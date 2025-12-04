@@ -16,6 +16,14 @@ const DEFAULT_STYLING = {
   selectedColor: '#F3A712',
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
+  annotationBackground: '#f8f8f8',
+}
+
+// Default config for annotation scaling
+const DEFAULT_CONFIG = {
+  xPosScalingFactor: 80,
+  xPosScalingThreshold: 500,
+  minAnnotationWidth: 40,
 }
 
 export default defineComponent({
@@ -38,6 +46,7 @@ export default defineComponent({
   data() {
     return {
       isInitialized: false as boolean,
+      manualXRange: undefined as number[] | undefined,
     }
   },
   computed: {
@@ -54,6 +63,27 @@ export default defineComponent({
         ...DEFAULT_STYLING,
         ...this.args.styling,
       }
+    },
+
+    config() {
+      return {
+        ...DEFAULT_CONFIG,
+        ...this.args.config,
+      }
+    },
+
+    /**
+     * Get actual plot width from DOM.
+     */
+    actualPlotWidth(): number {
+      const element = document.getElementById(this.id)
+      if (element) {
+        const rect = element.getBoundingClientRect()
+        if (rect.width > 0) {
+          return rect.width
+        }
+      }
+      return 800 // default
     },
 
     /**
@@ -80,6 +110,11 @@ export default defineComponent({
      * Compute x range for the plot.
      */
     xRange(): number[] {
+      // Use manual range if set (from zoom)
+      if (this.manualXRange) {
+        return this.manualXRange
+      }
+
       if (!this.isDataReady || !this.plotData) return [0, 1]
 
       const xValues = this.plotData.x_values
@@ -91,16 +126,224 @@ export default defineComponent({
     },
 
     /**
-     * Compute y range for the plot.
+     * Compute y range for the plot based on visible x range.
+     * Adds extra space at top for annotations.
      */
     yRange(): number[] {
       if (!this.isDataReady || !this.plotData) return [0, 1]
 
-      const yValues = this.plotData.y_values.filter((y) => y > 0)
-      if (yValues.length === 0) return [0, 1]
+      const { x_values, y_values } = this.plotData
+      const xRange = this.xRange
 
-      const maxY = Math.max(...yValues)
-      return [0, maxY * 1.1]
+      // Find max y within the visible x range
+      let maxY = 0
+      for (let i = 0; i < x_values.length; i++) {
+        const x = x_values[i]
+        const y = y_values[i]
+        if (x >= xRange[0] && x <= xRange[1] && y > maxY) {
+          maxY = y
+        }
+      }
+
+      if (maxY === 0) return [0, 1]
+
+      // Add headroom for annotations (1.8x like FLASHApp)
+      return [0, maxY * 1.8]
+    },
+
+    /**
+     * Compute x position scaling factor based on current zoom level.
+     */
+    xPosScalingFactor(): number {
+      const xRange = this.xRange
+      const rangeWidth = xRange[1] - xRange[0]
+      const actualWidth = this.actualPlotWidth
+      return (1200 / actualWidth) * rangeWidth / this.config.xPosScalingFactor
+    },
+
+    /**
+     * Get annotation data: positions, labels, and visibility based on overlap.
+     */
+    annotatedPeaks(): Array<{
+      x: number
+      y: number
+      label: string
+      index: number
+    }> {
+      if (!this.isDataReady || !this.plotData) return []
+
+      const { x_raw, y_raw, annotations, highlight_mask } = this.plotData
+      if (!annotations || !x_raw || !y_raw) return []
+
+      const peaks: Array<{ x: number; y: number; label: string; index: number }> = []
+
+      for (let i = 0; i < annotations.length; i++) {
+        const label = annotations[i]
+        // Only include highlighted peaks with non-empty labels
+        if (!label || label.length === 0) continue
+        if (highlight_mask && !highlight_mask[i]) continue
+
+        peaks.push({
+          x: x_raw[i],
+          y: y_raw[i],
+          label: label,
+          index: i,
+        })
+      }
+
+      return peaks
+    },
+
+    /**
+     * Compute annotation boxes with overlap detection.
+     * Returns which annotations should be visible.
+     * Only checks for collisions between labels within the visible x range.
+     */
+    annotationBoxData(): Array<{
+      x: number
+      y: number
+      width: number
+      height: number
+      label: string
+      visible: boolean
+    }> {
+      const peaks = this.annotatedPeaks
+      if (peaks.length === 0) return []
+
+      const yRange = this.yRange
+      const xRange = this.xRange
+
+      if (yRange[1] <= 0 || xRange[1] <= xRange[0]) return []
+
+      const ymax = yRange[1] / 1.8
+      const ypos_low = ymax * 1.18
+      const ypos_high = ymax * 1.32
+      const boxHeight = ypos_high - ypos_low
+
+      const xpos_scaling = this.xPosScalingFactor
+
+      const boxes: Array<{
+        x: number
+        y: number
+        width: number
+        height: number
+        label: string
+        visible: boolean
+        inVisibleRange: boolean
+      }> = []
+
+      // Create boxes for each annotation, marking if they're in visible range
+      for (const peak of peaks) {
+        const inVisibleRange = peak.x >= xRange[0] && peak.x <= xRange[1]
+        boxes.push({
+          x: peak.x,
+          y: (ypos_low + ypos_high) / 2,
+          width: xpos_scaling * 2,
+          height: boxHeight,
+          label: peak.label,
+          visible: inVisibleRange, // Only visible if in range
+          inVisibleRange: inVisibleRange,
+        })
+      }
+
+      // Filter to only visible boxes for overlap detection
+      const visibleBoxes = boxes.filter((box) => box.inVisibleRange)
+
+      // Check for overlaps only among visible boxes
+      if (visibleBoxes.length > 1) {
+        let hasOverlap = false
+        const xPadding = (xRange[1] - xRange[0]) * 0.01
+
+        for (let i = 0; i < visibleBoxes.length && !hasOverlap; i++) {
+          for (let j = i + 1; j < visibleBoxes.length; j++) {
+            const box1Left = visibleBoxes[i].x - visibleBoxes[i].width / 2 - xPadding
+            const box1Right = visibleBoxes[i].x + visibleBoxes[i].width / 2 + xPadding
+            const box2Left = visibleBoxes[j].x - visibleBoxes[j].width / 2 - xPadding
+            const box2Right = visibleBoxes[j].x + visibleBoxes[j].width / 2 + xPadding
+
+            // Check x overlap (y is the same for all boxes)
+            if (!(box1Right < box2Left || box2Right < box1Left)) {
+              hasOverlap = true
+              break
+            }
+          }
+        }
+
+        // If overlap detected, hide all visible boxes
+        if (hasOverlap) {
+          boxes.forEach((box) => {
+            if (box.inVisibleRange) {
+              box.visible = false
+            }
+          })
+        }
+      }
+
+      return boxes
+    },
+
+    /**
+     * Build Plotly shapes for annotation background boxes.
+     */
+    annotationShapes(): Partial<Plotly.Shape>[] {
+      const boxes = this.annotationBoxData
+      const shapes: Partial<Plotly.Shape>[] = []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return shapes
+
+      const ymax = yRange[1] / 1.8
+      const ypos_low = ymax * 1.18
+      const ypos_high = ymax * 1.32
+
+      for (const box of boxes) {
+        if (!box.visible) continue
+
+        shapes.push({
+          type: 'rect',
+          x0: box.x - box.width / 2,
+          y0: ypos_low,
+          x1: box.x + box.width / 2,
+          y1: ypos_high,
+          fillcolor: this.styling.highlightColor,
+          line: { width: 0 },
+        })
+      }
+
+      return shapes
+    },
+
+    /**
+     * Build Plotly annotations for peak labels.
+     */
+    peakAnnotations(): Partial<Plotly.Annotations>[] {
+      const boxes = this.annotationBoxData
+      const annotations: Partial<Plotly.Annotations>[] = []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return annotations
+
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+
+      for (const box of boxes) {
+        if (!box.visible) continue
+
+        annotations.push({
+          x: box.x,
+          y: ypos,
+          xref: 'x',
+          yref: 'y',
+          text: box.label,
+          showarrow: false,
+          font: {
+            size: 14,
+            color: 'white',
+          },
+        })
+      }
+
+      return annotations
     },
 
     /**
@@ -218,6 +461,8 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
+        shapes: this.annotationShapes,
+        annotations: this.peakAnnotations,
       }
     },
 
@@ -294,16 +539,36 @@ export default defineComponent({
           responsive: true,
         })
 
-        // Add click event listener
+        // Add event listeners
         const plotElement = document.getElementById(this.id) as any
         if (plotElement) {
           plotElement.on('plotly_click', (eventData: any) => {
             this.onPlotClick(eventData)
           })
+
+          plotElement.on('plotly_relayout', (eventData: any) => {
+            this.onRelayout(eventData)
+          })
         }
       } catch (error) {
         console.error('PlotlyLineplot: Error rendering plot:', error)
         this.renderFallback()
+      }
+    },
+
+    onRelayout(eventData: any): void {
+      // Handle zoom/pan events
+      if (eventData['xaxis.range[0]'] !== undefined && eventData['xaxis.range[1]'] !== undefined) {
+        const newXRange = [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
+        if (newXRange[0] < 0) {
+          newXRange[0] = 0
+        }
+        this.manualXRange = newXRange
+        this.renderPlot()
+      } else if (eventData['xaxis.autorange'] === true) {
+        // Reset to auto range
+        this.manualXRange = undefined
+        this.renderPlot()
       }
     },
 

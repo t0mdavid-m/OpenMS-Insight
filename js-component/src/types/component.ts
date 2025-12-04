@@ -35,13 +35,13 @@ export interface TableComponentArgs extends BaseComponentArgs {
  * Line plot component arguments.
  */
 export interface LinePlotComponentArgs extends BaseComponentArgs {
-  componentType: 'PlotlyLineplotUnified'
+  componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
   title: string
   xLabel?: string
   yLabel?: string
-  plotType?: 'stick' | 'line' | 'scatter'
   styling?: LinePlotStyling
   config?: LinePlotConfig
+  interactivity?: InteractivityMapping
 }
 
 export interface LinePlotStyling {
