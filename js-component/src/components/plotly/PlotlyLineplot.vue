@@ -121,13 +121,15 @@ export default defineComponent({
 
     /**
      * Generate stick format y values from raw data.
-     * Each data point (y) becomes triplet: [0, y, 0]
+     * Each data point (y) becomes triplet: [-10000000, y, -10000000]
+     * Using large negative value (matching FLASHApp) to avoid visual artifacts.
      */
     yValuesStick(): number[] {
       if (!this.isDataReady || !this.plotData) return []
       const result: number[] = []
+      const baseline = -10000000
       for (const y of this.plotData.y_values) {
-        result.push(0, y, 0)
+        result.push(baseline, y, baseline)
       }
       return result
     },
@@ -416,14 +418,16 @@ export default defineComponent({
         const x = this.plotData.x_values[i]
         const y = this.plotData.y_values[i]
 
+        // Use large negative baseline (matching FLASHApp) to avoid visual artifacts
+        const baseline = -10000000
         if (isHighlighted) {
           // Push complete triplet for this stick
           highlighted_x.push(x, x, x)
-          highlighted_y.push(0, y, 0)
+          highlighted_y.push(baseline, y, baseline)
         } else {
           // Push complete triplet for this stick
           unhighlighted_x.push(x, x, x)
-          unhighlighted_y.push(0, y, 0)
+          unhighlighted_y.push(baseline, y, baseline)
         }
       }
 
