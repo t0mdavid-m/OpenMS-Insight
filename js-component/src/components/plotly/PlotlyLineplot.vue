@@ -107,6 +107,32 @@ export default defineComponent({
     },
 
     /**
+     * Generate stick format x values from raw data.
+     * Each data point (x) becomes triplet: [x, x, x]
+     */
+    xValuesStick(): number[] {
+      if (!this.isDataReady || !this.plotData) return []
+      const result: number[] = []
+      for (const x of this.plotData.x_values) {
+        result.push(x, x, x)
+      }
+      return result
+    },
+
+    /**
+     * Generate stick format y values from raw data.
+     * Each data point (y) becomes triplet: [0, y, 0]
+     */
+    yValuesStick(): number[] {
+      if (!this.isDataReady || !this.plotData) return []
+      const result: number[] = []
+      for (const y of this.plotData.y_values) {
+        result.push(0, y, 0)
+      }
+      return result
+    },
+
+    /**
      * Compute x range for the plot.
      */
     xRange(): number[] {
@@ -163,6 +189,7 @@ export default defineComponent({
 
     /**
      * Get annotation data: positions, labels, and visibility based on overlap.
+     * Uses raw x_values/y_values (not stick format triplets).
      */
     annotatedPeaks(): Array<{
       x: number
@@ -172,8 +199,8 @@ export default defineComponent({
     }> {
       if (!this.isDataReady || !this.plotData) return []
 
-      const { x_raw, y_raw, annotations, highlight_mask } = this.plotData
-      if (!annotations || !x_raw || !y_raw) return []
+      const { x_values, y_values, annotations, highlight_mask } = this.plotData
+      if (!annotations) return []
 
       const peaks: Array<{ x: number; y: number; label: string; index: number }> = []
 
@@ -184,8 +211,8 @@ export default defineComponent({
         if (highlight_mask && !highlight_mask[i]) continue
 
         peaks.push({
-          x: x_raw[i],
-          y: y_raw[i],
+          x: x_values[i],
+          y: y_values[i],
           label: label,
           index: i,
         })
@@ -348,6 +375,7 @@ export default defineComponent({
 
     /**
      * Build Plotly traces.
+     * Uses stick format triplets generated from raw data.
      */
     traces(): Plotly.Data[] {
       if (!this.isDataReady || !this.plotData) {
@@ -355,13 +383,15 @@ export default defineComponent({
       }
 
       const traces: Plotly.Data[] = []
-      const { x_values, y_values, highlight_mask } = this.plotData
+      const { highlight_mask } = this.plotData
+      const xStick = this.xValuesStick
+      const yStick = this.yValuesStick
 
       // If no highlight mask, show all as one trace
       if (!highlight_mask) {
         traces.push({
-          x: x_values,
-          y: y_values,
+          x: xStick,
+          y: yStick,
           mode: 'lines',
           type: 'scatter',
           connectgaps: false,
@@ -377,19 +407,23 @@ export default defineComponent({
       const highlighted_x: number[] = []
       const highlighted_y: number[] = []
 
-      // For stick plots, each data point has 3 values (x, x, x) and (0, y, 0)
-      const stepSize = 3
+      // Process each data point (each point becomes a triplet in stick format)
+      // We must keep triplets together for proper stick rendering
+      const numPoints = this.plotData.x_values.length
 
-      for (let i = 0; i < x_values.length; i++) {
-        const maskIndex = Math.floor(i / stepSize)
-        const isHighlighted = highlight_mask[maskIndex]
+      for (let i = 0; i < numPoints; i++) {
+        const isHighlighted = highlight_mask[i]
+        const x = this.plotData.x_values[i]
+        const y = this.plotData.y_values[i]
 
         if (isHighlighted) {
-          highlighted_x.push(x_values[i])
-          highlighted_y.push(y_values[i])
+          // Push complete triplet for this stick
+          highlighted_x.push(x, x, x)
+          highlighted_y.push(0, y, 0)
         } else {
-          unhighlighted_x.push(x_values[i])
-          unhighlighted_y.push(y_values[i])
+          // Push complete triplet for this stick
+          unhighlighted_x.push(x, x, x)
+          unhighlighted_y.push(0, y, 0)
         }
       }
 

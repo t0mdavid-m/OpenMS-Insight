@@ -148,17 +148,14 @@ class LinePlot(BaseComponent):
 
         LinePlots always filter based on selection state.
 
-        Converts the data to the format expected by PlotlyLineplotUnified:
-        - x values (replicated 3x for stick plots: x, x, x)
-        - y values (with 0s for stick plots: 0, y, 0)
-        - highlighting boolean mask
-        - annotations array
+        Sends raw x/y values to Vue, which converts them to stick plot format.
+        This reduces data transfer size by 3x.
 
         Args:
             state: Current selection state from StateManager
 
         Returns:
-            Dict with plot data for Vue
+            Dict with plot data for Vue (x_values, y_values, highlight_mask, annotations)
         """
         # LinePlots always filter based on interactivity and current state
         filtered_data = filter_by_selection(
@@ -168,16 +165,9 @@ class LinePlot(BaseComponent):
         )
         df = filtered_data.collect()
 
-        # Get x and y values
-        x_raw = df[self._x_column].to_list()
-        y_raw = df[self._y_column].to_list()
-
-        # Prepare stick plot format (x, x, x and 0, y, 0 pattern)
-        x_values = []
-        y_values = []
-        for x, y in zip(x_raw, y_raw):
-            x_values.extend([x, x, x])
-            y_values.extend([0, y, 0])
+        # Get x and y values (raw, not triplicated - Vue will create stick format)
+        x_values = df[self._x_column].to_list()
+        y_values = df[self._y_column].to_list()
 
         # Get highlighting data
         highlight_mask = None
@@ -193,8 +183,6 @@ class LinePlot(BaseComponent):
         plot_data = {
             'x_values': x_values,
             'y_values': y_values,
-            'x_raw': x_raw,
-            'y_raw': y_raw,
         }
 
         if highlight_mask is not None:

@@ -96,12 +96,12 @@ export type TableData = Record<string, unknown>[]
 
 /**
  * Plot data format for line plots.
+ * x_values and y_values contain raw data points.
+ * Vue component converts to stick plot format (triplets) for rendering.
  */
 export interface PlotData {
   x_values: number[]
   y_values: number[]
-  x_raw: number[]
-  y_raw: number[]
   highlight_mask?: boolean[]
   annotations?: string[]
 }
