@@ -60,6 +60,10 @@ def _cached_filter_and_collect(
     for identifier, column in filters.items():
         selected_value = state.get(identifier)
         if selected_value is not None:
+            # Convert float to int for integer columns to handle JSON number parsing
+            # (JavaScript numbers come back as floats, but Polars Int64 needs int comparison)
+            if isinstance(selected_value, float) and selected_value.is_integer():
+                selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
 
     # Apply column projection if specified
