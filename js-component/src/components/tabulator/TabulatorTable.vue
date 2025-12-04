@@ -231,8 +231,16 @@ export default defineComponent({
     },
   },
   watch: {
+    // Watch tableData and redraw when it changes
     tableData() {
-      this.updateTableData()
+      this.drawTable()
+    },
+    // Watch for height changes in args
+    'args.height'(newHeight: number | undefined) {
+      if (this.tabulator && newHeight) {
+        const newMaxHeight = newHeight - 56 - (this.showGoTo ? 58 : 0)
+        this.tabulator.setHeight(Math.max(newMaxHeight, 50))
+      }
     },
     selectedColumns: {
       handler(newColumns: string[]) {
@@ -251,6 +259,7 @@ export default defineComponent({
     },
   },
   mounted() {
+    // Always draw the table on mount - it will be updated when data arrives
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()
@@ -260,8 +269,18 @@ export default defineComponent({
   },
   methods: {
     drawTable(): void {
+      // Destroy existing table if any
+      if (this.tabulator) {
+        this.tabulator.destroy()
+        this.tabulator = undefined
+      }
+
       const indexField = this.args.tableIndexField || 'id'
-      const baseHeight = this.args.title ? 320 : 310
+      // Use passed height if available, otherwise use default
+      // Subtract space for title bar (~40px) and padding (~16px)
+      const passedHeight = this.args.height
+      const defaultHeight = this.args.title ? 320 : 310
+      const baseHeight = passedHeight ? passedHeight - 56 : defaultHeight
       const goToHeight = this.showGoTo ? 58 : 0
       const tableMaxHeight = baseHeight - goToHeight
 
@@ -295,30 +314,6 @@ export default defineComponent({
       // Use Tabulator's rowClick event for reliable row selection handling
       this.tabulator.on('rowClick', (e: Event, row: any) => {
         this.onRowClick(row)
-      })
-    },
-
-    /**
-     * Update table data efficiently using Tabulator's setData() method.
-     * This preserves table state (filters, scroll position) instead of recreating the table.
-     */
-    updateTableData(): void {
-      if (!this.tabulator) {
-        // First render - create the table
-        this.drawTable()
-        return
-      }
-
-      // Use Tabulator's setData for efficient updates
-      // This preserves filters, sorting, and other table state
-      this.tabulator.setData(this.preparedTableData)
-
-      // Clear column analysis cache since data changed
-      this.columnAnalysis = {}
-
-      // Re-sync selection from store after data update
-      this.$nextTick(() => {
-        this.syncSelectionFromStore()
       })
     },
 

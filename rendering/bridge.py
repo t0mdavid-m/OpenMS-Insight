@@ -106,6 +106,10 @@ def render_component(
         'hash': _hash_data(vue_data),
     }
 
+    # Add height to component args if specified
+    if height is not None:
+        component_args['height'] = height
+
     # Component layout: [[{componentArgs: {...}}]]
     components = [[{'componentArgs': component_args}]]
 
