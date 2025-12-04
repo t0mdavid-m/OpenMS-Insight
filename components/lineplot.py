@@ -173,6 +173,11 @@ class LinePlot(BaseComponent):
             columns_to_select.append(self._highlight_column)
         if self._annotation_column:
             columns_to_select.append(self._annotation_column)
+        # Include columns needed for interactivity (e.g., peak_id)
+        if self._interactivity:
+            for col in self._interactivity.values():
+                if col not in columns_to_select:
+                    columns_to_select.append(col)
 
         # Use cached filter+collect for efficiency
         # Cache key is based on filter state, so interactions that don't
@@ -209,6 +214,12 @@ class LinePlot(BaseComponent):
 
         if annotations is not None:
             plot_data['annotations'] = annotations
+
+        # Include interactivity column values (e.g., peak_id for each point)
+        if self._interactivity:
+            for identifier, col in self._interactivity.items():
+                if col in df.columns:
+                    plot_data[f'interactivity_{col}'] = df[col].to_list()
 
         return {
             'plotData': plot_data,

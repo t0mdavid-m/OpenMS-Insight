@@ -103,38 +103,40 @@ export default defineComponent({
     },
 
     /**
-     * Get the selected x value from the selection store.
-     * Returns undefined if no selection or interactivity not configured.
-     */
-    selectedXValue(): number | undefined {
-      // For each identifier in interactivity, check if there's a selection
-      // that maps to x_column (we use x values for selection in plots)
-      for (const [identifier, column] of Object.entries(this.interactivity)) {
-        // Check if this interactivity uses the x column
-        if (column === this.args.xColumn) {
-          const value = this.selectionStore.$state[identifier]
-          if (value !== undefined && value !== null) {
-            return value as number
-          }
-        }
-      }
-      return undefined
-    },
-
-    /**
-     * Find the index of the selected peak based on selectedXValue.
+     * Find the index of the selected peak based on interactivity mapping.
+     * Looks up the selection value and finds the matching index in the data.
      */
     selectedPeakIndex(): number | undefined {
-      const selectedX = this.selectedXValue
-      if (selectedX === undefined || !this.isDataReady || !this.plotData) {
+      if (!this.isDataReady || !this.plotData) {
         return undefined
       }
 
-      // Find the peak with matching x value
-      const xValues = this.plotData.x_values
-      for (let i = 0; i < xValues.length; i++) {
-        if (xValues[i] === selectedX) {
-          return i
+      // For each identifier in interactivity, check if there's a selection
+      for (const [identifier, column] of Object.entries(this.interactivity)) {
+        const selectedValue = this.selectionStore.$state[identifier]
+        if (selectedValue === undefined || selectedValue === null) {
+          continue
+        }
+
+        // Look for the interactivity column data (e.g., interactivity_peak_id)
+        const columnKey = `interactivity_${column}`
+        const columnValues = this.plotData[columnKey] as unknown[] | undefined
+
+        if (columnValues && Array.isArray(columnValues)) {
+          // Find the index with matching value
+          for (let i = 0; i < columnValues.length; i++) {
+            if (columnValues[i] === selectedValue) {
+              return i
+            }
+          }
+        } else if (column === this.args.xColumn) {
+          // Fallback: if no interactivity column data, try matching x values
+          const xValues = this.plotData.x_values
+          for (let i = 0; i < xValues.length; i++) {
+            if (xValues[i] === selectedValue) {
+              return i
+            }
+          }
         }
       }
       return undefined
@@ -528,11 +530,11 @@ export default defineComponent({
      */
     layout(): Partial<Plotly.Layout> {
       return {
-        title: this.args.title ? `<b>${this.args.title}</b>` : undefined,
+        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: false,
         height: 400,
         xaxis: {
-          title: this.args.xLabel,
+          title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           showgrid: false,
           showline: true,
           linecolor: 'grey',
@@ -540,7 +542,7 @@ export default defineComponent({
           range: this.xRange,
         },
         yaxis: {
-          title: this.args.yLabel,
+          title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
           showgrid: true,
           gridcolor: this.theme?.secondaryBackgroundColor || '#f0f0f0',
           rangemode: 'nonnegative',
@@ -714,14 +716,18 @@ export default defineComponent({
           }
         }
 
-        const selectedXValue = xValues[nearestIndex]
-
         // Update selection store using the interactivity mapping
         for (const [identifier, column] of Object.entries(this.interactivity)) {
-          // For now, we assume interactivity column matches x_column
-          // (selection is by x value / mass)
-          if (column === this.args.xColumn) {
-            this.selectionStore.updateSelection(identifier, selectedXValue)
+          // Look for the interactivity column data (e.g., interactivity_peak_id)
+          const columnKey = `interactivity_${column}`
+          const columnValues = this.plotData[columnKey] as unknown[] | undefined
+
+          if (columnValues && Array.isArray(columnValues) && nearestIndex < columnValues.length) {
+            // Use the value from the interactivity column
+            this.selectionStore.updateSelection(identifier, columnValues[nearestIndex])
+          } else if (column === this.args.xColumn) {
+            // Fallback: use x value if no interactivity column data
+            this.selectionStore.updateSelection(identifier, xValues[nearestIndex])
           }
         }
       }
@@ -743,11 +749,11 @@ export default defineComponent({
     async renderFallback(): Promise<void> {
       try {
         const fallbackLayout: Partial<Plotly.Layout> = {
-          title: '<b>No Data Available</b>',
+          title: { text: '<b>No Data Available</b>' },
           showlegend: false,
           height: 400,
-          xaxis: { title: 'X', showgrid: false },
-          yaxis: { title: 'Y', showgrid: true, rangemode: 'nonnegative' },
+          xaxis: { title: { text: 'X' }, showgrid: false },
+          yaxis: { title: { text: 'Y' }, showgrid: true, rangemode: 'nonnegative' },
           paper_bgcolor: this.theme?.backgroundColor || 'white',
           plot_bgcolor: this.theme?.backgroundColor || 'white',
           font: {
