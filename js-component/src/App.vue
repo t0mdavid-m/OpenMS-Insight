@@ -61,7 +61,7 @@ export default defineComponent({
   },
   data() {
     return {
-      timer: undefined as NodeJS.Timer | undefined,
+      resizeObserver: undefined as ResizeObserver | undefined,
     }
   },
   computed: {
@@ -100,14 +100,18 @@ export default defineComponent({
     Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, this.updateStreamlitData)
   },
   mounted() {
-    // Periodically update frame height
-    this.timer = setInterval(() => {
+    // Use ResizeObserver to update frame height only when size actually changes
+    // This replaces polling (setInterval every 500ms) with event-driven updates
+    this.resizeObserver = new ResizeObserver(() => {
       Streamlit.setFrameHeight()
-    }, 500)
+    })
+    this.resizeObserver.observe(this.$el as HTMLElement)
   },
   unmounted() {
     Streamlit.events.removeEventListener(Streamlit.RENDER_EVENT, this.updateStreamlitData)
-    clearInterval(this.timer)
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect()
+    }
   },
   updated() {
     Streamlit.setFrameHeight()
