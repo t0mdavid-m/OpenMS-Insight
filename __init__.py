@@ -12,6 +12,7 @@ from .core.serialization import save_component, load_component
 
 from .components.table import Table
 from .components.lineplot import LinePlot
+from .components.heatmap import Heatmap
 
 __version__ = "0.1.0"
 
@@ -26,4 +27,5 @@ __all__ = [
     # Components
     "Table",
     "LinePlot",
+    "Heatmap",
 ]

@@ -29,6 +29,7 @@ export interface TableComponentArgs extends BaseComponentArgs {
   initialSort?: Array<{ column: string; dir: 'asc' | 'desc' }>
   goToFields?: string[]
   interactivity?: InteractivityMapping
+  height?: number
 }
 
 /**
@@ -69,9 +70,32 @@ export interface LinePlotConfig {
 }
 
 /**
+ * Heatmap component arguments.
+ */
+export interface HeatmapComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyHeatmap'
+  title?: string
+  xColumn: string
+  yColumn: string
+  intensityColumn: string
+  xLabel?: string
+  yLabel?: string
+  colorscale?: string
+  zoomIdentifier?: string
+  interactivity?: InteractivityMapping
+}
+
+/**
+ * Heatmap data format.
+ * Each entry is a row with x, y, intensity, and any additional columns
+ * needed for interactivity (e.g., scan_id, mass_idx).
+ */
+export type HeatmapData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
-export type ComponentArgs = TableComponentArgs | LinePlotComponentArgs
+export type ComponentArgs = TableComponentArgs | LinePlotComponentArgs | HeatmapComponentArgs
 
 /**
  * Component layout entry.

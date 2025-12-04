@@ -27,12 +27,14 @@ import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
 import TabulatorTable from './components/tabulator/TabulatorTable.vue'
 import PlotlyLineplot from './components/plotly/PlotlyLineplot.vue'
+import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
 
 export default defineComponent({
   name: 'App',
   components: {
     TabulatorTable,
     PlotlyLineplot,
+    PlotlyHeatmap,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -51,8 +53,10 @@ export default defineComponent({
         if (currentCounter === lastSentCounter) return
         lastSentCounter = currentCounter
 
-        // Send full state to Python (same as before, just triggered more efficiently)
-        Streamlit.setComponentValue({ ...selectionStore.$state })
+        // Deep clone to remove Vue reactivity proxies before sending to Streamlit
+        // This prevents "Proxy object could not be cloned" errors
+        const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
+        Streamlit.setComponentValue(plainState)
       },
       { immediate: true }
     )
@@ -99,6 +103,8 @@ export default defineComponent({
         case 'PlotlyLineplotUnified':
         case 'PlotlyLineplot':
           return PlotlyLineplot
+        case 'PlotlyHeatmap':
+          return PlotlyHeatmap
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null
