@@ -12,18 +12,15 @@ from ..preprocessing.filtering import filter_by_selection
 @register_component("lineplot")
 class LinePlot(BaseComponent):
     """
-    Interactive line plot component using Plotly.js.
+    Interactive stick plot component using Plotly.js.
 
     Features:
-    - Line/bar/scatter plotting with stick-style peaks
+    - Stick-style peak visualization (vertical lines from baseline)
     - Highlighting of selected data points
     - Annotations with labels (mass labels, charge states, etc.)
     - Zoom controls with auto-fit to highlighted data
     - SVG export
     - Cross-component selection via interactivity mapping
-
-    The component supports "stick plots" (vertical lines) commonly used in
-    mass spectrometry visualization, as well as standard line plots.
 
     LinePlots always filter their data based on selection state.
 
@@ -35,7 +32,6 @@ class LinePlot(BaseComponent):
             interactivity={'spectrum': 'scan_id'},
             x_column='mass',
             y_column='intensity',
-            plot_type='stick',
         )
     """
 
@@ -48,7 +44,6 @@ class LinePlot(BaseComponent):
         title: Optional[str] = None,
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
-        plot_type: str = 'stick',
         highlight_column: Optional[str] = None,
         annotation_column: Optional[str] = None,
         styling: Optional[Dict[str, Any]] = None,
@@ -68,8 +63,6 @@ class LinePlot(BaseComponent):
             title: Plot title
             x_label: X-axis label (defaults to x_column)
             y_label: Y-axis label (defaults to y_column)
-            plot_type: 'stick' for vertical lines, 'line' for connected lines,
-                       'scatter' for point markers
             highlight_column: Optional column name containing boolean/int
                               indicating which points to highlight
             annotation_column: Optional column name containing text annotations
@@ -87,7 +80,6 @@ class LinePlot(BaseComponent):
         self._title = title
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
-        self._plot_type = plot_type
         self._highlight_column = highlight_column
         self._annotation_column = annotation_column
         self._styling = styling or {}
@@ -138,7 +130,6 @@ class LinePlot(BaseComponent):
         self._preprocessed_data['plot_config'] = {
             'x_column': self._x_column,
             'y_column': self._y_column,
-            'plot_type': self._plot_type,
             'highlight_column': self._highlight_column,
             'annotation_column': self._annotation_column,
         }
@@ -182,15 +173,11 @@ class LinePlot(BaseComponent):
         y_raw = df[self._y_column].to_list()
 
         # Prepare stick plot format (x, x, x and 0, y, 0 pattern)
-        if self._plot_type == 'stick':
-            x_values = []
-            y_values = []
-            for x, y in zip(x_raw, y_raw):
-                x_values.extend([x, x, x])
-                y_values.extend([0, y, 0])
-        else:
-            x_values = x_raw
-            y_values = y_raw
+        x_values = []
+        y_values = []
+        for x, y in zip(x_raw, y_raw):
+            x_values.extend([x, x, x])
+            y_values.extend([0, y, 0])
 
         # Get highlighting data
         highlight_mask = None
@@ -256,7 +243,6 @@ class LinePlot(BaseComponent):
             'title': self._title or '',
             'xLabel': self._x_label,
             'yLabel': self._y_label,
-            'plotType': self._plot_type,
             'styling': styling,
             'config': self._plot_config,
             # Pass interactivity for potential future click handling

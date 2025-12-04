@@ -135,11 +135,10 @@ export default defineComponent({
       const highlighted_y: number[] = []
 
       // For stick plots, each data point has 3 values (x, x, x) and (0, y, 0)
-      const isStickPlot = this.args.plotType === 'stick'
-      const stepSize = isStickPlot ? 3 : 1
+      const stepSize = 3
 
       for (let i = 0; i < x_values.length; i++) {
-        const maskIndex = isStickPlot ? Math.floor(i / stepSize) : i
+        const maskIndex = Math.floor(i / stepSize)
         const isHighlighted = highlight_mask[maskIndex]
 
         if (isHighlighted) {
