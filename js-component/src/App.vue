@@ -57,6 +57,17 @@ export default defineComponent({
       { immediate: true }
     )
 
+    // Watch for height changes and update frame height
+    watch(
+      () => streamlitDataStore.allDataForDrawing?.height,
+      (newHeight) => {
+        if (newHeight && typeof newHeight === 'number') {
+          Streamlit.setFrameHeight(newHeight)
+        }
+      },
+      { immediate: true }
+    )
+
     return { streamlitDataStore, selectionStore }
   },
   data() {
@@ -96,6 +107,7 @@ export default defineComponent({
   },
   created() {
     Streamlit.setComponentReady()
+    // Set initial frame height - will be updated when data arrives
     Streamlit.setFrameHeight(400)
     Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, this.updateStreamlitData)
   },

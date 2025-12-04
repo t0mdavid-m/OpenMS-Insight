@@ -96,9 +96,13 @@
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
 import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 'tabulator-tables'
+import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { TableComponentArgs } from '@/types/component'
+
+// Global counter for unique table IDs
+let tableIdCounter = 0
 
 export default defineComponent({
   name: 'TabulatorTable',
@@ -116,7 +120,9 @@ export default defineComponent({
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore }
+    // Generate unique ID on setup
+    const uniqueId = `table-${Date.now()}-${++tableIdCounter}`
+    return { streamlitDataStore, selectionStore, uniqueId }
   },
   data() {
     return {
@@ -151,7 +157,7 @@ export default defineComponent({
   },
   computed: {
     id(): string {
-      return `table-${this.index}`
+      return this.uniqueId
     },
     tableClasses(): Record<string, boolean> {
       return {
@@ -284,14 +290,19 @@ export default defineComponent({
       const goToHeight = this.showGoTo ? 58 : 0
       const tableMaxHeight = baseHeight - goToHeight
 
+      // Disable virtual DOM for small datasets to avoid rendering issues
+      const useVirtualDom = this.preparedTableData.length > 100
+
       this.tabulator = new Tabulator(`#${this.id}`, {
         index: indexField,
         data: this.preparedTableData,
-        minHeight: 50,
-        maxHeight: Math.max(tableMaxHeight, 50),
+        minHeight: 150,
+        maxHeight: Math.max(tableMaxHeight, 150),
+        height: Math.max(tableMaxHeight, 150),
         responsiveLayout: 'collapse',
         layout: this.args.tableLayoutParam || 'fitDataFill',
         selectable: 1,
+        renderVertical: useVirtualDom ? 'virtual' : 'basic',
         columnDefaults: {
           title: '',
           hozAlign: 'right',
@@ -307,8 +318,19 @@ export default defineComponent({
       })
 
       this.tabulator.on('tableBuilt', () => {
+        console.log(`[TabulatorTable] tableBuilt for ${this.args.title}:`, {
+          id: this.id,
+          rowCount: this.tabulator?.getDataCount(),
+        })
         this.selectDefaultRow()
         this.applyFilters()
+
+        // Force redraw and update frame height after table is built
+        this.$nextTick(() => {
+          this.tabulator?.redraw(true)
+          // Update Streamlit iframe height now that table is rendered
+          Streamlit.setFrameHeight()
+        })
       })
 
       // Use Tabulator's rowClick event for reliable row selection handling
@@ -385,11 +407,23 @@ export default defineComponent({
       if (!selectedFromState) {
         const defaultRow = this.args.defaultRow ?? 0
         if (defaultRow >= 0) {
-          const visibleRows = this.tabulator?.getRows('active')
-          if (visibleRows && visibleRows.length > 0 && defaultRow < visibleRows.length) {
-            visibleRows[defaultRow].select()
-            this.onTableClick()
-          }
+          // Use setTimeout to ensure Tabulator has fully rendered rows
+          setTimeout(() => {
+            const visibleRows = this.tabulator?.getRows('active')
+            if (visibleRows && visibleRows.length > 0 && defaultRow < visibleRows.length) {
+              const row = visibleRows[defaultRow]
+              row.select()
+              // Directly get the row data and update selection
+              const rowData = row.getData()
+              if (rowData) {
+                const interactivity = this.args.interactivity || {}
+                for (const [identifier, column] of Object.entries(interactivity)) {
+                  const value = rowData[column as string]
+                  this.selectionStore.updateSelection(identifier, value)
+                }
+              }
+            }
+          }, 0)
         }
       }
     },
@@ -1114,6 +1148,22 @@ export default defineComponent({
 
 <style>
 @import 'tabulator-tables/dist/css/tabulator_bootstrap4.min.css';
+
+/* Fix: Ensure Tabulator table renders properly */
+.tabulator {
+  min-height: 100px;
+}
+
+/* Override tableholder to ensure rows are visible */
+.tabulator .tabulator-tableholder {
+  overflow: visible !important;
+  min-height: 50px;
+}
+
+/* But keep the table itself scrollable via a wrapper if needed */
+.tabulator .tabulator-tableholder .tabulator-table {
+  width: 100%;
+}
 
 .tabulator-col-title,
 .tabulator-cell {

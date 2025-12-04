@@ -579,7 +579,7 @@ export default defineComponent({
   watch: {
     isDataReady: {
       handler(newVal: boolean) {
-        if (newVal) {
+        if (newVal && this.isInitialized) {
           this.renderPlot()
         }
       },
@@ -588,7 +588,9 @@ export default defineComponent({
 
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
-        this.renderPlot()
+        if (this.isInitialized) {
+          this.renderPlot()
+        }
       },
       deep: true,
     },
@@ -596,7 +598,7 @@ export default defineComponent({
     // Re-render when selection changes (to update gold highlighting)
     'selectionStore.$state': {
       handler() {
-        if (this.isDataReady) {
+        if (this.isDataReady && this.isInitialized) {
           this.renderPlot()
         }
       },
@@ -606,9 +608,12 @@ export default defineComponent({
 
   mounted() {
     this.isInitialized = true
-    if (this.isDataReady) {
-      this.renderPlot()
-    }
+    // Use nextTick to ensure DOM is fully ready
+    this.$nextTick(() => {
+      if (this.isDataReady) {
+        this.renderPlot()
+      }
+    })
   },
 
   methods: {
