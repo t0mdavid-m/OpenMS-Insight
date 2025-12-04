@@ -191,7 +191,9 @@ class StateManager:
                         modified = True
 
         if modified:
-            self._state['counter'] += 1
+            # Set counter to be at least vue_counter + 1 to reject future stale updates
+            # from other Vue components that haven't received the latest state yet
+            self._state['counter'] = max(self._state['counter'] + 1, vue_counter + 1)
 
         return modified
 

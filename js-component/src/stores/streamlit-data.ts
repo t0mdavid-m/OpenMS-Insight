@@ -35,9 +35,48 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
     updateRenderData(newData: RenderData) {
       const selectionStore = useSelectionStore()
 
-      // Update selection store from Python state with counter-based conflict resolution
-      if (newData.args.selection_store) {
-        const pythonState = newData.args.selection_store as Record<string, unknown>
+      // Extract selection store data before processing
+      const pythonState = newData.args.selection_store as Record<string, unknown> | undefined
+      const newHash = newData.args.hash as string | undefined
+
+      // Clean up before re-assignment
+      delete newData.args.selection_store
+      delete newData.args.hash
+
+      // IMPORTANT: Update data FIRST, before selection store
+      // This ensures that when selection watchers fire, the correct data is already in place
+      const hashChanged = this.hash !== newHash
+      console.log('[StreamlitDataStore] updateRenderData:', {
+        hashChanged,
+        oldHash: this.hash?.substring(0, 8),
+        newHash: newHash?.substring(0, 8),
+        pythonStateSpectrum: pythonState?.spectrum,
+        pythonStatePeak: pythonState?.peak,
+      })
+      if (hashChanged && newHash) {
+        this.hash = newHash
+
+        // Store render data
+        this.renderData = newData
+
+        // Parse Arrow tables to native JS objects
+        // IMPORTANT: Merge new data instead of replacing, so multiple components
+        // can each contribute their data (tableData, heatmapData, plotData, etc.)
+        const data = newData.args as StreamlitData
+        Object.entries(data).forEach(([key, value]) => {
+          if (value instanceof ArrowTable) {
+            const parsed = this.parseArrowTable(value)
+            console.log(`[StreamlitDataStore] Parsed ${key}:`, { rowCount: parsed.length })
+            this.dataForDrawing[key] = parsed
+          } else {
+            this.dataForDrawing[key] = value
+          }
+        })
+      }
+
+      // Update selection store AFTER data is updated
+      // This ensures watchers see the correct data when they fire
+      if (pythonState) {
         const pythonCounter = (pythonState.counter as number) || 0
         const vueCounter = (selectionStore.$state.counter as number) || 0
 
@@ -61,30 +100,6 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
           }
         })
       }
-
-      // Skip re-processing if data hash hasn't changed
-      if (this.hash === newData.args.hash) {
-        return
-      }
-      this.hash = newData.args.hash
-
-      // Clean up before re-assignment
-      delete newData.args.selection_store
-      delete newData.args.hash
-
-      // Reset data
-      this.dataForDrawing = {}
-      this.renderData = newData
-
-      // Parse Arrow tables to native JS objects
-      const data = newData.args as StreamlitData
-      Object.entries(data).forEach(([key, value]) => {
-        if (value instanceof ArrowTable) {
-          this.dataForDrawing[key] = this.parseArrowTable(value)
-        } else {
-          this.dataForDrawing[key] = value
-        }
-      })
     },
 
     /**
