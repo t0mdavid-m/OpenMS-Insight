@@ -20,16 +20,19 @@ class LinePlot(BaseComponent):
     - Annotations with labels (mass labels, charge states, etc.)
     - Zoom controls with auto-fit to highlighted data
     - SVG export
-    - Cross-component selection via interactivity mapping
+    - Click-to-select peaks with gold highlighting
+    - Cross-component linking via filters and interactivity
 
-    LinePlots always filter their data based on selection state.
+    LinePlots can have separate `filters` and `interactivity` mappings:
+    - `filters`: Which selections filter this plot's data
+    - `interactivity`: What selection is set when a peak is clicked
 
     Example:
-        data = pl.scan_csv("spectrum.csv")
-
+        # Plot filters by spectrum, clicking selects a peak
         plot = LinePlot(
-            data=data,
-            interactivity={'spectrum': 'scan_id'},
+            data=peaks_df,
+            filters={'spectrum': 'scan_id'},
+            interactivity={'my_selection': 'mass'},
             x_column='mass',
             y_column='intensity',
         )
@@ -38,7 +41,8 @@ class LinePlot(BaseComponent):
     def __init__(
         self,
         data: pl.LazyFrame,
-        interactivity: Dict[str, str],
+        filters: Optional[Dict[str, str]] = None,
+        interactivity: Optional[Dict[str, str]] = None,
         x_column: str = 'x',
         y_column: str = 'y',
         title: Optional[str] = None,
@@ -55,9 +59,14 @@ class LinePlot(BaseComponent):
 
         Args:
             data: Polars LazyFrame with plot data
-            interactivity: Mapping of identifier names to column names.
-                The plot filters its data where mapped columns equal the
-                selection values.
+            filters: Mapping of identifier names to column names for filtering.
+                Example: {'spectrum': 'scan_id'}
+                When 'spectrum' selection exists, plot shows only data where
+                scan_id equals the selected value.
+            interactivity: Mapping of identifier names to column names for clicks.
+                Example: {'my_selection': 'mass'}
+                When a peak is clicked, sets 'my_selection' to that peak's mass.
+                The selected peak is highlighted in gold (selectedColor).
             x_column: Column name for x-axis values
             y_column: Column name for y-axis values
             title: Plot title
@@ -69,7 +78,7 @@ class LinePlot(BaseComponent):
                                to display on highlighted points
             styling: Style configuration dict with keys:
                 - highlightColor: Color for highlighted points (default: '#E4572E')
-                - selectedColor: Color for selected points (default: '#F3A712')
+                - selectedColor: Color for clicked/selected peak (default: '#F3A712')
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options
@@ -87,13 +96,14 @@ class LinePlot(BaseComponent):
 
         super().__init__(
             data,
+            filters=filters,
             interactivity=interactivity,
             **kwargs
         )
 
-    def _validate_interactivity(self) -> None:
+    def _validate_mappings(self) -> None:
         """Validate columns exist in data schema."""
-        super()._validate_interactivity()
+        super()._validate_mappings()
 
         schema = self._raw_data.collect_schema()
         column_names = schema.names()
@@ -146,7 +156,7 @@ class LinePlot(BaseComponent):
         """
         Prepare plot data for Vue component.
 
-        LinePlots always filter based on selection state.
+        LinePlots filter based on filters mapping if provided.
 
         Sends raw x/y values to Vue, which converts them to stick plot format.
         This reduces data transfer size by 3x.
@@ -157,13 +167,16 @@ class LinePlot(BaseComponent):
         Returns:
             Dict with plot data for Vue (x_values, y_values, highlight_mask, annotations)
         """
-        # LinePlots always filter based on interactivity and current state
-        filtered_data = filter_by_selection(
-            self._raw_data,
-            self._interactivity,
-            state
-        )
-        df = filtered_data.collect()
+        # Filter based on filters mapping and current state
+        if self._filters:
+            filtered_data = filter_by_selection(
+                self._raw_data,
+                self._filters,
+                state
+            )
+            df = filtered_data.collect()
+        else:
+            df = self._raw_data.collect()
 
         # Get x and y values (raw, not triplicated - Vue will create stick format)
         x_values = df[self._x_column].to_list()
@@ -233,8 +246,10 @@ class LinePlot(BaseComponent):
             'yLabel': self._y_label,
             'styling': styling,
             'config': self._plot_config,
-            # Pass interactivity for potential future click handling
+            # Pass interactivity for click handling (sets selection on peak click)
             'interactivity': self._interactivity,
+            # Pass x_column name so Vue knows click sets x value
+            'xColumn': self._x_column,
         }
 
         # Add any extra config options

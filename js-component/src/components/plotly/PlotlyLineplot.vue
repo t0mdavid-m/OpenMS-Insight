@@ -95,6 +95,52 @@ export default defineComponent({
     },
 
     /**
+     * Get interactivity mapping from args.
+     * Maps identifier names to column names.
+     */
+    interactivity(): Record<string, string> {
+      return this.args.interactivity || {}
+    },
+
+    /**
+     * Get the selected x value from the selection store.
+     * Returns undefined if no selection or interactivity not configured.
+     */
+    selectedXValue(): number | undefined {
+      // For each identifier in interactivity, check if there's a selection
+      // that maps to x_column (we use x values for selection in plots)
+      for (const [identifier, column] of Object.entries(this.interactivity)) {
+        // Check if this interactivity uses the x column
+        if (column === this.args.xColumn) {
+          const value = this.selectionStore.$state[identifier]
+          if (value !== undefined && value !== null) {
+            return value as number
+          }
+        }
+      }
+      return undefined
+    },
+
+    /**
+     * Find the index of the selected peak based on selectedXValue.
+     */
+    selectedPeakIndex(): number | undefined {
+      const selectedX = this.selectedXValue
+      if (selectedX === undefined || !this.isDataReady || !this.plotData) {
+        return undefined
+      }
+
+      // Find the peak with matching x value
+      const xValues = this.plotData.x_values
+      for (let i = 0; i < xValues.length; i++) {
+        if (xValues[i] === selectedX) {
+          return i
+        }
+      }
+      return undefined
+    },
+
+    /**
      * Check if data is ready for rendering.
      */
     isDataReady(): boolean {
@@ -378,6 +424,7 @@ export default defineComponent({
     /**
      * Build Plotly traces.
      * Uses stick format triplets generated from raw data.
+     * Includes a separate gold trace for the selected peak.
      */
     traces(): Plotly.Data[] {
       if (!this.isDataReady || !this.plotData) {
@@ -386,52 +433,41 @@ export default defineComponent({
 
       const traces: Plotly.Data[] = []
       const { highlight_mask } = this.plotData
-      const xStick = this.xValuesStick
-      const yStick = this.yValuesStick
+      const selectedIndex = this.selectedPeakIndex
+      const baseline = -10000000
 
-      // If no highlight mask, show all as one trace
-      if (!highlight_mask) {
-        traces.push({
-          x: xStick,
-          y: yStick,
-          mode: 'lines',
-          type: 'scatter',
-          connectgaps: false,
-          marker: { color: this.styling.highlightHiddenColor },
-          hoverinfo: 'x+y',
-        })
-        return traces
-      }
-
-      // Split into highlighted and unhighlighted based on mask
+      // Split into unhighlighted, highlighted, and selected
       const unhighlighted_x: number[] = []
       const unhighlighted_y: number[] = []
       const highlighted_x: number[] = []
       const highlighted_y: number[] = []
+      const selected_x: number[] = []
+      const selected_y: number[] = []
 
-      // Process each data point (each point becomes a triplet in stick format)
-      // We must keep triplets together for proper stick rendering
       const numPoints = this.plotData.x_values.length
 
       for (let i = 0; i < numPoints; i++) {
-        const isHighlighted = highlight_mask[i]
         const x = this.plotData.x_values[i]
         const y = this.plotData.y_values[i]
+        const isHighlighted = highlight_mask ? highlight_mask[i] : false
+        const isSelected = selectedIndex !== undefined && i === selectedIndex
 
-        // Use large negative baseline (matching FLASHApp) to avoid visual artifacts
-        const baseline = -10000000
-        if (isHighlighted) {
-          // Push complete triplet for this stick
+        if (isSelected) {
+          // Selected peak goes in gold trace (drawn last, on top)
+          selected_x.push(x, x, x)
+          selected_y.push(baseline, y, baseline)
+        } else if (isHighlighted) {
+          // Highlighted peaks (annotated)
           highlighted_x.push(x, x, x)
           highlighted_y.push(baseline, y, baseline)
         } else {
-          // Push complete triplet for this stick
+          // Normal unhighlighted peaks
           unhighlighted_x.push(x, x, x)
           unhighlighted_y.push(baseline, y, baseline)
         }
       }
 
-      // Unhighlighted trace
+      // Unhighlighted trace (drawn first, bottom layer)
       if (unhighlighted_x.length > 0) {
         traces.push({
           x: unhighlighted_x,
@@ -444,7 +480,7 @@ export default defineComponent({
         })
       }
 
-      // Highlighted trace
+      // Highlighted trace (middle layer)
       if (highlighted_x.length > 0) {
         traces.push({
           x: highlighted_x,
@@ -453,6 +489,33 @@ export default defineComponent({
           type: 'scatter',
           connectgaps: false,
           marker: { color: this.styling.highlightColor },
+          hoverinfo: 'x+y',
+        })
+      }
+
+      // Selected trace (top layer, gold color)
+      if (selected_x.length > 0) {
+        traces.push({
+          x: selected_x,
+          y: selected_y,
+          mode: 'lines',
+          type: 'scatter',
+          connectgaps: false,
+          marker: { color: this.styling.selectedColor },
+          line: { width: 3 }, // Make selected peak slightly thicker
+          hoverinfo: 'x+y',
+        })
+      }
+
+      // If no data was added (no highlight mask and no selection), show all as default
+      if (traces.length === 0) {
+        traces.push({
+          x: this.xValuesStick,
+          y: this.yValuesStick,
+          mode: 'lines',
+          type: 'scatter',
+          connectgaps: false,
+          marker: { color: this.styling.highlightHiddenColor },
           hoverinfo: 'x+y',
         })
       }
@@ -526,6 +589,16 @@ export default defineComponent({
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
         this.renderPlot()
+      },
+      deep: true,
+    },
+
+    // Re-render when selection changes (to update gold highlighting)
+    'selectionStore.$state': {
+      handler() {
+        if (this.isDataReady) {
+          this.renderPlot()
+        }
       },
       deep: true,
     },
@@ -611,18 +684,41 @@ export default defineComponent({
     },
 
     onPlotClick(eventData: any): void {
+      // Only handle clicks if interactivity is configured
+      if (!this.interactivity || Object.keys(this.interactivity).length === 0) {
+        return
+      }
+
       if (eventData.points && eventData.points.length > 0) {
         const point = eventData.points[0]
-        const x = point.x
-        const y = point.y
-        const pointIndex = point.pointIndex
+        const clickedX = point.x
 
-        // Update selection store
-        this.selectionStore.updateSelection('selectedPoint', {
-          x,
-          y,
-          index: pointIndex,
-        })
+        // Find the nearest peak to the clicked x position
+        // Plotly click returns triplet index, we need to find the actual peak
+        if (!this.plotData) return
+
+        const xValues = this.plotData.x_values
+        let nearestIndex = 0
+        let nearestDistance = Infinity
+
+        for (let i = 0; i < xValues.length; i++) {
+          const distance = Math.abs(xValues[i] - clickedX)
+          if (distance < nearestDistance) {
+            nearestDistance = distance
+            nearestIndex = i
+          }
+        }
+
+        const selectedXValue = xValues[nearestIndex]
+
+        // Update selection store using the interactivity mapping
+        for (const [identifier, column] of Object.entries(this.interactivity)) {
+          // For now, we assume interactivity column matches x_column
+          // (selection is by x value / mass)
+          if (column === this.args.xColumn) {
+            this.selectionStore.updateSelection(identifier, selectedXValue)
+          }
+        }
       }
     },
 

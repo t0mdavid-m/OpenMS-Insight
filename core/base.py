@@ -9,12 +9,13 @@ class BaseComponent(ABC):
     """
     Abstract base class for all visualization components.
 
-    Components are created with data and interactivity mappings, then rendered
-    by calling the component instance.
+    Components are created with data, filters, and interactivity mappings,
+    then rendered by calling the component instance.
 
     Attributes:
         _raw_data: Original polars LazyFrame
-        _interactivity: Dict mapping identifiers to column names
+        _filters: Dict mapping identifiers to column names for filtering
+        _interactivity: Dict mapping identifiers to column names for click actions
         _preprocessed_data: Dict of preprocessed data structures
         _config: Component configuration options
         _component_type: Class-level component type identifier
@@ -25,7 +26,8 @@ class BaseComponent(ABC):
     def __init__(
         self,
         data: pl.LazyFrame,
-        interactivity: Dict[str, str],
+        filters: Optional[Dict[str, str]] = None,
+        interactivity: Optional[Dict[str, str]] = None,
         **kwargs
     ):
         """
@@ -33,32 +35,44 @@ class BaseComponent(ABC):
 
         Args:
             data: Polars LazyFrame with source data
-            interactivity: Mapping of identifier names to column names.
-                Example: {'spectrum': 'scan_id', 'mass': 'mass_idx'}
-                When a selection is made with identifier 'spectrum', components
-                filter their data where their mapped column equals the selected value.
+            filters: Mapping of identifier names to column names for filtering.
+                Example: {'spectrum': 'scan_id'}
+                When 'spectrum' selection exists, component filters data where
+                scan_id equals the selected value.
+            interactivity: Mapping of identifier names to column names for clicks.
+                Example: {'my_selection': 'mass'}
+                When user clicks/selects, sets 'my_selection' to the clicked
+                row's mass value.
             **kwargs: Component-specific configuration options
         """
         self._raw_data = data
-        self._interactivity = interactivity
+        self._filters = filters or {}
+        self._interactivity = interactivity or {}
         self._preprocessed_data: Dict[str, Any] = {}
         self._config = kwargs
 
-        # Validate interactivity columns exist in data
-        self._validate_interactivity()
+        # Validate columns exist in data
+        self._validate_mappings()
 
         # Run component-specific preprocessing
         self._preprocess()
 
-    def _validate_interactivity(self) -> None:
-        """Validate that interactivity columns exist in the data schema."""
+    def _validate_mappings(self) -> None:
+        """Validate that filter and interactivity columns exist in the data schema."""
         schema = self._raw_data.collect_schema()
         column_names = schema.names()
+
+        for identifier, column in self._filters.items():
+            if column not in column_names:
+                raise ValueError(
+                    f"Filter column '{column}' for identifier '{identifier}' not found in data. "
+                    f"Available columns: {column_names}"
+                )
 
         for identifier, column in self._interactivity.items():
             if column not in column_names:
                 raise ValueError(
-                    f"Column '{column}' for identifier '{identifier}' not found in data. "
+                    f"Interactivity column '{column}' for identifier '{identifier}' not found in data. "
                     f"Available columns: {column_names}"
                 )
 
@@ -108,12 +122,20 @@ class BaseComponent(ABC):
         """
         pass
 
+    def get_filters_mapping(self) -> Dict[str, str]:
+        """Return the filters identifier-to-column mapping."""
+        return self._filters.copy()
+
     def get_interactivity_mapping(self) -> Dict[str, str]:
         """Return the interactivity identifier-to-column mapping."""
         return self._interactivity.copy()
 
-    def get_selection_identifiers(self) -> List[str]:
-        """Return list of selection identifiers this component uses."""
+    def get_filter_identifiers(self) -> List[str]:
+        """Return list of filter identifiers this component uses."""
+        return list(self._filters.keys())
+
+    def get_interactivity_identifiers(self) -> List[str]:
+        """Return list of interactivity identifiers this component sets."""
         return list(self._interactivity.keys())
 
     def _get_primary_data(self) -> pl.LazyFrame:
@@ -182,6 +204,7 @@ class BaseComponent(ABC):
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("
+            f"filters={self._filters}, "
             f"interactivity={self._interactivity}, "
             f"config={self._config})"
         )

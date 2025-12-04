@@ -22,29 +22,30 @@ class Table(BaseComponent):
     - CSV download
     - Automatic column type detection
 
-    By default, tables show ALL data and set selection on row click.
-    Use `filters_on_selection=True` to make the table filter its data
-    based on the current selection state (like LinePlot does).
+    Tables can have separate `filters` and `interactivity` mappings:
+    - `filters`: Which selections filter this table's data
+    - `interactivity`: What selection is set when a row is clicked
 
     Example:
-        # Master table - shows all data, sets selection
+        # Master table - shows all data, clicking sets 'spectrum' selection
         master_table = Table(
             data=spectra_df,
             interactivity={'spectrum': 'scan_id'},
         )
 
-        # Detail table - filters based on selection
+        # Detail table - filters by 'spectrum', clicking sets 'peak' selection
         detail_table = Table(
             data=peaks_df,
-            interactivity={'spectrum': 'scan_id'},
-            filters_on_selection=True,
+            filters={'spectrum': 'scan_id'},
+            interactivity={'peak': 'mass'},
         )
     """
 
     def __init__(
         self,
         data: pl.LazyFrame,
-        interactivity: Dict[str, str],
+        filters: Optional[Dict[str, str]] = None,
+        interactivity: Optional[Dict[str, str]] = None,
         column_definitions: Optional[List[Dict[str, Any]]] = None,
         title: Optional[str] = None,
         index_field: str = 'id',
@@ -52,7 +53,6 @@ class Table(BaseComponent):
         layout: str = 'fitDataFill',
         default_row: int = 0,
         initial_sort: Optional[List[Dict[str, Any]]] = None,
-        filters_on_selection: bool = False,
         **kwargs
     ):
         """
@@ -60,9 +60,13 @@ class Table(BaseComponent):
 
         Args:
             data: Polars LazyFrame with table data
-            interactivity: Mapping of identifier names to column names.
-                When a row is clicked, the component updates the selection
-                for each identifier with the value from the mapped column.
+            filters: Mapping of identifier names to column names for filtering.
+                Example: {'spectrum': 'scan_id'}
+                When 'spectrum' selection exists, table shows only rows where
+                scan_id equals the selected value.
+            interactivity: Mapping of identifier names to column names for clicks.
+                Example: {'peak': 'mass'}
+                When a row is clicked, sets 'peak' selection to that row's mass.
             column_definitions: List of Tabulator column definition dicts.
                 Each dict can contain:
                 - field: Column field name (required)
@@ -80,8 +84,6 @@ class Table(BaseComponent):
             layout: Tabulator layout mode ('fitData', 'fitDataFill', 'fitColumns', etc.)
             default_row: Default row to select on load (-1 for none)
             initial_sort: List of sort configurations like [{'column': 'field', 'dir': 'asc'}]
-            filters_on_selection: If True, filter data based on current selection
-                state (like LinePlot). If False (default), show all data.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -91,10 +93,10 @@ class Table(BaseComponent):
         self._layout = layout
         self._default_row = default_row
         self._initial_sort = initial_sort
-        self._filters_on_selection = filters_on_selection
 
         super().__init__(
             data,
+            filters=filters,
             interactivity=interactivity,
             **kwargs
         )
@@ -148,7 +150,7 @@ class Table(BaseComponent):
         """
         Prepare table data for Vue component.
 
-        If filters_on_selection is True, filters data based on selection state.
+        If filters is non-empty, filters data based on selection state.
         Otherwise, shows all data.
 
         Args:
@@ -157,11 +159,11 @@ class Table(BaseComponent):
         Returns:
             Dict with tableData key containing the data
         """
-        if self._filters_on_selection:
-            # Filter based on selection state (like LinePlot)
+        if self._filters:
+            # Filter based on selection state using filters mapping
             filtered_data = filter_by_selection(
                 self._raw_data,
-                self._interactivity,
+                self._filters,
                 state
             )
             df = filtered_data.collect()

@@ -42,6 +42,7 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   styling?: LinePlotStyling
   config?: LinePlotConfig
   interactivity?: InteractivityMapping
+  xColumn?: string // Column name for x-axis, used for click-to-select
 }
 
 export interface LinePlotStyling {
