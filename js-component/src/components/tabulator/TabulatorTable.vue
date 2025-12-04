@@ -318,17 +318,11 @@ export default defineComponent({
       })
 
       this.tabulator.on('tableBuilt', () => {
-        console.log(`[TabulatorTable] tableBuilt for ${this.args.title}:`, {
-          id: this.id,
-          rowCount: this.tabulator?.getDataCount(),
-        })
         this.selectDefaultRow()
         this.applyFilters()
 
-        // Force redraw and update frame height after table is built
+        // Update Streamlit iframe height after table is rendered
         this.$nextTick(() => {
-          this.tabulator?.redraw(true)
-          // Update Streamlit iframe height now that table is rendered
           Streamlit.setFrameHeight()
         })
       })
@@ -442,23 +436,6 @@ export default defineComponent({
         for (const [identifier, column] of Object.entries(interactivity)) {
           const value = rowData[column as string]
           this.selectionStore.updateSelection(identifier, value)
-        }
-      }
-    },
-
-    onTableClick(): void {
-      // Legacy method - now handled by onRowClick via Tabulator's rowClick event
-      const selectedRow = this.tabulator?.getSelectedRows()[0]?.getIndex()
-      if (selectedRow !== undefined) {
-        const rowData = this.preparedTableData.find(
-          (row) => row[this.args.tableIndexField || 'id'] === selectedRow
-        )
-        if (rowData) {
-          const interactivity = this.args.interactivity || {}
-          for (const [identifier, column] of Object.entries(interactivity)) {
-            const value = rowData[column as string]
-            this.selectionStore.updateSelection(identifier, value)
-          }
         }
       }
     },
@@ -1122,10 +1099,23 @@ export default defineComponent({
       const rowIndex = this.findRowByValue(this.selectedGoToField, this.goToInputValue.trim())
 
       if (rowIndex >= 0) {
-        this.tabulator?.scrollToRow(rowIndex, 'top', false)
-        this.tabulator?.deselectRow()
-        this.tabulator?.selectRow([rowIndex])
-        this.onTableClick()
+        const indexField = this.args.tableIndexField || 'id'
+        const rowId = this.preparedTableData[rowIndex][indexField]
+        const row = this.tabulator?.getRow(rowId)
+        if (row) {
+          this.tabulator?.scrollToRow(rowId, 'top', false)
+          this.tabulator?.deselectRow()
+          row.select()
+          // Update selection store
+          const rowData = row.getData()
+          if (rowData) {
+            const interactivity = this.args.interactivity || {}
+            for (const [identifier, column] of Object.entries(interactivity)) {
+              const value = rowData[column as string]
+              this.selectionStore.updateSelection(identifier, value)
+            }
+          }
+        }
         this.goToInputValue = ''
       }
     },
@@ -1148,22 +1138,6 @@ export default defineComponent({
 
 <style>
 @import 'tabulator-tables/dist/css/tabulator_bootstrap4.min.css';
-
-/* Fix: Ensure Tabulator table renders properly */
-.tabulator {
-  min-height: 100px;
-}
-
-/* Override tableholder to ensure rows are visible */
-.tabulator .tabulator-tableholder {
-  overflow: visible !important;
-  min-height: 50px;
-}
-
-/* But keep the table itself scrollable via a wrapper if needed */
-.tabulator .tabulator-tableholder .tabulator-table {
-  width: 100%;
-}
 
 .tabulator-col-title,
 .tabulator-cell {
