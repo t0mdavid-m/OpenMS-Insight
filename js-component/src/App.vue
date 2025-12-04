@@ -38,13 +38,23 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
 
-    // Watch selection store and send changes back to Python
+    // Watch selection store counter and send state back to Python
+    // We watch counter (a primitive) instead of deep-watching the entire state.
+    // This avoids creating a spread object on every reactivity check.
+    // Counter increments on every selection change, so this captures all updates.
+    let lastSentCounter: number | undefined = undefined
     watch(
-      () => ({ ...selectionStore.$state }),
-      (newState) => {
-        Streamlit.setComponentValue(newState)
+      () => selectionStore.$state.counter,
+      () => {
+        // Avoid duplicate sends for same counter value
+        const currentCounter = selectionStore.$state.counter
+        if (currentCounter === lastSentCounter) return
+        lastSentCounter = currentCounter
+
+        // Send full state to Python (same as before, just triggered more efficiently)
+        Streamlit.setComponentValue({ ...selectionStore.$state })
       },
-      { deep: true, immediate: true }
+      { immediate: true }
     )
 
     return { streamlitDataStore, selectionStore }
