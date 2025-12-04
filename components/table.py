@@ -167,6 +167,14 @@ class Table(BaseComponent):
                 for col_def in self._column_definitions
                 if 'field' in col_def
             ]
+            # Always include index field for row identification
+            if self._index_field and self._index_field not in columns_to_select:
+                columns_to_select.append(self._index_field)
+            # Include columns needed for interactivity
+            if self._interactivity:
+                for col in self._interactivity.values():
+                    if col not in columns_to_select:
+                        columns_to_select.append(col)
             # Reset to None if empty (handles edge cases)
             if not columns_to_select:
                 columns_to_select = None
