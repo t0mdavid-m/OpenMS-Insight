@@ -121,8 +121,10 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
     // Generate unique ID on setup
-    const uniqueId = `table-${Date.now()}-${++tableIdCounter}`
-    return { streamlitDataStore, selectionStore, uniqueId }
+    const instanceId = ++tableIdCounter
+    const uniqueId = `table-${Date.now()}-${instanceId}`
+    console.log(`[TabulatorTable] setup() - new instance created, instanceId: ${instanceId}, uniqueId: ${uniqueId}`)
+    return { streamlitDataStore, selectionStore, uniqueId, instanceId }
   },
   data() {
     return {
@@ -153,6 +155,9 @@ export default defineComponent({
       showGoTo: false,
       selectedGoToField: '',
       goToInputValue: '',
+      // Pending selection: stores selection values that couldn't be applied
+      // because the data wasn't ready yet. Applied when new data arrives.
+      pendingSelection: null as Record<string, unknown> | null,
     }
   },
   computed: {
@@ -238,8 +243,18 @@ export default defineComponent({
   },
   watch: {
     // Watch tableData and redraw when it changes
-    tableData() {
-      this.drawTable()
+    // Use nextTick to ensure Vue's reactivity has fully propagated
+    // This is critical when both data and selection change simultaneously
+    tableData(newData, oldData) {
+      console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] tableData changed:`, {
+        newLength: newData?.length,
+        oldLength: oldData?.length,
+        pendingSelection: this.pendingSelection,
+        selectionState: { ...this.selectionStore.$state },
+      })
+      this.$nextTick(() => {
+        this.drawTable()
+      })
     },
     // Watch for height changes in args
     'args.height'(newHeight: number | undefined) {
@@ -271,10 +286,17 @@ export default defineComponent({
     this.initializeGoTo()
   },
   beforeUnmount() {
+    console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] beforeUnmount called`)
     this.cleanupTeleport()
   },
   methods: {
     drawTable(): void {
+      console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] drawTable:`, {
+        dataLength: this.preparedTableData.length,
+        pendingSelection: this.pendingSelection,
+        uniqueId: this.uniqueId,
+      })
+
       // Destroy existing table if any
       if (this.tabulator) {
         this.tabulator.destroy()
@@ -318,12 +340,34 @@ export default defineComponent({
       })
 
       this.tabulator.on('tableBuilt', () => {
+        const tabulatorRows = this.tabulator?.getRows().length
+        const tabulatorData = this.tabulator?.getData()
+        console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] tableBuilt:`, {
+          tabulatorRows,
+          tabulatorDataLength: tabulatorData?.length,
+          preparedDataLength: this.preparedTableData.length,
+        })
         this.selectDefaultRow()
         this.applyFilters()
 
         // Update Streamlit iframe height after table is rendered
         this.$nextTick(() => {
           Streamlit.setFrameHeight()
+          // Force Tabulator to recalculate and render visible rows
+          // This fixes issues where virtual rendering doesn't show rows until scroll
+          setTimeout(() => {
+            if (this.tabulator) {
+              // Get the selected row and scroll to it to force virtual DOM render
+              const selectedRows = this.tabulator.getSelectedRows()
+              if (selectedRows.length > 0) {
+                // scrollToRow forces virtual DOM to calculate and render visible rows
+                this.tabulator.scrollToRow(selectedRows[0], 'center', false)
+              } else {
+                // No selection - scroll to top to trigger render
+                this.tabulator.scrollToRow(this.tabulator.getRows()[0], 'top', false)
+              }
+            }
+          }, 50)
         })
       })
 
@@ -338,6 +382,12 @@ export default defineComponent({
       if (!this.tabulator) return
 
       const interactivity = this.args.interactivity || {}
+      console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] syncSelectionFromStore:`, {
+        interactivity,
+        selectionState: { ...this.selectionStore.$state },
+        dataLength: this.preparedTableData.length,
+        tabulatorRowCount: this.tabulator?.getRows().length,
+      })
 
       for (const [identifier, column] of Object.entries(interactivity)) {
         const selectedValue = this.selectionStore.$state[identifier]
@@ -347,7 +397,8 @@ export default defineComponent({
           if (currentlySelected) {
             const currentData = currentlySelected.getData()
             if (currentData[column as string] === selectedValue) {
-              // Already selected the correct row
+              // Already selected the correct row, clear any pending selection
+              this.pendingSelection = null
               return
             }
           }
@@ -359,11 +410,24 @@ export default defineComponent({
           if (rowIndex >= 0) {
             const indexField = this.args.tableIndexField || 'id'
             const rowId = this.preparedTableData[rowIndex][indexField]
-            const row = this.tabulator.getRow(rowId)
+            // Use getRows to avoid "Find Error" warnings during race conditions
+            // when selection state changes before filtered data arrives
+            const rows = this.tabulator.getRows()
+            const row = rows.find(r => r.getData()[indexField] === rowId)
             if (row) {
               this.tabulator.deselectRow()
               row.select()
+              // Successfully selected, clear any pending selection
+              this.pendingSelection = null
+            } else {
+              // Row exists in data but not in tabulator yet - store as pending
+              // This happens when data and selection change simultaneously
+              this.pendingSelection = { [identifier]: selectedValue }
             }
+          } else {
+            // Row not found in current data - store as pending selection
+            // This happens when selection changes before filtered data arrives
+            this.pendingSelection = { [identifier]: selectedValue }
           }
           break
         }
@@ -371,27 +435,71 @@ export default defineComponent({
     },
 
     selectDefaultRow(): void {
-      // First, try to select based on current selection state
       const interactivity = this.args.interactivity || {}
       let selectedFromState = false
 
-      // Check if we have a selection in the store that matches our interactivity
-      for (const [identifier, column] of Object.entries(interactivity)) {
-        const selectedValue = this.selectionStore.$state[identifier]
-        if (selectedValue !== undefined && selectedValue !== null) {
-          // Find the row with this value in the column
-          const rowIndex = this.preparedTableData.findIndex(
-            (row) => row[column as string] === selectedValue
-          )
-          if (rowIndex >= 0) {
-            const indexField = this.args.tableIndexField || 'id'
-            const rowId = this.preparedTableData[rowIndex][indexField]
-            const row = this.tabulator?.getRow(rowId)
-            if (row) {
-              row.select()
-              this.tabulator?.scrollToRow(rowId, 'center', false)
-              selectedFromState = true
-              break
+      console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] selectDefaultRow:`, {
+        pendingSelection: this.pendingSelection,
+        selectionState: { ...this.selectionStore.$state },
+        dataLength: this.preparedTableData.length,
+        tabulatorRowCount: this.tabulator?.getRows().length,
+      })
+
+      // First, check for pending selection (from previous failed sync attempts)
+      if (this.pendingSelection) {
+        for (const [identifier, selectedValue] of Object.entries(this.pendingSelection)) {
+          const column = interactivity[identifier]
+          if (column && selectedValue !== undefined && selectedValue !== null) {
+            const rowIndex = this.preparedTableData.findIndex(
+              (row) => row[column as string] === selectedValue
+            )
+            console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] pending selection search:`, {
+              identifier,
+              column,
+              selectedValue,
+              rowIndex,
+              found: rowIndex >= 0,
+            })
+            if (rowIndex >= 0) {
+              const indexField = this.args.tableIndexField || 'id'
+              const rowId = this.preparedTableData[rowIndex][indexField]
+              const rows = this.tabulator?.getRows() || []
+              const row = rows.find(r => r.getData()[indexField] === rowId)
+              if (row) {
+                row.select()
+                row.scrollTo('center', false)
+                selectedFromState = true
+                // Clear pending selection since we successfully applied it
+                this.pendingSelection = null
+                console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] selected pending row`)
+                break
+              }
+            }
+          }
+        }
+      }
+
+      // If no pending selection worked, try current selection state
+      if (!selectedFromState) {
+        for (const [identifier, column] of Object.entries(interactivity)) {
+          const selectedValue = this.selectionStore.$state[identifier]
+          if (selectedValue !== undefined && selectedValue !== null) {
+            // Find the row with this value in the column
+            const rowIndex = this.preparedTableData.findIndex(
+              (row) => row[column as string] === selectedValue
+            )
+            if (rowIndex >= 0) {
+              const indexField = this.args.tableIndexField || 'id'
+              const rowId = this.preparedTableData[rowIndex][indexField]
+              // Use getRows to avoid "Find Error" warnings during race conditions
+              const rows = this.tabulator?.getRows() || []
+              const row = rows.find(r => r.getData()[indexField] === rowId)
+              if (row) {
+                row.select()
+                row.scrollTo('center', false)
+                selectedFromState = true
+                break
+              }
             }
           }
         }
@@ -1103,7 +1211,7 @@ export default defineComponent({
         const rowId = this.preparedTableData[rowIndex][indexField]
         const row = this.tabulator?.getRow(rowId)
         if (row) {
-          this.tabulator?.scrollToRow(rowId, 'top', false)
+          row.scrollTo('top', false)
           this.tabulator?.deselectRow()
           row.select()
           // Update selection store
