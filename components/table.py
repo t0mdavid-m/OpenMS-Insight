@@ -6,7 +6,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
-from ..preprocessing.filtering import filter_by_selection
+from ..preprocessing.filtering import filter_and_collect_cached
 
 
 @register_component("table")
@@ -151,7 +151,7 @@ class Table(BaseComponent):
         Prepare table data for Vue component.
 
         If filters is non-empty, filters data based on selection state.
-        Otherwise, shows all data.
+        Otherwise, shows all data. Results are cached based on filter state.
 
         Args:
             state: Current selection state from StateManager
@@ -159,17 +159,27 @@ class Table(BaseComponent):
         Returns:
             Dict with tableData key containing the data
         """
-        if self._filters:
-            # Filter based on selection state using filters mapping
-            filtered_data = filter_by_selection(
-                self._raw_data,
-                self._filters,
-                state
-            )
-            df = filtered_data.collect()
-        else:
-            # Show all data (default behavior)
-            df = self._raw_data.collect()
+        # Build list of columns to select (projection pushdown)
+        columns_to_select = None
+        if self._column_definitions:
+            columns_to_select = [
+                col_def['field']
+                for col_def in self._column_definitions
+                if 'field' in col_def
+            ]
+            # Reset to None if empty (handles edge cases)
+            if not columns_to_select:
+                columns_to_select = None
+
+        # Use cached filter+collect for efficiency
+        # Cache key is based on filter state, so interactions that don't
+        # change filters (e.g., clicking within filtered data) hit cache
+        df = filter_and_collect_cached(
+            self._raw_data,
+            self._filters,
+            state,
+            columns=columns_to_select,
+        )
 
         # Convert to list of dicts for JSON serialization
         table_data = df.to_dicts()

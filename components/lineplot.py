@@ -6,7 +6,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
-from ..preprocessing.filtering import filter_by_selection
+from ..preprocessing.filtering import filter_and_collect_cached
 
 
 @register_component("lineplot")
@@ -159,7 +159,7 @@ class LinePlot(BaseComponent):
         LinePlots filter based on filters mapping if provided.
 
         Sends raw x/y values to Vue, which converts them to stick plot format.
-        This reduces data transfer size by 3x.
+        This reduces data transfer size by 3x. Results are cached based on filter state.
 
         Args:
             state: Current selection state from StateManager
@@ -167,16 +167,22 @@ class LinePlot(BaseComponent):
         Returns:
             Dict with plot data for Vue (x_values, y_values, highlight_mask, annotations)
         """
-        # Filter based on filters mapping and current state
-        if self._filters:
-            filtered_data = filter_by_selection(
-                self._raw_data,
-                self._filters,
-                state
-            )
-            df = filtered_data.collect()
-        else:
-            df = self._raw_data.collect()
+        # Build list of columns to select (projection pushdown for efficiency)
+        columns_to_select = [self._x_column, self._y_column]
+        if self._highlight_column:
+            columns_to_select.append(self._highlight_column)
+        if self._annotation_column:
+            columns_to_select.append(self._annotation_column)
+
+        # Use cached filter+collect for efficiency
+        # Cache key is based on filter state, so interactions that don't
+        # change filters (e.g., clicking a peak) hit cache
+        df = filter_and_collect_cached(
+            self._raw_data,
+            self._filters,
+            state,
+            columns=columns_to_select,
+        )
 
         # Get x and y values (raw, not triplicated - Vue will create stick format)
         x_values = df[self._x_column].to_list()
