@@ -232,7 +232,7 @@ export default defineComponent({
   },
   watch: {
     tableData() {
-      this.drawTable()
+      this.updateTableData()
     },
     selectedColumns: {
       handler(newColumns: string[]) {
@@ -295,6 +295,30 @@ export default defineComponent({
       // Use Tabulator's rowClick event for reliable row selection handling
       this.tabulator.on('rowClick', (e: Event, row: any) => {
         this.onRowClick(row)
+      })
+    },
+
+    /**
+     * Update table data efficiently using Tabulator's setData() method.
+     * This preserves table state (filters, scroll position) instead of recreating the table.
+     */
+    updateTableData(): void {
+      if (!this.tabulator) {
+        // First render - create the table
+        this.drawTable()
+        return
+      }
+
+      // Use Tabulator's setData for efficient updates
+      // This preserves filters, sorting, and other table state
+      this.tabulator.setData(this.preparedTableData)
+
+      // Clear column analysis cache since data changed
+      this.columnAnalysis = {}
+
+      // Re-sync selection from store after data update
+      this.$nextTick(() => {
+        this.syncSelectionFromStore()
       })
     },
 
