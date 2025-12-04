@@ -6,6 +6,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
+from ..preprocessing.filtering import filter_by_selection
 
 
 @register_component("table")
@@ -21,16 +22,22 @@ class Table(BaseComponent):
     - CSV download
     - Automatic column type detection
 
-    Tables always show ALL data and set selection on row click.
-    They never filter themselves based on selection state.
+    By default, tables show ALL data and set selection on row click.
+    Use `filters_on_selection=True` to make the table filter its data
+    based on the current selection state (like LinePlot does).
 
     Example:
-        data = pl.scan_csv("data.csv")
-
-        table = Table(
-            data=data,
+        # Master table - shows all data, sets selection
+        master_table = Table(
+            data=spectra_df,
             interactivity={'spectrum': 'scan_id'},
-            column_definitions=[...],
+        )
+
+        # Detail table - filters based on selection
+        detail_table = Table(
+            data=peaks_df,
+            interactivity={'spectrum': 'scan_id'},
+            filters_on_selection=True,
         )
     """
 
@@ -45,6 +52,7 @@ class Table(BaseComponent):
         layout: str = 'fitDataFill',
         default_row: int = 0,
         initial_sort: Optional[List[Dict[str, Any]]] = None,
+        filters_on_selection: bool = False,
         **kwargs
     ):
         """
@@ -72,6 +80,8 @@ class Table(BaseComponent):
             layout: Tabulator layout mode ('fitData', 'fitDataFill', 'fitColumns', etc.)
             default_row: Default row to select on load (-1 for none)
             initial_sort: List of sort configurations like [{'column': 'field', 'dir': 'asc'}]
+            filters_on_selection: If True, filter data based on current selection
+                state (like LinePlot). If False (default), show all data.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -81,6 +91,7 @@ class Table(BaseComponent):
         self._layout = layout
         self._default_row = default_row
         self._initial_sort = initial_sort
+        self._filters_on_selection = filters_on_selection
 
         super().__init__(
             data,
@@ -137,16 +148,26 @@ class Table(BaseComponent):
         """
         Prepare table data for Vue component.
 
-        Tables always show ALL data - they never filter themselves.
+        If filters_on_selection is True, filters data based on selection state.
+        Otherwise, shows all data.
 
         Args:
-            state: Current selection state from StateManager (ignored)
+            state: Current selection state from StateManager
 
         Returns:
             Dict with tableData key containing the data
         """
-        # Tables never filter - always show all data
-        df = self._raw_data.collect()
+        if self._filters_on_selection:
+            # Filter based on selection state (like LinePlot)
+            filtered_data = filter_by_selection(
+                self._raw_data,
+                self._interactivity,
+                state
+            )
+            df = filtered_data.collect()
+        else:
+            # Show all data (default behavior)
+            df = self._raw_data.collect()
 
         # Convert to list of dicts for JSON serialization
         table_data = df.to_dicts()
