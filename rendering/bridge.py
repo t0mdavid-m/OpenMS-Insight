@@ -3,7 +3,7 @@
 import hashlib
 import os
 import pickle
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import pandas as pd
 import polars as pl
@@ -19,6 +19,48 @@ _vue_component_func = None
 
 # Session state key for caching last data hash per component
 _LAST_HASH_KEY = "_svc_last_hashes"
+
+# Session state key for tracking Vue's data reception
+# This ensures we resend data after Vue hot reloads or browser refreshes
+_VUE_DATA_RECEIVED_KEY = "_svc_vue_data_received"
+
+
+
+@st.cache_data(max_entries=10, show_spinner=False)
+def _cached_prepare_vue_data(
+    _component: 'BaseComponent',
+    component_id: str,
+    filter_state: Tuple[Tuple[str, Any], ...],
+    _data_id: int,
+) -> Tuple[Dict[str, Any], str]:
+    """
+    Cached wrapper for _prepare_vue_data.
+
+    Cache key is based on:
+    - component_id: unique key for this component instance
+    - filter_state: only the selection values that affect this component's filters
+    - _data_id: identity of raw data (invalidates cache if data object changes)
+
+    The _component parameter is prefixed with underscore so it's not hashed
+    (component instances are not hashable).
+
+    Args:
+        _component: The component to prepare data for (not hashed)
+        component_id: Unique identifier for this component
+        filter_state: Tuple of (identifier, value) pairs for filter-relevant state
+        _data_id: id() of the raw data object
+
+    Returns:
+        Tuple of (vue_data dict, data_hash string)
+    """
+    # Reconstruct full state dict from filter_state tuple
+    state = dict(filter_state)
+    vue_data = _component._prepare_vue_data(state)
+
+    # Compute hash before any conversion
+    data_hash = _hash_data(vue_data)
+
+    return vue_data, data_hash
 
 
 def get_vue_component_function():
@@ -74,7 +116,7 @@ def render_component(
 
     This function:
     1. Gets current state from StateManager
-    2. Calls component._prepare_vue_data() to get filtered data
+    2. Calls component._prepare_vue_data() to get filtered data (cached!)
     3. Computes hash for change detection
     4. Only sends data if hash changed from last render (optimization)
     5. Calls the Vue component with data payload
@@ -97,50 +139,77 @@ def render_component(
     state = state_manager.get_state_for_vue()
     t1 = time.perf_counter()
 
-    # Get component data and configuration
-    vue_data = component._prepare_vue_data(state)
+    # Generate unique key if not provided (needed for cache)
+    if key is None:
+        key = f"svc_{id(component)}_{hash(str(component._interactivity))}"
+
+    # Extract only filter-relevant state for cache key
+    # This ensures cache hits when non-filter selections change
+    filter_keys = set(component._filters.keys()) if component._filters else set()
+    filter_state = tuple(sorted(
+        (k, state.get(k)) for k in filter_keys
+    ))
+
+    # Build component ID for cache (includes type to avoid collisions)
+    component_type = component._get_vue_component_name()
+    component_id = f"{component_type}:{key}"
+
+    # Get data identity - cache invalidates if raw data object changes
+    data_id = id(component._raw_data)
+
+    # Get component data using cached function
+    # Cache key: (component_id, filter_state, data_id)
+    # - Filterless components: filter_state=() always → always cache hit
+    # - Filtered components: cache hit when filter values unchanged
+    vue_data, data_hash = _cached_prepare_vue_data(
+        component, component_id, filter_state, data_id
+    )
     t2 = time.perf_counter()
 
     component_args = component._get_component_args()
     t3 = time.perf_counter()
 
-    # Use precomputed hash if available, otherwise compute it
-    if '_hash' in vue_data:
-        data_hash = vue_data.pop('_hash')
-    else:
-        # Need to compute hash before conversion
-        data_hash = _hash_data(vue_data)
+    # Hash already computed by cache
     t4 = time.perf_counter()
-
-    # Generate unique key if not provided
-    if key is None:
-        key = f"svc_{id(component)}_{hash(str(component._interactivity))}"
 
     # Initialize hash cache in session state if needed
     if _LAST_HASH_KEY not in st.session_state:
         st.session_state[_LAST_HASH_KEY] = {}
 
+    # Track which components Vue has confirmed receiving data for
+    # This handles the case where Vue reloads (dev mode hot reload, browser refresh)
+    # but Python's session state persists with stale hash cache
+    if _VUE_DATA_RECEIVED_KEY not in st.session_state:
+        st.session_state[_VUE_DATA_RECEIVED_KEY] = set()
+
     # Check if data changed from last render
     last_hash = st.session_state[_LAST_HASH_KEY].get(key)
-    data_changed = last_hash != data_hash
+    vue_has_data = key in st.session_state[_VUE_DATA_RECEIVED_KEY]
+
+    # Send data if hash changed OR Vue hasn't confirmed receiving data yet
+    data_changed = (last_hash != data_hash) or not vue_has_data
 
     # Only include full data if hash changed
     if data_changed:
         # Convert any non-pandas data to pandas for Arrow serialization
         # pandas DataFrames are passed through (already optimal for Arrow)
+        # Also filter out internal keys (starting with _)
+        converted_data = {}
         for data_key, value in vue_data.items():
             if data_key.startswith('_'):
                 # Skip metadata keys like _hash, _plotConfig
                 continue
             if isinstance(value, pl.LazyFrame):
-                vue_data[data_key] = value.collect().to_pandas()
+                converted_data[data_key] = value.collect().to_pandas()
             elif isinstance(value, pl.DataFrame):
-                vue_data[data_key] = value.to_pandas()
+                converted_data[data_key] = value.to_pandas()
+            else:
+                converted_data[data_key] = value
             # pandas DataFrames pass through unchanged (optimal for Arrow)
         # Update cached hash
         st.session_state[_LAST_HASH_KEY][key] = data_hash
         data_payload = {
-            **vue_data,
+            **converted_data,
             'selection_store': state,
             'hash': data_hash,
             'dataChanged': True,
@@ -178,6 +247,12 @@ def render_component(
 
     # Update state from Vue response
     if result is not None:
+        # Mark that Vue has received data for this component
+        # Only mark if we actually sent data (dataChanged was True)
+        if data_changed:
+            st.session_state[_VUE_DATA_RECEIVED_KEY].add(key)
+
+        # Update state and rerun if state changed
         if state_manager.update_from_vue(result):
             st.rerun()
 
@@ -185,7 +260,9 @@ def render_component(
     comp_name = component_args.get('componentType', 'unknown')
     changed_str = "CHANGED" if data_changed else "cached"
     import sys
-    print(f"[TIMING {comp_name}] state:{(t1-t0)*1000:.1f}ms prepare:{(t2-t1)*1000:.1f}ms args:{(t3-t2)*1000:.1f}ms hash:{(t4-t3)*1000:.1f}ms convert:{(t5-t4)*1000:.1f}ms build:{(t6-t5)*1000:.1f}ms vue_call:{(t7-t6)*1000:.1f}ms update:{(t8-t7)*1000:.1f}ms [{changed_str}]", file=sys.stderr, flush=True)
+    # Show filter state for cache debugging
+    filter_info = f"filters={dict(filter_state)}" if filter_state else "no_filters"
+    print(f"[TIMING {comp_name}] prepare:{(t2-t1)*1000:.1f}ms vue_call:{(t7-t6)*1000:.1f}ms [{changed_str}] {filter_info}", file=sys.stderr, flush=True)
 
     return result
 

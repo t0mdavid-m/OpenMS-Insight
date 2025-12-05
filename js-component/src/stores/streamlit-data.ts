@@ -57,12 +57,11 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
 
       // Only process data if Python says it changed (optimization to avoid re-parsing same data)
       if (dataChanged && newHash) {
-        this.hash = newHash
-
         // Store render data
         this.renderData = newData
 
-        // Parse Arrow tables to native JS objects
+        // Parse Arrow tables to native JS objects BEFORE updating hash
+        // This ensures watchers see the new data when they fire on hash change
         // IMPORTANT: Merge new data instead of replacing, so multiple components
         // can each contribute their data (tableData, heatmapData, plotData, etc.)
         const data = newData.args as StreamlitData
@@ -75,6 +74,9 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
             this.dataForDrawing[key] = value
           }
         })
+
+        // Update hash AFTER data is parsed - this triggers watchers that depend on hash
+        this.hash = newHash
       } else if (!dataChanged) {
         // Data unchanged - Python only sent hash and state, keep cached data
         console.log('[StreamlitDataStore] Data unchanged, using cached data')

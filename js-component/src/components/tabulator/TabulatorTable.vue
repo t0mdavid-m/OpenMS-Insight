@@ -160,6 +160,8 @@ export default defineComponent({
       pendingSelection: null as Record<string, unknown> | null,
       // Track last data hash to avoid unnecessary redraws
       lastDataHash: '' as string,
+      // Flag to skip redundant syncSelectionFromStore calls after manual selection
+      skipNextSync: false as boolean,
     }
   },
   computed: {
@@ -254,6 +256,8 @@ export default defineComponent({
       // Skip if hash hasn't actually changed (e.g., on initial load or selection-only updates)
       if (newHash === this.lastDataHash) {
         console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] hash unchanged, skipping redraw`)
+        // Note: Don't call syncSelectionFromStore here - the selection store watcher
+        // already handles selection changes. Calling it here was causing double work.
         return
       }
 
@@ -312,6 +316,7 @@ export default defineComponent({
         dataLength: this.preparedTableData.length,
         pendingSelection: this.pendingSelection,
         uniqueId: this.uniqueId,
+        hasExistingTable: !!this.tabulator,
       })
 
       // Destroy existing table if any
@@ -395,6 +400,13 @@ export default defineComponent({
     },
 
     syncSelectionFromStore(): void {
+      // Skip if we just manually selected a row (flag set in onRowClick)
+      // This prevents redundant work since the visual selection is already done
+      if (this.skipNextSync) {
+        console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] syncSelectionFromStore: SKIPPED (manual selection in progress)`)
+        return
+      }
+
       // Sync table selection with selection store
       if (!this.tabulator) return
 
@@ -552,9 +564,20 @@ export default defineComponent({
       const rowData = row.getData()
       const rowIndex = row.getIndex()
 
+      // FIRST: Immediately select the row visually (before any async operations)
+      // This ensures instant visual feedback regardless of Streamlit round-trip
+      this.tabulator?.deselectRow()
+      row.select()
+
       this.$emit('rowSelected', rowIndex)
 
-      // Update selection store using the interactivity mapping
+      // Set flag to skip the redundant syncSelectionFromStore call that will be
+      // triggered by the selection store watcher when we update the store below.
+      // The visual selection is already done - no need to redo it.
+      this.skipNextSync = true
+
+      // THEN: Update selection store (which triggers Streamlit.setComponentValue)
+      // The visual selection is already done, so user sees instant feedback
       const interactivity = this.args.interactivity || {}
 
       if (rowData) {
@@ -563,6 +586,11 @@ export default defineComponent({
           this.selectionStore.updateSelection(identifier, value)
         }
       }
+
+      // Clear flag after Vue's next tick (after watcher has fired)
+      this.$nextTick(() => {
+        this.skipNextSync = false
+      })
     },
 
     downloadTable(): void {
