@@ -2,6 +2,8 @@
 
 This module provides functions for multi-resolution downsampling of 2D scatter
 data, enabling efficient visualization of datasets with millions of points.
+
+Supports both streaming (lazy) and eager downsampling approaches.
 """
 
 from typing import List, Optional, Union
@@ -201,4 +203,129 @@ def downsample_2d_simple(
         data
         .sort(intensity_column, descending=True)
         .head(max_points)
+    )
+
+
+def downsample_2d_streaming(
+    data: Union[pl.LazyFrame, pl.DataFrame],
+    max_points: int = 20000,
+    x_column: str = 'x',
+    y_column: str = 'y',
+    intensity_column: str = 'intensity',
+    x_bins: int = 400,
+    y_bins: int = 50,
+    x_range: Optional[tuple] = None,
+    y_range: Optional[tuple] = None,
+) -> pl.LazyFrame:
+    """
+    Streaming 2D downsampling using pure Polars operations.
+
+    Uses Polars' lazy evaluation to downsample data without full materialization.
+    Creates spatial bins using integer division and keeps top-N highest-intensity
+    points per bin. Stays fully lazy - no .collect() is called.
+
+    Args:
+        data: Input data as Polars LazyFrame or DataFrame
+        max_points: Maximum number of points to keep
+        x_column: Name of x-axis column
+        y_column: Name of y-axis column
+        intensity_column: Name of intensity/value column for ranking
+        x_bins: Number of bins along x-axis
+        y_bins: Number of bins along y-axis
+        x_range: Optional (min, max) tuple for x-axis. If None, computed from data.
+        y_range: Optional (min, max) tuple for y-axis. If None, computed from data.
+
+    Returns:
+        Downsampled data as Polars LazyFrame (fully lazy, no collection)
+    """
+    if isinstance(data, pl.DataFrame):
+        data = data.lazy()
+
+    # Calculate points per bin
+    total_bins = x_bins * y_bins
+    points_per_bin = max(1, max_points // total_bins)
+
+    # Build binning expression using provided or computed ranges
+    if x_range is not None and y_range is not None:
+        x_min, x_max = x_range
+        y_min, y_max = y_range
+
+        # Use provided ranges for bin calculation
+        x_bin_expr = (
+            ((pl.col(x_column) - x_min) / (x_max - x_min + 1e-10) * x_bins)
+            .cast(pl.Int32)
+            .clip(0, x_bins - 1)
+            .alias('_x_bin')
+        )
+        y_bin_expr = (
+            ((pl.col(y_column) - y_min) / (y_max - y_min + 1e-10) * y_bins)
+            .cast(pl.Int32)
+            .clip(0, y_bins - 1)
+            .alias('_y_bin')
+        )
+
+        result = (
+            data
+            .with_columns([x_bin_expr, y_bin_expr])
+            .sort(intensity_column, descending=True)
+            .group_by(['_x_bin', '_y_bin'])
+            .head(points_per_bin)
+            .drop(['_x_bin', '_y_bin'])
+        )
+    else:
+        # Need to compute ranges - still lazy using over() window
+        # First pass: add normalized bin columns using min/max over entire frame
+        result = (
+            data
+            .with_columns([
+                # Compute bin indices using window functions for min/max
+                (
+                    (pl.col(x_column) - pl.col(x_column).min()) /
+                    (pl.col(x_column).max() - pl.col(x_column).min() + 1e-10) * x_bins
+                ).cast(pl.Int32).clip(0, x_bins - 1).alias('_x_bin'),
+                (
+                    (pl.col(y_column) - pl.col(y_column).min()) /
+                    (pl.col(y_column).max() - pl.col(y_column).min() + 1e-10) * y_bins
+                ).cast(pl.Int32).clip(0, y_bins - 1).alias('_y_bin'),
+            ])
+            .sort(intensity_column, descending=True)
+            .group_by(['_x_bin', '_y_bin'])
+            .head(points_per_bin)
+            .drop(['_x_bin', '_y_bin'])
+        )
+
+    return result
+
+
+def get_data_range(
+    data: Union[pl.LazyFrame, pl.DataFrame],
+    x_column: str,
+    y_column: str,
+) -> tuple:
+    """
+    Get the min/max ranges for x and y columns.
+
+    This requires a collect() operation but only fetches 4 scalar values.
+
+    Args:
+        data: Input data
+        x_column: X-axis column name
+        y_column: Y-axis column name
+
+    Returns:
+        Tuple of ((x_min, x_max), (y_min, y_max))
+    """
+    if isinstance(data, pl.DataFrame):
+        data = data.lazy()
+
+    stats = data.select([
+        pl.col(x_column).min().alias('x_min'),
+        pl.col(x_column).max().alias('x_max'),
+        pl.col(y_column).min().alias('y_min'),
+        pl.col(y_column).max().alias('y_max'),
+    ]).collect()
+
+    return (
+        (stats['x_min'][0], stats['x_max'][0]),
+        (stats['y_min'][0], stats['y_max'][0]),
     )

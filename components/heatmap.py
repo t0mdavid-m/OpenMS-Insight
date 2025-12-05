@@ -1,5 +1,8 @@
 """Heatmap component using Plotly scattergl."""
 
+import hashlib
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import polars as pl
@@ -11,8 +14,13 @@ from ..preprocessing.compression import (
     compute_compression_levels,
     downsample_2d,
     downsample_2d_simple,
+    downsample_2d_streaming,
+    get_data_range,
 )
 from ..preprocessing.filtering import filter_and_collect_cached
+
+# Default cache directory for heatmap levels
+_DEFAULT_CACHE_DIR = Path.home() / ".cache" / "streamlit_vue_components" / "heatmap_levels"
 
 
 # Cache key only includes zoom state (not other selections)
@@ -76,6 +84,8 @@ class Heatmap(BaseComponent):
         y_label: Optional[str] = None,
         colorscale: str = 'Portland',
         use_simple_downsample: bool = False,
+        use_streaming: bool = True,
+        cache_dir: Optional[Union[str, Path]] = None,
         **kwargs
     ):
         """
@@ -101,6 +111,11 @@ class Heatmap(BaseComponent):
             colorscale: Plotly colorscale name (default: 'Portland')
             use_simple_downsample: If True, use simple top-N downsampling instead
                 of spatial binning (doesn't require scipy)
+            use_streaming: If True (default), use streaming downsampling that
+                stays lazy until render time. Reduces memory on init.
+            cache_dir: Directory for caching computed levels to disk. Levels are
+                written after first computation and loaded on subsequent runs.
+                Set to None to disable disk caching. Default: ~/.cache/streamlit_vue_components/heatmap_levels
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -115,6 +130,8 @@ class Heatmap(BaseComponent):
         self._y_label = y_label or y_column
         self._colorscale = colorscale
         self._use_simple_downsample = use_simple_downsample
+        self._use_streaming = use_streaming
+        self._cache_dir = Path(cache_dir) if cache_dir else _DEFAULT_CACHE_DIR
 
         super().__init__(
             data,
@@ -127,15 +144,207 @@ class Heatmap(BaseComponent):
         """
         Preprocess heatmap data by computing multi-resolution levels.
 
-        This is STAGE 1 processing - expensive but only done once at
-        component creation. Creates downsampled versions at logarithmically
-        spaced sizes for efficient zoom-based rendering.
+        This is STAGE 1 processing. In streaming mode (default), levels stay
+        as lazy LazyFrames and are only collected at render time. In non-streaming
+        mode, levels are eagerly computed for faster rendering but higher memory.
+        """
+        if self._use_streaming:
+            self._preprocess_streaming()
+        else:
+            self._preprocess_eager()
+
+        # Store config for serialization
+        self._preprocessed_data['config'] = {
+            'x_column': self._x_column,
+            'y_column': self._y_column,
+            'intensity_column': self._intensity_column,
+            'min_points': self._min_points,
+            'zoom_identifier': self._zoom_identifier,
+        }
+
+    def _get_cache_path(self, level_index: int) -> Path:
+        """Get the cache file path for a specific level."""
+        return self._cache_dir / f"level_{level_index}.parquet"
+
+    def _get_metadata_path(self) -> Path:
+        """Get the metadata file path."""
+        return self._cache_dir / "metadata.json"
+
+    def _clear_cache(self) -> None:
+        """Clear the disk cache directory."""
+        if self._cache_dir.exists():
+            for f in self._cache_dir.glob("*.parquet"):
+                f.unlink()
+            metadata_path = self._get_metadata_path()
+            if metadata_path.exists():
+                metadata_path.unlink()
+
+    def _load_cached_levels(self) -> bool:
+        """
+        Try to load levels from disk cache.
+
+        Returns:
+            True if cache was loaded successfully, False otherwise.
+        """
+        metadata_path = self._get_metadata_path()
+        if not metadata_path.exists():
+            return False
+
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+
+            # Check if cache is valid (same configuration)
+            if (metadata.get('min_points') != self._min_points or
+                metadata.get('x_bins') != self._x_bins or
+                metadata.get('y_bins') != self._y_bins or
+                metadata.get('x_column') != self._x_column or
+                metadata.get('y_column') != self._y_column or
+                metadata.get('intensity_column') != self._intensity_column):
+                return False
+
+            level_sizes = metadata.get('level_sizes', [])
+            x_range = tuple(metadata.get('x_range', []))
+            y_range = tuple(metadata.get('y_range', []))
+            total = metadata.get('total', 0)
+
+            # Load levels from parquet files
+            levels = []
+            for i in range(len(level_sizes)):
+                cache_path = self._get_cache_path(i)
+                if not cache_path.exists():
+                    return False
+                # Load as LazyFrame for consistency
+                levels.append(pl.scan_parquet(cache_path))
+
+            # Store loaded data
+            self._preprocessed_data['levels'] = levels
+            # Add full resolution at end (not cached)
+            self._preprocessed_data['levels'].append(self._raw_data)
+            self._preprocessed_data['x_range'] = x_range
+            self._preprocessed_data['y_range'] = y_range
+            self._preprocessed_data['total'] = total
+            self._preprocessed_data['level_sizes'] = level_sizes
+
+            return True
+        except (json.JSONDecodeError, KeyError, OSError):
+            return False
+
+    def _save_levels_to_cache(self) -> None:
+        """Save computed levels to disk cache."""
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save each level (excluding full resolution which is last)
+        levels = self._preprocessed_data.get('levels', [])
+        level_sizes = self._preprocessed_data.get('level_sizes', [])
+
+        for i, level in enumerate(levels[:-1]):  # Skip full resolution
+            cache_path = self._get_cache_path(i)
+            # Collect if lazy and save
+            if isinstance(level, pl.LazyFrame):
+                level.collect().write_parquet(cache_path)
+            else:
+                level.write_parquet(cache_path)
+
+        # Save metadata
+        metadata = {
+            'min_points': self._min_points,
+            'x_bins': self._x_bins,
+            'y_bins': self._y_bins,
+            'x_column': self._x_column,
+            'y_column': self._y_column,
+            'intensity_column': self._intensity_column,
+            'level_sizes': level_sizes,
+            'x_range': list(self._preprocessed_data.get('x_range', ())),
+            'y_range': list(self._preprocessed_data.get('y_range', ())),
+            'total': self._preprocessed_data.get('total', 0),
+        }
+
+        with open(self._get_metadata_path(), 'w') as f:
+            json.dump(metadata, f)
+
+    def _preprocess_streaming(self) -> None:
+        """
+        Streaming preprocessing - levels stay lazy until render.
+
+        Attempts to load from disk cache first. If not available,
+        builds lazy query plans and saves to cache on first collection.
+        """
+        # Try loading from cache first
+        if self._load_cached_levels():
+            return
+
+        # Clear any stale cache
+        self._clear_cache()
+
+        # Get data ranges (minimal collect - just 4 values)
+        x_range, y_range = get_data_range(
+            self._raw_data,
+            self._x_column,
+            self._y_column,
+        )
+        self._preprocessed_data['x_range'] = x_range
+        self._preprocessed_data['y_range'] = y_range
+
+        # Estimate total from schema if possible, otherwise use a scan
+        # For parquet files this is very fast (metadata only)
+        total = self._raw_data.select(pl.len()).collect().item()
+        self._preprocessed_data['total'] = total
+
+        # Compute target sizes for levels
+        level_sizes = compute_compression_levels(self._min_points, total)
+        self._preprocessed_data['level_sizes'] = level_sizes
+
+        # Build lazy query plans for each level (NO collection here!)
+        self._preprocessed_data['levels'] = []
+
+        for size in level_sizes:
+            if self._use_simple_downsample:
+                level = downsample_2d_simple(
+                    self._raw_data,
+                    max_points=size,
+                    intensity_column=self._intensity_column,
+                )
+            else:
+                level = downsample_2d_streaming(
+                    self._raw_data,
+                    max_points=size,
+                    x_column=self._x_column,
+                    y_column=self._y_column,
+                    intensity_column=self._intensity_column,
+                    x_bins=self._x_bins,
+                    y_bins=self._y_bins,
+                    x_range=x_range,
+                    y_range=y_range,
+                )
+            self._preprocessed_data['levels'].append(level)
+
+        # Add full resolution at end
+        self._preprocessed_data['levels'].append(self._raw_data)
+
+        # Save levels to cache (this collects them once)
+        self._save_levels_to_cache()
+
+        # Replace lazy levels with cached parquet scans for future reads
+        for i in range(len(level_sizes)):
+            cache_path = self._get_cache_path(i)
+            if cache_path.exists():
+                self._preprocessed_data['levels'][i] = pl.scan_parquet(cache_path)
+
+    def _preprocess_eager(self) -> None:
+        """
+        Eager preprocessing - levels are computed upfront.
+
+        Uses more memory at init but faster rendering. Uses scipy-based
+        downsampling for better spatial distribution.
         """
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
+        self._preprocessed_data['total'] = total
 
         # Compute compression level target sizes
         level_sizes = compute_compression_levels(self._min_points, total)
+        self._preprocessed_data['level_sizes'] = level_sizes
 
         # Build levels from largest to smallest, storing smallest first
         self._preprocessed_data['levels'] = []
@@ -166,15 +375,6 @@ class Heatmap(BaseComponent):
 
         # Add full resolution at end
         self._preprocessed_data['levels'].append(self._raw_data)
-
-        # Store config for serialization
-        self._preprocessed_data['config'] = {
-            'x_column': self._x_column,
-            'y_column': self._y_column,
-            'intensity_column': self._intensity_column,
-            'min_points': self._min_points,
-            'zoom_identifier': self._zoom_identifier,
-        }
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
@@ -220,6 +420,10 @@ class Heatmap(BaseComponent):
         last_filtered = None
 
         for level_data in levels:
+            # Ensure we have a LazyFrame for filtering
+            if isinstance(level_data, pl.DataFrame):
+                level_data = level_data.lazy()
+
             # Filter to zoom range
             filtered = level_data.filter(
                 (pl.col(self._x_column) >= x0) &
@@ -244,8 +448,23 @@ class Heatmap(BaseComponent):
             if count >= self._min_points:
                 # This level has enough detail
                 if count > self._min_points * 2:
-                    # Still too many - downsample
-                    if self._use_simple_downsample:
+                    # Still too many - downsample further
+                    if self._use_streaming:
+                        # Use streaming downsample
+                        x_range = self._preprocessed_data.get('x_range')
+                        y_range = self._preprocessed_data.get('y_range')
+                        return downsample_2d_streaming(
+                            filtered.lazy(),
+                            max_points=self._min_points,
+                            x_column=self._x_column,
+                            y_column=self._y_column,
+                            intensity_column=self._intensity_column,
+                            x_bins=self._x_bins,
+                            y_bins=self._y_bins,
+                            x_range=x_range,
+                            y_range=y_range,
+                        ).collect()
+                    elif self._use_simple_downsample:
                         return downsample_2d_simple(
                             filtered.lazy(),
                             max_points=self._min_points,
@@ -284,6 +503,10 @@ class Heatmap(BaseComponent):
         if self._is_no_zoom(zoom):
             # No zoom - use smallest level
             data = self._preprocessed_data['levels'][0]
+
+            # Ensure we have a LazyFrame
+            if isinstance(data, pl.DataFrame):
+                data = data.lazy()
 
             # Apply filters if any
             if self._filters:

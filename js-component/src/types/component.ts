@@ -83,6 +83,7 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   colorscale?: string
   zoomIdentifier?: string
   interactivity?: InteractivityMapping
+  height?: number
 }
 
 /**
@@ -123,12 +124,15 @@ export type TableData = Record<string, unknown>[]
  * Plot data format for line plots.
  * x_values and y_values contain raw data points.
  * Vue component converts to stick plot format (triplets) for rendering.
+ * Additional interactivity columns (e.g., interactivity_peak_id) are added dynamically.
  */
 export interface PlotData {
   x_values: number[]
   y_values: number[]
   highlight_mask?: boolean[]
   annotations?: string[]
+  // Allow dynamic interactivity columns like interactivity_peak_id
+  [key: string]: unknown[] | undefined
 }
 
 /**
