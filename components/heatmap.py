@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+import pandas as pd
 import polars as pl
 import streamlit as st
 
@@ -17,7 +18,7 @@ from ..preprocessing.compression import (
     downsample_2d_streaming,
     get_data_range,
 )
-from ..preprocessing.filtering import filter_and_collect_cached
+from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
 
 # Default cache directory for heatmap levels
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "streamlit_vue_components" / "heatmap_levels"
@@ -411,7 +412,7 @@ class Heatmap(BaseComponent):
             state: Full selection state for applying filters
 
         Returns:
-            Filtered DataFrame at appropriate resolution
+            Filtered Polars DataFrame at appropriate resolution
         """
         x0, x1 = zoom['xRange']
         y0, y1 = zoom['yRange']
@@ -425,7 +426,7 @@ class Heatmap(BaseComponent):
                 level_data = level_data.lazy()
 
             # Filter to zoom range
-            filtered = level_data.filter(
+            filtered_lazy = level_data.filter(
                 (pl.col(self._x_column) >= x0) &
                 (pl.col(self._x_column) <= x1) &
                 (pl.col(self._y_column) >= y0) &
@@ -434,13 +435,16 @@ class Heatmap(BaseComponent):
 
             # Apply component filters if any
             if self._filters:
-                filtered = filter_and_collect_cached(
-                    filtered,
+                # filter_and_collect_cached returns (pandas DataFrame, hash)
+                # We need Polars DataFrame for further processing
+                df_pandas, _ = filter_and_collect_cached(
+                    filtered_lazy,
                     self._filters,
                     state,
                 )
+                filtered = pl.from_pandas(df_pandas)
             else:
-                filtered = filtered.collect()
+                filtered = filtered_lazy.collect()
 
             count = len(filtered)
             last_filtered = filtered
@@ -490,15 +494,32 @@ class Heatmap(BaseComponent):
         Prepare heatmap data for Vue component.
 
         Selects appropriate resolution level based on zoom state.
-        This is STAGE 2 processing - fast, happens every render.
+        Returns pandas DataFrame for efficient Arrow serialization.
 
         Args:
             state: Current selection state from StateManager
 
         Returns:
-            Dict with heatmapData key containing the data
+            Dict with heatmapData (pandas DataFrame) and _hash for change detection
         """
         zoom = state.get(self._zoom_identifier)
+
+        # Build columns to select
+        columns_to_select = [
+            self._x_column,
+            self._y_column,
+            self._intensity_column,
+        ]
+        # Include columns needed for interactivity
+        if self._interactivity:
+            for col in self._interactivity.values():
+                if col not in columns_to_select:
+                    columns_to_select.append(col)
+        # Include filter columns
+        if self._filters:
+            for col in self._filters.values():
+                if col not in columns_to_select:
+                    columns_to_select.append(col)
 
         if self._is_no_zoom(zoom):
             # No zoom - use smallest level
@@ -508,38 +529,30 @@ class Heatmap(BaseComponent):
             if isinstance(data, pl.DataFrame):
                 data = data.lazy()
 
-            # Apply filters if any
+            # Apply filters if any - returns (pandas DataFrame, hash)
             if self._filters:
-                df = filter_and_collect_cached(
+                df_pandas, data_hash = filter_and_collect_cached(
                     data,
                     self._filters,
                     state,
+                    columns=columns_to_select,
                 )
             else:
-                df = data.collect()
+                df_polars = data.select(columns_to_select).collect()
+                data_hash = compute_dataframe_hash(df_polars)
+                df_pandas = df_polars.to_pandas()
         else:
             # Zoomed - select appropriate level
-            df = self._select_level_for_zoom(zoom, state)
-
-        # Build columns to include
-        columns_to_send = [
-            self._x_column,
-            self._y_column,
-            self._intensity_column,
-        ]
-
-        # Include columns needed for interactivity
-        if self._interactivity:
-            for col in self._interactivity.values():
-                if col not in columns_to_send and col in df.columns:
-                    columns_to_send.append(col)
-
-        # Select only needed columns and convert to list of dicts
-        df_selected = df.select([c for c in columns_to_send if c in df.columns])
-        heatmap_data = df_selected.to_dicts()
+            df_polars = self._select_level_for_zoom(zoom, state)
+            # Select only needed columns
+            available_cols = [c for c in columns_to_select if c in df_polars.columns]
+            df_polars = df_polars.select(available_cols)
+            data_hash = compute_dataframe_hash(df_polars)
+            df_pandas = df_polars.to_pandas()
 
         return {
-            'heatmapData': heatmap_data,
+            'heatmapData': df_pandas,
+            '_hash': data_hash,
         }
 
     def _get_component_args(self) -> Dict[str, Any]:

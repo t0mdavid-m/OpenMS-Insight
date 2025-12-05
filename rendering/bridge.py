@@ -5,6 +5,7 @@ import os
 import pickle
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+import pandas as pd
 import polars as pl
 import streamlit as st
 
@@ -15,6 +16,9 @@ if TYPE_CHECKING:
 
 # Cache the Vue component function
 _vue_component_func = None
+
+# Session state key for caching last data hash per component
+_LAST_HASH_KEY = "_svc_last_hashes"
 
 
 def get_vue_component_function():
@@ -72,9 +76,10 @@ def render_component(
     1. Gets current state from StateManager
     2. Calls component._prepare_vue_data() to get filtered data
     3. Computes hash for change detection
-    4. Calls the Vue component with data payload
-    5. Updates StateManager from Vue response
-    6. Triggers st.rerun() if state changed
+    4. Only sends data if hash changed from last render (optimization)
+    5. Calls the Vue component with data payload
+    6. Updates StateManager from Vue response
+    7. Triggers st.rerun() if state changed
 
     Args:
         component: The component to render
@@ -85,26 +90,69 @@ def render_component(
     Returns:
         The value returned by the Vue component
     """
+    import time
+    t0 = time.perf_counter()
+
     # Get current state
     state = state_manager.get_state_for_vue()
+    t1 = time.perf_counter()
 
     # Get component data and configuration
     vue_data = component._prepare_vue_data(state)
+    t2 = time.perf_counter()
+
     component_args = component._get_component_args()
+    t3 = time.perf_counter()
 
-    # Convert any DataFrames to pandas for Arrow serialization
-    for data_key, value in vue_data.items():
-        if isinstance(value, pl.LazyFrame):
-            vue_data[data_key] = value.collect().to_pandas()
-        elif isinstance(value, pl.DataFrame):
-            vue_data[data_key] = value.to_pandas()
+    # Use precomputed hash if available, otherwise compute it
+    if '_hash' in vue_data:
+        data_hash = vue_data.pop('_hash')
+    else:
+        # Need to compute hash before conversion
+        data_hash = _hash_data(vue_data)
+    t4 = time.perf_counter()
 
-    # Build the full data payload
-    data_payload = {
-        **vue_data,
-        'selection_store': state,
-        'hash': _hash_data(vue_data),
-    }
+    # Generate unique key if not provided
+    if key is None:
+        key = f"svc_{id(component)}_{hash(str(component._interactivity))}"
+
+    # Initialize hash cache in session state if needed
+    if _LAST_HASH_KEY not in st.session_state:
+        st.session_state[_LAST_HASH_KEY] = {}
+
+    # Check if data changed from last render
+    last_hash = st.session_state[_LAST_HASH_KEY].get(key)
+    data_changed = last_hash != data_hash
+
+    # Only include full data if hash changed
+    if data_changed:
+        # Convert any non-pandas data to pandas for Arrow serialization
+        # pandas DataFrames are passed through (already optimal for Arrow)
+        for data_key, value in vue_data.items():
+            if data_key.startswith('_'):
+                # Skip metadata keys like _hash, _plotConfig
+                continue
+            if isinstance(value, pl.LazyFrame):
+                vue_data[data_key] = value.collect().to_pandas()
+            elif isinstance(value, pl.DataFrame):
+                vue_data[data_key] = value.to_pandas()
+            # pandas DataFrames pass through unchanged (optimal for Arrow)
+        # Update cached hash
+        st.session_state[_LAST_HASH_KEY][key] = data_hash
+        data_payload = {
+            **vue_data,
+            'selection_store': state,
+            'hash': data_hash,
+            'dataChanged': True,
+        }
+    else:
+        # Data unchanged - only send hash and state, Vue will use cached data
+        data_payload = {
+            'selection_store': state,
+            'hash': data_hash,
+            'dataChanged': False,
+        }
+    t5 = time.perf_counter()
 
     # Add height to component args if specified
     if height is not None:
@@ -112,10 +160,6 @@ def render_component(
 
     # Component layout: [[{componentArgs: {...}}]]
     components = [[{'componentArgs': component_args}]]
-
-    # Generate unique key if not provided
-    if key is None:
-        key = f"svc_{id(component)}_{hash(str(component._interactivity))}"
 
     # Call Vue component
     vue_func = get_vue_component_function()
@@ -127,13 +171,21 @@ def render_component(
     }
     if height is not None:
         kwargs['height'] = height
+    t6 = time.perf_counter()
 
     result = vue_func(**kwargs)
+    t7 = time.perf_counter()
 
     # Update state from Vue response
     if result is not None:
         if state_manager.update_from_vue(result):
             st.rerun()
+
+    t8 = time.perf_counter()
+    comp_name = component_args.get('componentType', 'unknown')
+    changed_str = "CHANGED" if data_changed else "cached"
+    import sys
+    print(f"[TIMING {comp_name}] state:{(t1-t0)*1000:.1f}ms prepare:{(t2-t1)*1000:.1f}ms args:{(t3-t2)*1000:.1f}ms hash:{(t4-t3)*1000:.1f}ms convert:{(t5-t4)*1000:.1f}ms build:{(t6-t5)*1000:.1f}ms vue_call:{(t7-t6)*1000:.1f}ms update:{(t8-t7)*1000:.1f}ms [{changed_str}]", file=sys.stderr, flush=True)
 
     return result
 
@@ -142,8 +194,8 @@ def _hash_data(data: Dict[str, Any]) -> str:
     """
     Compute hash of data payload for change detection.
 
-    This helps the Vue component avoid unnecessary re-renders when
-    the data hasn't actually changed.
+    Uses efficient hashing based on shape and samples for DataFrames,
+    avoiding full data serialization.
 
     Args:
         data: The data dict to hash
@@ -151,9 +203,22 @@ def _hash_data(data: Dict[str, Any]) -> str:
     Returns:
         SHA256 hash string
     """
-    try:
-        serialized = pickle.dumps(data)
-        return hashlib.sha256(serialized).hexdigest()
-    except Exception:
-        # Fallback for non-picklable data
-        return hashlib.sha256(str(data).encode()).hexdigest()
+    from ..preprocessing.filtering import compute_dataframe_hash
+
+    hash_parts = []
+    for key, value in sorted(data.items()):
+        if key.startswith('_'):
+            continue  # Skip metadata
+        if isinstance(value, pd.DataFrame):
+            # Efficient hash for DataFrames
+            df_polars = pl.from_pandas(value)
+            hash_parts.append(f"{key}:{compute_dataframe_hash(df_polars)}")
+        elif isinstance(value, pl.DataFrame):
+            hash_parts.append(f"{key}:{compute_dataframe_hash(value)}")
+        elif isinstance(value, (list, dict)):
+            # For small data, use string repr
+            hash_parts.append(f"{key}:{hash(str(value)[:1000])}")
+        else:
+            hash_parts.append(f"{key}:{hash(str(value))}")
+
+    return hashlib.sha256("|".join(hash_parts).encode()).hexdigest()

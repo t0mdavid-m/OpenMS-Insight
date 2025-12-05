@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional, Union
 
+import pandas as pd
 import polars as pl
 
 from ..core.base import BaseComponent
@@ -158,14 +159,14 @@ class LinePlot(BaseComponent):
 
         LinePlots filter based on filters mapping if provided.
 
-        Sends raw x/y values to Vue, which converts them to stick plot format.
-        This reduces data transfer size by 3x. Results are cached based on filter state.
+        Returns pandas DataFrame for efficient Arrow serialization.
+        Vue converts raw x/y values to stick plot format (reduces data transfer 3x).
 
         Args:
             state: Current selection state from StateManager
 
         Returns:
-            Dict with plot data for Vue (x_values, y_values, highlight_mask, annotations)
+            Dict with plotData (pandas DataFrame) and _hash for change detection
         """
         # Build list of columns to select (projection pushdown for efficiency)
         columns_to_select = [self._x_column, self._y_column]
@@ -178,51 +179,31 @@ class LinePlot(BaseComponent):
             for col in self._interactivity.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        # Include filter columns for filtering to work
+        if self._filters:
+            for col in self._filters.values():
+                if col not in columns_to_select:
+                    columns_to_select.append(col)
 
-        # Use cached filter+collect for efficiency
-        # Cache key is based on filter state, so interactions that don't
-        # change filters (e.g., clicking a peak) hit cache
-        df = filter_and_collect_cached(
+        # Use cached filter+collect - returns (pandas DataFrame, hash)
+        df_pandas, data_hash = filter_and_collect_cached(
             self._raw_data,
             self._filters,
             state,
             columns=columns_to_select,
         )
 
-        # Get x and y values (raw, not triplicated - Vue will create stick format)
-        x_values = df[self._x_column].to_list()
-        y_values = df[self._y_column].to_list()
-
-        # Get highlighting data
-        highlight_mask = None
-        if self._highlight_column and self._highlight_column in df.columns:
-            highlight_mask = df[self._highlight_column].to_list()
-
-        # Get annotations
-        annotations = None
-        if self._annotation_column and self._annotation_column in df.columns:
-            annotations = df[self._annotation_column].to_list()
-
-        # Build the data payload
-        plot_data = {
-            'x_values': x_values,
-            'y_values': y_values,
-        }
-
-        if highlight_mask is not None:
-            plot_data['highlight_mask'] = highlight_mask
-
-        if annotations is not None:
-            plot_data['annotations'] = annotations
-
-        # Include interactivity column values (e.g., peak_id for each point)
-        if self._interactivity:
-            for identifier, col in self._interactivity.items():
-                if col in df.columns:
-                    plot_data[f'interactivity_{col}'] = df[col].to_list()
-
         return {
-            'plotData': plot_data,
+            'plotData': df_pandas,
+            '_hash': data_hash,
+            # Pass column mappings so Vue knows which columns to use
+            '_plotConfig': {
+                'xColumn': self._x_column,
+                'yColumn': self._y_column,
+                'highlightColumn': self._highlight_column,
+                'annotationColumn': self._annotation_column,
+                'interactivity': self._interactivity,
+            }
         }
 
     def _get_component_args(self) -> Dict[str, Any]:

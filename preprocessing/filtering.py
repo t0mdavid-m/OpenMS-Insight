@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import hashlib
+import pandas as pd
 import polars as pl
 import streamlit as st
 
@@ -30,18 +32,64 @@ def _make_cache_key(
     return tuple(relevant_state)
 
 
+def compute_dataframe_hash(df: pl.DataFrame) -> str:
+    """
+    Compute an efficient hash for a DataFrame without pickling.
+
+    Uses shape, column names, and sampled values to create a fast hash
+    that detects data changes without materializing extra copies.
+
+    Args:
+        df: Polars DataFrame to hash
+
+    Returns:
+        SHA256 hash string
+    """
+    # Build hash from metadata and sampled content
+    hash_parts = [
+        str(df.shape),  # (rows, cols)
+        str(df.columns),  # Column names
+    ]
+
+    # For small DataFrames, hash first/last values of each column
+    # For large DataFrames, this is still O(1) memory
+    if len(df) > 0:
+        # Sample first and last row for change detection
+        first_row = df.head(1).to_dicts()[0] if len(df) > 0 else {}
+        last_row = df.tail(1).to_dicts()[0] if len(df) > 0 else {}
+        hash_parts.append(str(first_row))
+        hash_parts.append(str(last_row))
+
+        # Add sum of numeric columns for content verification
+        for col in df.columns:
+            dtype = df[col].dtype
+            if dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+                         pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+                         pl.Float32, pl.Float64):
+                try:
+                    col_sum = df[col].sum()
+                    hash_parts.append(f"{col}:{col_sum}")
+                except Exception:
+                    pass
+
+    hash_input = "|".join(hash_parts).encode()
+    return hashlib.sha256(hash_input).hexdigest()
+
+
 @st.cache_data(ttl=300, max_entries=100)
 def _cached_filter_and_collect(
     _data: pl.LazyFrame,
     filters_tuple: Tuple[Tuple[str, str], ...],
     state_tuple: Tuple[Tuple[str, Any], ...],
     columns_tuple: Optional[Tuple[str, ...]] = None,
-) -> pl.DataFrame:
+) -> Tuple[pd.DataFrame, str]:
     """
     Filter data and collect with caching.
 
     This function is cached by Streamlit, so repeated calls with the same
     filter state will return cached results without re-executing the query.
+
+    Returns pandas DataFrame for efficient Arrow serialization to frontend.
 
     Args:
         _data: LazyFrame to filter (underscore prefix tells st.cache_data to hash by id)
@@ -50,11 +98,16 @@ def _cached_filter_and_collect(
         columns_tuple: Optional tuple of column names to select (projection)
 
     Returns:
-        Collected DataFrame with filters applied
+        Tuple of (pandas DataFrame, hash string)
     """
     data = _data
     filters = dict(filters_tuple)
     state = dict(state_tuple)
+
+    # Apply column projection FIRST (before filters) for efficiency
+    # This ensures we only read needed columns from disk
+    if columns_tuple:
+        data = data.select(list(columns_tuple))
 
     # Apply filters
     for identifier, column in filters.items():
@@ -66,11 +119,16 @@ def _cached_filter_and_collect(
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
 
-    # Apply column projection if specified
-    if columns_tuple:
-        data = data.select(list(columns_tuple))
+    # Collect to Polars DataFrame
+    df_polars = data.collect()
 
-    return data.collect()
+    # Compute hash efficiently (no pickle)
+    data_hash = compute_dataframe_hash(df_polars)
+
+    # Convert to pandas for Arrow serialization (zero-copy when possible)
+    df_pandas = df_polars.to_pandas()
+
+    return (df_pandas, data_hash)
 
 
 def filter_and_collect_cached(
@@ -78,7 +136,7 @@ def filter_and_collect_cached(
     filters: Dict[str, str],
     state: Dict[str, Any],
     columns: Optional[List[str]] = None,
-) -> pl.DataFrame:
+) -> Tuple[pd.DataFrame, str]:
     """
     Filter data based on selection state and collect, with caching.
 
@@ -87,6 +145,9 @@ def filter_and_collect_cached(
     change the filter values (e.g., clicking within already-filtered data)
     will return cached results instantly.
 
+    Returns pandas DataFrame for efficient Arrow serialization to the frontend.
+    The hash is computed efficiently without pickling the data.
+
     Args:
         data: The data to filter (LazyFrame or DataFrame)
         filters: Mapping of identifier names to column names for filtering
@@ -94,7 +155,7 @@ def filter_and_collect_cached(
         columns: Optional list of column names to select (projection pushdown)
 
     Returns:
-        Collected DataFrame with filters and optional projection applied
+        Tuple of (pandas DataFrame, hash string) with filters and projection applied
     """
     if isinstance(data, pl.DataFrame):
         data = data.lazy()

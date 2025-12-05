@@ -2,11 +2,12 @@
 
 from typing import Any, Dict, List, Optional, Union
 
+import pandas as pd
 import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
-from ..preprocessing.filtering import filter_and_collect_cached
+from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
 
 
 @register_component("table")
@@ -105,8 +106,8 @@ class Table(BaseComponent):
         """
         Preprocess table data.
 
-        For tables, we store the full data and let Vue handle filtering.
-        The interactivity-based filtering happens at render time based on state.
+        Stores the LazyFrame reference for lazy evaluation.
+        Projection and filtering happen at render time for streaming from disk.
         """
         # Collect schema for auto-generating column definitions if needed
         schema = self._raw_data.collect_schema()
@@ -138,6 +139,36 @@ class Table(BaseComponent):
         # Store column definitions in preprocessed data for serialization
         self._preprocessed_data['column_definitions'] = self._column_definitions
 
+        # Store LazyFrame reference - stays lazy until render
+        # Projection happens at filter time for optimal streaming from parquet
+        self._preprocessed_data['data'] = self._raw_data
+
+    def _get_columns_to_select(self) -> Optional[List[str]]:
+        """Get list of columns needed for this table."""
+        if not self._column_definitions:
+            return None
+
+        columns_to_select = [
+            col_def['field']
+            for col_def in self._column_definitions
+            if 'field' in col_def
+        ]
+        # Always include index field for row identification
+        if self._index_field and self._index_field not in columns_to_select:
+            columns_to_select.append(self._index_field)
+        # Include columns needed for interactivity
+        if self._interactivity:
+            for col in self._interactivity.values():
+                if col not in columns_to_select:
+                    columns_to_select.append(col)
+        # Include columns needed for filtering
+        if self._filters:
+            for col in self._filters.values():
+                if col not in columns_to_select:
+                    columns_to_select.append(col)
+
+        return columns_to_select if columns_to_select else None
+
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
         return 'TabulatorTable'
@@ -150,51 +181,28 @@ class Table(BaseComponent):
         """
         Prepare table data for Vue component.
 
-        If filters is non-empty, filters data based on selection state.
-        Otherwise, shows all data. Results are cached based on filter state.
+        Returns pandas DataFrame for efficient Arrow serialization to frontend.
+        Data is streamed from parquet and only filtered rows/columns are materialized.
 
         Args:
             state: Current selection state from StateManager
 
         Returns:
-            Dict with tableData key containing the data
+            Dict with tableData (pandas DataFrame) and _hash keys
         """
-        # Build list of columns to select (projection pushdown)
-        columns_to_select = None
-        if self._column_definitions:
-            columns_to_select = [
-                col_def['field']
-                for col_def in self._column_definitions
-                if 'field' in col_def
-            ]
-            # Always include index field for row identification
-            if self._index_field and self._index_field not in columns_to_select:
-                columns_to_select.append(self._index_field)
-            # Include columns needed for interactivity
-            if self._interactivity:
-                for col in self._interactivity.values():
-                    if col not in columns_to_select:
-                        columns_to_select.append(col)
-            # Reset to None if empty (handles edge cases)
-            if not columns_to_select:
-                columns_to_select = None
+        # Get columns to select for projection pushdown
+        columns = self._get_columns_to_select()
 
-        # Use cached filter+collect for efficiency
-        # Cache key is based on filter state, so interactions that don't
-        # change filters (e.g., clicking within filtered data) hit cache
-        df = filter_and_collect_cached(
-            self._raw_data,
+        # Use cached filter+collect - returns (pandas DataFrame, hash)
+        # For unfiltered tables, this still applies projection and streams from disk
+        df_pandas, data_hash = filter_and_collect_cached(
+            self._preprocessed_data['data'],
             self._filters,
             state,
-            columns=columns_to_select,
+            columns=columns,
         )
 
-        # Convert to list of dicts for JSON serialization
-        table_data = df.to_dicts()
-
-        return {
-            'tableData': table_data,
-        }
+        return {'tableData': df_pandas, '_hash': data_hash}
 
     def _get_component_args(self) -> Dict[str, Any]:
         """
