@@ -158,6 +158,8 @@ export default defineComponent({
       // Pending selection: stores selection values that couldn't be applied
       // because the data wasn't ready yet. Applied when new data arrives.
       pendingSelection: null as Record<string, unknown> | null,
+      // Track last data hash to avoid unnecessary redraws
+      lastDataHash: '' as string,
     }
   },
   computed: {
@@ -240,18 +242,32 @@ export default defineComponent({
       }
       return this.tableData
     },
+    // Get current data hash from store for change detection
+    currentDataHash(): string {
+      return this.streamlitDataStore.hash || ''
+    },
   },
   watch: {
-    // Watch tableData and redraw when it changes
-    // Use nextTick to ensure Vue's reactivity has fully propagated
-    // This is critical when both data and selection change simultaneously
-    tableData(newData, oldData) {
-      console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] tableData changed:`, {
-        newLength: newData?.length,
-        oldLength: oldData?.length,
+    // Watch data hash instead of tableData directly
+    // This prevents unnecessary redraws when only selection changes (data unchanged)
+    currentDataHash(newHash, oldHash) {
+      // Skip if hash hasn't actually changed (e.g., on initial load or selection-only updates)
+      if (newHash === this.lastDataHash) {
+        console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] hash unchanged, skipping redraw`)
+        return
+      }
+
+      console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] data hash changed:`, {
+        newHash: newHash?.substring(0, 8),
+        oldHash: oldHash?.substring(0, 8),
+        lastDataHash: this.lastDataHash?.substring(0, 8),
+        dataLength: this.tableData?.length,
         pendingSelection: this.pendingSelection,
-        selectionState: { ...this.selectionStore.$state },
       })
+
+      // Update our local hash tracker
+      this.lastDataHash = newHash
+
       this.$nextTick(() => {
         this.drawTable()
       })
@@ -280,7 +296,8 @@ export default defineComponent({
     },
   },
   mounted() {
-    // Always draw the table on mount - it will be updated when data arrives
+    // Initialize lastDataHash from store and draw table
+    this.lastDataHash = this.currentDataHash
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()

@@ -38,22 +38,25 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       // Extract selection store data before processing
       const pythonState = newData.args.selection_store as Record<string, unknown> | undefined
       const newHash = newData.args.hash as string | undefined
+      const dataChanged = newData.args.dataChanged as boolean | undefined
 
       // Clean up before re-assignment
       delete newData.args.selection_store
       delete newData.args.hash
+      delete newData.args.dataChanged
 
       // IMPORTANT: Update data FIRST, before selection store
       // This ensures that when selection watchers fire, the correct data is already in place
-      const hashChanged = this.hash !== newHash
       console.log('[StreamlitDataStore] updateRenderData:', {
-        hashChanged,
+        dataChanged,
         oldHash: this.hash?.substring(0, 8),
         newHash: newHash?.substring(0, 8),
         pythonStateSpectrum: pythonState?.spectrum,
         pythonStatePeak: pythonState?.peak,
       })
-      if (hashChanged && newHash) {
+
+      // Only process data if Python says it changed (optimization to avoid re-parsing same data)
+      if (dataChanged && newHash) {
         this.hash = newHash
 
         // Store render data
@@ -72,6 +75,17 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
             this.dataForDrawing[key] = value
           }
         })
+      } else if (!dataChanged) {
+        // Data unchanged - Python only sent hash and state, keep cached data
+        console.log('[StreamlitDataStore] Data unchanged, using cached data')
+        // Update components config without changing data
+        if (newData.args.components) {
+          if (!this.renderData) {
+            this.renderData = newData
+          } else {
+            this.renderData.args.components = newData.args.components
+          }
+        }
       }
 
       // Update selection store AFTER data is updated
