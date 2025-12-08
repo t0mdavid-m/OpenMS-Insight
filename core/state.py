@@ -174,6 +174,9 @@ class StateManager:
         vue_counter = vue_state.pop('counter', 0)
         vue_state.pop('id', None)
 
+        # Filter out internal keys (starting with _)
+        vue_state = {k: v for k, v in vue_state.items() if not k.startswith('_')}
+
         modified = False
 
         # Always accept previously undefined keys

@@ -45,21 +45,29 @@ export default defineComponent({
     // This avoids creating a spread object on every reactivity check.
     // Counter increments on every selection change, so this captures all updates.
     let lastSentCounter: number | undefined = undefined
-    watch(
-      () => selectionStore.$state.counter,
-      () => {
-        // Avoid duplicate sends for same counter value
-        const currentCounter = selectionStore.$state.counter
-        if (currentCounter === lastSentCounter) return
-        lastSentCounter = currentCounter
+    let lastSentHash: string | undefined = undefined
 
-        // Deep clone to remove Vue reactivity proxies before sending to Streamlit
-        // This prevents "Proxy object could not be cloned" errors
-        const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
-        Streamlit.setComponentValue(plainState)
-      },
-      { immediate: true }
-    )
+    const sendStateToStreamlit = () => {
+      const currentCounter = selectionStore.$state.counter
+      const currentHash = streamlitDataStore.hash || null
+
+      // Avoid duplicate sends for same counter+hash combination
+      if (currentCounter === lastSentCounter && currentHash === lastSentHash) return
+      lastSentCounter = currentCounter
+      lastSentHash = currentHash ?? undefined
+
+      // Deep clone to remove Vue reactivity proxies before sending to Streamlit
+      // This prevents "Proxy object could not be cloned" errors
+      const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
+      // Echo back Vue's current data hash so Python knows if Vue has the data
+      // This enables bidirectional hash confirmation for cache optimization
+      plainState._vueDataHash = currentHash
+      Streamlit.setComponentValue(plainState)
+    }
+
+    // Watch both counter and hash to ensure Python always knows Vue's state
+    watch(() => selectionStore.$state.counter, sendStateToStreamlit, { immediate: true })
+    watch(() => streamlitDataStore.hash, sendStateToStreamlit)
 
     // Watch for height changes and update frame height
     watch(

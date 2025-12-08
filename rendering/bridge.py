@@ -3,7 +3,7 @@
 import hashlib
 import json
 import os
-import pickle
+import sys
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -38,12 +38,10 @@ if TYPE_CHECKING:
 # Cache the Vue component function
 _vue_component_func = None
 
-# Session state key for caching last data hash per component
-_LAST_HASH_KEY = "_svc_last_hashes"
-
-# Session state key for tracking Vue's data reception
-# This ensures we resend data after Vue hot reloads or browser refreshes
-_VUE_DATA_RECEIVED_KEY = "_svc_vue_data_received"
+# Session state key for Vue's echoed hash (what Vue currently has)
+# Used for bidirectional hash confirmation - we only send data when
+# Vue's echoed hash doesn't match the current data hash
+_VUE_ECHOED_HASH_KEY = "_svc_vue_echoed_hashes"
 
 
 
@@ -203,26 +201,17 @@ def render_component(
     t4 = time.perf_counter()
 
     # Initialize hash cache in session state if needed
-    if _LAST_HASH_KEY not in st.session_state:
-        st.session_state[_LAST_HASH_KEY] = {}
+    if _VUE_ECHOED_HASH_KEY not in st.session_state:
+        st.session_state[_VUE_ECHOED_HASH_KEY] = {}
 
-    # Track which components Vue has confirmed receiving data for
-    # This handles the case where Vue reloads (dev mode hot reload, browser refresh)
-    # but Python's session state persists with stale hash cache
-    if _VUE_DATA_RECEIVED_KEY not in st.session_state:
-        st.session_state[_VUE_DATA_RECEIVED_KEY] = set()
+    # Get Vue's last-echoed hash for this component
+    # This is what Vue reported having in its last response
+    vue_echoed_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(key)
 
-    # Check if data changed from last render
-    last_hash = st.session_state[_LAST_HASH_KEY].get(key)
-    vue_has_data = key in st.session_state[_VUE_DATA_RECEIVED_KEY]
-
-    # Send data if hash changed OR Vue hasn't confirmed receiving data yet
-    data_changed = (last_hash != data_hash) or not vue_has_data
-
-    # In dev mode, always send data (Vue may have hot-reloaded and lost its state)
-    dev_mode = os.environ.get('SVC_DEV_MODE', 'false').lower() == 'true'
-    if dev_mode:
-        data_changed = True
+    # Send data if Vue's hash doesn't match current hash
+    # This handles: first render, data change, browser refresh, Vue hot reload
+    # Vue echoes null/None if it has no data, so mismatch triggers send
+    data_changed = (vue_echoed_hash != data_hash)
 
     # Only include full data if hash changed
     if data_changed:
@@ -241,8 +230,6 @@ def render_component(
             else:
                 converted_data[data_key] = value
             # pandas DataFrames pass through unchanged (optimal for Arrow)
-        # Update cached hash
-        st.session_state[_LAST_HASH_KEY][key] = data_hash
         data_payload = {
             **converted_data,
             'selection_store': state,
@@ -282,10 +269,9 @@ def render_component(
 
     # Update state from Vue response
     if result is not None:
-        # Mark that Vue has received data for this component
-        # Only mark if we actually sent data (dataChanged was True)
-        if data_changed:
-            st.session_state[_VUE_DATA_RECEIVED_KEY].add(key)
+        # Store Vue's echoed hash for next render comparison
+        vue_hash = result.get('_vueDataHash')
+        st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
 
         # Update state and rerun if state changed
         if state_manager.update_from_vue(result):
@@ -294,7 +280,6 @@ def render_component(
     t8 = time.perf_counter()
     comp_name = component_args.get('componentType', 'unknown')
     changed_str = "CHANGED" if data_changed else "cached"
-    import sys
     # Show filter state for cache debugging (use relevant_state for readable output)
     filter_info = f"filters={relevant_state}" if relevant_state else "no_filters"
     print(f"[TIMING {comp_name}] prepare:{(t2-t1)*1000:.1f}ms vue_call:{(t7-t6)*1000:.1f}ms [{changed_str}] {filter_info}", file=sys.stderr, flush=True)
