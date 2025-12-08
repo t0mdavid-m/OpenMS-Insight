@@ -159,6 +159,20 @@ class Heatmap(BaseComponent):
             'use_streaming': self._use_streaming,
         }
 
+    def get_state_dependencies(self) -> list:
+        """
+        Return list of state keys that affect this component's data.
+
+        Heatmaps depend on both filters (like other components) and
+        the zoom state, which determines which resolution level is used.
+
+        Returns:
+            List of state identifier keys including zoom_identifier
+        """
+        deps = list(self._filters.keys()) if self._filters else []
+        deps.append(self._zoom_identifier)
+        return deps
+
     def _preprocess(self) -> None:
         """
         Preprocess heatmap data by computing multi-resolution levels.
@@ -338,13 +352,14 @@ class Heatmap(BaseComponent):
         Returns:
             Filtered Polars DataFrame at appropriate resolution
         """
+        import sys
         x0, x1 = zoom['xRange']
         y0, y1 = zoom['yRange']
 
         levels = self._get_levels()
         last_filtered = None
 
-        for level_data in levels:
+        for level_idx, level_data in enumerate(levels):
             # Ensure we have a LazyFrame for filtering
             if isinstance(level_data, pl.DataFrame):
                 level_data = level_data.lazy()
@@ -372,6 +387,7 @@ class Heatmap(BaseComponent):
 
             count = len(filtered)
             last_filtered = filtered
+            print(f"[HEATMAP] Level {level_idx}: {count} pts in zoom range", file=sys.stderr)
 
             if count >= self._min_points:
                 # This level has enough detail
@@ -426,6 +442,7 @@ class Heatmap(BaseComponent):
         Returns:
             Dict with heatmapData (pandas DataFrame) and _hash for change detection
         """
+        import sys
         zoom = state.get(self._zoom_identifier)
 
         # Build columns to select
@@ -445,14 +462,18 @@ class Heatmap(BaseComponent):
                 if col not in columns_to_select:
                     columns_to_select.append(col)
 
+        levels = self._get_levels()
+        level_sizes = [len(l) if isinstance(l, pl.DataFrame) else '?' for l in levels]
+
         if self._is_no_zoom(zoom):
             # No zoom - use smallest level
-            levels = self._get_levels()
             if not levels:
                 # No levels available
+                print(f"[HEATMAP] No levels available", file=sys.stderr)
                 return {'heatmapData': pl.DataFrame().to_pandas(), '_hash': ''}
 
             data = levels[0]
+            print(f"[HEATMAP] No zoom → level 0 ({level_sizes[0]} pts), levels={level_sizes}", file=sys.stderr)
 
             # Ensure we have a LazyFrame
             if isinstance(data, pl.DataFrame):
@@ -472,10 +493,12 @@ class Heatmap(BaseComponent):
                 df_pandas = df_polars.to_pandas()
         else:
             # Zoomed - select appropriate level
+            print(f"[HEATMAP] Zoom {zoom} → selecting level...", file=sys.stderr)
             df_polars = self._select_level_for_zoom(zoom, state)
             # Select only needed columns
             available_cols = [c for c in columns_to_select if c in df_polars.columns]
             df_polars = df_polars.select(available_cols)
+            print(f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}", file=sys.stderr)
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 

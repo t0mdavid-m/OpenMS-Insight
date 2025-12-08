@@ -338,6 +338,21 @@ class BaseComponent(ABC):
         """Return list of interactivity identifiers this component sets."""
         return list(self._interactivity.keys())
 
+    def get_state_dependencies(self) -> List[str]:
+        """
+        Return list of state keys that affect this component's data.
+
+        By default, returns filter identifiers. Override in subclasses
+        to include additional state keys (e.g., zoom state for heatmaps).
+
+        The returned keys are used in the cache key calculation, so
+        changes to any of these state values will trigger data recomputation.
+
+        Returns:
+            List of state identifier keys
+        """
+        return list(self._filters.keys())
+
     def _get_primary_data(self) -> Optional[pl.LazyFrame]:
         """
         Get the primary data for operations.

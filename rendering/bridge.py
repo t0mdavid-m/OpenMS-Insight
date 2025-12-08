@@ -1,6 +1,7 @@
 """Bridge between Python components and Vue frontend."""
 
 import hashlib
+import json
 import os
 import pickle
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
@@ -8,6 +9,26 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 import pandas as pd
 import polars as pl
 import streamlit as st
+
+
+def _make_hashable(value: Any) -> Any:
+    """
+    Convert a value to a hashable form for use in cache keys.
+
+    Handles dicts and lists by converting to JSON strings.
+
+    Args:
+        value: Any value from state
+
+    Returns:
+        A hashable version of the value
+    """
+    if isinstance(value, dict):
+        # Convert dict to sorted JSON string for consistent hashing
+        return json.dumps(value, sort_keys=True)
+    if isinstance(value, list):
+        return json.dumps(value)
+    return value
 
 if TYPE_CHECKING:
     from ..core.base import BaseComponent
@@ -30,32 +51,34 @@ _VUE_DATA_RECEIVED_KEY = "_svc_vue_data_received"
 def _cached_prepare_vue_data(
     _component: 'BaseComponent',
     component_id: str,
-    filter_state: Tuple[Tuple[str, Any], ...],
+    filter_state_hashable: Tuple[Tuple[str, Any], ...],
     _data_id: int,
+    _state_dict: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], str]:
     """
     Cached wrapper for _prepare_vue_data.
 
     Cache key is based on:
     - component_id: unique key for this component instance
-    - filter_state: only the selection values that affect this component's filters
+    - filter_state_hashable: hashable version of state values (for cache key only)
     - _data_id: identity of raw data (invalidates cache if data object changes)
 
-    The _component parameter is prefixed with underscore so it's not hashed
-    (component instances are not hashable).
+    The _component and _state_dict parameters are prefixed with underscore so
+    they are not hashed (component instances are not hashable, and state_dict
+    may contain unhashable values like dicts).
 
     Args:
         _component: The component to prepare data for (not hashed)
         component_id: Unique identifier for this component
-        filter_state: Tuple of (identifier, value) pairs for filter-relevant state
+        filter_state_hashable: Tuple of (identifier, hashable_value) for cache key
         _data_id: id() of the raw data object
+        _state_dict: Original state dict with actual values (not hashed)
 
     Returns:
         Tuple of (vue_data dict, data_hash string)
     """
-    # Reconstruct full state dict from filter_state tuple
-    state = dict(filter_state)
-    vue_data = _component._prepare_vue_data(state)
+    # Use the original state dict (not the hashable version)
+    vue_data = _component._prepare_vue_data(_state_dict)
 
     # Compute hash before any conversion
     data_hash = _hash_data(vue_data)
@@ -143,12 +166,19 @@ def render_component(
     if key is None:
         key = f"svc_{id(component)}_{hash(str(component._interactivity))}"
 
-    # Extract only filter-relevant state for cache key
-    # This ensures cache hits when non-filter selections change
-    filter_keys = set(component._filters.keys()) if component._filters else set()
-    filter_state = tuple(sorted(
-        (k, state.get(k)) for k in filter_keys
+    # Extract state keys that affect this component's data for cache key
+    # This includes filters and any additional dependencies (e.g., zoom for heatmaps)
+    # Uses get_state_dependencies() which can be overridden by subclasses
+    state_keys = set(component.get_state_dependencies())
+
+    # Build hashable version for cache key (converts dicts/lists to JSON strings)
+    filter_state_hashable = tuple(sorted(
+        (k, _make_hashable(state.get(k))) for k in state_keys
     ))
+
+    # Build original state dict for passing to _prepare_vue_data
+    # (contains actual values, not JSON strings)
+    relevant_state = {k: state.get(k) for k in state_keys}
 
     # Build component ID for cache (includes type to avoid collisions)
     component_type = component._get_vue_component_name()
@@ -158,11 +188,11 @@ def render_component(
     data_id = id(component._raw_data)
 
     # Get component data using cached function
-    # Cache key: (component_id, filter_state, data_id)
+    # Cache key: (component_id, filter_state_hashable, data_id)
     # - Filterless components: filter_state=() always → always cache hit
     # - Filtered components: cache hit when filter values unchanged
     vue_data, data_hash = _cached_prepare_vue_data(
-        component, component_id, filter_state, data_id
+        component, component_id, filter_state_hashable, data_id, relevant_state
     )
     t2 = time.perf_counter()
 
@@ -265,8 +295,8 @@ def render_component(
     comp_name = component_args.get('componentType', 'unknown')
     changed_str = "CHANGED" if data_changed else "cached"
     import sys
-    # Show filter state for cache debugging
-    filter_info = f"filters={dict(filter_state)}" if filter_state else "no_filters"
+    # Show filter state for cache debugging (use relevant_state for readable output)
+    filter_info = f"filters={relevant_state}" if relevant_state else "no_filters"
     print(f"[TIMING {comp_name}] prepare:{(t2-t1)*1000:.1f}ms vue_call:{(t7-t6)*1000:.1f}ms [{changed_str}] {filter_info}", file=sys.stderr, flush=True)
 
     return result
