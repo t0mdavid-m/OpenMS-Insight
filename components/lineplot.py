@@ -1,8 +1,7 @@
 """Line plot component using Plotly.js."""
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional
 
-import pandas as pd
 import polars as pl
 
 from ..core.base import BaseComponent
@@ -31,6 +30,7 @@ class LinePlot(BaseComponent):
     Example:
         # Plot filters by spectrum, clicking selects a peak
         plot = LinePlot(
+            cache_id="peaks_plot",
             data=peaks_df,
             filters={'spectrum': 'scan_id'},
             interactivity={'my_selection': 'mass'},
@@ -39,11 +39,16 @@ class LinePlot(BaseComponent):
         )
     """
 
+    _component_type: str = "lineplot"
+
     def __init__(
         self,
-        data: pl.LazyFrame,
+        cache_id: str,
+        data: Optional[pl.LazyFrame] = None,
         filters: Optional[Dict[str, str]] = None,
         interactivity: Optional[Dict[str, str]] = None,
+        cache_path: str = ".",
+        regenerate_cache: bool = False,
         x_column: str = 'x',
         y_column: str = 'y',
         title: Optional[str] = None,
@@ -59,7 +64,9 @@ class LinePlot(BaseComponent):
         Initialize the LinePlot component.
 
         Args:
-            data: Polars LazyFrame with plot data
+            cache_id: Unique identifier for this component's cache (MANDATORY).
+                Creates a folder {cache_path}/{cache_id}/ for cached data.
+            data: Polars LazyFrame with plot data. Optional if cache exists.
             filters: Mapping of identifier names to column names for filtering.
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, plot shows only data where
@@ -68,6 +75,8 @@ class LinePlot(BaseComponent):
                 Example: {'my_selection': 'mass'}
                 When a peak is clicked, sets 'my_selection' to that peak's mass.
                 The selected peak is highlighted in gold (selectedColor).
+            cache_path: Base path for cache storage. Default "." (current dir).
+            regenerate_cache: If True, regenerate cache even if valid cache exists.
             x_column: Column name for x-axis values
             y_column: Column name for y-axis values
             title: Plot title
@@ -96,11 +105,28 @@ class LinePlot(BaseComponent):
         self._plot_config = config or {}
 
         super().__init__(
-            data,
+            cache_id=cache_id,
+            data=data,
             filters=filters,
             interactivity=interactivity,
+            cache_path=cache_path,
+            regenerate_cache=regenerate_cache,
             **kwargs
         )
+
+    def _get_cache_config(self) -> Dict[str, Any]:
+        """
+        Get configuration that affects cache validity.
+
+        Returns:
+            Dict of config values that affect preprocessing
+        """
+        return {
+            'x_column': self._x_column,
+            'y_column': self._y_column,
+            'highlight_column': self._highlight_column,
+            'annotation_column': self._annotation_column,
+        }
 
     def _validate_mappings(self) -> None:
         """Validate columns exist in data schema."""
@@ -135,7 +161,7 @@ class LinePlot(BaseComponent):
         """
         Preprocess plot data.
 
-        For line plots, we collect the data and prepare it for Vue rendering.
+        Collects the LazyFrame for caching by base class.
         """
         # Store configuration in preprocessed data for serialization
         self._preprocessed_data['plot_config'] = {
@@ -144,6 +170,10 @@ class LinePlot(BaseComponent):
             'highlight_column': self._highlight_column,
             'annotation_column': self._annotation_column,
         }
+
+        # Collect data for caching (filter happens at render time)
+        # Base class will serialize this to parquet
+        self._preprocessed_data['data'] = self._raw_data.collect()
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
@@ -185,9 +215,19 @@ class LinePlot(BaseComponent):
                 if col not in columns_to_select:
                     columns_to_select.append(col)
 
+        # Get cached data (DataFrame or LazyFrame)
+        data = self._preprocessed_data.get('data')
+        if data is None:
+            # Fallback to raw data if available
+            data = self._raw_data
+
+        # Ensure we have a LazyFrame for filtering
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+
         # Use cached filter+collect - returns (pandas DataFrame, hash)
         df_pandas, data_hash = filter_and_collect_cached(
-            self._raw_data,
+            data,
             self._filters,
             state,
             columns=columns_to_select,

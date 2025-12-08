@@ -1,8 +1,7 @@
 """Table component using Tabulator.js."""
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
-import pandas as pd
 import polars as pl
 
 from ..core.base import BaseComponent
@@ -30,23 +29,30 @@ class Table(BaseComponent):
     Example:
         # Master table - shows all data, clicking sets 'spectrum' selection
         master_table = Table(
+            cache_id="spectra_table",
             data=spectra_df,
             interactivity={'spectrum': 'scan_id'},
         )
 
         # Detail table - filters by 'spectrum', clicking sets 'peak' selection
         detail_table = Table(
+            cache_id="peaks_table",
             data=peaks_df,
             filters={'spectrum': 'scan_id'},
             interactivity={'peak': 'mass'},
         )
     """
 
+    _component_type: str = "table"
+
     def __init__(
         self,
-        data: pl.LazyFrame,
+        cache_id: str,
+        data: Optional[pl.LazyFrame] = None,
         filters: Optional[Dict[str, str]] = None,
         interactivity: Optional[Dict[str, str]] = None,
+        cache_path: str = ".",
+        regenerate_cache: bool = False,
         column_definitions: Optional[List[Dict[str, Any]]] = None,
         title: Optional[str] = None,
         index_field: str = 'id',
@@ -60,7 +66,9 @@ class Table(BaseComponent):
         Initialize the Table component.
 
         Args:
-            data: Polars LazyFrame with table data
+            cache_id: Unique identifier for this component's cache (MANDATORY).
+                Creates a folder {cache_path}/{cache_id}/ for cached data.
+            data: Polars LazyFrame with table data. Optional if cache exists.
             filters: Mapping of identifier names to column names for filtering.
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, table shows only rows where
@@ -68,6 +76,8 @@ class Table(BaseComponent):
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {'peak': 'mass'}
                 When a row is clicked, sets 'peak' selection to that row's mass.
+            cache_path: Base path for cache storage. Default "." (current dir).
+            regenerate_cache: If True, regenerate cache even if valid cache exists.
             column_definitions: List of Tabulator column definition dicts.
                 Each dict can contain:
                 - field: Column field name (required)
@@ -96,18 +106,33 @@ class Table(BaseComponent):
         self._initial_sort = initial_sort
 
         super().__init__(
-            data,
+            cache_id=cache_id,
+            data=data,
             filters=filters,
             interactivity=interactivity,
+            cache_path=cache_path,
+            regenerate_cache=regenerate_cache,
             **kwargs
         )
+
+    def _get_cache_config(self) -> Dict[str, Any]:
+        """
+        Get configuration that affects cache validity.
+
+        Returns:
+            Dict of config values that affect preprocessing
+        """
+        return {
+            'column_definitions': self._column_definitions,
+            'index_field': self._index_field,
+        }
 
     def _preprocess(self) -> None:
         """
         Preprocess table data.
 
-        Stores the LazyFrame reference for lazy evaluation.
-        Projection and filtering happen at render time for streaming from disk.
+        Collects the LazyFrame and generates column definitions if needed.
+        Data is cached by base class for fast subsequent loads.
         """
         # Collect schema for auto-generating column definitions if needed
         schema = self._raw_data.collect_schema()
@@ -139,9 +164,9 @@ class Table(BaseComponent):
         # Store column definitions in preprocessed data for serialization
         self._preprocessed_data['column_definitions'] = self._column_definitions
 
-        # Store LazyFrame reference - stays lazy until render
-        # Projection happens at filter time for optimal streaming from parquet
-        self._preprocessed_data['data'] = self._raw_data
+        # Collect data for caching (filter happens at render time)
+        # Base class will serialize this to parquet
+        self._preprocessed_data['data'] = self._raw_data.collect()
 
     def _get_columns_to_select(self) -> Optional[List[str]]:
         """Get list of columns needed for this table."""
@@ -182,7 +207,7 @@ class Table(BaseComponent):
         Prepare table data for Vue component.
 
         Returns pandas DataFrame for efficient Arrow serialization to frontend.
-        Data is streamed from parquet and only filtered rows/columns are materialized.
+        Data is filtered based on current selection state.
 
         Args:
             state: Current selection state from StateManager
@@ -193,10 +218,19 @@ class Table(BaseComponent):
         # Get columns to select for projection pushdown
         columns = self._get_columns_to_select()
 
+        # Get cached data (DataFrame or LazyFrame)
+        data = self._preprocessed_data.get('data')
+        if data is None:
+            # Fallback to raw data if available
+            data = self._raw_data
+
+        # Ensure we have a LazyFrame for filtering
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+
         # Use cached filter+collect - returns (pandas DataFrame, hash)
-        # For unfiltered tables, this still applies projection and streams from disk
         df_pandas, data_hash = filter_and_collect_cached(
-            self._preprocessed_data['data'],
+            data,
             self._filters,
             state,
             columns=columns,
@@ -211,9 +245,14 @@ class Table(BaseComponent):
         Returns:
             Dict with all table configuration for Vue
         """
+        # Get column definitions (may have been loaded from cache)
+        column_defs = self._column_definitions
+        if column_defs is None:
+            column_defs = self._preprocessed_data.get('column_definitions', [])
+
         args: Dict[str, Any] = {
             'componentType': self._get_vue_component_name(),
-            'columnDefinitions': self._column_definitions,
+            'columnDefinitions': column_defs,
             'tableIndexField': self._index_field,
             'tableLayoutParam': self._layout,
             'defaultRow': self._default_row,
