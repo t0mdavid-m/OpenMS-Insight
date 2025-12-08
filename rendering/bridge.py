@@ -189,6 +189,11 @@ def render_component(
     # Send data if hash changed OR Vue hasn't confirmed receiving data yet
     data_changed = (last_hash != data_hash) or not vue_has_data
 
+    # In dev mode, always send data (Vue may have hot-reloaded and lost its state)
+    dev_mode = os.environ.get('SVC_DEV_MODE', 'false').lower() == 'true'
+    if dev_mode:
+        data_changed = True
+
     # Only include full data if hash changed
     if data_changed:
         # Convert any non-pandas data to pandas for Arrow serialization

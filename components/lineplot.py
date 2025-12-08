@@ -128,6 +128,22 @@ class LinePlot(BaseComponent):
             'annotation_column': self._annotation_column,
         }
 
+    def _get_row_group_size(self) -> int:
+        """
+        Get optimal row group size for parquet writing.
+
+        Filtered plots use smaller row groups (10K) for better predicate
+        pushdown granularity - this allows Polars to skip row groups that
+        don't contain the filter value. Unfiltered plots use larger groups
+        (50K) since we read all data anyway.
+
+        Returns:
+            Number of rows per row group
+        """
+        if self._filters:
+            return 10_000  # Smaller groups for better filter performance
+        return 50_000  # Larger groups for unfiltered plots
+
     def _validate_mappings(self) -> None:
         """Validate columns exist in data schema."""
         super()._validate_mappings()
@@ -161,8 +177,19 @@ class LinePlot(BaseComponent):
         """
         Preprocess plot data.
 
-        Collects the LazyFrame for caching by base class.
+        Sorts by filter columns for efficient predicate pushdown, then
+        collects the LazyFrame for caching by base class.
         """
+        data = self._raw_data
+
+        # Sort by filter columns for efficient predicate pushdown.
+        # This clusters identical filter values together, enabling Polars
+        # to skip row groups that don't contain the target value when
+        # filtering by selection state.
+        if self._filters:
+            sort_columns = list(self._filters.values())
+            data = data.sort(sort_columns)
+
         # Store configuration in preprocessed data for serialization
         self._preprocessed_data['plot_config'] = {
             'x_column': self._x_column,
@@ -173,7 +200,7 @@ class LinePlot(BaseComponent):
 
         # Collect data for caching (filter happens at render time)
         # Base class will serialize this to parquet
-        self._preprocessed_data['data'] = self._raw_data.collect()
+        self._preprocessed_data['data'] = data.collect()
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
