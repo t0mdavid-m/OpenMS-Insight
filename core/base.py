@@ -14,7 +14,8 @@ if TYPE_CHECKING:
     from .state import StateManager
 
 # Cache format version - increment when cache structure changes
-CACHE_VERSION = 1
+# Version 2: Added sorting by filter columns + smaller row groups for predicate pushdown
+CACHE_VERSION = 2
 
 
 class BaseComponent(ABC):
@@ -225,16 +226,27 @@ class BaseComponent(ABC):
         }
 
         # Save preprocessed data
+        row_group_size = self._get_row_group_size()
         for key, value in self._preprocessed_data.items():
             if isinstance(value, pl.LazyFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
-                value.collect().write_parquet(filepath)
+                value.collect().write_parquet(
+                    filepath,
+                    compression='zstd',
+                    statistics=True,
+                    row_group_size=row_group_size,
+                )
                 manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
-                value.write_parquet(filepath)
+                value.write_parquet(
+                    filepath,
+                    compression='zstd',
+                    statistics=True,
+                    row_group_size=row_group_size,
+                )
                 manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
@@ -250,6 +262,19 @@ class BaseComponent(ABC):
             return True
         except (TypeError, ValueError):
             return False
+
+    def _get_row_group_size(self) -> int:
+        """
+        Get optimal row group size for parquet writing.
+
+        Smaller row groups enable better predicate pushdown when filtering,
+        but increase metadata overhead. Override in subclasses for
+        component-specific tuning.
+
+        Returns:
+            Number of rows per row group (default: 50,000)
+        """
+        return 50_000
 
     @abstractmethod
     def _preprocess(self) -> None:
