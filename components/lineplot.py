@@ -189,8 +189,8 @@ class LinePlot(BaseComponent):
 
         LinePlots filter based on filters mapping if provided.
 
-        Returns pandas DataFrame for efficient Arrow serialization.
-        Vue converts raw x/y values to stick plot format (reduces data transfer 3x).
+        Sends data as a pandas DataFrame for efficient Arrow serialization.
+        Vue parses the Arrow table and extracts column arrays for rendering.
 
         Args:
             state: Current selection state from StateManager
@@ -233,16 +233,20 @@ class LinePlot(BaseComponent):
             columns=columns_to_select,
         )
 
+        # Send as DataFrame for Arrow serialization (efficient binary transfer)
+        # Vue will parse and extract columns using the config
         return {
             'plotData': df_pandas,
             '_hash': data_hash,
-            # Pass column mappings so Vue knows which columns to use
+            # Config tells Vue which columns map to x, y, etc.
             '_plotConfig': {
                 'xColumn': self._x_column,
                 'yColumn': self._y_column,
                 'highlightColumn': self._highlight_column,
                 'annotationColumn': self._annotation_column,
-                'interactivity': self._interactivity,
+                'interactivityColumns': {
+                    col: col for col in (self._interactivity.values() if self._interactivity else [])
+                },
             }
         }
 
@@ -286,8 +290,11 @@ class LinePlot(BaseComponent):
             'config': self._plot_config,
             # Pass interactivity for click handling (sets selection on peak click)
             'interactivity': self._interactivity,
-            # Pass x_column name so Vue knows click sets x value
+            # Column mappings for Arrow data parsing in Vue
             'xColumn': self._x_column,
+            'yColumn': self._y_column,
+            'highlightColumn': self._highlight_column,
+            'annotationColumn': self._annotation_column,
         }
 
         # Add any extra config options

@@ -67,9 +67,20 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         const data = newData.args as StreamlitData
         Object.entries(data).forEach(([key, value]) => {
           if (value instanceof ArrowTable) {
-            const parsed = this.parseArrowTable(value)
-            console.log(`[StreamlitDataStore] Parsed ${key}:`, { rowCount: parsed.length })
-            this.dataForDrawing[key] = parsed
+            // Use column-based parsing for plotData (more efficient for plotting)
+            // Use row-based parsing for tableData (needed for Tabulator)
+            if (key === 'plotData') {
+              const parsed = this.parseArrowTableToColumns(value)
+              console.log(`[StreamlitDataStore] Parsed ${key} to columns:`, {
+                columns: Object.keys(parsed),
+                rowCount: Object.values(parsed)[0]?.length ?? 0,
+              })
+              this.dataForDrawing[key] = parsed
+            } else {
+              const parsed = this.parseArrowTable(value)
+              console.log(`[StreamlitDataStore] Parsed ${key}:`, { rowCount: parsed.length })
+              this.dataForDrawing[key] = parsed
+            }
           } else {
             this.dataForDrawing[key] = value
           }
@@ -120,6 +131,7 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
 
     /**
      * Parse Arrow table to array of row objects.
+     * Used for table data where row-based access is needed.
      */
     parseArrowTable(arrowTable: ArrowTable): Record<string, unknown>[] {
       const rows: Record<string, unknown>[] = []
@@ -135,6 +147,32 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       }
 
       return rows
+    },
+
+    /**
+     * Parse Arrow table to column arrays.
+     * More efficient for plotting where column-based access is needed.
+     * Returns: { columnName: [values...], ... }
+     */
+    parseArrowTableToColumns(arrowTable: ArrowTable): Record<string, unknown[]> {
+      const columns: Record<string, unknown[]> = {}
+      const columnNames = arrowTable.table.schema.fields.map((field) => field.name)
+      const numRows = arrowTable.table.numRows
+
+      columnNames.forEach((columnName, colIndex) => {
+        const column = arrowTable.table.getChildAt(colIndex)
+        const values: unknown[] = []
+
+        if (column) {
+          for (let i = 0; i < numRows; i++) {
+            values.push(this.parseArrowValue(column.get(i)))
+          }
+        }
+
+        columns[columnName] = values
+      })
+
+      return columns
     },
 
     /**

@@ -88,10 +88,48 @@ export default defineComponent({
 
     /**
      * Get plot data from Python.
+     * Data arrives as column arrays: {columnName: [values...], ...}
+     * We map to the expected format using xColumn/yColumn from args.
      */
     plotData(): PlotData | undefined {
-      const data = this.streamlitDataStore.allDataForDrawing?.plotData
-      return data as PlotData | undefined
+      const rawData = this.streamlitDataStore.allDataForDrawing?.plotData as
+        | Record<string, unknown[]>
+        | undefined
+      if (!rawData) return undefined
+
+      // Get column names from args
+      const xCol = this.args.xColumn || 'x'
+      const yCol = this.args.yColumn || 'y'
+
+      // Map to expected PlotData format
+      const result: PlotData = {
+        x_values: (rawData[xCol] as number[]) || [],
+        y_values: (rawData[yCol] as number[]) || [],
+      }
+
+      // Add highlight mask if present (using original column name)
+      // Python sends highlight column with its original name
+      if (this.args.highlightColumn && rawData[this.args.highlightColumn]) {
+        result.highlight_mask = rawData[this.args.highlightColumn] as boolean[]
+      }
+
+      // Add annotations if present
+      if (this.args.annotationColumn && rawData[this.args.annotationColumn]) {
+        result.annotations = rawData[this.args.annotationColumn] as string[]
+      }
+
+      // Add interactivity column data for click handling
+      // Columns are stored with their original names in rawData
+      if (this.args.interactivity) {
+        for (const [identifier, column] of Object.entries(this.args.interactivity)) {
+          const colName = column as string
+          if (rawData[colName]) {
+            result[`interactivity_${colName}`] = rawData[colName]
+          }
+        }
+      }
+
+      return result
     },
 
     /**
