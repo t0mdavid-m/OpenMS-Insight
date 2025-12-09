@@ -23,6 +23,7 @@ declare module 'tabulator-tables' {
     select(): void
     deselect(): void
     scrollTo(position?: string, ifVisible?: boolean): Promise<void>
+    pageTo(): Promise<void>
   }
 
   export interface CellComponent {
@@ -33,6 +34,7 @@ declare module 'tabulator-tables' {
 
   export class TabulatorFull {
     constructor(element: string | HTMLElement, options: Record<string, unknown>)
+    options: Record<string, unknown>
     destroy(): void
     setData(data: unknown[]): Promise<void>
     getData(): unknown[]
@@ -50,6 +52,7 @@ declare module 'tabulator-tables' {
     off(event: string, callback?: (...args: any[]) => void): void
     download(type: string, filename: string, options?: Record<string, unknown>): void
     setHeight(height: number | string): void
+    setPageToRow(row: number | string): Promise<void>
   }
 
   export default TabulatorFull

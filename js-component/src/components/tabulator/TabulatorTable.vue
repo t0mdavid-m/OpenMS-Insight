@@ -451,16 +451,32 @@ export default defineComponent({
           if (rowIndex >= 0) {
             const indexField = this.args.tableIndexField || 'id'
             const rowId = this.preparedTableData[rowIndex][indexField]
-            // Use getRows to avoid "Find Error" warnings during race conditions
-            // when selection state changes before filtered data arrives
-            const rows = this.tabulator.getRows()
-            const row = rows.find(r => r.getData()[indexField] === rowId)
+            console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] syncSelection lookup:`, {
+              identifier,
+              column,
+              selectedValue,
+              rowIndex,
+              indexField,
+              rowId,
+            })
+            // Use getRow(rowId) which works across all pages, not just current page
+            const row = this.tabulator.getRow(rowId)
             if (row) {
               this.tabulator.deselectRow()
               row.select()
+              // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
+              if (this.tabulator.options.pagination) {
+                console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] calling setPageToRow(${rowId})`)
+                this.tabulator.setPageToRow(rowId as string | number).then(() => {
+                  row.scrollTo('center', false)
+                })
+              } else {
+                row.scrollTo('center', false)
+              }
               // Successfully selected, clear any pending selection
               this.pendingSelection = null
             } else {
+              console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] getRow(${rowId}) returned false/null`)
               // Row exists in data but not in tabulator yet - store as pending
               // This happens when data and selection change simultaneously
               this.pendingSelection = { [identifier]: selectedValue }
@@ -508,7 +524,14 @@ export default defineComponent({
               const row = rows.find(r => r.getData()[indexField] === rowId)
               if (row) {
                 row.select()
-                row.scrollTo('center', false)
+                // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
+                if (this.tabulator?.options.pagination) {
+                  this.tabulator.setPageToRow(rowId as string | number).then(() => {
+                    row.scrollTo('center', false)
+                  })
+                } else {
+                  row.scrollTo('center', false)
+                }
                 selectedFromState = true
                 // Clear pending selection since we successfully applied it
                 this.pendingSelection = null
@@ -537,7 +560,14 @@ export default defineComponent({
               const row = rows.find(r => r.getData()[indexField] === rowId)
               if (row) {
                 row.select()
-                row.scrollTo('center', false)
+                // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
+                if (this.tabulator?.options.pagination) {
+                  this.tabulator.setPageToRow(rowId as string | number).then(() => {
+                    row.scrollTo('center', false)
+                  })
+                } else {
+                  row.scrollTo('center', false)
+                }
                 selectedFromState = true
                 break
               }
