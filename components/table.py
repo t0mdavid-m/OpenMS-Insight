@@ -60,6 +60,8 @@ class Table(BaseComponent):
         layout: str = 'fitDataFill',
         default_row: int = 0,
         initial_sort: Optional[List[Dict[str, Any]]] = None,
+        pagination: bool = True,
+        page_size: int = 100,
         **kwargs
     ):
         """
@@ -95,6 +97,10 @@ class Table(BaseComponent):
             layout: Tabulator layout mode ('fitData', 'fitDataFill', 'fitColumns', etc.)
             default_row: Default row to select on load (-1 for none)
             initial_sort: List of sort configurations like [{'column': 'field', 'dir': 'asc'}]
+            pagination: Enable pagination for large tables (default: True).
+                Pagination dramatically improves performance for tables with
+                thousands of rows by only rendering one page at a time.
+            page_size: Number of rows per page when pagination is enabled (default: 100)
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -104,6 +110,8 @@ class Table(BaseComponent):
         self._layout = layout
         self._default_row = default_row
         self._initial_sort = initial_sort
+        self._pagination = pagination
+        self._page_size = page_size
 
         super().__init__(
             cache_id=cache_id,
@@ -285,6 +293,9 @@ class Table(BaseComponent):
             'defaultRow': self._default_row,
             # Pass interactivity so Vue knows which identifier to update on row click
             'interactivity': self._interactivity,
+            # Pagination settings
+            'pagination': self._pagination,
+            'pageSize': self._page_size,
         }
 
         if self._title:

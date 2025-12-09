@@ -30,6 +30,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   goToFields?: string[]
   interactivity?: InteractivityMapping
   height?: number
+  pagination?: boolean
+  pageSize?: number
 }
 
 /**

@@ -334,10 +334,8 @@ export default defineComponent({
       const goToHeight = this.showGoTo ? 58 : 0
       const tableMaxHeight = baseHeight - goToHeight
 
-      // Disable virtual DOM for small datasets to avoid rendering issues
-      const useVirtualDom = this.preparedTableData.length > 100
-
-      this.tabulator = new Tabulator(`#${this.id}`, {
+      // Build Tabulator options
+      const tabulatorOptions: Options = {
         index: indexField,
         data: this.preparedTableData,
         minHeight: 150,
@@ -346,7 +344,6 @@ export default defineComponent({
         responsiveLayout: 'collapse',
         layout: this.args.tableLayoutParam || 'fitDataFill',
         selectable: 1,
-        renderVertical: useVirtualDom ? 'virtual' : 'basic',
         columnDefaults: {
           title: '',
           hozAlign: 'right',
@@ -359,7 +356,22 @@ export default defineComponent({
           return colDef
         }),
         initialSort: this.args.initialSort,
-      })
+      }
+
+      // Enable pagination for large datasets (default: true)
+      const usePagination = this.args.pagination !== false
+      if (usePagination) {
+        tabulatorOptions.pagination = true
+        tabulatorOptions.paginationSize = this.args.pageSize || 100
+        tabulatorOptions.paginationSizeSelector = [50, 100, 200, 500, 1000]
+        tabulatorOptions.paginationCounter = 'rows'
+      } else {
+        // Only use virtual DOM if pagination is disabled and dataset is large
+        const useVirtualDom = this.preparedTableData.length > 100
+        tabulatorOptions.renderVertical = useVirtualDom ? 'virtual' : 'basic'
+      }
+
+      this.tabulator = new Tabulator(`#${this.id}`, tabulatorOptions)
 
       this.tabulator.on('tableBuilt', () => {
         const tabulatorRows = this.tabulator?.getRows().length
@@ -1314,5 +1326,91 @@ export default defineComponent({
   line-height: 1;
   z-index: 10;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Compact pagination styling */
+.tabulator .tabulator-footer {
+  padding: 4px 8px;
+  min-height: unset;
+}
+
+.tabulator .tabulator-footer .tabulator-paginator {
+  font-size: 12px;
+}
+
+.tabulator .tabulator-footer .tabulator-page {
+  padding: 2px 8px;
+  font-size: 12px;
+  min-width: unset;
+}
+
+.tabulator .tabulator-footer .tabulator-page-size {
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.tabulator .tabulator-footer .tabulator-pages {
+  margin: 0 4px;
+}
+
+.tabulator .tabulator-footer .tabulator-page-counter {
+  font-size: 11px;
+  margin-right: 8px;
+}
+
+/* Dark mode pagination styling */
+.table-dark .tabulator-footer {
+  background-color: #1e1e1e;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+.table-dark .tabulator-footer .tabulator-paginator label {
+  color: #e0e0e0;
+}
+
+.table-dark .tabulator-footer .tabulator-page {
+  background-color: #2d2d2d;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+.table-dark .tabulator-footer .tabulator-page:hover {
+  background-color: #3d3d3d;
+  color: #fff;
+}
+
+.table-dark .tabulator-footer .tabulator-page.active {
+  background-color: #0d6efd;
+  border-color: #0d6efd;
+  color: #fff;
+}
+
+.table-dark .tabulator-footer .tabulator-page:disabled {
+  background-color: #1e1e1e;
+  border-color: #333;
+  color: #666;
+}
+
+.table-dark .tabulator-footer .tabulator-page-size {
+  background-color: #2d2d2d;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+.table-dark .tabulator-footer .tabulator-page-counter {
+  color: #aaa;
+}
+
+/* Light mode - ensure consistent styling */
+.table-light .tabulator-footer {
+  background-color: #f8f9fa;
+  border-color: #dee2e6;
+}
+
+.table-light .tabulator-footer .tabulator-page.active {
+  background-color: #0d6efd;
+  border-color: #0d6efd;
+  color: #fff;
 }
 </style>
