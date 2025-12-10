@@ -10,12 +10,6 @@ Interactive visualization components for Streamlit backed by Vue.js.
 - **Table component** (TabulatorTable) with filtering, sorting, go-to
 - **Line plot component** (PlotlyLineplot) with highlighting and zoom
 
-## Installation
-
-```bash
-pip install streamlit-vue-components
-```
-
 ## Quick Start
 
 ```python
