@@ -107,7 +107,3 @@ Set environment variables for development:
 export SVC_DEV_MODE=true
 export SVC_DEV_URL=http://localhost:5173
 ```
-
-## Architecture
-
-See [ARCHITECTURE_PLAN.md](../ARCHITECTURE_PLAN.md) for detailed design documentation.
