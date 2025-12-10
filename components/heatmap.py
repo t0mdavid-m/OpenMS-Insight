@@ -1,6 +1,6 @@
 """Heatmap component using Plotly scattergl."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
@@ -84,6 +84,7 @@ class Heatmap(BaseComponent):
         colorscale: str = 'Portland',
         use_simple_downsample: bool = False,
         use_streaming: bool = True,
+        categorical_filters: Optional[List[str]] = None,
         **kwargs
     ):
         """
@@ -115,6 +116,11 @@ class Heatmap(BaseComponent):
                 of spatial binning (doesn't require scipy)
             use_streaming: If True (default), use streaming downsampling that
                 stays lazy until render time. Reduces memory on init.
+            categorical_filters: List of filter identifiers that should have
+                per-value compression levels. This ensures constant point counts
+                are sent to the client regardless of filter selection. Should be
+                used for filters with a small number of unique values (<20).
+                Example: ['im_dimension'] for ion mobility filtering.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -130,6 +136,7 @@ class Heatmap(BaseComponent):
         self._colorscale = colorscale
         self._use_simple_downsample = use_simple_downsample
         self._use_streaming = use_streaming
+        self._categorical_filters = categorical_filters or []
 
         super().__init__(
             cache_id=cache_id,
@@ -157,6 +164,7 @@ class Heatmap(BaseComponent):
             'y_bins': self._y_bins,
             'use_simple_downsample': self._use_simple_downsample,
             'use_streaming': self._use_streaming,
+            'categorical_filters': sorted(self._categorical_filters),
         }
 
     def get_state_dependencies(self) -> list:
@@ -180,11 +188,140 @@ class Heatmap(BaseComponent):
         This is STAGE 1 processing. In streaming mode (default), levels stay
         as lazy LazyFrames and are only collected at render time. In non-streaming
         mode, levels are eagerly computed for faster rendering but higher memory.
+
+        If categorical_filters is specified, creates separate compression levels
+        for each unique value of those filters, ensuring constant point counts
+        regardless of filter selection.
         """
-        if self._use_streaming:
+        if self._categorical_filters:
+            self._preprocess_with_categorical_filters()
+        elif self._use_streaming:
             self._preprocess_streaming()
         else:
             self._preprocess_eager()
+
+    def _preprocess_with_categorical_filters(self) -> None:
+        """
+        Preprocess with per-filter-value compression levels.
+
+        For each unique value of each categorical filter, creates separate
+        compression levels. This ensures that when a filter is applied at
+        render time, the resulting data has ~min_points regardless of the
+        filter value selected.
+
+        Example: For im_dimension with values [0, 1, 2, 3], creates:
+        - cat_level_im_dimension_0_0: 20K points with im_id=0
+        - cat_level_im_dimension_0_1: 20K points with im_id=1
+        - etc.
+        """
+        import sys
+
+        # Get data ranges (for the full dataset)
+        x_range, y_range = get_data_range(
+            self._raw_data,
+            self._x_column,
+            self._y_column,
+        )
+        self._preprocessed_data['x_range'] = x_range
+        self._preprocessed_data['y_range'] = y_range
+
+        # Get total count
+        total = self._raw_data.select(pl.len()).collect().item()
+        self._preprocessed_data['total'] = total
+
+        # Store metadata about categorical filters
+        self._preprocessed_data['has_categorical_filters'] = True
+        self._preprocessed_data['categorical_filter_values'] = {}
+
+        # Process each categorical filter
+        for filter_id in self._categorical_filters:
+            if filter_id not in self._filters:
+                print(f"[HEATMAP] Warning: categorical_filter '{filter_id}' not in filters, skipping", file=sys.stderr)
+                continue
+
+            column_name = self._filters[filter_id]
+
+            # Get unique values for this filter
+            unique_values = (
+                self._raw_data
+                .select(pl.col(column_name))
+                .unique()
+                .collect()
+                .to_series()
+                .to_list()
+            )
+            unique_values = sorted([v for v in unique_values if v is not None and v >= 0])
+
+            print(f"[HEATMAP] Categorical filter '{filter_id}' ({column_name}): {len(unique_values)} unique values", file=sys.stderr)
+
+            self._preprocessed_data['categorical_filter_values'][filter_id] = unique_values
+
+            # Create compression levels for each filter value
+            for filter_value in unique_values:
+                # Filter data to this value
+                filtered_data = self._raw_data.filter(pl.col(column_name) == filter_value)
+                filtered_total = filtered_data.select(pl.len()).collect().item()
+
+                # Compute level sizes for this filtered subset
+                level_sizes = compute_compression_levels(self._min_points, filtered_total)
+
+                print(f"[HEATMAP]   Value {filter_value}: {filtered_total:,} pts → levels {level_sizes}", file=sys.stderr)
+
+                # Store level sizes for this filter value
+                self._preprocessed_data[f'cat_level_sizes_{filter_id}_{filter_value}'] = level_sizes
+                self._preprocessed_data[f'cat_num_levels_{filter_id}_{filter_value}'] = len(level_sizes)
+
+                # Build each level
+                for level_idx, target_size in enumerate(level_sizes):
+                    if self._use_simple_downsample:
+                        level = downsample_2d_simple(
+                            filtered_data,
+                            max_points=target_size,
+                            intensity_column=self._intensity_column,
+                        )
+                    else:
+                        level = downsample_2d_streaming(
+                            filtered_data,
+                            max_points=target_size,
+                            x_column=self._x_column,
+                            y_column=self._y_column,
+                            intensity_column=self._intensity_column,
+                            x_bins=self._x_bins,
+                            y_bins=self._y_bins,
+                            x_range=x_range,
+                            y_range=y_range,
+                        )
+
+                    # Collect and store
+                    level_key = f'cat_level_{filter_id}_{filter_value}_{level_idx}'
+                    self._preprocessed_data[level_key] = level.collect()
+
+        # Also create global levels for when no categorical filter is selected
+        # (fallback to standard behavior)
+        level_sizes = compute_compression_levels(self._min_points, total)
+        self._preprocessed_data['level_sizes'] = level_sizes
+        self._preprocessed_data['num_levels'] = len(level_sizes)
+
+        for i, size in enumerate(level_sizes):
+            if self._use_simple_downsample:
+                level = downsample_2d_simple(
+                    self._raw_data,
+                    max_points=size,
+                    intensity_column=self._intensity_column,
+                )
+            else:
+                level = downsample_2d_streaming(
+                    self._raw_data,
+                    max_points=size,
+                    x_column=self._x_column,
+                    y_column=self._y_column,
+                    intensity_column=self._intensity_column,
+                    x_bins=self._x_bins,
+                    y_bins=self._y_bins,
+                    x_range=x_range,
+                    y_range=y_range,
+                )
+            self._preprocessed_data[f'level_{i}'] = level.collect()
 
     def _preprocess_streaming(self) -> None:
         """
@@ -315,6 +452,83 @@ class Heatmap(BaseComponent):
 
         return levels
 
+    def _get_categorical_levels(
+        self,
+        filter_id: str,
+        filter_value: Any,
+    ) -> Tuple[list, Optional[pl.LazyFrame]]:
+        """
+        Get compression levels for a specific categorical filter value.
+
+        Args:
+            filter_id: The filter identifier (e.g., 'im_dimension')
+            filter_value: The filter value to get levels for (e.g., 0)
+
+        Returns:
+            Tuple of (levels list, filtered raw data for full resolution)
+            Returns ([], None) if no categorical levels exist for this filter
+        """
+        # Check if we have categorical levels for this filter/value
+        num_levels_key = f'cat_num_levels_{filter_id}_{filter_value}'
+        num_levels = self._preprocessed_data.get(num_levels_key, 0)
+
+        if num_levels == 0:
+            return [], None
+
+        levels = []
+        for i in range(num_levels):
+            level_key = f'cat_level_{filter_id}_{filter_value}_{i}'
+            level_data = self._preprocessed_data.get(level_key)
+            if level_data is not None:
+                levels.append(level_data)
+
+        # Get filtered raw data for full resolution (if available)
+        filtered_raw = None
+        if self._raw_data is not None and filter_id in self._filters:
+            column_name = self._filters[filter_id]
+            filtered_raw = self._raw_data.filter(pl.col(column_name) == filter_value)
+
+        return levels, filtered_raw
+
+    def _get_levels_for_state(self, state: Dict[str, Any]) -> Tuple[list, Optional[pl.LazyFrame]]:
+        """
+        Get appropriate compression levels based on current filter state.
+
+        If categorical_filters are configured and a matching filter value is
+        selected in state, returns the per-value levels. Otherwise returns
+        the global levels.
+
+        Args:
+            state: Current selection state
+
+        Returns:
+            Tuple of (levels list, raw data for full resolution)
+        """
+        # Check if we have categorical filters and a selected value
+        if self._preprocessed_data.get('has_categorical_filters'):
+            cat_filter_values = self._preprocessed_data.get('categorical_filter_values', {})
+
+            for filter_id in self._categorical_filters:
+                if filter_id not in cat_filter_values:
+                    continue
+
+                selected_value = state.get(filter_id)
+                if selected_value is None:
+                    continue
+
+                # Convert float to int if needed (JS numbers come as floats)
+                if isinstance(selected_value, float) and selected_value.is_integer():
+                    selected_value = int(selected_value)
+
+                # Check if this value has per-filter levels
+                if selected_value in cat_filter_values[filter_id]:
+                    levels, filtered_raw = self._get_categorical_levels(filter_id, selected_value)
+                    if levels:
+                        return levels, filtered_raw
+
+        # Fall back to global levels
+        return self._get_levels(), self._raw_data
+
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
         return 'PlotlyHeatmap'
@@ -337,7 +551,10 @@ class Heatmap(BaseComponent):
     def _select_level_for_zoom(
         self,
         zoom: Dict[str, Any],
-        state: Dict[str, Any]
+        state: Dict[str, Any],
+        levels: list,
+        filtered_raw: Optional[pl.LazyFrame],
+        non_categorical_filters: Dict[str, str],
     ) -> pl.DataFrame:
         """
         Select appropriate resolution level based on zoom range.
@@ -348,6 +565,9 @@ class Heatmap(BaseComponent):
         Args:
             zoom: Zoom state with xRange and yRange
             state: Full selection state for applying filters
+            levels: List of compression levels to use
+            filtered_raw: Filtered raw data for full resolution (optional)
+            non_categorical_filters: Filters to apply (excluding categorical ones)
 
         Returns:
             Filtered Polars DataFrame at appropriate resolution
@@ -356,10 +576,14 @@ class Heatmap(BaseComponent):
         x0, x1 = zoom['xRange']
         y0, y1 = zoom['yRange']
 
-        levels = self._get_levels()
+        # Add raw data as final level if available
+        all_levels = list(levels)
+        if filtered_raw is not None:
+            all_levels.append(filtered_raw)
+
         last_filtered = None
 
-        for level_idx, level_data in enumerate(levels):
+        for level_idx, level_data in enumerate(all_levels):
             # Ensure we have a LazyFrame for filtering
             if isinstance(level_data, pl.DataFrame):
                 level_data = level_data.lazy()
@@ -372,13 +596,13 @@ class Heatmap(BaseComponent):
                 (pl.col(self._y_column) <= y1)
             )
 
-            # Apply component filters if any
-            if self._filters:
+            # Apply non-categorical filters if any
+            if non_categorical_filters:
                 # filter_and_collect_cached returns (pandas DataFrame, hash)
                 # We need Polars DataFrame for further processing
                 df_pandas, _ = filter_and_collect_cached(
                     filtered_lazy,
-                    self._filters,
+                    non_categorical_filters,
                     state,
                 )
                 filtered = pl.from_pandas(df_pandas)
@@ -434,6 +658,9 @@ class Heatmap(BaseComponent):
         Prepare heatmap data for Vue component.
 
         Selects appropriate resolution level based on zoom state.
+        If categorical_filters are configured, uses per-filter-value levels
+        to ensure constant point counts regardless of filter selection.
+
         Returns pandas DataFrame for efficient Arrow serialization.
 
         Args:
@@ -462,8 +689,17 @@ class Heatmap(BaseComponent):
                 if col not in columns_to_select:
                     columns_to_select.append(col)
 
-        levels = self._get_levels()
+        # Get levels based on current state (may use per-filter levels)
+        levels, filtered_raw = self._get_levels_for_state(state)
         level_sizes = [len(l) if isinstance(l, pl.DataFrame) else '?' for l in levels]
+
+        # Determine which filters still need to be applied at render time
+        # (filters not in categorical_filters need runtime application)
+        non_categorical_filters = {}
+        if self._filters:
+            for filter_id, column in self._filters.items():
+                if filter_id not in self._categorical_filters:
+                    non_categorical_filters[filter_id] = column
 
         if self._is_no_zoom(zoom):
             # No zoom - use smallest level
@@ -473,28 +709,33 @@ class Heatmap(BaseComponent):
                 return {'heatmapData': pl.DataFrame().to_pandas(), '_hash': ''}
 
             data = levels[0]
-            print(f"[HEATMAP] No zoom → level 0 ({level_sizes[0]} pts), levels={level_sizes}", file=sys.stderr)
+            using_cat = self._preprocessed_data.get('has_categorical_filters', False)
+            print(f"[HEATMAP] No zoom → level 0 ({level_sizes[0]} pts), levels={level_sizes}, categorical={using_cat}", file=sys.stderr)
 
             # Ensure we have a LazyFrame
             if isinstance(data, pl.DataFrame):
                 data = data.lazy()
 
-            # Apply filters if any - returns (pandas DataFrame, hash)
-            if self._filters:
+            # Apply non-categorical filters if any - returns (pandas DataFrame, hash)
+            if non_categorical_filters:
                 df_pandas, data_hash = filter_and_collect_cached(
                     data,
-                    self._filters,
+                    non_categorical_filters,
                     state,
                     columns=columns_to_select,
                 )
             else:
-                df_polars = data.select(columns_to_select).collect()
+                # No filters to apply - levels already filtered by categorical filter
+                available_cols = [c for c in columns_to_select if c in data.columns]
+                df_polars = data.select(available_cols).collect()
                 data_hash = compute_dataframe_hash(df_polars)
                 df_pandas = df_polars.to_pandas()
         else:
             # Zoomed - select appropriate level
             print(f"[HEATMAP] Zoom {zoom} → selecting level...", file=sys.stderr)
-            df_polars = self._select_level_for_zoom(zoom, state)
+            df_polars = self._select_level_for_zoom(
+                zoom, state, levels, filtered_raw, non_categorical_filters
+            )
             # Select only needed columns
             available_cols = [c for c in columns_to_select if c in df_polars.columns]
             df_polars = df_polars.select(available_cols)
