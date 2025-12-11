@@ -13,6 +13,7 @@ from .core.cache import CacheMissError
 from .components.table import Table
 from .components.lineplot import LinePlot
 from .components.heatmap import Heatmap
+from .components.sequenceview import SequenceView
 
 __version__ = "0.1.0"
 
@@ -27,4 +28,5 @@ __all__ = [
     "Table",
     "LinePlot",
     "Heatmap",
+    "SequenceView",
 ]

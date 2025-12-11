@@ -92,6 +92,19 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
 }
 
 /**
+ * SequenceView component arguments.
+ */
+export interface SequenceViewComponentArgs extends BaseComponentArgs {
+  componentType: 'SequenceView'
+  title?: string
+  height?: number
+  /** If true (default), observed masses are neutral masses. If false, they are m/z values. */
+  deconvolved?: boolean
+  /** Max charge state to consider for fragment matching when deconvolved=false. */
+  precursorCharge?: number
+}
+
+/**
  * Heatmap data format.
  * Each entry is a row with x, y, intensity, and any additional columns
  * needed for interactivity (e.g., scan_id, mass_idx).
@@ -101,7 +114,7 @@ export type HeatmapData = Record<string, unknown>
 /**
  * Union type for all component arguments.
  */
-export type ComponentArgs = TableComponentArgs | LinePlotComponentArgs | HeatmapComponentArgs
+export type ComponentArgs = TableComponentArgs | LinePlotComponentArgs | HeatmapComponentArgs | SequenceViewComponentArgs
 
 /**
  * Component layout entry.

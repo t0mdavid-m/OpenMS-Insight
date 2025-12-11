@@ -28,6 +28,7 @@ import type { ComponentArgs, ComponentLayout } from './types/component'
 import TabulatorTable from './components/tabulator/TabulatorTable.vue'
 import PlotlyLineplot from './components/plotly/PlotlyLineplot.vue'
 import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
+import SequenceView from './components/sequence/SequenceView.vue'
 
 export default defineComponent({
   name: 'App',
@@ -35,6 +36,7 @@ export default defineComponent({
     TabulatorTable,
     PlotlyLineplot,
     PlotlyHeatmap,
+    SequenceView,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -113,6 +115,8 @@ export default defineComponent({
           return PlotlyLineplot
         case 'PlotlyHeatmap':
           return PlotlyHeatmap
+        case 'SequenceView':
+          return SequenceView
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null
