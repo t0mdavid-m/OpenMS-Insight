@@ -1,11 +1,69 @@
 """SequenceView component for peptide/protein sequence visualization with fragment matching."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
+
+
+def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
+    """Parse OpenMS sequence format to extract residues and modification mass shifts.
+
+    Converts e.g. 'SHC(Carbamidomethyl)IAEVEK' to:
+    - residues: ['S', 'H', 'C', 'I', 'A', 'E', 'V', 'E', 'K']
+    - modifications: [None, None, 57.02, None, None, None, None, None, None]
+
+    Args:
+        sequence_str: Peptide sequence in OpenMS format with modifications in parentheses
+
+    Returns:
+        Tuple of (residues list, modifications list where None means unmodified)
+    """
+    try:
+        from pyopenms import AASequence
+
+        aa_seq = AASequence.fromString(sequence_str)
+        residues = []
+        modifications = []
+
+        for i in range(aa_seq.size()):
+            residue = aa_seq.getResidue(i)
+            one_letter = residue.getOneLetterCode()
+            residues.append(one_letter)
+
+            mod = residue.getModification()
+            if mod:
+                diff_mono = mod.getDiffMonoMass()
+                modifications.append(round(diff_mono, 2))
+            else:
+                modifications.append(None)
+
+        return residues, modifications
+    except ImportError:
+        # Fallback: just extract single-letter codes (naive parsing)
+        residues = []
+        modifications = []
+        i = 0
+        while i < len(sequence_str):
+            if sequence_str[i].isupper():
+                residues.append(sequence_str[i])
+                modifications.append(None)
+                i += 1
+            elif sequence_str[i] == '(':
+                # Skip modification name in parentheses
+                end = sequence_str.find(')', i)
+                if end > i:
+                    i = end + 1
+                else:
+                    i += 1
+            else:
+                i += 1
+        return residues, modifications
+    except Exception:
+        # On any error, return the raw sequence as single letters
+        return list(sequence_str), [None] * len(sequence_str)
 
 
 # Amino acid monoisotopic masses
@@ -167,6 +225,7 @@ class SequenceView(BaseComponent):
                 masses are already cached externally, e.g., in identification preprocessing).
             **kwargs: Additional configuration options.
         """
+        self._sequence_raw = sequence  # Keep original for calculations
         self._sequence = sequence.upper().replace(' ', '').replace('\n', '')
         self._observed_masses = observed_masses or []
         self._precursor_mass = precursor_mass or 0.0
@@ -177,9 +236,13 @@ class SequenceView(BaseComponent):
         self._precursor_charge = max(1, precursor_charge)
         self._precomputed_sequence_data = _precomputed_sequence_data
 
-        # Create dummy data if none provided (base class requires it)
+        # Parse sequence to extract residues and modifications
+        self._parsed_residues, self._parsed_modifications = parse_openms_sequence(self._sequence)
+
+        # Create unique dummy data per sequence (base class requires data for cache key)
+        # The sequence is included so each sequence gets a unique data_id for cache invalidation
         if data is None:
-            data = pl.LazyFrame({'_dummy': [1]})
+            data = pl.LazyFrame({'_sequence': [self._sequence]})
 
         super().__init__(
             cache_id=cache_id,
@@ -205,15 +268,17 @@ class SequenceView(BaseComponent):
         Calculates theoretical fragment masses for all ion types.
         This is cached so subsequent renders are fast.
         """
-        # Calculate fragment masses
-        fragment_masses = calculate_fragment_masses(self._sequence)
+        # Calculate fragment masses using plain residues
+        plain_sequence = ''.join(self._parsed_residues)
+        fragment_masses = calculate_fragment_masses(plain_sequence)
 
         # Calculate theoretical mass
-        theoretical_mass = calculate_theoretical_mass(self._sequence)
+        theoretical_mass = calculate_theoretical_mass(plain_sequence)
 
         # Build sequence data structure
         sequence_data = {
-            'sequence': list(self._sequence),
+            'sequence': self._parsed_residues,
+            'modifications': self._parsed_modifications,  # New: list of mass shifts per position
             'theoretical_mass': theoretical_mass,
             'fixed_modifications': self._fixed_modifications,
             **fragment_masses,

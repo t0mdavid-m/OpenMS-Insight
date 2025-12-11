@@ -1,45 +1,64 @@
 <template>
   <div
     :id="id"
-    class="d-flex justify-center align-center rounded-lg amino-acid-cell"
-    :class="{ highlighted: isHighlighted, 'fixed-mod': fixedModification }"
+    class="d-flex justify-center align-center rounded-lg"
+    :class="[aminoAcidCellClass, { highlighted: isHighlighted }, { 'fixed-mod': fixedModification }]"
     :style="cellStyles"
     @click="selectCell"
   >
-    <!-- Fragment ion markers -->
-    <div v-if="showFragments && sequenceObject.aIon" class="frag-marker-container frag-a">
+    <!-- Fragment ion markers (N-terminal: a, b, c) -->
+    <div v-if="showFragments && sequenceObject.aIon" class="frag-marker-container frag-marker-a">
       <svg viewBox="0 0 10 10">
         <path stroke="green" d="M7, 1 L9, 3 L9, 7 L9, 3 L7, 1 z" stroke-width="1.5" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.bIon" class="frag-marker-container frag-b">
+    <div v-if="showFragments && sequenceObject.bIon" class="frag-marker-container frag-marker-b">
       <svg viewBox="0 0 10 10">
         <path stroke="blue" d="M10, 0 V5 M10, 0 H5 z" stroke-width="3" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.cIon" class="frag-marker-container frag-c">
+    <div v-if="showFragments && sequenceObject.cIon" class="frag-marker-container frag-marker-c">
       <svg viewBox="0 0 10 10">
         <path stroke="red" d="M4, 1 L9, 3 L9, 7 L9, 3 L4, 1 z" stroke-width="1.5" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.xIon" class="frag-marker-container frag-x">
+
+    <!-- Fragment ion markers (C-terminal: x, y, z) -->
+    <div v-if="showFragments && sequenceObject.xIon" class="frag-marker-container frag-marker-x">
       <svg viewBox="0 0 10 10">
         <path stroke="green" d="M1, 3 L1, 7 L3, 9 L1, 7 L1, 3 z" stroke-width="1.5" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.yIon" class="frag-marker-container frag-y">
+    <div v-if="showFragments && sequenceObject.yIon" class="frag-marker-container frag-marker-y">
       <svg viewBox="0 0 10 10">
         <path stroke="blue" d="M0, 10 V5 M0, 10 H5 z" stroke-width="3" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.zIon" class="frag-marker-container frag-z">
+    <div v-if="showFragments && sequenceObject.zIon" class="frag-marker-container frag-marker-z">
       <svg viewBox="0 0 10 10">
         <path stroke="red" d="M1, 3 L1, 7 L6, 9 L1, 7 L1, 3 z" stroke-width="1.5" />
       </svg>
     </div>
 
+    <!-- Modification marker with dotted pattern (like FLASHApp) -->
+    <div v-if="modification !== null" class="rounded-lg mod-marker mod-start"></div>
+    <div v-if="modification !== null" class="rounded-lg mod-marker mod-end"></div>
+
+    <!-- Modification mass badge -->
+    <div v-if="modification !== null" class="rounded-lg mod-mass">
+      {{ modificationDisplay }}
+      <v-tooltip activator="parent" class="foreground">
+        Modification Mass: {{ modificationDisplay }} Da
+      </v-tooltip>
+    </div>
+
+    <!-- Modification mass with fragment ion border coloring -->
+    <div v-if="showFragments && modification !== null && sequenceObject.aIon && !sequenceObject.bIon" class="rounded-lg mod-mass-a">{{ modificationDisplay }}</div>
+    <div v-if="showFragments && modification !== null && sequenceObject.bIon" class="rounded-lg mod-mass-b">{{ modificationDisplay }}</div>
+    <div v-if="showFragments && modification !== null && sequenceObject.cIon && !sequenceObject.bIon" class="rounded-lg mod-mass-c">{{ modificationDisplay }}</div>
+
     <!-- Extra fragment type indicator -->
-    <div v-if="hasExtraFragTypes" class="frag-marker-extra">
+    <div v-if="hasExtraFragTypes" class="frag-marker-extra-type">
       <svg viewBox="0 0 10 10">
         <circle cx="5" cy="5" r="0.5" stroke="black" stroke-width="0.3" fill="gold" />
       </svg>
@@ -95,6 +114,10 @@ export default defineComponent({
       type: Boolean,
       default: false,
     },
+    modification: {
+      type: Number as PropType<number | null>,
+      default: null,
+    },
   },
   emits: ['selected'],
   setup() {
@@ -130,14 +153,29 @@ export default defineComponent({
         this.sequenceObject.zIon
       )
     },
+    aminoAcidCellClass(): Record<string, boolean> {
+      return {
+        'sequence-amino-acid': !this.fixedModification,
+        'sequence-amino-acid-highlighted': this.fixedModification,
+      }
+    },
     cellStyles(): Record<string, string> {
       return {
-        '--aa-cell-color': this.theme?.textColor ?? '#000',
-        '--aa-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
-        '--aa-cell-hover-bg-color': this.theme?.backgroundColor ?? '#fff',
-        '--aa-font-size': `${this.fontSize}px`,
+        '--amino-acid-cell-color': this.theme?.textColor ?? '#000',
+        '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
+        '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#000',
+        '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#fff',
+        '--amino-acid-font-size': `${this.fontSize}px`,
         position: 'relative',
       }
+    },
+    modificationDisplay(): string {
+      if (this.modification === null) return ''
+      const mod = this.modification
+      if (mod >= 0) {
+        return `+${mod.toFixed(2)}`
+      }
+      return mod.toFixed(2)
     },
   },
   methods: {
@@ -151,76 +189,184 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.amino-acid-cell {
-  background-color: var(--aa-cell-bg-color);
-  color: var(--aa-cell-color);
-  cursor: pointer;
-  aspect-ratio: 1;
+.foreground {
+  position: relative;
+  z-index: 1000;
 }
 
-.amino-acid-cell:hover {
-  background-color: var(--aa-cell-hover-bg-color);
-}
-
-.amino-acid-cell.highlighted {
+.sequence-amino-acid-highlighted,
+.sequence-amino-acid.highlighted {
   background-color: #f3a712;
-  color: #000;
+  color: #000000;
   outline: 3px solid #29335c;
   font-weight: bold;
 }
 
-.amino-acid-cell.fixed-mod {
+.sequence-amino-acid {
+  background-color: var(--amino-acid-cell-bg-color);
+  color: var(--amino-acid-cell-color);
+  cursor: pointer;
+  aspect-ratio: 1;
+}
+
+.sequence-amino-acid:hover {
+  background-color: var(--amino-acid-cell-hover-bg-color);
+  color: var(--amino-acid-cell-hover-color);
+}
+
+.sequence-amino-acid-highlighted {
+  background-color: var(--amino-acid-cell-bg-color);
   color: #f3a712;
 }
 
-.aa-text {
-  position: absolute;
-  font-size: var(--aa-font-size, 12px);
-  font-weight: 500;
+.sequence-amino-acid-highlighted:hover {
+  background-color: var(--amino-acid-cell-hover-bg-color);
 }
 
+.fixed-mod {
+  color: #f3a712;
+}
+
+/* Fragment marker base container */
 .frag-marker-container {
   width: 100%;
   height: 100%;
   position: absolute;
-  z-index: 10;
+  z-index: 1000;
 }
 
-.frag-a {
+.frag-marker-a {
   top: -28%;
   left: 15%;
 }
 
-.frag-b {
+.frag-marker-b {
   top: -8%;
   left: 13%;
 }
 
-.frag-c {
+.frag-marker-c {
   top: -28%;
   left: 15%;
 }
 
-.frag-x {
+.frag-marker-x {
   bottom: -32%;
   left: -10%;
 }
 
-.frag-y {
+.frag-marker-y {
   bottom: -8%;
   left: -10%;
 }
 
-.frag-z {
+.frag-marker-z {
   bottom: -32%;
   left: -10%;
 }
 
-.frag-marker-extra {
+.frag-marker-extra-type {
   width: 100%;
   height: 100%;
   position: absolute;
   top: -30%;
-  z-index: 10;
+  z-index: 1000;
+}
+
+.aa-text {
+  position: absolute;
+  font-size: var(--amino-acid-font-size, 12px);
+  font-weight: 500;
+}
+
+/* Modification marker with dotted pattern background (like FLASHApp) */
+.mod-marker {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: right;
+  background-image: radial-gradient(#676a9c 0.5px, transparent 0.5px),
+    radial-gradient(#444cf7 0.5px, #e5e5f7 0.5px);
+  background-size: 15px 15px;
+  background-position: 0 0, 10px 10px;
+  background-repeat: repeat;
+}
+
+.mod-start {
+  clip-path: inset(0 50% 0 0);
+}
+
+.mod-end {
+  clip-path: inset(0 0 0 50%);
+}
+
+/* Modification mass badge */
+.mod-mass {
+  background-color: white;
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  justify-content: right;
+  border: 0.1em solid #a79c91;
+  font-size: 0.7em;
+  padding: 0em 0.2em;
+  z-index: 1100;
+}
+
+/* Modification mass with fragment ion colored borders */
+.mod-mass-a {
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  border-top: 0.2em solid green;
+  border-right: 0.2em solid green;
+  border-bottom: 0.2em solid green;
+  border-radius: 0.5rem;
+  padding: 0em 0.2em;
+  z-index: 1200;
+  font-size: 0.7em;
+  color: rgba(0, 0, 0, 0);
+}
+
+.mod-mass-b {
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  border-top: 0.2em solid blue;
+  border-right: 0.2em solid blue;
+  border-bottom: 0.2em solid blue;
+  border-radius: 0.5rem;
+  z-index: 1200;
+  padding: 0em 0.2em;
+  font-size: 0.7em;
+  color: rgba(0, 0, 0, 0);
+}
+
+.mod-mass-c {
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  border-top: 0.2em solid red;
+  border-right: 0.2em solid red;
+  border-bottom: 0.2em solid red;
+  border-radius: 0.5rem;
+  z-index: 1200;
+  font-size: 0.7em;
+  padding: 0em 0.2em;
+  color: rgba(0, 0, 0, 0);
 }
 </style>

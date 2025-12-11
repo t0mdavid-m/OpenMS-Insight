@@ -104,6 +104,10 @@ class LinePlot(BaseComponent):
         self._styling = styling or {}
         self._plot_config = config or {}
 
+        # Dynamic annotations set at render time (not cached)
+        self._dynamic_annotations: Optional[Dict[str, Any]] = None
+        self._dynamic_title: Optional[str] = None
+
         super().__init__(
             cache_id=cache_id,
             data=data,
@@ -260,6 +264,42 @@ class LinePlot(BaseComponent):
             columns=columns_to_select,
         )
 
+        # Determine which highlight/annotation columns to use
+        highlight_col = self._highlight_column
+        annotation_col = self._annotation_column
+
+        # Apply dynamic annotations if set
+        if self._dynamic_annotations and len(df_pandas) > 0:
+            import pandas as pd
+
+            # Create highlight and annotation columns based on x values
+            x_values = df_pandas[self._x_column].values
+            highlights = []
+            annotations = []
+
+            for x in x_values:
+                ann_data = self._dynamic_annotations.get(x)
+                if ann_data:
+                    highlights.append(ann_data.get('highlight', False))
+                    annotations.append(ann_data.get('annotation', ''))
+                else:
+                    highlights.append(False)
+                    annotations.append('')
+
+            # Add dynamic columns to dataframe
+            df_pandas = df_pandas.copy()
+            df_pandas['_dynamic_highlight'] = highlights
+            df_pandas['_dynamic_annotation'] = annotations
+
+            # Update column names to use dynamic columns
+            highlight_col = '_dynamic_highlight'
+            annotation_col = '_dynamic_annotation'
+
+            # Update hash to include dynamic annotation state
+            import hashlib
+            ann_hash = hashlib.md5(str(self._dynamic_annotations).encode()).hexdigest()[:8]
+            data_hash = f"{data_hash}_{ann_hash}"
+
         # Send as DataFrame for Arrow serialization (efficient binary transfer)
         # Vue will parse and extract columns using the config
         return {
@@ -269,8 +309,8 @@ class LinePlot(BaseComponent):
             '_plotConfig': {
                 'xColumn': self._x_column,
                 'yColumn': self._y_column,
-                'highlightColumn': self._highlight_column,
-                'annotationColumn': self._annotation_column,
+                'highlightColumn': highlight_col,
+                'annotationColumn': annotation_col,
                 'interactivityColumns': {
                     col: col for col in (self._interactivity.values() if self._interactivity else [])
                 },
@@ -308,9 +348,12 @@ class LinePlot(BaseComponent):
                 **self._styling['annotationColors']
             }
 
+        # Use dynamic title if set, otherwise static title
+        title = self._dynamic_title if self._dynamic_title else (self._title or '')
+
         args: Dict[str, Any] = {
             'componentType': self._get_vue_component_name(),
-            'title': self._title or '',
+            'title': title,
             'xLabel': self._x_label,
             'yLabel': self._y_label,
             'styling': styling,
@@ -381,4 +424,50 @@ class LinePlot(BaseComponent):
         if selected_button_color:
             self._styling['annotationColors']['selectedMassButton'] = selected_button_color
 
+        return self
+
+    def set_dynamic_annotations(
+        self,
+        annotations: Optional[Dict[Any, Dict[str, Any]]] = None,
+        title: Optional[str] = None,
+    ) -> 'LinePlot':
+        """
+        Set dynamic annotations to be applied at render time.
+
+        This allows updating peak annotations without recreating the component.
+        Annotations are keyed by the x_column value (e.g., mass/m/z).
+
+        Args:
+            annotations: Dict mapping x_column values to annotation data.
+                Each entry should have:
+                - 'highlight': bool - whether to highlight this peak
+                - 'annotation': str - label text (e.g., "b3¹⁺")
+                Example: {147.1132: {'highlight': True, 'annotation': 'b2¹⁺'}}
+            title: Optional dynamic title override
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            # Compute annotations for current identification
+            annotations = {
+                147.1132: {'highlight': True, 'annotation': 'b2¹⁺'},
+                262.1401: {'highlight': True, 'annotation': 'b3¹⁺'},
+            }
+            spectrum_plot.set_dynamic_annotations(annotations, title="PEPTIDER")
+            spectrum_plot(key="plot", state_manager=sm)
+        """
+        self._dynamic_annotations = annotations
+        self._dynamic_title = title
+        return self
+
+    def clear_dynamic_annotations(self) -> 'LinePlot':
+        """
+        Clear any dynamic annotations.
+
+        Returns:
+            Self for method chaining
+        """
+        self._dynamic_annotations = None
+        self._dynamic_title = None
         return self

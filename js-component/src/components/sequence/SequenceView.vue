@@ -6,14 +6,6 @@
         <h4>Sequence View</h4>
       </div>
 
-      <!-- Mass data display -->
-      <div v-if="massData.length > 0" class="d-flex justify-space-evenly mb-4">
-        <template v-for="(item, idx) in massData" :key="idx">
-          <span>{{ item }}</span>
-          <v-divider v-if="idx < massData.length - 1" :vertical="true"></v-divider>
-        </template>
-      </div>
-
       <!-- Toolbar -->
       <div class="d-flex justify-end px-4 mb-4">
         <v-btn variant="text" icon size="small" :disabled="sequence.length === 0" @click="copySequence">
@@ -137,6 +129,7 @@
             :show-fragments="showFragments"
             :font-size="fontSize"
             :is-highlighted="selectedAAIndex === aaIndex"
+            :modification="modifications[aaIndex] ?? null"
             @selected="onAminoAcidSelected"
           />
 
@@ -279,6 +272,9 @@ export default defineComponent({
     sequence(): string[] {
       return this.sequenceData?.sequence ?? []
     },
+    modifications(): (number | null)[] {
+      return this.sequenceData?.modifications ?? []
+    },
     theoreticalMass(): number {
       return this.sequenceData?.theoretical_mass ?? 0
     },
@@ -300,16 +296,6 @@ export default defineComponent({
     /** Default tolerance type from search parameters */
     defaultToleranceIsPpm(): boolean {
       return this.sequenceData?.fragment_tolerance_ppm ?? true
-    },
-    massData(): string[] {
-      if (!this.sequenceData || this.observedMasses.length === 0) return []
-
-      const deltaMass = Math.abs(this.theoreticalMass - this.precursorMass)
-      return [
-        `Theoretical: ${this.theoreticalMass.toFixed(2)} Da`,
-        `Observed: ${this.precursorMass.toFixed(2)} Da`,
-        `Δ Mass: ${deltaMass.toFixed(2)} Da`,
-      ]
     },
     gridClasses(): Record<string, boolean> {
       return {

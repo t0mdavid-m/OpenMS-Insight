@@ -24,6 +24,8 @@ export interface ExternalAnnotation {
 export interface SequenceData {
   /** Array of single-letter amino acid codes */
   sequence: string[]
+  /** Array of modification mass shifts per position (null for unmodified positions) */
+  modifications?: (number | null)[]
   /** Pre-computed fragment masses for a ions (array of arrays for multiple masses due to modifications) */
   fragment_masses_a: number[][]
   /** Pre-computed fragment masses for b ions */
