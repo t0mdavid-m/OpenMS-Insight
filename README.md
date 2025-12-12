@@ -219,7 +219,3 @@ export SVC_DEV_MODE=true
 export SVC_DEV_URL=http://localhost:5173
 streamlit run app.py
 ```
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
