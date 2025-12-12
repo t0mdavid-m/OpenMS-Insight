@@ -332,6 +332,7 @@ export default defineComponent({
       height: number
       label: string
       visible: boolean
+      index: number
     }> {
       const peaks = this.annotatedPeaks
       if (peaks.length === 0) return []
@@ -356,6 +357,7 @@ export default defineComponent({
         label: string
         visible: boolean
         inVisibleRange: boolean
+        index: number
       }> = []
 
       // Create boxes for each annotation, marking if they're in visible range
@@ -369,6 +371,7 @@ export default defineComponent({
           label: peak.label,
           visible: inVisibleRange, // Only visible if in range
           inVisibleRange: inVisibleRange,
+          index: peak.index,
         })
       }
 
@@ -410,6 +413,7 @@ export default defineComponent({
 
     /**
      * Build Plotly shapes for annotation background boxes.
+     * Box color matches the peak: selectedColor if peak is selected, highlightColor otherwise.
      */
     annotationShapes(): Partial<Plotly.Shape>[] {
       const boxes = this.annotationBoxData
@@ -422,8 +426,14 @@ export default defineComponent({
       const ypos_low = ymax * 1.18
       const ypos_high = ymax * 1.32
 
+      const selectedIndex = this.selectedPeakIndex
+
       for (const box of boxes) {
         if (!box.visible) continue
+
+        // Use selected color if this annotation's peak is selected
+        const isSelected = box.index === selectedIndex
+        const boxColor = isSelected ? this.styling.selectedColor : this.styling.highlightColor
 
         shapes.push({
           type: 'rect',
@@ -431,7 +441,7 @@ export default defineComponent({
           y0: ypos_low,
           x1: box.x + box.width / 2,
           y1: ypos_high,
-          fillcolor: this.styling.highlightColor,
+          fillcolor: boxColor,
           line: { width: 0 },
         })
       }
