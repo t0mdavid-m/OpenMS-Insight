@@ -272,6 +272,13 @@ export default defineComponent({
       // Update our local hash tracker
       this.lastDataHash = newHash
 
+      // Auto-clear invalid selections: when data changes, check if current selection
+      // still exists in the new data. If not, clear it from the selection store.
+      // This ensures that when upstream filters change (e.g., selecting a new spectrum),
+      // any selection that's no longer valid (e.g., an identification from the old spectrum)
+      // is automatically cleared.
+      this.clearInvalidSelections()
+
       this.$nextTick(() => {
         this.drawTable()
       })
@@ -597,6 +604,44 @@ export default defineComponent({
               }
             }
           }, 0)
+        }
+      }
+    },
+
+    clearInvalidSelections(): void {
+      // Check if current selection values exist in the new data
+      // If not, clear them from the selection store
+      const interactivity = this.args.interactivity || {}
+
+      for (const [identifier, column] of Object.entries(interactivity)) {
+        const selectedValue = this.selectionStore.$state[identifier]
+
+        // Skip if no selection
+        if (selectedValue === undefined || selectedValue === null) {
+          continue
+        }
+
+        // Check if selected value exists in current data
+        const rowIndex = this.preparedTableData.findIndex(
+          (row) => row[column as string] === selectedValue
+        )
+
+        if (rowIndex < 0) {
+          // Selected value not found in new data - clear the selection
+          console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] auto-clearing invalid selection:`, {
+            identifier,
+            column,
+            selectedValue,
+            dataLength: this.preparedTableData.length,
+          })
+          this.selectionStore.updateSelection(identifier, null)
+          // Clear any pending selection for this identifier as well
+          if (this.pendingSelection && identifier in this.pendingSelection) {
+            delete this.pendingSelection[identifier]
+            if (Object.keys(this.pendingSelection).length === 0) {
+              this.pendingSelection = null
+            }
+          }
         }
       }
     },
