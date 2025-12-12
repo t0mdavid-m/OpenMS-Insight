@@ -47,6 +47,7 @@ export default defineComponent({
     return {
       isInitialized: false as boolean,
       manualXRange: undefined as number[] | undefined,
+      lastAutoZoomedPeakIndex: undefined as number | undefined,
     }
   },
   computed: {
@@ -483,6 +484,23 @@ export default defineComponent({
     },
 
     /**
+     * Check if the selected peak is annotated but its annotation is currently hidden.
+     */
+    selectedAnnotationHidden(): boolean {
+      const selectedIndex = this.selectedPeakIndex
+      if (selectedIndex === undefined) return false
+
+      const boxes = this.annotationBoxData
+      const selectedBox = boxes.find(box => box.index === selectedIndex)
+
+      // Not annotated = not hidden
+      if (!selectedBox) return false
+
+      // Return true if annotation exists but is not visible
+      return !selectedBox.visible
+    },
+
+    /**
      * Build Plotly traces.
      * Uses stick format triplets generated from raw data.
      * Includes a separate gold trace for the selected peak.
@@ -648,8 +666,17 @@ export default defineComponent({
     },
 
     'streamlitDataStore.allDataForDrawing.plotData': {
-      handler() {
+      handler(newData, oldData) {
+        console.log('[LinePlot] plotData changed', {
+          newLength: newData?.x_values?.length,
+          oldLength: oldData?.x_values?.length,
+          newFirstX: newData?.x_values?.[0],
+          oldFirstX: oldData?.x_values?.[0],
+        })
         if (this.isInitialized) {
+          // Reset zoom when data changes (e.g., switching spectra)
+          this.manualXRange = undefined
+          this.lastAutoZoomedPeakIndex = undefined
           this.renderPlot()
         }
       },
@@ -667,9 +694,12 @@ export default defineComponent({
     },
 
     // Re-render when selection changes (to update gold highlighting)
+    // Also auto-zoom if selected annotated peak's label is hidden
     'selectionStore.$state': {
-      handler() {
+      handler(newState) {
+        console.log('[LinePlot] selection changed', newState)
         if (this.isDataReady && this.isInitialized) {
+          this.autoZoomToSelectedAnnotation()
           this.renderPlot()
         }
       },
@@ -751,12 +781,115 @@ export default defineComponent({
           newXRange[0] = 0
         }
         this.manualXRange = newXRange
+        // Reset auto-zoom tracking when user manually zooms
+        this.lastAutoZoomedPeakIndex = undefined
         this.renderPlot()
       } else if (eventData['xaxis.autorange'] === true) {
         // Reset to auto range
         this.manualXRange = undefined
+        this.lastAutoZoomedPeakIndex = undefined
         this.renderPlot()
       }
+    },
+
+    /**
+     * Auto-zoom to show the selected peak's annotation if it's currently hidden.
+     * Only triggers once per peak selection to allow manual zoom adjustments.
+     */
+    autoZoomToSelectedAnnotation(): void {
+      const selectedIndex = this.selectedPeakIndex
+
+      // Reset tracking if no selection
+      if (selectedIndex === undefined) {
+        this.lastAutoZoomedPeakIndex = undefined
+        return
+      }
+
+      // Don't re-zoom for the same peak (allows user to manually adjust after auto-zoom)
+      if (selectedIndex === this.lastAutoZoomedPeakIndex) {
+        return
+      }
+
+      // Check if selected peak is annotated and its annotation is hidden
+      if (!this.selectedAnnotationHidden) {
+        return
+      }
+
+      // Calculate zoom range to show the annotation
+      const newRange = this.calculateZoomForSelectedAnnotation()
+      if (newRange) {
+        this.manualXRange = newRange
+        this.lastAutoZoomedPeakIndex = selectedIndex
+      }
+    },
+
+    /**
+     * Calculate a zoom range that would show the selected annotated peak's label
+     * without overlapping with neighboring annotations.
+     */
+    calculateZoomForSelectedAnnotation(): number[] | undefined {
+      const selectedIndex = this.selectedPeakIndex
+      if (selectedIndex === undefined || !this.plotData) return undefined
+
+      const peaks = this.annotatedPeaks
+      const selectedPeak = peaks.find(p => p.index === selectedIndex)
+      if (!selectedPeak) return undefined
+
+      // Find distances to nearest annotated neighbors
+      let leftNeighborDist = Infinity
+      let rightNeighborDist = Infinity
+
+      for (const peak of peaks) {
+        if (peak.index === selectedIndex) continue
+        const dist = peak.x - selectedPeak.x
+        if (dist < 0 && -dist < leftNeighborDist) {
+          leftNeighborDist = -dist
+        } else if (dist > 0 && dist < rightNeighborDist) {
+          rightNeighborDist = dist
+        }
+      }
+
+      // Use the smaller distance to nearest neighbor for zoom calculation
+      const minNeighborDist = Math.min(leftNeighborDist, rightNeighborDist)
+
+      // Calculate range width that would prevent overlap
+      // Box width formula: 2 * (1200 / actualWidth) * rangeWidth / scalingFactor
+      // For no overlap: neighborDist > boxWidth + padding
+      // Solving for rangeWidth that gives comfortable spacing
+      const actualWidth = this.actualPlotWidth
+      const scalingFactor = this.config.xPosScalingFactor
+
+      let rangeWidth: number
+      if (minNeighborDist < Infinity) {
+        // Zoom aggressively to show just the selected peak and its immediate context
+        // Use 2x the neighbor distance as the visible range
+        rangeWidth = minNeighborDist * 2
+      } else {
+        // No annotated neighbors - zoom to show 20% of total data range
+        const xValues = this.plotData.x_values
+        const dataRange = Math.max(...xValues) - Math.min(...xValues)
+        rangeWidth = dataRange * 0.2
+      }
+
+      // Center on selected peak, clamped to data bounds
+      const xValues = this.plotData.x_values
+      const minX = Math.min(...xValues)
+      const maxX = Math.max(...xValues)
+
+      let newLeft = selectedPeak.x - rangeWidth / 2
+      let newRight = selectedPeak.x + rangeWidth / 2
+
+      // Clamp to data bounds while maintaining range width
+      if (newLeft < minX) {
+        newLeft = minX
+        newRight = Math.min(minX + rangeWidth, maxX)
+      }
+      if (newRight > maxX) {
+        newRight = maxX
+        newLeft = Math.max(maxX - rangeWidth, minX)
+      }
+
+      return [newLeft, newRight]
     },
 
     onPlotClick(eventData: any): void {
