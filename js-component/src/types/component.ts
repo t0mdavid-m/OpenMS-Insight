@@ -102,6 +102,8 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
   deconvolved?: boolean
   /** Max charge state to consider for fragment matching when deconvolved=false. */
   precursorCharge?: number
+  /** Interactivity mapping: identifier name -> column name for click handling. */
+  interactivity?: InteractivityMapping
 }
 
 /**

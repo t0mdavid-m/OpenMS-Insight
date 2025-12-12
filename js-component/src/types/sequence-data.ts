@@ -58,6 +58,8 @@ export interface ObservedSpectrumData {
   precursor_mass: number
   /** Array of observed peak masses */
   observed_masses: number[]
+  /** Array of peak IDs corresponding to observed_masses (for interactivity) */
+  peak_ids?: number[]
 }
 
 /**
@@ -98,6 +100,8 @@ export interface FragmentTableRow {
   TheoreticalMass: string
   /** Observed mass/mz from spectrum */
   ObservedMass: number
+  /** Peak ID of the matched peak (for interactivity linking) */
+  PeakId?: number
   /** Mass difference in Daltons */
   MassDiffDa: string
   /** Mass difference in ppm */

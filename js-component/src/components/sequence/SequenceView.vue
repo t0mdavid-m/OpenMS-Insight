@@ -258,8 +258,16 @@ export default defineComponent({
     observedMasses(): number[] {
       return (this.streamlitDataStore.allDataForDrawing.observedMasses as number[]) ?? []
     },
+    /** Peak IDs corresponding to observed masses (for interactivity linking) */
+    peakIds(): number[] | undefined {
+      return this.streamlitDataStore.allDataForDrawing.peakIds as number[] | undefined
+    },
     precursorMass(): number {
       return (this.streamlitDataStore.allDataForDrawing.precursorMass as number) ?? 0
+    },
+    /** Interactivity mapping from component args */
+    interactivity(): Record<string, string> {
+      return (this.args.interactivity as Record<string, string>) ?? {}
     },
     /** Whether data is deconvolved (neutral masses) or not (m/z values) */
     deconvolved(): boolean {
@@ -446,15 +454,18 @@ export default defineComponent({
       const matchingFragments: FragmentTableRow[] = []
 
       for (const ann of this.externalAnnotations) {
-        // Find closest observed peak
+        // Find closest observed peak and track its index for PeakId lookup
         let bestObserved: number | null = null
+        let bestObservedIndex = -1
         let bestDiff = Infinity
 
-        for (const observedValue of this.observedMasses) {
+        for (let obsIdx = 0; obsIdx < this.observedMasses.length; obsIdx++) {
+          const observedValue = this.observedMasses[obsIdx]
           const diff = Math.abs(observedValue - ann.mz)
           if (diff < bestDiff) {
             bestDiff = diff
             bestObserved = observedValue
+            bestObservedIndex = obsIdx
           }
         }
 
@@ -485,6 +496,11 @@ export default defineComponent({
 
         if (ann.charge > 1) {
           fragmentRow.Charge = ann.charge
+        }
+
+        // Add PeakId for interactivity linking
+        if (this.peakIds && bestObservedIndex >= 0 && this.peakIds[bestObservedIndex] !== undefined) {
+          fragmentRow.PeakId = this.peakIds[bestObservedIndex]
         }
 
         matchingFragments.push(fragmentRow)
@@ -530,8 +546,9 @@ export default defineComponent({
                   ? adjustedNeutralMass
                   : (adjustedNeutralMass + charge * PROTON_MASS) / charge
 
-                // Match against observed masses/m/z values
-                for (const observedValue of this.observedMasses) {
+                // Match against observed masses/m/z values (track index for PeakId lookup)
+                for (let obsIdx = 0; obsIdx < this.observedMasses.length; obsIdx++) {
+                  const observedValue = this.observedMasses[obsIdx]
                   const massDiffDa = observedValue - theoreticalValue
 
                   if (this.isWithinTolerance(massDiffDa, theoreticalValue)) {
@@ -556,6 +573,11 @@ export default defineComponent({
                     // Add charge for non-deconvolved data
                     if (!this.deconvolved) {
                       fragmentRow.Charge = charge
+                    }
+
+                    // Add PeakId for interactivity linking
+                    if (this.peakIds && this.peakIds[obsIdx] !== undefined) {
+                      fragmentRow.PeakId = this.peakIds[obsIdx]
                     }
 
                     matchingFragments.push(fragmentRow)
@@ -618,6 +640,16 @@ export default defineComponent({
       const aaIndex = isPrefixIon ? ionNumber - 1 : this.sequence.length - ionNumber
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         this.selectedAAIndex = aaIndex
+      }
+
+      // Handle interactivity: update selection for each mapped identifier
+      // Uses the same pattern as other components (LinePlot, Table)
+      if (item.PeakId !== undefined && Object.keys(this.interactivity).length > 0) {
+        for (const [identifier, _columnName] of Object.entries(this.interactivity)) {
+          // For SequenceView, the interactivity maps to peak_id
+          // The column name tells us what field in the data this maps to
+          this.selectionStore.updateSelection(identifier, item.PeakId)
+        }
       }
     },
     getRowProps({ index }: { index: number }) {

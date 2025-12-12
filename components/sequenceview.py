@@ -185,6 +185,7 @@ class SequenceView(BaseComponent):
         cache_id: str,
         sequence: str,
         observed_masses: Optional[List[float]] = None,
+        peak_ids: Optional[List[int]] = None,
         precursor_mass: Optional[float] = None,
         data: Optional[pl.LazyFrame] = None,  # Not used but required by base
         filters: Optional[Dict[str, str]] = None,
@@ -206,10 +207,12 @@ class SequenceView(BaseComponent):
             cache_id: Unique identifier for this component's cache.
             sequence: Amino acid sequence string (single-letter codes).
             observed_masses: List of observed peak masses from spectrum.
+            peak_ids: List of peak IDs corresponding to observed_masses (for interactivity).
             precursor_mass: Observed precursor mass.
             data: Not used for SequenceView, but required by base class.
             filters: Mapping of identifier names to column names for filtering.
             interactivity: Mapping of identifier names to column names for clicks.
+                Example: {'peak': 'peak_id'} sets 'peak' selection to 'peak_id' value on click.
             cache_path: Base path for cache storage.
             regenerate_cache: If True, regenerate cache even if valid.
             fixed_modifications: List of amino acids with fixed modifications (e.g., ['C']).
@@ -228,6 +231,7 @@ class SequenceView(BaseComponent):
         self._sequence_raw = sequence  # Keep original for calculations
         self._sequence = sequence.upper().replace(' ', '').replace('\n', '')
         self._observed_masses = observed_masses or []
+        self._peak_ids = peak_ids  # peak_ids corresponding to observed_masses
         self._precursor_mass = precursor_mass or 0.0
         self._fixed_modifications = fixed_modifications or []
         self._title = title
@@ -239,10 +243,19 @@ class SequenceView(BaseComponent):
         # Parse sequence to extract residues and modifications
         self._parsed_residues, self._parsed_modifications = parse_openms_sequence(self._sequence)
 
-        # Create unique dummy data per sequence (base class requires data for cache key)
-        # The sequence is included so each sequence gets a unique data_id for cache invalidation
+        # Build peaks DataFrame for interactivity validation
+        # This allows interactivity={'peak': 'peak_id'} to validate naturally
+        # Note: Cache validity is based on sequence (via _get_cache_config), not peaks data
         if data is None:
-            data = pl.LazyFrame({'_sequence': [self._sequence]})
+            if self._observed_masses:
+                ids = self._peak_ids if self._peak_ids is not None else list(range(len(self._observed_masses)))
+                data = pl.LazyFrame({
+                    'peak_id': ids,
+                    'mass': self._observed_masses,
+                })
+            else:
+                # Empty peaks - use schema so validation still passes
+                data = pl.LazyFrame(schema={'peak_id': pl.Int64, 'mass': pl.Float64})
 
         super().__init__(
             cache_id=cache_id,
@@ -315,12 +328,18 @@ class SequenceView(BaseComponent):
         hash_input = f"{self._sequence}:{len(self._observed_masses)}:{self._precursor_mass}"
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
-        return {
+        result = {
             'sequenceData': sequence_data,
             'observedMasses': self._observed_masses,
             'precursorMass': self._precursor_mass,
             '_hash': data_hash,
         }
+
+        # Include peak_ids if provided (for interactivity linking)
+        if self._peak_ids is not None:
+            result['peakIds'] = self._peak_ids
+
+        return result
 
     def _get_component_args(self) -> Dict[str, Any]:
         """Get component arguments to send to Vue."""
@@ -333,6 +352,10 @@ class SequenceView(BaseComponent):
 
         if self._title:
             args['title'] = self._title
+
+        # Pass interactivity mapping to Vue (similar to other components)
+        if self._interactivity:
+            args['interactivity'] = self._interactivity
 
         args.update(self._config)
         return args
