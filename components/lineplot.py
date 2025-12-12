@@ -269,22 +269,32 @@ class LinePlot(BaseComponent):
         annotation_col = self._annotation_column
 
         # Apply dynamic annotations if set
+        # Annotations are keyed by peak_id (stable identifier from interactivity column)
         if self._dynamic_annotations and len(df_pandas) > 0:
-            import pandas as pd
+            num_rows = len(df_pandas)
+            highlights = [False] * num_rows
+            annotations = [''] * num_rows
 
-            # Create highlight and annotation columns based on x values
-            x_values = df_pandas[self._x_column].values
-            highlights = []
-            annotations = []
+            # Get the interactivity column to use for lookup (e.g., 'peak_id')
+            # Use the first interactivity column as the ID column for annotation lookup
+            id_column = None
+            if self._interactivity:
+                id_column = list(self._interactivity.values())[0]
 
-            for x in x_values:
-                ann_data = self._dynamic_annotations.get(x)
-                if ann_data:
-                    highlights.append(ann_data.get('highlight', False))
-                    annotations.append(ann_data.get('annotation', ''))
-                else:
-                    highlights.append(False)
-                    annotations.append('')
+            # Apply annotations by peak_id lookup
+            if id_column and id_column in df_pandas.columns:
+                peak_ids = df_pandas[id_column].tolist()
+                for row_idx, peak_id in enumerate(peak_ids):
+                    if peak_id in self._dynamic_annotations:
+                        ann_data = self._dynamic_annotations[peak_id]
+                        highlights[row_idx] = ann_data.get('highlight', False)
+                        annotations[row_idx] = ann_data.get('annotation', '')
+            else:
+                # Fallback: use row index as key (legacy behavior)
+                for idx, ann_data in self._dynamic_annotations.items():
+                    if isinstance(idx, int) and 0 <= idx < num_rows:
+                        highlights[idx] = ann_data.get('highlight', False)
+                        annotations[idx] = ann_data.get('annotation', '')
 
             # Add dynamic columns to dataframe
             df_pandas = df_pandas.copy()
@@ -297,7 +307,7 @@ class LinePlot(BaseComponent):
 
             # Update hash to include dynamic annotation state
             import hashlib
-            ann_hash = hashlib.md5(str(self._dynamic_annotations).encode()).hexdigest()[:8]
+            ann_hash = hashlib.md5(str(sorted(self._dynamic_annotations.keys())).encode()).hexdigest()[:8]
             data_hash = f"{data_hash}_{ann_hash}"
 
         # Send as DataFrame for Arrow serialization (efficient binary transfer)
@@ -428,31 +438,33 @@ class LinePlot(BaseComponent):
 
     def set_dynamic_annotations(
         self,
-        annotations: Optional[Dict[Any, Dict[str, Any]]] = None,
+        annotations: Optional[Dict[int, Dict[str, Any]]] = None,
         title: Optional[str] = None,
     ) -> 'LinePlot':
         """
         Set dynamic annotations to be applied at render time.
 
         This allows updating peak annotations without recreating the component.
-        Annotations are keyed by the x_column value (e.g., mass/m/z).
+        Annotations are keyed by the interactivity column value (e.g., peak_id),
+        which provides a stable identifier independent of row order.
 
         Args:
-            annotations: Dict mapping x_column values to annotation data.
+            annotations: Dict mapping peak IDs to annotation data.
+                Keys should match values in the first interactivity column.
                 Each entry should have:
                 - 'highlight': bool - whether to highlight this peak
                 - 'annotation': str - label text (e.g., "b3¹⁺")
-                Example: {147.1132: {'highlight': True, 'annotation': 'b2¹⁺'}}
+                Example: {123: {'highlight': True, 'annotation': 'b2¹⁺'}}
             title: Optional dynamic title override
 
         Returns:
             Self for method chaining
 
         Example:
-            # Compute annotations for current identification
+            # Compute annotations for current identification (keyed by peak_id)
             annotations = {
-                147.1132: {'highlight': True, 'annotation': 'b2¹⁺'},
-                262.1401: {'highlight': True, 'annotation': 'b3¹⁺'},
+                123: {'highlight': True, 'annotation': 'b2¹⁺'},
+                456: {'highlight': True, 'annotation': 'b3¹⁺'},
             }
             spectrum_plot.set_dynamic_annotations(annotations, title="PEPTIDER")
             spectrum_plot(key="plot", state_manager=sm)

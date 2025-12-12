@@ -87,6 +87,14 @@ export default defineComponent({
     },
 
     /**
+     * Get plot config from Python (sent with data, may have dynamic column names).
+     * When dynamic annotations are set, _plotConfig contains updated column names.
+     */
+    plotConfig(): Record<string, unknown> | undefined {
+      return this.streamlitDataStore.allDataForDrawing?._plotConfig as Record<string, unknown> | undefined
+    },
+
+    /**
      * Get plot data from Python.
      * Data arrives as column arrays: {columnName: [values...], ...}
      * We map to the expected format using xColumn/yColumn from args.
@@ -97,9 +105,10 @@ export default defineComponent({
         | undefined
       if (!rawData) return undefined
 
-      // Get column names from args
-      const xCol = this.args.xColumn || 'x'
-      const yCol = this.args.yColumn || 'y'
+      // Get column names from args (static) or plotConfig (dynamic, may be updated at runtime)
+      const config = this.plotConfig
+      const xCol = (config?.xColumn as string) || this.args.xColumn || 'x'
+      const yCol = (config?.yColumn as string) || this.args.yColumn || 'y'
 
       // Map to expected PlotData format
       const result: PlotData = {
@@ -107,15 +116,17 @@ export default defineComponent({
         y_values: (rawData[yCol] as number[]) || [],
       }
 
-      // Add highlight mask if present (using original column name)
-      // Python sends highlight column with its original name
-      if (this.args.highlightColumn && rawData[this.args.highlightColumn]) {
-        result.highlight_mask = rawData[this.args.highlightColumn] as boolean[]
+      // Add highlight mask if present
+      // Use plotConfig column name if available (for dynamic annotations), otherwise args
+      const highlightCol = (config?.highlightColumn as string) || this.args.highlightColumn
+      if (highlightCol && rawData[highlightCol]) {
+        result.highlight_mask = rawData[highlightCol] as boolean[]
       }
 
       // Add annotations if present
-      if (this.args.annotationColumn && rawData[this.args.annotationColumn]) {
-        result.annotations = rawData[this.args.annotationColumn] as string[]
+      const annotationCol = (config?.annotationColumn as string) || this.args.annotationColumn
+      if (annotationCol && rawData[annotationCol]) {
+        result.annotations = rawData[annotationCol] as string[]
       }
 
       // Add interactivity column data for click handling
@@ -627,6 +638,16 @@ export default defineComponent({
     },
 
     'streamlitDataStore.allDataForDrawing.plotData': {
+      handler() {
+        if (this.isInitialized) {
+          this.renderPlot()
+        }
+      },
+      deep: true,
+    },
+
+    // Re-render when plot config changes (e.g., dynamic annotations)
+    'streamlitDataStore.allDataForDrawing._plotConfig': {
       handler() {
         if (this.isInitialized) {
           this.renderPlot()
