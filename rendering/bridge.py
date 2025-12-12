@@ -3,7 +3,6 @@
 import hashlib
 import json
 import os
-import sys
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -153,16 +152,13 @@ def render_component(
     Returns:
         The value returned by the Vue component
     """
-    import time
-    t0 = time.perf_counter()
-
     # Get current state
     state = state_manager.get_state_for_vue()
-    t1 = time.perf_counter()
 
     # Generate unique key if not provided (needed for cache)
+    # Use cache_id instead of id(component) since components are recreated each rerun
     if key is None:
-        key = f"svc_{id(component)}_{hash(str(component._interactivity))}"
+        key = f"svc_{component._cache_id}_{hash(str(component._interactivity))}"
 
     # Extract state keys that affect this component's data for cache key
     # This includes filters and any additional dependencies (e.g., zoom for heatmaps)
@@ -192,13 +188,8 @@ def render_component(
     vue_data, data_hash = _cached_prepare_vue_data(
         component, component_id, filter_state_hashable, data_id, relevant_state
     )
-    t2 = time.perf_counter()
 
     component_args = component._get_component_args()
-    t3 = time.perf_counter()
-
-    # Hash already computed by cache
-    t4 = time.perf_counter()
 
     # Initialize hash cache in session state if needed
     if _VUE_ECHOED_HASH_KEY not in st.session_state:
@@ -236,6 +227,11 @@ def render_component(
             'hash': data_hash,
             'dataChanged': True,
         }
+        # IMPORTANT: Immediately update the stored hash when sending new data
+        # This prevents a one-cycle delay where Vue returns the previous hash,
+        # causing us to incorrectly think data changed again.
+        # We know Vue will have this data after this render.
+        st.session_state[_VUE_ECHOED_HASH_KEY][key] = data_hash
     else:
         # Data unchanged - only send hash and state, Vue will use cached data
         data_payload = {
@@ -243,7 +239,6 @@ def render_component(
             'hash': data_hash,
             'dataChanged': False,
         }
-    t5 = time.perf_counter()
 
     # Add height to component args if specified
     if height is not None:
@@ -262,27 +257,20 @@ def render_component(
     }
     if height is not None:
         kwargs['height'] = height
-    t6 = time.perf_counter()
 
     result = vue_func(**kwargs)
-    t7 = time.perf_counter()
 
     # Update state from Vue response
     if result is not None:
         # Store Vue's echoed hash for next render comparison
+        # (This is a backup - primary hash update happens when we send data)
         vue_hash = result.get('_vueDataHash')
-        st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
+        if vue_hash:
+            st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
 
         # Update state and rerun if state changed
         if state_manager.update_from_vue(result):
             st.rerun()
-
-    t8 = time.perf_counter()
-    comp_name = component_args.get('componentType', 'unknown')
-    changed_str = "CHANGED" if data_changed else "cached"
-    # Show filter state for cache debugging (use relevant_state for readable output)
-    filter_info = f"filters={relevant_state}" if relevant_state else "no_filters"
-    print(f"[TIMING {comp_name}] prepare:{(t2-t1)*1000:.1f}ms vue_call:{(t7-t6)*1000:.1f}ms [{changed_str}] {filter_info}", file=sys.stderr, flush=True)
 
     return result
 

@@ -64,6 +64,7 @@ export default defineComponent({
       // Echo back Vue's current data hash so Python knows if Vue has the data
       // This enables bidirectional hash confirmation for cache optimization
       plainState._vueDataHash = currentHash
+      console.log('[Vue] sendStateToStreamlit', { counter: currentCounter, hash: currentHash?.substring(0, 8) })
       Streamlit.setComponentValue(plainState)
     }
 

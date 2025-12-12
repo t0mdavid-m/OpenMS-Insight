@@ -179,11 +179,13 @@ class StateManager:
 
         modified = False
 
-        # Always accept previously undefined keys
+        # Always accept previously undefined keys (but skip None/undefined values)
         for key, value in vue_state.items():
             if key not in self._state['selections']:
-                self._state['selections'][key] = value
-                modified = True
+                # Only add if value is not None (undefined in Vue = no selection)
+                if value is not None:
+                    self._state['selections'][key] = value
+                    modified = True
 
         # Only accept conflicting updates if Vue has newer state
         if vue_counter >= self._state['counter']:
