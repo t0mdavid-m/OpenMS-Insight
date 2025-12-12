@@ -46,6 +46,7 @@ class LinePlot(BaseComponent):
         cache_id: str,
         data: Optional[pl.LazyFrame] = None,
         filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
@@ -71,6 +72,10 @@ class LinePlot(BaseComponent):
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, plot shows only data where
                 scan_id equals the selected value.
+            filter_defaults: Default values for filters when state is None.
+                Example: {'identification': -1}
+                When 'identification' selection is None, filter uses -1 instead.
+                This enables showing unannotated data when no identification selected.
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {'my_selection': 'mass'}
                 When a peak is clicked, sets 'my_selection' to that peak's mass.
@@ -112,6 +117,7 @@ class LinePlot(BaseComponent):
             cache_id=cache_id,
             data=data,
             filters=filters,
+            filter_defaults=filter_defaults,
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
@@ -262,6 +268,7 @@ class LinePlot(BaseComponent):
             self._filters,
             state,
             columns=columns_to_select,
+            filter_defaults=self._filter_defaults,
         )
 
         # Determine which highlight/annotation columns to use

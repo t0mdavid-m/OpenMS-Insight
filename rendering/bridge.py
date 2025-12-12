@@ -58,17 +58,16 @@ def _cached_prepare_vue_data(
     Cache key is based on:
     - component_id: unique key for this component instance
     - filter_state_hashable: hashable version of state values (for cache key only)
-    - _data_id: identity of raw data (invalidates cache if data object changes)
 
-    The _component and _state_dict parameters are prefixed with underscore so
-    they are not hashed (component instances are not hashable, and state_dict
+    The _component, _data_id, and _state_dict parameters are prefixed with underscore
+    so they are not hashed (component instances are not hashable, and state_dict
     may contain unhashable values like dicts).
 
     Args:
         _component: The component to prepare data for (not hashed)
         component_id: Unique identifier for this component
         filter_state_hashable: Tuple of (identifier, hashable_value) for cache key
-        _data_id: id() of the raw data object
+        _data_id: id() of the raw data object (not used in cache key)
         _state_dict: Original state dict with actual values (not hashed)
 
     Returns:
@@ -195,9 +194,13 @@ def render_component(
     if _VUE_ECHOED_HASH_KEY not in st.session_state:
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
 
-    # Get Vue's last-echoed hash for this component
-    # This is what Vue reported having in its last response
-    vue_echoed_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(key)
+    # Hash tracking key includes filter state so different filter values have separate tracking
+    # This ensures data is re-sent when filters change (e.g., different spectrum selected)
+    hash_tracking_key = f"{key}:{filter_state_hashable}"
+
+    # Get Vue's last-echoed hash for this component + filter state
+    # This is what Vue reported having in its last response for this exact filter state
+    vue_echoed_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(hash_tracking_key)
 
     # Send data if Vue's hash doesn't match current hash
     # This handles: first render, data change, browser refresh, Vue hot reload
@@ -266,7 +269,7 @@ def render_component(
         # ALWAYS update from Vue's echo - if Vue lost its data (page navigation),
         # it echoes None, and we need to know that to resend data next time
         vue_hash = result.get('_vueDataHash')
-        st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
+        st.session_state[_VUE_ECHOED_HASH_KEY][hash_tracking_key] = vue_hash
 
         # Update state and rerun if state changed
         if state_manager.update_from_vue(result):

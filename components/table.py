@@ -50,6 +50,7 @@ class Table(BaseComponent):
         cache_id: str,
         data: Optional[pl.LazyFrame] = None,
         filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
@@ -75,6 +76,9 @@ class Table(BaseComponent):
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, table shows only rows where
                 scan_id equals the selected value.
+            filter_defaults: Default values for filters when state is None.
+                Example: {'identification': -1}
+                When 'identification' selection is None, filter uses -1 instead.
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {'peak': 'mass'}
                 When a row is clicked, sets 'peak' selection to that row's mass.
@@ -117,6 +121,7 @@ class Table(BaseComponent):
             cache_id=cache_id,
             data=data,
             filters=filters,
+            filter_defaults=filter_defaults,
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
@@ -269,6 +274,7 @@ class Table(BaseComponent):
             self._filters,
             state,
             columns=columns,
+            filter_defaults=self._filter_defaults,
         )
 
         return {'tableData': df_pandas, '_hash': data_hash}

@@ -11,6 +11,7 @@ import streamlit as st
 def _make_cache_key(
     filters: Dict[str, str],
     state: Dict[str, Any],
+    filter_defaults: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Tuple[str, Any], ...]:
     """
     Create a hashable cache key from filters and state.
@@ -21,6 +22,7 @@ def _make_cache_key(
     Args:
         filters: Mapping of identifier names to column names
         state: Current selection state
+        filter_defaults: Optional default values for filters when state is None
 
     Returns:
         Tuple of (identifier, value) pairs for use as cache key
@@ -28,6 +30,9 @@ def _make_cache_key(
     relevant_state = []
     for identifier in sorted(filters.keys()):
         value = state.get(identifier)
+        # Apply default if value is None and default exists
+        if value is None and filter_defaults and identifier in filter_defaults:
+            value = filter_defaults[identifier]
         relevant_state.append((identifier, value))
     return tuple(relevant_state)
 
@@ -82,6 +87,7 @@ def _cached_filter_and_collect(
     filters_tuple: Tuple[Tuple[str, str], ...],
     state_tuple: Tuple[Tuple[str, Any], ...],
     columns_tuple: Optional[Tuple[str, ...]] = None,
+    filter_defaults_tuple: Optional[Tuple[Tuple[str, Any], ...]] = None,
 ) -> Tuple[pd.DataFrame, str]:
     """
     Filter data and collect with caching.
@@ -95,14 +101,17 @@ def _cached_filter_and_collect(
         _data: LazyFrame to filter (underscore prefix tells st.cache_data to hash by id)
         filters_tuple: Tuple of (identifier, column) pairs from filters dict
         state_tuple: Tuple of (identifier, value) pairs for current selection state
+            (already has defaults applied from _make_cache_key)
         columns_tuple: Optional tuple of column names to select (projection)
+        filter_defaults_tuple: Optional tuple of (identifier, default_value) pairs
+            (included for cache key differentiation)
 
     Returns:
         Tuple of (pandas DataFrame, hash string)
     """
     data = _data
     filters = dict(filters_tuple)
-    state = dict(state_tuple)
+    state = dict(state_tuple)  # Already has defaults applied
 
     # Apply column projection FIRST (before filters) for efficiency
     # This ensures we only read needed columns from disk
@@ -110,7 +119,7 @@ def _cached_filter_and_collect(
         data = data.select(list(columns_tuple))
 
     # Apply filters
-    # If ANY filter has no selection, return empty DataFrame
+    # If ANY filter has no selection (and no default), return empty DataFrame
     # This prevents loading millions of rows when no spectrum is selected
     for identifier, column in filters.items():
         selected_value = state.get(identifier)
@@ -145,6 +154,7 @@ def filter_and_collect_cached(
     filters: Dict[str, str],
     state: Dict[str, Any],
     columns: Optional[List[str]] = None,
+    filter_defaults: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pd.DataFrame, str]:
     """
     Filter data based on selection state and collect, with caching.
@@ -162,6 +172,9 @@ def filter_and_collect_cached(
         filters: Mapping of identifier names to column names for filtering
         state: Current selection state with identifier values
         columns: Optional list of column names to select (projection pushdown)
+        filter_defaults: Optional default values for filters when state is None.
+            When a filter's state value is None, the default is used instead.
+            Example: {"identification": -1} means None → -1 for identification filter.
 
     Returns:
         Tuple of (pandas DataFrame, hash string) with filters and projection applied
@@ -171,14 +184,17 @@ def filter_and_collect_cached(
 
     # Convert to tuples for caching (dicts aren't hashable)
     filters_tuple = tuple(sorted(filters.items()))
-    state_tuple = _make_cache_key(filters, state)
+    # Pass filter_defaults to _make_cache_key so defaults are applied to state
+    state_tuple = _make_cache_key(filters, state, filter_defaults)
     columns_tuple = tuple(columns) if columns else None
+    filter_defaults_tuple = tuple(sorted(filter_defaults.items())) if filter_defaults else None
 
     return _cached_filter_and_collect(
         data,
         filters_tuple,
         state_tuple,
         columns_tuple,
+        filter_defaults_tuple,
     )
 
 

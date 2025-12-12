@@ -71,6 +71,7 @@ class Heatmap(BaseComponent):
         data: Optional[pl.LazyFrame] = None,
         intensity_column: str = 'intensity',
         filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
@@ -142,6 +143,7 @@ class Heatmap(BaseComponent):
             cache_id=cache_id,
             data=data,
             filters=filters,
+            filter_defaults=filter_defaults,
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
@@ -604,6 +606,7 @@ class Heatmap(BaseComponent):
                     filtered_lazy,
                     non_categorical_filters,
                     state,
+                    filter_defaults=self._filter_defaults,
                 )
                 filtered = pl.from_pandas(df_pandas)
             else:
@@ -723,6 +726,7 @@ class Heatmap(BaseComponent):
                     non_categorical_filters,
                     state,
                     columns=columns_to_select,
+                    filter_defaults=self._filter_defaults,
                 )
             else:
                 # No filters to apply - levels already filtered by categorical filter

@@ -44,6 +44,7 @@ class BaseComponent(ABC):
         cache_id: str,
         data: Optional[pl.LazyFrame] = None,
         filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
@@ -60,6 +61,10 @@ class BaseComponent(ABC):
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, component filters data where
                 scan_id equals the selected value.
+            filter_defaults: Default values for filters when state is None.
+                Example: {'identification': -1}
+                When 'identification' selection is None, filter uses -1 instead.
+                This enables showing default/unannotated data when no selection.
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {'my_selection': 'mass'}
                 When user clicks/selects, sets 'my_selection' to the clicked
@@ -71,6 +76,7 @@ class BaseComponent(ABC):
         self._cache_id = cache_id
         self._cache_dir = get_cache_dir(cache_path, cache_id)
         self._filters = filters or {}
+        self._filter_defaults = filter_defaults or {}
         self._interactivity = interactivity or {}
         self._preprocessed_data: Dict[str, Any] = {}
         self._config = kwargs
@@ -325,6 +331,10 @@ class BaseComponent(ABC):
     def get_filters_mapping(self) -> Dict[str, str]:
         """Return the filters identifier-to-column mapping."""
         return self._filters.copy()
+
+    def get_filter_defaults(self) -> Dict[str, Any]:
+        """Return the filter defaults mapping."""
+        return self._filter_defaults.copy()
 
     def get_interactivity_mapping(self) -> Dict[str, str]:
         """Return the interactivity identifier-to-column mapping."""
