@@ -202,7 +202,9 @@ def render_component(
     # Send data if Vue's hash doesn't match current hash
     # This handles: first render, data change, browser refresh, Vue hot reload
     # Vue echoes null/None if it has no data, so mismatch triggers send
-    data_changed = (vue_echoed_hash != data_hash)
+    # IMPORTANT: Also send data if vue_echoed_hash is None - this means Vue
+    # hasn't confirmed receipt yet (e.g., after page navigation destroys Vue component)
+    data_changed = (vue_echoed_hash is None) or (vue_echoed_hash != data_hash)
 
     # Only include full data if hash changed
     if data_changed:
@@ -227,11 +229,9 @@ def render_component(
             'hash': data_hash,
             'dataChanged': True,
         }
-        # IMPORTANT: Immediately update the stored hash when sending new data
-        # This prevents a one-cycle delay where Vue returns the previous hash,
-        # causing us to incorrectly think data changed again.
-        # We know Vue will have this data after this render.
-        st.session_state[_VUE_ECHOED_HASH_KEY][key] = data_hash
+        # Note: We don't pre-set the hash here anymore. We trust Vue's echo
+        # at the end of the render cycle. This ensures we detect when Vue
+        # loses its data (e.g., page navigation) and needs it resent.
     else:
         # Data unchanged - only send hash and state, Vue will use cached data
         data_payload = {
@@ -263,10 +263,10 @@ def render_component(
     # Update state from Vue response
     if result is not None:
         # Store Vue's echoed hash for next render comparison
-        # (This is a backup - primary hash update happens when we send data)
+        # ALWAYS update from Vue's echo - if Vue lost its data (page navigation),
+        # it echoes None, and we need to know that to resend data next time
         vue_hash = result.get('_vueDataHash')
-        if vue_hash:
-            st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
+        st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
 
         # Update state and rerun if state changed
         if state_manager.update_from_vue(result):
