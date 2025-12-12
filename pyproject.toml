@@ -3,17 +3,27 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "streamlit-vue-components"
+name = "openms-insight"
 version = "0.1.0"
-description = "Interactive visualization components for Streamlit backed by Vue.js"
+description = "Interactive visualization components for mass spectrometry data in Streamlit"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [
     { name = "Kohlbacher Lab" },
 ]
+keywords = [
+    "streamlit",
+    "visualization",
+    "mass-spectrometry",
+    "proteomics",
+    "openms",
+    "vue",
+    "plotly",
+    "tabulator",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -22,6 +32,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Visualization",
 ]
 dependencies = [
@@ -40,19 +51,32 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/kohlbacherlab/streamlit-vue-components"
-Documentation = "https://github.com/kohlbacherlab/streamlit-vue-components#readme"
-Repository = "https://github.com/kohlbacherlab/streamlit-vue-components"
+Homepage = "https://github.com/t0mdavid-m/OpenMS-Insight"
+Documentation = "https://github.com/t0mdavid-m/OpenMS-Insight#readme"
+Repository = "https://github.com/t0mdavid-m/OpenMS-Insight"
+Issues = "https://github.com/t0mdavid-m/OpenMS-Insight/issues"
+
+[tool.hatch.build]
+exclude = [
+    "**/__pycache__",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["streamlit_vue_components"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"streamlit_vue_components/js-component/dist" = "streamlit_vue_components/js-component/dist"
+
 [tool.hatch.build.targets.sdist]
 include = [
-    "streamlit_vue_components",
+    "streamlit_vue_components/**",
+    "js-component/dist/**",
     "README.md",
     "LICENSE",
 ]
+
+[tool.hatch.build.targets.sdist.force-include]
+"streamlit_vue_components/js-component/dist" = "streamlit_vue_components/js-component/dist"
 
 [tool.black]
 line-length = 88

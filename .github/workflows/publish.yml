@@ -1,0 +1,51 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write  # Required for trusted publishing
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: js-component/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: js-component
+        run: npm ci
+
+      - name: Build Vue component
+        working-directory: js-component
+        run: npm run build
+
+      - name: Copy Vue dist to package
+        run: |
+          mkdir -p streamlit_vue_components/js-component
+          cp -r js-component/dist streamlit_vue_components/js-component/
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
