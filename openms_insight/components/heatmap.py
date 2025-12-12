@@ -275,7 +275,10 @@ class Heatmap(BaseComponent):
 
                 # Build each level
                 for level_idx, target_size in enumerate(level_sizes):
-                    if self._use_simple_downsample:
+                    # If target size equals total, skip downsampling - use all data
+                    if target_size >= filtered_total:
+                        level = filtered_data
+                    elif self._use_simple_downsample:
                         level = downsample_2d_simple(
                             filtered_data,
                             max_points=target_size,
@@ -305,7 +308,10 @@ class Heatmap(BaseComponent):
         self._preprocessed_data['num_levels'] = len(level_sizes)
 
         for i, size in enumerate(level_sizes):
-            if self._use_simple_downsample:
+            # If target size equals total, skip downsampling - use all data
+            if size >= total:
+                level = self._raw_data
+            elif self._use_simple_downsample:
                 level = downsample_2d_simple(
                     self._raw_data,
                     max_points=size,
@@ -352,7 +358,10 @@ class Heatmap(BaseComponent):
         self._preprocessed_data['levels'] = []
 
         for i, size in enumerate(level_sizes):
-            if self._use_simple_downsample:
+            # If target size equals total, skip downsampling - use all data
+            if size >= total:
+                level = self._raw_data
+            elif self._use_simple_downsample:
                 level = downsample_2d_simple(
                     self._raw_data,
                     max_points=size,
@@ -406,7 +415,10 @@ class Heatmap(BaseComponent):
             current = self._raw_data
 
             for i, size in enumerate(reversed(level_sizes)):
-                if self._use_simple_downsample:
+                # If target size equals total, skip downsampling - use all data
+                if size >= total:
+                    downsampled = current
+                elif self._use_simple_downsample:
                     downsampled = downsample_2d_simple(
                         current,
                         max_points=size,
@@ -728,10 +740,14 @@ class Heatmap(BaseComponent):
                     columns=columns_to_select,
                     filter_defaults=self._filter_defaults,
                 )
+                # Sort by intensity ascending so high-intensity points are drawn on top
+                df_pandas = df_pandas.sort_values(self._intensity_column).reset_index(drop=True)
             else:
                 # No filters to apply - levels already filtered by categorical filter
                 available_cols = [c for c in columns_to_select if c in data.columns]
                 df_polars = data.select(available_cols).collect()
+                # Sort by intensity ascending so high-intensity points are drawn on top
+                df_polars = df_polars.sort(self._intensity_column)
                 data_hash = compute_dataframe_hash(df_polars)
                 df_pandas = df_polars.to_pandas()
         else:
@@ -743,6 +759,8 @@ class Heatmap(BaseComponent):
             # Select only needed columns
             available_cols = [c for c in columns_to_select if c in df_polars.columns]
             df_polars = df_polars.select(available_cols)
+            # Sort by intensity ascending so high-intensity points are drawn on top
+            df_polars = df_polars.sort(self._intensity_column)
             print(f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}", file=sys.stderr)
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()

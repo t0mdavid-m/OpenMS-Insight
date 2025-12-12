@@ -33,8 +33,8 @@ jobs:
 
       - name: Copy Vue dist to package
         run: |
-          mkdir -p streamlit_vue_components/js-component
-          cp -r js-component/dist streamlit_vue_components/js-component/
+          mkdir -p openms_insight/js-component
+          cp -r js-component/dist openms_insight/js-component/
 
       - name: Setup Python
         uses: actions/setup-python@v5

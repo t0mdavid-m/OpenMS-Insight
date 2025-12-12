@@ -26,7 +26,7 @@ pip install openms-insight
 ```python
 import streamlit as st
 import polars as pl
-from streamlit_vue_components import Table, LinePlot, StateManager
+from openms_insight import Table, LinePlot, StateManager
 
 # Create state manager for cross-component linking
 state_manager = StateManager()
@@ -188,7 +188,7 @@ All components accept these common arguments:
 All components are callable. Pass a `StateManager` to enable cross-component linking:
 
 ```python
-from streamlit_vue_components import StateManager
+from openms_insight import StateManager
 
 state_manager = StateManager()
 

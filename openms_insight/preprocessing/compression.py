@@ -30,7 +30,8 @@ def compute_compression_levels(min_size: int, total: int) -> List[int]:
         total: Total number of data points
 
     Returns:
-        List of target sizes, smallest first. Empty if total <= min_size.
+        List of target sizes, smallest first. Always returns at least one level.
+        For small datasets (total <= min_size), returns [total] to preserve all data.
 
     Examples:
         >>> compute_compression_levels(20000, 1_000_000)
@@ -38,17 +39,19 @@ def compute_compression_levels(min_size: int, total: int) -> List[int]:
         >>> compute_compression_levels(20000, 50_000)
         [20000]
         >>> compute_compression_levels(20000, 15_000)
-        []
+        [15000]
     """
     if total <= min_size:
-        return []
+        # Still return at least one level with all data
+        return [total]
 
     # Compute powers of 10 between min and total
     min_power = int(np.log10(min_size))
     max_power = int(np.log10(total))
 
     if min_power >= max_power:
-        return []
+        # Data is between min_size and 10x min_size - one downsampled level
+        return [min_size]
 
     # Generate levels at each power of 10, scaled by the fractional part
     scale_factor = int(10 ** (np.log10(min_size) % 1))
@@ -59,10 +62,14 @@ def compute_compression_levels(min_size: int, total: int) -> List[int]:
         dtype='int'
     ) * scale_factor
 
-    # Filter out levels >= total
-    levels = levels[levels < total]
+    # Filter out levels >= total (don't include full resolution for large datasets)
+    levels = levels[levels < total].tolist()
 
-    return levels.tolist()
+    # Ensure at least one level exists
+    if not levels:
+        levels = [min_size]
+
+    return levels
 
 
 def downsample_2d(

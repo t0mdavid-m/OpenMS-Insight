@@ -1,4 +1,4 @@
-"""Core infrastructure for streamlit_vue_components."""
+"""Core infrastructure for openms_insight."""
 
 from .base import BaseComponent
 from .state import StateManager

@@ -62,21 +62,21 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["streamlit_vue_components"]
+packages = ["openms_insight"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"streamlit_vue_components/js-component/dist" = "streamlit_vue_components/js-component/dist"
+"openms_insight/js-component/dist" = "openms_insight/js-component/dist"
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "streamlit_vue_components/**",
+    "openms_insight/**",
     "js-component/dist/**",
     "README.md",
     "LICENSE",
 ]
 
 [tool.hatch.build.targets.sdist.force-include]
-"streamlit_vue_components/js-component/dist" = "streamlit_vue_components/js-component/dist"
+"openms_insight/js-component/dist" = "openms_insight/js-component/dist"
 
 [tool.black]
 line-length = 88
@@ -114,4 +114,4 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --cov=streamlit_vue_components --cov-report=term-missing"
+addopts = "-v --cov=openms_insight --cov-report=term-missing"
