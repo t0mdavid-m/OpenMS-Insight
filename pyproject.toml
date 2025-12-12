@@ -7,7 +7,7 @@ name = "openms-insight"
 version = "0.1.0"
 description = "Interactive visualization components for mass spectrometry data in Streamlit"
 readme = "README.md"
-license = "MIT"
+license = "BSD-3-Clause"
 requires-python = ">=3.9"
 authors = [
     { name = "Kohlbacher Lab" },
@@ -26,7 +26,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
