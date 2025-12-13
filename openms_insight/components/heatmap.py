@@ -69,6 +69,7 @@ class Heatmap(BaseComponent):
         x_column: str,
         y_column: str,
         data: Optional[pl.LazyFrame] = None,
+        data_path: Optional[str] = None,
         intensity_column: str = 'intensity',
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
@@ -97,6 +98,7 @@ class Heatmap(BaseComponent):
             x_column: Name of column for x-axis values
             y_column: Name of column for y-axis values
             data: Polars LazyFrame with heatmap data. Optional if cache exists.
+            data_path: Path to parquet file (preferred for large datasets).
             intensity_column: Name of column for intensity/color values
             filters: Mapping of identifier names to column names for filtering
             interactivity: Mapping of identifier names to column names for clicks.
@@ -142,11 +144,27 @@ class Heatmap(BaseComponent):
         super().__init__(
             cache_id=cache_id,
             data=data,
+            data_path=data_path,
             filters=filters,
             filter_defaults=filter_defaults,
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
+            # Pass component-specific params for subprocess recreation
+            x_column=x_column,
+            y_column=y_column,
+            intensity_column=intensity_column,
+            min_points=min_points,
+            x_bins=x_bins,
+            y_bins=y_bins,
+            zoom_identifier=zoom_identifier,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            colorscale=colorscale,
+            use_simple_downsample=use_simple_downsample,
+            use_streaming=use_streaming,
+            categorical_filters=categorical_filters,
             **kwargs
         )
 

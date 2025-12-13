@@ -9,7 +9,6 @@ from .core.base import BaseComponent
 from .core.state import StateManager
 from .core.registry import register_component, get_component_class
 from .core.cache import CacheMissError
-from .core.subprocess_preprocess import preprocess_component
 
 from .components.table import Table
 from .components.lineplot import LinePlot
@@ -25,7 +24,6 @@ __all__ = [
     "register_component",
     "get_component_class",
     "CacheMissError",
-    "preprocess_component",
     # Components
     "Table",
     "LinePlot",

@@ -7,24 +7,31 @@ subprocess ensures all memory is returned to the OS when the subprocess exits.
 
 import multiprocessing
 import os
-from typing import Any, Dict, Optional, Type
+import traceback
+from typing import Any, Dict, Type
 
 
 def _preprocess_worker(
     component_class: Type,
     data_path: str,
     kwargs: Dict[str, Any],
+    error_queue: multiprocessing.Queue,
 ) -> None:
     """Worker function that runs in subprocess to do preprocessing."""
-    import polars as pl
+    try:
+        import polars as pl
 
-    # Set mimalloc to release memory aggressively (in case not inherited)
-    os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
+        # Set mimalloc to release memory aggressively (in case not inherited)
+        os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
 
-    # Create component with data - this triggers preprocessing and cache save
-    data = pl.scan_parquet(data_path)
-    component_class(data=data, **kwargs)
-    # Subprocess exits here, releasing all memory
+        # Create component with data - this triggers preprocessing and cache save
+        data = pl.scan_parquet(data_path)
+        component_class(data=data, **kwargs)
+        # Subprocess exits here, releasing all memory
+        error_queue.put(None)
+    except Exception as e:
+        # Send exception info back to parent process
+        error_queue.put((type(e).__name__, str(e), traceback.format_exc()))
 
 
 def preprocess_component(
@@ -37,23 +44,10 @@ def preprocess_component(
     """
     Run component preprocessing in a subprocess to guarantee memory release.
 
-    After this function returns, the component cache is ready and the main
-    process can create the component without data (loading from cache).
+    This is an internal function called by BaseComponent when data_path is
+    provided. Users should use the component constructor directly:
 
-    Args:
-        component_class: The component class (e.g., Heatmap, Table)
-        data_path: Path to the parquet file containing the data
-        cache_id: Unique identifier for the cache
-        cache_path: Directory for cache storage
-        **kwargs: Additional arguments passed to component constructor
-
-    Example:
-        from openms_insight import Heatmap
-        from openms_insight.core.subprocess_preprocess import preprocess_component
-
-        # Run preprocessing in subprocess (memory released when done)
-        preprocess_component(
-            Heatmap,
+        heatmap = Heatmap(
             data_path="/path/to/data.parquet",
             cache_id="my_heatmap",
             cache_path="/path/to/cache",
@@ -62,8 +56,12 @@ def preprocess_component(
             intensity_column="intensity",
         )
 
-        # Now create component from cache (no data needed, no memory spike)
-        heatmap = Heatmap(cache_id="my_heatmap", cache_path="/path/to/cache")
+    Args:
+        component_class: The component class (e.g., Heatmap, Table)
+        data_path: Path to the parquet file containing the data
+        cache_id: Unique identifier for the cache
+        cache_path: Directory for cache storage
+        **kwargs: Additional arguments passed to component constructor
     """
     # Prepare kwargs for subprocess
     worker_kwargs = {
@@ -74,12 +72,23 @@ def preprocess_component(
 
     # Use spawn to get a fresh process (fork might copy memory)
     ctx = multiprocessing.get_context("spawn")
+    error_queue = ctx.Queue()
     process = ctx.Process(
         target=_preprocess_worker,
-        args=(component_class, data_path, worker_kwargs),
+        args=(component_class, data_path, worker_kwargs, error_queue),
     )
     process.start()
     process.join()
+
+    # Check for errors from subprocess
+    if not error_queue.empty():
+        error_info = error_queue.get_nowait()
+        if error_info is not None:
+            exc_type, exc_msg, exc_tb = error_info
+            raise RuntimeError(
+                f"Subprocess preprocessing failed with {exc_type}: {exc_msg}\n"
+                f"Subprocess traceback:\n{exc_tb}"
+            )
 
     if process.exitcode != 0:
         raise RuntimeError(

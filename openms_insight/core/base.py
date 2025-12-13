@@ -43,6 +43,7 @@ class BaseComponent(ABC):
         self,
         cache_id: str,
         data: Optional[pl.LazyFrame] = None,
+        data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
@@ -57,6 +58,9 @@ class BaseComponent(ABC):
             cache_id: Unique identifier for this component's cache (MANDATORY).
                 Creates a folder {cache_path}/{cache_id}/ for cached data.
             data: Polars LazyFrame with source data. Optional if cache exists.
+            data_path: Path to parquet file with source data. Preferred over
+                data= for large datasets as preprocessing runs in a subprocess
+                to ensure memory is released after cache creation.
             filters: Mapping of identifier names to column names for filtering.
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, component filters data where
@@ -73,6 +77,10 @@ class BaseComponent(ABC):
             regenerate_cache: If True, regenerate cache even if valid cache exists.
             **kwargs: Component-specific configuration options
         """
+        # Validate inputs
+        if data is not None and data_path is not None:
+            raise ValueError("Provide either 'data' or 'data_path', not both")
+
         self._cache_id = cache_id
         self._cache_dir = get_cache_dir(cache_path, cache_id)
         self._filters = filters or {}
@@ -83,18 +91,33 @@ class BaseComponent(ABC):
 
         # Check if we should load from cache or preprocess
         if regenerate_cache or not self._is_cache_valid():
-            if data is None:
+            if data is None and data_path is None:
                 raise CacheMissError(
                     f"Cache not found at '{self._cache_dir}' and no data provided. "
-                    f"Either provide data= or ensure cache exists from a previous run."
+                    f"Either provide data=, data_path=, or ensure cache exists."
                 )
-            self._raw_data = data
-            # Validate columns exist in data
-            self._validate_mappings()
-            # Run component-specific preprocessing
-            self._preprocess()
-            # Save to cache for next time
-            self._save_to_cache()
+
+            if data_path is not None:
+                # Subprocess preprocessing - memory released after cache creation
+                from .subprocess_preprocess import preprocess_component
+                preprocess_component(
+                    type(self),
+                    data_path=data_path,
+                    cache_id=cache_id,
+                    cache_path=cache_path,
+                    filters=filters,
+                    filter_defaults=filter_defaults,
+                    interactivity=interactivity,
+                    **kwargs
+                )
+                self._raw_data = None
+                self._load_from_cache()
+            else:
+                # In-process preprocessing (backward compatible)
+                self._raw_data = data
+                self._validate_mappings()
+                self._preprocess()
+                self._save_to_cache()
         else:
             # Load from valid cache
             self._raw_data = None

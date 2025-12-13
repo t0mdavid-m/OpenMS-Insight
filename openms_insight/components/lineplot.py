@@ -45,6 +45,7 @@ class LinePlot(BaseComponent):
         self,
         cache_id: str,
         data: Optional[pl.LazyFrame] = None,
+        data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
@@ -68,6 +69,7 @@ class LinePlot(BaseComponent):
             cache_id: Unique identifier for this component's cache (MANDATORY).
                 Creates a folder {cache_path}/{cache_id}/ for cached data.
             data: Polars LazyFrame with plot data. Optional if cache exists.
+            data_path: Path to parquet file (preferred for large datasets).
             filters: Mapping of identifier names to column names for filtering.
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, plot shows only data where
@@ -116,11 +118,22 @@ class LinePlot(BaseComponent):
         super().__init__(
             cache_id=cache_id,
             data=data,
+            data_path=data_path,
             filters=filters,
             filter_defaults=filter_defaults,
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
+            # Pass component-specific params for subprocess recreation
+            x_column=x_column,
+            y_column=y_column,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            highlight_column=highlight_column,
+            annotation_column=annotation_column,
+            styling=styling,
+            config=config,
             **kwargs
         )
 

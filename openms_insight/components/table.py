@@ -49,6 +49,7 @@ class Table(BaseComponent):
         self,
         cache_id: str,
         data: Optional[pl.LazyFrame] = None,
+        data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
@@ -72,6 +73,7 @@ class Table(BaseComponent):
             cache_id: Unique identifier for this component's cache (MANDATORY).
                 Creates a folder {cache_path}/{cache_id}/ for cached data.
             data: Polars LazyFrame with table data. Optional if cache exists.
+            data_path: Path to parquet file (preferred for large datasets).
             filters: Mapping of identifier names to column names for filtering.
                 Example: {'spectrum': 'scan_id'}
                 When 'spectrum' selection exists, table shows only rows where
@@ -120,11 +122,22 @@ class Table(BaseComponent):
         super().__init__(
             cache_id=cache_id,
             data=data,
+            data_path=data_path,
             filters=filters,
             filter_defaults=filter_defaults,
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
+            # Pass component-specific params for subprocess recreation
+            column_definitions=column_definitions,
+            title=title,
+            index_field=index_field,
+            go_to_fields=go_to_fields,
+            layout=layout,
+            default_row=default_row,
+            initial_sort=initial_sort,
+            pagination=pagination,
+            page_size=page_size,
             **kwargs
         )
 

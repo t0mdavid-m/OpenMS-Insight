@@ -8,7 +8,7 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 ## Features
 
 - **Cross-component selection linking** via shared identifiers
-- **Polars LazyFrame support** for efficient data handling
+- **Memory-efficient preprocessing** via subprocess isolation
 - **Automatic disk caching** with config-based invalidation
 - **Table component** (Tabulator.js) with filtering, sorting, go-to, pagination
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
@@ -25,7 +25,6 @@ pip install openms-insight
 
 ```python
 import streamlit as st
-import polars as pl
 from openms_insight import Table, LinePlot, StateManager
 
 # Create state manager for cross-component linking
@@ -34,7 +33,7 @@ state_manager = StateManager()
 # Create a table - clicking a row sets the 'item' selection
 table = Table(
     cache_id="items_table",
-    data=pl.scan_parquet("items.parquet"),
+    data_path="items.parquet",
     interactivity={'item': 'item_id'},
     column_definitions=[
         {'field': 'item_id', 'title': 'ID', 'sorter': 'number'},
@@ -46,7 +45,7 @@ table(state_manager=state_manager)
 # Create a linked plot - filters by the selected 'item'
 plot = LinePlot(
     cache_id="values_plot",
-    data=pl.scan_parquet("values.parquet"),
+    data_path="values.parquet",
     filters={'item': 'item_id'},
     x_column='x',
     y_column='y',
@@ -65,14 +64,14 @@ Components communicate through **identifiers** using two mechanisms:
 # Master table: no filters, sets 'spectrum' on click
 master = Table(
     cache_id="spectra",
-    data=spectra_data,
+    data_path="spectra.parquet",
     interactivity={'spectrum': 'scan_id'},  # Click -> sets spectrum=scan_id
 )
 
 # Detail table: filters by 'spectrum', sets 'peak' on click
 detail = Table(
     cache_id="peaks",
-    data=peaks_data,
+    data_path="peaks.parquet",
     filters={'spectrum': 'scan_id'},        # Filters where scan_id = selected spectrum
     interactivity={'peak': 'peak_id'},      # Click -> sets peak=peak_id
 )
@@ -80,7 +79,7 @@ detail = Table(
 # Plot: filters by 'spectrum', highlights selected 'peak'
 plot = LinePlot(
     cache_id="plot",
-    data=peaks_data,
+    data_path="peaks.parquet",
     filters={'spectrum': 'scan_id'},
     interactivity={'peak': 'peak_id'},
     x_column='mass',
@@ -99,7 +98,7 @@ Interactive table using Tabulator.js with filtering dialogs, sorting, pagination
 ```python
 Table(
     cache_id="spectra_table",
-    data=pl.scan_parquet("spectra.parquet"),
+    data_path="spectra.parquet",
     interactivity={'spectrum': 'scan_id'},
     column_definitions=[
         {'field': 'scan_id', 'title': 'Scan', 'sorter': 'number'},
@@ -121,7 +120,7 @@ Stick-style line plot using Plotly.js for mass spectra visualization.
 ```python
 LinePlot(
     cache_id="spectrum_plot",
-    data=pl.scan_parquet("peaks.parquet"),
+    data_path="peaks.parquet",
     filters={'spectrum': 'scan_id'},
     interactivity={'peak': 'peak_id'},
     x_column='mass',
@@ -141,7 +140,7 @@ LinePlot(
 ```python
 Heatmap(
     cache_id="peaks_heatmap",
-    data=pl.scan_parquet("all_peaks.parquet"),
+    data_path="all_peaks.parquet",
     x_column='retention_time',
     y_column='mass',
     intensity_column='intensity',
@@ -178,7 +177,8 @@ All components accept these common arguments:
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `cache_id` | `str` | **Required** | Unique identifier for disk cache |
-| `data` | `pl.LazyFrame` | `None` | Polars LazyFrame with source data |
+| `data_path` | `str` | `None` | Path to parquet file (preferred - uses subprocess for memory efficiency) |
+| `data` | `pl.LazyFrame` | `None` | Polars LazyFrame (alternative to data_path, in-process preprocessing) |
 | `filters` | `Dict[str, str]` | `None` | Map identifier -> column for filtering |
 | `interactivity` | `Dict[str, str]` | `None` | Map identifier -> column for click actions |
 | `cache_path` | `str` | `"."` | Base directory for cache storage |
