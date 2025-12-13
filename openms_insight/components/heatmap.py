@@ -297,9 +297,9 @@ class Heatmap(BaseComponent):
                             y_range=y_range,
                         )
 
-                    # Collect and store
+                    # Store LazyFrame for streaming to disk
                     level_key = f'cat_level_{filter_id}_{filter_value}_{level_idx}'
-                    self._preprocessed_data[level_key] = level.collect()
+                    self._preprocessed_data[level_key] = level  # Keep lazy
 
         # Also create global levels for when no categorical filter is selected
         # (fallback to standard behavior)
@@ -329,13 +329,13 @@ class Heatmap(BaseComponent):
                     x_range=x_range,
                     y_range=y_range,
                 )
-            self._preprocessed_data[f'level_{i}'] = level.collect()
+            self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
 
     def _preprocess_streaming(self) -> None:
         """
-        Streaming preprocessing - levels stay lazy until render.
+        Streaming preprocessing - levels stay lazy through caching.
 
-        Builds lazy query plans and collects them for caching.
+        Builds lazy query plans that are streamed to disk via sink_parquet().
         """
         # Get data ranges (minimal collect - just 4 values)
         x_range, y_range = get_data_range(
@@ -379,9 +379,9 @@ class Heatmap(BaseComponent):
                     x_range=x_range,
                     y_range=y_range,
                 )
-            # Collect and store as DataFrame for caching
-            # Base class will serialize these to parquet
-            self._preprocessed_data[f'level_{i}'] = level.collect()
+            # Store LazyFrame for streaming to disk
+            # Base class will use sink_parquet() to stream without full materialization
+            self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
 
         # Store number of levels for reconstruction
         self._preprocessed_data['num_levels'] = len(level_sizes)
@@ -434,12 +434,13 @@ class Heatmap(BaseComponent):
                         x_bins=self._x_bins,
                         y_bins=self._y_bins,
                     )
-                # Collect for caching - store with reversed index
+                # Store LazyFrame for streaming to disk
                 level_idx = len(level_sizes) - 1 - i
                 if isinstance(downsampled, pl.LazyFrame):
-                    self._preprocessed_data[f'level_{level_idx}'] = downsampled.collect()
+                    self._preprocessed_data[f'level_{level_idx}'] = downsampled  # Keep lazy
                 else:
-                    self._preprocessed_data[f'level_{level_idx}'] = downsampled
+                    # DataFrame from downsample_2d - convert back to lazy
+                    self._preprocessed_data[f'level_{level_idx}'] = downsampled.lazy()
                 current = downsampled
 
         # Store number of levels for reconstruction
@@ -744,7 +745,8 @@ class Heatmap(BaseComponent):
                 df_pandas = df_pandas.sort_values(self._intensity_column).reset_index(drop=True)
             else:
                 # No filters to apply - levels already filtered by categorical filter
-                available_cols = [c for c in columns_to_select if c in data.columns]
+                schema_names = data.collect_schema().names()
+                available_cols = [c for c in columns_to_select if c in schema_names]
                 df_polars = data.select(available_cols).collect()
                 # Sort by intensity ascending so high-intensity points are drawn on top
                 df_polars = df_polars.sort(self._intensity_column)

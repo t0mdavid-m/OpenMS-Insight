@@ -42,42 +42,106 @@ _vue_component_func = None
 # Vue's echoed hash doesn't match the current data hash
 _VUE_ECHOED_HASH_KEY = "_svc_vue_echoed_hashes"
 
+# Session state key for per-component data cache
+# Each component stores exactly one entry (current filter state)
+_COMPONENT_DATA_CACHE_KEY = "_svc_component_data_cache"
 
 
-@st.cache_data(max_entries=10, show_spinner=False)
-def _cached_prepare_vue_data(
-    _component: 'BaseComponent',
+def _get_component_cache() -> Dict[str, Any]:
+    """Get per-component data cache from session state."""
+    if _COMPONENT_DATA_CACHE_KEY not in st.session_state:
+        st.session_state[_COMPONENT_DATA_CACHE_KEY] = {}
+    return st.session_state[_COMPONENT_DATA_CACHE_KEY]
+
+
+def clear_component_cache() -> None:
+    """
+    Clear all per-component cached data.
+
+    Call this when loading a new file to ensure fresh data is sent to Vue.
+    """
+    if _COMPONENT_DATA_CACHE_KEY in st.session_state:
+        st.session_state[_COMPONENT_DATA_CACHE_KEY].clear()
+
+
+def _get_cached_vue_data(
     component_id: str,
     filter_state_hashable: Tuple[Tuple[str, Any], ...],
-    _data_id: int,
-    _state_dict: Dict[str, Any],
-) -> Tuple[Dict[str, Any], str]:
+) -> Optional[Tuple[Dict[str, Any], str]]:
     """
-    Cached wrapper for _prepare_vue_data.
+    Get cached Vue data for component if filter state matches.
 
-    Cache key is based on:
-    - component_id: unique key for this component instance
-    - filter_state_hashable: hashable version of state values (for cache key only)
-
-    The _component, _data_id, and _state_dict parameters are prefixed with underscore
-    so they are not hashed (component instances are not hashable, and state_dict
-    may contain unhashable values like dicts).
+    Each component has exactly one cached entry. If filter state changed,
+    returns None (cache miss).
 
     Args:
-        _component: The component to prepare data for (not hashed)
         component_id: Unique identifier for this component
-        filter_state_hashable: Tuple of (identifier, hashable_value) for cache key
-        _data_id: id() of the raw data object (not used in cache key)
-        _state_dict: Original state dict with actual values (not hashed)
+        filter_state_hashable: Current filter state (for cache validation)
+
+    Returns:
+        Tuple of (vue_data, data_hash) if cache hit, None otherwise
+    """
+    cache = _get_component_cache()
+    if component_id in cache:
+        cached_state, vue_data, data_hash = cache[component_id]
+        if cached_state == filter_state_hashable:
+            return (vue_data, data_hash)
+    return None
+
+
+def _set_cached_vue_data(
+    component_id: str,
+    filter_state_hashable: Tuple[Tuple[str, Any], ...],
+    vue_data: Dict[str, Any],
+    data_hash: str,
+) -> None:
+    """
+    Cache Vue data for component, replacing any previous entry.
+
+    Each component stores exactly one entry, so memory = O(num_components).
+
+    Args:
+        component_id: Unique identifier for this component
+        filter_state_hashable: Current filter state
+        vue_data: Data to cache
+        data_hash: Hash of the data
+    """
+    cache = _get_component_cache()
+    cache[component_id] = (filter_state_hashable, vue_data, data_hash)
+
+
+def _prepare_vue_data_cached(
+    component: 'BaseComponent',
+    component_id: str,
+    filter_state_hashable: Tuple[Tuple[str, Any], ...],
+    state_dict: Dict[str, Any],
+) -> Tuple[Dict[str, Any], str]:
+    """
+    Prepare Vue data with per-component caching.
+
+    Each component caches exactly one entry (its current filter state).
+    When filter state changes, old entry is replaced - memory stays bounded.
+
+    Args:
+        component: The component to prepare data for
+        component_id: Unique identifier for this component
+        filter_state_hashable: Hashable version of filter state (for cache key)
+        state_dict: Original state dict with actual values
 
     Returns:
         Tuple of (vue_data dict, data_hash string)
     """
-    # Use the original state dict (not the hashable version)
-    vue_data = _component._prepare_vue_data(_state_dict)
+    # Check cache first
+    cached = _get_cached_vue_data(component_id, filter_state_hashable)
+    if cached is not None:
+        return cached
 
-    # Compute hash before any conversion
+    # Cache miss - compute data
+    vue_data = component._prepare_vue_data(state_dict)
     data_hash = _hash_data(vue_data)
+
+    # Store in cache (replaces any previous entry for this component)
+    _set_cached_vue_data(component_id, filter_state_hashable, vue_data, data_hash)
 
     return vue_data, data_hash
 
@@ -177,15 +241,12 @@ def render_component(
     component_type = component._get_vue_component_name()
     component_id = f"{component_type}:{key}"
 
-    # Get data identity - cache invalidates if raw data object changes
-    data_id = id(component._raw_data)
-
-    # Get component data using cached function
-    # Cache key: (component_id, filter_state_hashable, data_id)
+    # Get component data using per-component cache
+    # Each component stores exactly one entry (current filter state)
     # - Filterless components: filter_state=() always → always cache hit
     # - Filtered components: cache hit when filter values unchanged
-    vue_data, data_hash = _cached_prepare_vue_data(
-        component, component_id, filter_state_hashable, data_id, relevant_state
+    vue_data, data_hash = _prepare_vue_data_cached(
+        component, component_id, filter_state_hashable, relevant_state
     )
 
     component_args = component._get_component_args()

@@ -208,9 +208,9 @@ class LinePlot(BaseComponent):
             'annotation_column': self._annotation_column,
         }
 
-        # Collect data for caching (filter happens at render time)
-        # Base class will serialize this to parquet
-        self._preprocessed_data['data'] = data.collect()
+        # Store LazyFrame for streaming to disk (filter happens at render time)
+        # Base class will use sink_parquet() to stream without full materialization
+        self._preprocessed_data['data'] = data  # Keep lazy
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""

@@ -231,28 +231,18 @@ class BaseComponent(ABC):
             "data_values": {},
         }
 
-        # Save preprocessed data
-        row_group_size = self._get_row_group_size()
+        # Save preprocessed data - stream LazyFrames directly to disk
         for key, value in self._preprocessed_data.items():
             if isinstance(value, pl.LazyFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
-                value.collect().write_parquet(
-                    filepath,
-                    compression='zstd',
-                    statistics=True,
-                    row_group_size=row_group_size,
-                )
+                # Stream directly to disk without full materialization
+                value.sink_parquet(filepath, compression='zstd')
                 manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
-                value.write_parquet(
-                    filepath,
-                    compression='zstd',
-                    statistics=True,
-                    row_group_size=row_group_size,
-                )
+                value.write_parquet(filepath, compression='zstd')
                 manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
@@ -260,6 +250,13 @@ class BaseComponent(ABC):
         # Write manifest
         with open(self._get_manifest_path(), "w") as f:
             json.dump(manifest, f, indent=2)
+
+        # Release memory - data is now safely on disk
+        self._preprocessed_data = {}
+        self._raw_data = None
+
+        # Reload as lazy scan_parquet() references
+        self._load_from_cache()
 
     def _is_json_serializable(self, value: Any) -> bool:
         """Check if value can be JSON serialized."""

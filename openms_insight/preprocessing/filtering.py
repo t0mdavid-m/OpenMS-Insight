@@ -81,35 +81,30 @@ def compute_dataframe_hash(df: pl.DataFrame) -> str:
     return hashlib.sha256(hash_input).hexdigest()
 
 
-@st.cache_data(ttl=300, max_entries=100)
-def _cached_filter_and_collect(
-    _data: pl.LazyFrame,
+def _filter_and_collect(
+    data: pl.LazyFrame,
     filters_tuple: Tuple[Tuple[str, str], ...],
     state_tuple: Tuple[Tuple[str, Any], ...],
     columns_tuple: Optional[Tuple[str, ...]] = None,
-    filter_defaults_tuple: Optional[Tuple[Tuple[str, Any], ...]] = None,
 ) -> Tuple[pd.DataFrame, str]:
     """
-    Filter data and collect with caching.
+    Filter data and collect.
 
-    This function is cached by Streamlit, so repeated calls with the same
-    filter state will return cached results without re-executing the query.
+    This function executes the filter query. Caching is handled at a higher
+    level (per-component in bridge.py) to ensure memory = O(num_components).
 
     Returns pandas DataFrame for efficient Arrow serialization to frontend.
 
     Args:
-        _data: LazyFrame to filter (underscore prefix tells st.cache_data to hash by id)
+        data: LazyFrame to filter
         filters_tuple: Tuple of (identifier, column) pairs from filters dict
         state_tuple: Tuple of (identifier, value) pairs for current selection state
             (already has defaults applied from _make_cache_key)
         columns_tuple: Optional tuple of column names to select (projection)
-        filter_defaults_tuple: Optional tuple of (identifier, default_value) pairs
-            (included for cache key differentiation)
 
     Returns:
         Tuple of (pandas DataFrame, hash string)
     """
-    data = _data
     filters = dict(filters_tuple)
     state = dict(state_tuple)  # Already has defaults applied
 
@@ -182,19 +177,17 @@ def filter_and_collect_cached(
     if isinstance(data, pl.DataFrame):
         data = data.lazy()
 
-    # Convert to tuples for caching (dicts aren't hashable)
+    # Convert to tuples for consistent processing
     filters_tuple = tuple(sorted(filters.items()))
     # Pass filter_defaults to _make_cache_key so defaults are applied to state
     state_tuple = _make_cache_key(filters, state, filter_defaults)
     columns_tuple = tuple(columns) if columns else None
-    filter_defaults_tuple = tuple(sorted(filter_defaults.items())) if filter_defaults else None
 
-    return _cached_filter_and_collect(
+    return _filter_and_collect(
         data,
         filters_tuple,
         state_tuple,
         columns_tuple,
-        filter_defaults_tuple,
     )
 
 

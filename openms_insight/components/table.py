@@ -204,9 +204,9 @@ class Table(BaseComponent):
         # Store column definitions in preprocessed data for serialization
         self._preprocessed_data['column_definitions'] = self._column_definitions
 
-        # Collect data for caching (filter happens at render time)
-        # Base class will serialize this to parquet with optimized row groups
-        self._preprocessed_data['data'] = data.collect()
+        # Store LazyFrame for streaming to disk (filter happens at render time)
+        # Base class will use sink_parquet() to stream without full materialization
+        self._preprocessed_data['data'] = data  # Keep lazy
 
     def _get_columns_to_select(self) -> Optional[List[str]]:
         """Get list of columns needed for this table."""
