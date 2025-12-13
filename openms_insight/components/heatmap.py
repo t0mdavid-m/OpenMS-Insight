@@ -289,9 +289,8 @@ class Heatmap(BaseComponent):
 
                 # Store level sizes for this filter value
                 self._preprocessed_data[f'cat_level_sizes_{filter_id}_{filter_value}'] = level_sizes
-                self._preprocessed_data[f'cat_num_levels_{filter_id}_{filter_value}'] = len(level_sizes)
 
-                # Build each level
+                # Build each compressed level
                 for level_idx, target_size in enumerate(level_sizes):
                     # If target size equals total, skip downsampling - use all data
                     if target_size >= filtered_total:
@@ -319,11 +318,16 @@ class Heatmap(BaseComponent):
                     level_key = f'cat_level_{filter_id}_{filter_value}_{level_idx}'
                     self._preprocessed_data[level_key] = level  # Keep lazy
 
+                # Add full resolution as final level (for zoom fallback)
+                num_compressed = len(level_sizes)
+                full_res_key = f'cat_level_{filter_id}_{filter_value}_{num_compressed}'
+                self._preprocessed_data[full_res_key] = filtered_data
+                self._preprocessed_data[f'cat_num_levels_{filter_id}_{filter_value}'] = num_compressed + 1
+
         # Also create global levels for when no categorical filter is selected
         # (fallback to standard behavior)
         level_sizes = compute_compression_levels(self._min_points, total)
         self._preprocessed_data['level_sizes'] = level_sizes
-        self._preprocessed_data['num_levels'] = len(level_sizes)
 
         for i, size in enumerate(level_sizes):
             # If target size equals total, skip downsampling - use all data
@@ -348,6 +352,11 @@ class Heatmap(BaseComponent):
                     y_range=y_range,
                 )
             self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
+
+        # Add full resolution as final level (for zoom fallback)
+        num_compressed = len(level_sizes)
+        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data
+        self._preprocessed_data['num_levels'] = num_compressed + 1
 
     def _preprocess_streaming(self) -> None:
         """
@@ -401,8 +410,12 @@ class Heatmap(BaseComponent):
             # Base class will use sink_parquet() to stream without full materialization
             self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
 
-        # Store number of levels for reconstruction
-        self._preprocessed_data['num_levels'] = len(level_sizes)
+        # Add full resolution as final level (for zoom fallback)
+        num_compressed = len(level_sizes)
+        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data
+
+        # Store number of levels for reconstruction (includes full resolution)
+        self._preprocessed_data['num_levels'] = num_compressed + 1
 
     def _preprocess_eager(self) -> None:
         """
@@ -461,8 +474,12 @@ class Heatmap(BaseComponent):
                     self._preprocessed_data[f'level_{level_idx}'] = downsampled.lazy()
                 current = downsampled
 
-        # Store number of levels for reconstruction
-        self._preprocessed_data['num_levels'] = len(level_sizes)
+        # Add full resolution as final level (for zoom fallback)
+        num_compressed = len(level_sizes)
+        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data
+
+        # Store number of levels for reconstruction (includes full resolution)
+        self._preprocessed_data['num_levels'] = num_compressed + 1
 
     def _get_levels(self) -> list:
         """
@@ -478,10 +495,6 @@ class Heatmap(BaseComponent):
             level_data = self._preprocessed_data.get(f'level_{i}')
             if level_data is not None:
                 levels.append(level_data)
-
-        # Add full resolution at end (if raw data available)
-        if self._raw_data is not None:
-            levels.append(self._raw_data)
 
         return levels
 
@@ -515,13 +528,7 @@ class Heatmap(BaseComponent):
             if level_data is not None:
                 levels.append(level_data)
 
-        # Get filtered raw data for full resolution (if available)
-        filtered_raw = None
-        if self._raw_data is not None and filter_id in self._filters:
-            column_name = self._filters[filter_id]
-            filtered_raw = self._raw_data.filter(pl.col(column_name) == filter_value)
-
-        return levels, filtered_raw
+        return levels, None  # Full resolution included in cached levels
 
     def _get_levels_for_state(self, state: Dict[str, Any]) -> Tuple[list, Optional[pl.LazyFrame]]:
         """
@@ -649,10 +656,11 @@ class Heatmap(BaseComponent):
 
             if count >= self._min_points:
                 # This level has enough detail
-                if count > self._min_points * 2:
-                    # Still too many - downsample further
-                    x_range = self._preprocessed_data.get('x_range')
-                    y_range = self._preprocessed_data.get('y_range')
+                if count > self._min_points:
+                    # Over limit - downsample to stay at/under max
+                    # Use ZOOM range for binning (not global) to avoid sparse bins
+                    zoom_x_range = (x0, x1)
+                    zoom_y_range = (y0, y1)
                     if self._use_streaming or self._use_simple_downsample:
                         if self._use_simple_downsample:
                             return downsample_2d_simple(
@@ -669,8 +677,8 @@ class Heatmap(BaseComponent):
                                 intensity_column=self._intensity_column,
                                 x_bins=self._x_bins,
                                 y_bins=self._y_bins,
-                                x_range=x_range,
-                                y_range=y_range,
+                                x_range=zoom_x_range,
+                                y_range=zoom_y_range,
                             ).collect()
                     else:
                         return downsample_2d(
