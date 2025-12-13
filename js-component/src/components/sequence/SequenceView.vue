@@ -706,13 +706,13 @@ export default defineComponent({
 
 .row-number {
   font-size: 10px;
-  color: #666;
+  opacity: 0.6;
 }
 
 .terminal-cell {
   font-weight: bold;
   font-size: 12px;
-  background-color: #e0e0e0;
+  background-color: rgba(128, 128, 128, 0.2);
   border-radius: 4px;
   aspect-ratio: 1;
 }
