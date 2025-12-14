@@ -280,7 +280,13 @@ export default defineComponent({
       this.clearInvalidSelections()
 
       this.$nextTick(() => {
-        this.drawTable()
+        // Use replaceData if table exists - preserves scroll position, sort, filters
+        // Only full rebuild needed on initial render or if table was destroyed
+        if (this.tabulator) {
+          this.updateTableData()
+        } else {
+          this.drawTable()
+        }
       })
     },
     // Watch for height changes in args
@@ -392,8 +398,13 @@ export default defineComponent({
         this.applyFilters()
 
         // Update Streamlit iframe height after table is rendered
+        // Use specified height if provided, otherwise auto-calculate
         this.$nextTick(() => {
-          Streamlit.setFrameHeight()
+          if (this.args.height) {
+            Streamlit.setFrameHeight(this.args.height)
+          } else {
+            Streamlit.setFrameHeight()
+          }
           // Force Tabulator to recalculate and render visible rows
           // This fixes issues where virtual rendering doesn't show rows until scroll
           setTimeout(() => {
@@ -677,6 +688,40 @@ export default defineComponent({
       // Clear flag after Vue's next tick (after watcher has fired)
       this.$nextTick(() => {
         this.skipNextSync = false
+      })
+    },
+
+    /**
+     * Update table data without full rebuild.
+     * Uses Tabulator's replaceData() to preserve scroll position, sorting, and user filters.
+     * This is much faster than destroying and recreating the table.
+     */
+    updateTableData(): void {
+      if (!this.tabulator) {
+        this.drawTable()
+        return
+      }
+
+      console.log(`[TabulatorTable ${this.args.title}] [#${this.instanceId}] updateTableData (replaceData):`, {
+        dataLength: this.preparedTableData.length,
+      })
+
+      // replaceData silently replaces all data without updating scroll position, sort or filtering
+      this.tabulator.replaceData(this.preparedTableData).then(() => {
+        // Re-apply user column filters (these are client-side filters from filter dialog)
+        this.applyFilters()
+
+        // Sync selection from store (handles pending selections)
+        this.selectDefaultRow()
+
+        // Update Streamlit frame height - use specified height if provided
+        this.$nextTick(() => {
+          if (this.args.height) {
+            Streamlit.setFrameHeight(this.args.height)
+          } else {
+            Streamlit.setFrameHeight()
+          }
+        })
       })
     },
 

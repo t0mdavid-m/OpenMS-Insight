@@ -37,6 +37,7 @@ declare module 'tabulator-tables' {
     options: Record<string, unknown>
     destroy(): void
     setData(data: unknown[]): Promise<void>
+    replaceData(data: unknown[]): Promise<void>
     getData(): unknown[]
     getRows(filter?: string): RowComponent[]
     getRow(index: any): RowComponent | false

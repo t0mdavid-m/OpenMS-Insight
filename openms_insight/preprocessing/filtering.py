@@ -8,6 +8,88 @@ import polars as pl
 import streamlit as st
 
 
+def optimize_for_transfer(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Optimize DataFrame types for efficient Arrow transfer to frontend.
+
+    This function downcasts numeric types to reduce Arrow payload size and
+    avoid BigInt overhead in JavaScript:
+    - Int64 → Int32 (if values fit): Avoids BigInt conversion in JS
+    - Float64 → Float32: Sufficient precision for visualization
+
+    Args:
+        df: Polars DataFrame to optimize
+
+    Returns:
+        DataFrame with optimized types
+    """
+    if len(df) == 0:
+        return df
+
+    casts = []
+
+    for col in df.columns:
+        dtype = df[col].dtype
+
+        # Downcast Int64 to Int32 to avoid BigInt in JavaScript
+        # JS safe integer is 2^53, but Int32 range is simpler and sufficient for most data
+        if dtype == pl.Int64:
+            # Get min/max in a single pass
+            stats = df.select([
+                pl.col(col).min().alias('min'),
+                pl.col(col).max().alias('max'),
+            ]).row(0)
+            col_min, col_max = stats
+
+            if col_min is not None and col_max is not None:
+                # Int32 range: -2,147,483,648 to 2,147,483,647
+                if col_min >= -2147483648 and col_max <= 2147483647:
+                    casts.append(pl.col(col).cast(pl.Int32))
+
+        # Downcast Float64 to Float32 (sufficient for display)
+        # Float32 has ~7 significant digits - enough for visualization
+        elif dtype == pl.Float64:
+            casts.append(pl.col(col).cast(pl.Float32))
+
+    if casts:
+        df = df.with_columns(casts)
+
+    return df
+
+
+def optimize_for_transfer_lazy(lf: pl.LazyFrame) -> pl.LazyFrame:
+    """
+    Optimize LazyFrame types for efficient Arrow transfer (streaming-safe).
+
+    Unlike optimize_for_transfer(), this only applies optimizations that don't
+    require knowing the data values, preserving the ability to stream via sink_parquet().
+
+    Currently applies:
+    - Float64 → Float32: Always safe, no bounds check needed
+
+    Int64 → Int32 is NOT applied here because it requires bounds checking.
+    Use optimize_for_transfer() on collected DataFrames for full optimization.
+
+    Args:
+        lf: Polars LazyFrame to optimize
+
+    Returns:
+        LazyFrame with Float64 columns cast to Float32
+    """
+    schema = lf.collect_schema()
+    casts = []
+
+    for col, dtype in zip(schema.names(), schema.dtypes()):
+        # Only Float64 → Float32 is safe without bounds checking
+        if dtype == pl.Float64:
+            casts.append(pl.col(col).cast(pl.Float32))
+
+    if casts:
+        lf = lf.with_columns(casts)
+
+    return lf
+
+
 def _make_cache_key(
     filters: Dict[str, str],
     state: Dict[str, Any],
@@ -133,6 +215,8 @@ def _filter_and_collect(
         data = data.filter(pl.col(column) == selected_value)
 
     # Collect to Polars DataFrame
+    # Note: Type optimization (Int64→Int32, Float64→Float32) is applied at cache
+    # creation time in base.py._save_to_cache(), so data is already optimized
     df_polars = data.collect()
 
     # Compute hash efficiently (no pickle)

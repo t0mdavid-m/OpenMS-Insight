@@ -132,18 +132,41 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
     /**
      * Parse Arrow table to array of row objects.
      * Used for table data where row-based access is needed.
+     *
+     * Optimized to use bulk column extraction via toArray() instead of
+     * row-by-row random access. This is significantly faster for large tables.
      */
     parseArrowTable(arrowTable: ArrowTable): Record<string, unknown>[] {
-      const rows: Record<string, unknown>[] = []
+      const numRows = arrowTable.table.numRows
       const columnNames = arrowTable.table.schema.fields.map((field) => field.name)
 
-      for (let i = 0; i < arrowTable.table.numRows; i++) {
+      // Step 1: Bulk extract all columns using toArray() - O(columns) not O(rows × columns)
+      const columns: Map<string, unknown[]> = new Map()
+      columnNames.forEach((columnName, colIndex) => {
+        const column = arrowTable.table.getChildAt(colIndex)
+        if (column) {
+          // toArray() does vectorized conversion - much faster than row-by-row .get()
+          const rawArray = column.toArray()
+          // Convert typed array to regular array and handle BigInt
+          const values: unknown[] = new Array(rawArray.length)
+          for (let i = 0; i < rawArray.length; i++) {
+            values[i] = this.parseArrowValue(rawArray[i])
+          }
+          columns.set(columnName, values)
+        }
+      })
+
+      // Step 2: Transform to row format (required for Tabulator)
+      const rows: Record<string, unknown>[] = new Array(numRows)
+      for (let i = 0; i < numRows; i++) {
         const row: Record<string, unknown> = {}
-        columnNames.forEach((columnName, colIndex) => {
-          const rawValue = arrowTable.table.getChildAt(colIndex)?.get(i)
-          row[columnName] = this.parseArrowValue(rawValue)
+        columnNames.forEach((columnName) => {
+          const colData = columns.get(columnName)
+          if (colData) {
+            row[columnName] = colData[i]
+          }
         })
-        rows.push(row)
+        rows[i] = row
       }
 
       return rows
@@ -153,23 +176,28 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
      * Parse Arrow table to column arrays.
      * More efficient for plotting where column-based access is needed.
      * Returns: { columnName: [values...], ... }
+     *
+     * Optimized to use bulk toArray() extraction instead of row-by-row access.
      */
     parseArrowTableToColumns(arrowTable: ArrowTable): Record<string, unknown[]> {
       const columns: Record<string, unknown[]> = {}
       const columnNames = arrowTable.table.schema.fields.map((field) => field.name)
-      const numRows = arrowTable.table.numRows
 
       columnNames.forEach((columnName, colIndex) => {
         const column = arrowTable.table.getChildAt(colIndex)
-        const values: unknown[] = []
 
         if (column) {
-          for (let i = 0; i < numRows; i++) {
-            values.push(this.parseArrowValue(column.get(i)))
+          // toArray() does vectorized conversion - much faster than row-by-row .get()
+          const rawArray = column.toArray()
+          // Convert typed array to regular array and handle BigInt
+          const values: unknown[] = new Array(rawArray.length)
+          for (let i = 0; i < rawArray.length; i++) {
+            values[i] = this.parseArrowValue(rawArray[i])
           }
+          columns[columnName] = values
+        } else {
+          columns[columnName] = []
         }
-
-        columns[columnName] = values
       })
 
       return columns

@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 
 # Cache format version - increment when cache structure changes
 # Version 2: Added sorting by filter columns + smaller row groups for predicate pushdown
-CACHE_VERSION = 2
+# Version 3: Downcast numeric types (Int64→Int32, Float64→Float32) for efficient transfer
+CACHE_VERSION = 3
 
 
 class BaseComponent(ABC):
@@ -236,6 +237,8 @@ class BaseComponent(ABC):
 
     def _save_to_cache(self) -> None:
         """Save preprocessed data to cache."""
+        from ..preprocessing.filtering import optimize_for_transfer, optimize_for_transfer_lazy
+
         # Create directories
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         preprocessed_dir = self._get_preprocessed_dir()
@@ -254,17 +257,23 @@ class BaseComponent(ABC):
             "data_values": {},
         }
 
-        # Save preprocessed data - stream LazyFrames directly to disk
+        # Save preprocessed data with type optimization for efficient transfer
+        # Float64→Float32 reduces Arrow payload size
+        # Int64→Int32 (when safe) avoids BigInt overhead in JavaScript
         for key, value in self._preprocessed_data.items():
             if isinstance(value, pl.LazyFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
-                # Stream directly to disk without full materialization
+                # Apply streaming-safe optimization (Float64→Float32 only)
+                # Int64 bounds checking would require collect(), breaking streaming
+                value = optimize_for_transfer_lazy(value)
                 value.sink_parquet(filepath, compression='zstd')
                 manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
+                # Full optimization including Int64→Int32 with bounds checking
+                value = optimize_for_transfer(value)
                 value.write_parquet(filepath, compression='zstd')
                 manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
