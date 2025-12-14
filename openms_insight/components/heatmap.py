@@ -229,6 +229,8 @@ class Heatmap(BaseComponent):
         render time, the resulting data has ~min_points regardless of the
         filter value selected.
 
+        Data is sorted by x, y columns for efficient range query predicate pushdown.
+
         Example: For im_dimension with values [0, 1, 2, 3], creates:
         - cat_level_im_dimension_0_0: 20K points with im_id=0
         - cat_level_im_dimension_0_1: 20K points with im_id=1
@@ -314,14 +316,19 @@ class Heatmap(BaseComponent):
                             y_range=y_range,
                         )
 
+                    # Sort by x, y for efficient range query predicate pushdown
+                    level = level.sort([self._x_column, self._y_column])
                     # Store LazyFrame for streaming to disk
                     level_key = f'cat_level_{filter_id}_{filter_value}_{level_idx}'
                     self._preprocessed_data[level_key] = level  # Keep lazy
 
                 # Add full resolution as final level (for zoom fallback)
+                # Also sorted for consistent predicate pushdown behavior
                 num_compressed = len(level_sizes)
                 full_res_key = f'cat_level_{filter_id}_{filter_value}_{num_compressed}'
-                self._preprocessed_data[full_res_key] = filtered_data
+                self._preprocessed_data[full_res_key] = filtered_data.sort(
+                    [self._x_column, self._y_column]
+                )
                 self._preprocessed_data[f'cat_num_levels_{filter_id}_{filter_value}'] = num_compressed + 1
 
         # Also create global levels for when no categorical filter is selected
@@ -351,11 +358,16 @@ class Heatmap(BaseComponent):
                     x_range=x_range,
                     y_range=y_range,
                 )
+            # Sort by x, y for efficient range query predicate pushdown
+            level = level.sort([self._x_column, self._y_column])
             self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
 
         # Add full resolution as final level (for zoom fallback)
+        # Also sorted for consistent predicate pushdown behavior
         num_compressed = len(level_sizes)
-        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data
+        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data.sort(
+            [self._x_column, self._y_column]
+        )
         self._preprocessed_data['num_levels'] = num_compressed + 1
 
     def _preprocess_streaming(self) -> None:
@@ -363,6 +375,7 @@ class Heatmap(BaseComponent):
         Streaming preprocessing - levels stay lazy through caching.
 
         Builds lazy query plans that are streamed to disk via sink_parquet().
+        Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
         # Get data ranges (minimal collect - just 4 values)
         x_range, y_range = get_data_range(
@@ -406,13 +419,19 @@ class Heatmap(BaseComponent):
                     x_range=x_range,
                     y_range=y_range,
                 )
+            # Sort by x, y for efficient range query predicate pushdown
+            # This clusters spatially close points together in row groups
+            level = level.sort([self._x_column, self._y_column])
             # Store LazyFrame for streaming to disk
             # Base class will use sink_parquet() to stream without full materialization
             self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
 
         # Add full resolution as final level (for zoom fallback)
+        # Also sorted for consistent predicate pushdown behavior
         num_compressed = len(level_sizes)
-        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data
+        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data.sort(
+            [self._x_column, self._y_column]
+        )
 
         # Store number of levels for reconstruction (includes full resolution)
         self._preprocessed_data['num_levels'] = num_compressed + 1
@@ -423,6 +442,7 @@ class Heatmap(BaseComponent):
 
         Uses more memory at init but faster rendering. Uses scipy-based
         downsampling for better spatial distribution.
+        Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
         # Get data ranges
         x_range, y_range = get_data_range(
@@ -465,6 +485,11 @@ class Heatmap(BaseComponent):
                         x_bins=self._x_bins,
                         y_bins=self._y_bins,
                     )
+                # Sort by x, y for efficient range query predicate pushdown
+                if isinstance(downsampled, pl.LazyFrame):
+                    downsampled = downsampled.sort([self._x_column, self._y_column])
+                else:
+                    downsampled = downsampled.sort([self._x_column, self._y_column])
                 # Store LazyFrame for streaming to disk
                 level_idx = len(level_sizes) - 1 - i
                 if isinstance(downsampled, pl.LazyFrame):
@@ -475,8 +500,11 @@ class Heatmap(BaseComponent):
                 current = downsampled
 
         # Add full resolution as final level (for zoom fallback)
+        # Also sorted for consistent predicate pushdown behavior
         num_compressed = len(level_sizes)
-        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data
+        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data.sort(
+            [self._x_column, self._y_column]
+        )
 
         # Store number of levels for reconstruction (includes full resolution)
         self._preprocessed_data['num_levels'] = num_compressed + 1
