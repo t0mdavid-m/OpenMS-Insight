@@ -627,6 +627,12 @@ export default defineComponent({
       }
 
       // Update store with annotations (triggers rerun in Python via state change)
+      // Also increment selection counter to ensure state is sent reliably
+      const prevAnnotations = this.streamlitDataStore.annotations
+      const prevPeakIds = prevAnnotations?.peak_id ?? []
+      const annotationsChanged = peakIds.length !== prevPeakIds.length ||
+        peakIds.some((id, i) => id !== prevPeakIds[i])
+
       if (peakIds.length > 0) {
         this.streamlitDataStore.setAnnotations({
           peak_id: peakIds,
@@ -635,6 +641,11 @@ export default defineComponent({
         })
       } else {
         this.streamlitDataStore.setAnnotations(null)
+      }
+
+      // Force counter increment when annotations change to ensure state is sent
+      if (annotationsChanged) {
+        this.selectionStore.$patch({ counter: (this.selectionStore.$state.counter || 0) + 1 })
       }
     },
     isFixedModification(aminoAcid: string): boolean {

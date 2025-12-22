@@ -477,8 +477,9 @@ def _hash_data(data: Dict[str, Any]) -> str:
 
     hash_parts = []
     for key, value in sorted(data.items()):
-        if key.startswith('_'):
-            continue  # Skip metadata
+        # Skip internal metadata but NOT dynamic annotation columns
+        if key.startswith('_') and not key.startswith('_dynamic'):
+            continue
         if isinstance(value, pd.DataFrame):
             # Efficient hash for DataFrames
             df_polars = pl.from_pandas(value)

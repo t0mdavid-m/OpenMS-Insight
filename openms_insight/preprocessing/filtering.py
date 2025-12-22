@@ -158,6 +158,22 @@ def compute_dataframe_hash(df: pl.DataFrame) -> str:
                     hash_parts.append(f"{col}:{col_sum}")
                 except Exception:
                     pass
+            elif dtype == pl.Boolean:
+                # Count True values for boolean columns (important for annotations)
+                try:
+                    true_count = df[col].sum()  # True=1, False=0
+                    hash_parts.append(f"{col}_bool:{true_count}")
+                except Exception:
+                    pass
+            elif dtype == pl.Utf8 and col.startswith('_dynamic'):
+                # Hash content of dynamic string columns (annotations)
+                try:
+                    # Use hash of all non-empty values for annotation text
+                    non_empty = df[col].filter(pl.col(col) != "").to_list()
+                    if non_empty:
+                        hash_parts.append(f"{col}_str:{hash(tuple(non_empty))}")
+                except Exception:
+                    pass
 
     hash_input = "|".join(hash_parts).encode()
     return hashlib.sha256(hash_input).hexdigest()
