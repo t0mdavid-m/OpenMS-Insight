@@ -46,6 +46,10 @@ _VUE_ECHOED_HASH_KEY = "_svc_vue_echoed_hashes"
 # Each component stores exactly one entry (current filter state)
 _COMPONENT_DATA_CACHE_KEY = "_svc_component_data_cache"
 
+# Session state key for component annotations (from Vue)
+# Stores annotation dataframes returned by components like SequenceView
+_COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
+
 
 def _get_component_cache() -> Dict[str, Any]:
     """Get per-component data cache from session state."""
@@ -62,6 +66,53 @@ def clear_component_cache() -> None:
     """
     if _COMPONENT_DATA_CACHE_KEY in st.session_state:
         st.session_state[_COMPONENT_DATA_CACHE_KEY].clear()
+
+
+def _store_component_annotations(component_key: str, annotations: Dict[str, Any]) -> None:
+    """
+    Store annotations returned by a Vue component.
+
+    Args:
+        component_key: Unique key for the component
+        annotations: Dict with annotation arrays (e.g., peak_id, highlight_color, annotation)
+    """
+    if _COMPONENT_ANNOTATIONS_KEY not in st.session_state:
+        st.session_state[_COMPONENT_ANNOTATIONS_KEY] = {}
+    st.session_state[_COMPONENT_ANNOTATIONS_KEY][component_key] = annotations
+
+
+def get_component_annotations(component_key: Optional[str]) -> Optional[pl.DataFrame]:
+    """
+    Get annotations stored by a Vue component.
+
+    Args:
+        component_key: Unique key for the component
+
+    Returns:
+        Polars DataFrame with annotations, or None if not available
+    """
+    if component_key is None:
+        return None
+
+    if _COMPONENT_ANNOTATIONS_KEY not in st.session_state:
+        return None
+
+    annotations = st.session_state[_COMPONENT_ANNOTATIONS_KEY].get(component_key)
+    if annotations is None:
+        return None
+
+    # Convert to DataFrame
+    try:
+        # annotations should be a dict with arrays: {peak_id: [...], highlight_color: [...], annotation: [...]}
+        return pl.DataFrame(annotations)
+    except Exception:
+        return None
+
+
+def clear_component_annotations() -> None:
+    """Clear all component annotations."""
+    if _COMPONENT_ANNOTATIONS_KEY in st.session_state:
+        st.session_state[_COMPONENT_ANNOTATIONS_KEY].clear()
 
 
 def _get_cached_vue_data(
@@ -122,6 +173,11 @@ def _prepare_vue_data_cached(
     Each component caches exactly one entry (its current filter state).
     When filter state changes, old entry is replaced - memory stays bounded.
 
+    For components with dynamic annotations (e.g., LinePlot linked to SequenceView):
+    - Cache stores BASE data (without annotation columns)
+    - Annotations are re-applied fresh each render (cheap operation)
+    - Final hash reflects current annotation state
+
     Args:
         component: The component to prepare data for
         component_id: Unique identifier for this component
@@ -131,19 +187,54 @@ def _prepare_vue_data_cached(
     Returns:
         Tuple of (vue_data dict, data_hash string)
     """
-    # Check cache first
+    # Check if component has dynamic annotations (e.g., LinePlot linked to SequenceView)
+    has_dynamic_annotations = getattr(component, '_dynamic_annotations', None) is not None
+
+    # Try cache first (works for ALL components now)
     cached = _get_cached_vue_data(component_id, filter_state_hashable)
+
     if cached is not None:
-        return cached
+        cached_data, cached_hash = cached
+
+        if has_dynamic_annotations:
+            # Cache hit but need to re-apply annotations (they may have changed)
+            # Use component method to apply fresh annotations to cached base data
+            if hasattr(component, '_apply_fresh_annotations'):
+                # Shallow copy to avoid mutating cache
+                vue_data = component._apply_fresh_annotations(dict(cached_data))
+                # Hash final data (includes new annotations)
+                data_hash = _hash_data(vue_data)
+                return vue_data, data_hash
+            else:
+                # Fallback: recompute if component doesn't support fresh annotations
+                vue_data = component._prepare_vue_data(state_dict)
+                data_hash = _hash_data(vue_data)
+                return vue_data, data_hash
+        else:
+            # No dynamic annotations - return cached as-is
+            return cached_data, cached_hash
 
     # Cache miss - compute data
     vue_data = component._prepare_vue_data(state_dict)
-    data_hash = _hash_data(vue_data)
 
-    # Store in cache (replaces any previous entry for this component)
-    _set_cached_vue_data(component_id, filter_state_hashable, vue_data, data_hash)
+    if has_dynamic_annotations:
+        # Store BASE data (without dynamic annotation columns) in cache
+        if hasattr(component, '_strip_dynamic_columns'):
+            base_data = component._strip_dynamic_columns(vue_data)
+        else:
+            # Fallback: store without _plotConfig (may have stale column refs)
+            base_data = {k: v for k, v in vue_data.items() if k != '_plotConfig'}
+        base_hash = _hash_data(base_data)
+        _set_cached_vue_data(component_id, filter_state_hashable, base_data, base_hash)
 
-    return vue_data, data_hash
+        # Return full data with annotations
+        data_hash = _hash_data(vue_data)
+        return vue_data, data_hash
+    else:
+        # Store complete data in cache
+        data_hash = _hash_data(vue_data)
+        _set_cached_vue_data(component_id, filter_state_hashable, vue_data, data_hash)
+        return vue_data, data_hash
 
 
 def get_vue_component_function():
@@ -268,17 +359,19 @@ def render_component(
     # Vue echoes null/None if it has no data, so mismatch triggers send
     # IMPORTANT: Also send data if vue_echoed_hash is None - this means Vue
     # hasn't confirmed receipt yet (e.g., after page navigation destroys Vue component)
+    # NOTE: Hash now correctly reflects annotation state (annotations included in hash),
+    # so normal comparison works for all components including those with dynamic annotations
     data_changed = (vue_echoed_hash is None) or (vue_echoed_hash != data_hash)
 
     # Only include full data if hash changed
     if data_changed:
         # Convert any non-pandas data to pandas for Arrow serialization
         # pandas DataFrames are passed through (already optimal for Arrow)
-        # Also filter out internal keys (starting with _)
+        # Filter out _hash (internal metadata) but keep _plotConfig (needed by Vue)
         converted_data = {}
         for data_key, value in vue_data.items():
-            if data_key.startswith('_'):
-                # Skip metadata keys like _hash, _plotConfig
+            if data_key == '_hash':
+                # Skip internal hash metadata
                 continue
             if isinstance(value, pl.LazyFrame):
                 converted_data[data_key] = value.collect().to_pandas()
@@ -332,8 +425,36 @@ def render_component(
         vue_hash = result.get('_vueDataHash')
         st.session_state[_VUE_ECHOED_HASH_KEY][hash_tracking_key] = vue_hash
 
-        # Update state and rerun if state changed
-        if state_manager.update_from_vue(result):
+        # Capture annotations from Vue (e.g., from SequenceView)
+        # Use hash-based change detection for robustness
+        annotations = result.get('_annotations')
+        annotations_changed = False
+
+        if annotations is not None:
+            # Compute hash of new annotations
+            peak_ids = annotations.get('peak_id', [])
+            new_hash = hash(tuple(peak_ids)) if peak_ids else 0
+
+            # Compare with stored hash
+            ann_hash_key = f"_svc_ann_hash_{key}"
+            old_hash = st.session_state.get(ann_hash_key)
+
+            if old_hash != new_hash:
+                annotations_changed = True
+                st.session_state[ann_hash_key] = new_hash
+
+            _store_component_annotations(key, annotations)
+        else:
+            # Annotations cleared - check if we had annotations before
+            ann_hash_key = f"_svc_ann_hash_{key}"
+            if st.session_state.get(ann_hash_key) is not None:
+                annotations_changed = True
+                st.session_state[ann_hash_key] = None
+
+        # Update state and rerun if state changed OR annotations changed
+        # Hash comparison will naturally detect changes on the next render
+        state_changed = state_manager.update_from_vue(result)
+        if state_changed or annotations_changed:
             st.rerun()
 
     return result

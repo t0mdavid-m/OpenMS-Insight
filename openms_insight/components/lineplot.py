@@ -1,12 +1,15 @@
 """Line plot component using Plotly.js."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
+
+if TYPE_CHECKING:
+    from .sequenceview import SequenceView
 
 
 @register_component("lineplot")
@@ -335,16 +338,7 @@ class LinePlot(BaseComponent):
         return {
             'plotData': df_pandas,
             '_hash': data_hash,
-            # Config tells Vue which columns map to x, y, etc.
-            '_plotConfig': {
-                'xColumn': self._x_column,
-                'yColumn': self._y_column,
-                'highlightColumn': highlight_col,
-                'annotationColumn': annotation_col,
-                'interactivityColumns': {
-                    col: col for col in (self._interactivity.values() if self._interactivity else [])
-                },
-            }
+            '_plotConfig': self._build_plot_config(highlight_col, annotation_col),
         }
 
     def _get_component_args(self) -> Dict[str, Any]:
@@ -503,3 +497,273 @@ class LinePlot(BaseComponent):
         self._dynamic_annotations = None
         self._dynamic_title = None
         return self
+
+    def _build_plot_config(
+        self,
+        highlight_col: Optional[str],
+        annotation_col: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Build _plotConfig dict for Vue component.
+
+        Args:
+            highlight_col: Column name for highlight values
+            annotation_col: Column name for annotation text
+
+        Returns:
+            Config dict with column mappings for Vue
+        """
+        return {
+            'xColumn': self._x_column,
+            'yColumn': self._y_column,
+            'highlightColumn': highlight_col,
+            'annotationColumn': annotation_col,
+            'interactivityColumns': {
+                col: col for col in (self._interactivity.values() if self._interactivity else [])
+            },
+        }
+
+    def _strip_dynamic_columns(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Strip dynamic annotation columns from vue_data for caching.
+
+        Returns a copy with dynamic columns removed so the cached version
+        doesn't contain stale annotation data.
+
+        Args:
+            vue_data: The vue data dict to strip
+
+        Returns:
+            Copy of vue_data without dynamic columns and _plotConfig
+        """
+        import pandas as pd
+
+        vue_data = dict(vue_data)
+        df = vue_data.get('plotData')
+
+        if df is not None and isinstance(df, pd.DataFrame):
+            dynamic_cols = ['_dynamic_highlight', '_dynamic_annotation']
+            cols_to_drop = [c for c in dynamic_cols if c in df.columns]
+            if cols_to_drop:
+                vue_data['plotData'] = df.drop(columns=cols_to_drop)
+
+        # Remove _plotConfig since it may reference dynamic columns
+        vue_data.pop('_plotConfig', None)
+        return vue_data
+
+    def _apply_fresh_annotations(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply current dynamic annotations to cached base vue_data.
+
+        This is called by bridge.py when there's a cache hit for a component
+        with dynamic annotations. Re-applies the current annotation state.
+
+        Args:
+            vue_data: Cached base vue_data (without annotation columns)
+
+        Returns:
+            vue_data with current annotations applied
+        """
+        import pandas as pd
+
+        df_pandas = vue_data.get('plotData')
+        if df_pandas is None:
+            return vue_data
+
+        # Ensure we have a DataFrame
+        if not isinstance(df_pandas, pd.DataFrame):
+            return vue_data
+
+        # Determine highlight/annotation columns
+        highlight_col = self._highlight_column
+        annotation_col = self._annotation_column
+
+        if self._dynamic_annotations and len(df_pandas) > 0:
+            # Apply dynamic annotations
+            df_pandas = df_pandas.copy()
+            num_rows = len(df_pandas)
+            highlights = [False] * num_rows
+            annotations = [''] * num_rows
+
+            # Get the interactivity column for lookup
+            id_column = None
+            if self._interactivity:
+                id_column = list(self._interactivity.values())[0]
+
+            # Apply annotations by peak_id lookup
+            if id_column and id_column in df_pandas.columns:
+                peak_ids = df_pandas[id_column].tolist()
+                for row_idx, peak_id in enumerate(peak_ids):
+                    if peak_id in self._dynamic_annotations:
+                        ann_data = self._dynamic_annotations[peak_id]
+                        highlights[row_idx] = ann_data.get('highlight', False)
+                        annotations[row_idx] = ann_data.get('annotation', '')
+            else:
+                # Fallback: use row index as key
+                for idx, ann_data in self._dynamic_annotations.items():
+                    if isinstance(idx, int) and 0 <= idx < num_rows:
+                        highlights[idx] = ann_data.get('highlight', False)
+                        annotations[idx] = ann_data.get('annotation', '')
+
+            df_pandas['_dynamic_highlight'] = highlights
+            df_pandas['_dynamic_annotation'] = annotations
+            highlight_col = '_dynamic_highlight'
+            annotation_col = '_dynamic_annotation'
+
+        # Build result
+        vue_data = dict(vue_data)
+        vue_data['plotData'] = df_pandas
+        vue_data['_plotConfig'] = self._build_plot_config(highlight_col, annotation_col)
+        return vue_data
+
+    @classmethod
+    def from_sequence_view(
+        cls,
+        sequence_view: 'SequenceView',
+        cache_id: str,
+        cache_path: str = ".",
+        title: Optional[str] = None,
+        x_label: str = "m/z",
+        y_label: str = "Intensity",
+        styling: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> 'LinePlot':
+        """
+        Create a LinePlot linked to a SequenceView for annotated spectrum display.
+
+        The created LinePlot will:
+        - Use the same peaks data as the SequenceView
+        - Use the same filters (spectrum selection)
+        - Use the same interactivity (peak selection)
+        - Automatically apply annotations from SequenceView when rendered
+
+        Args:
+            sequence_view: The SequenceView to link to
+            cache_id: Unique identifier for this component's cache
+            cache_path: Base path for cache storage
+            title: Plot title (optional)
+            x_label: X-axis label (default: "m/z")
+            y_label: Y-axis label (default: "Intensity")
+            styling: Style configuration dict
+            **kwargs: Additional LinePlot configuration
+
+        Returns:
+            A new LinePlot instance linked to the SequenceView
+
+        Example:
+            sequence_view = SequenceView(
+                cache_id="seq",
+                sequence_data=sequences_df,
+                peaks_data=peaks_df,
+                filters={"spectrum": "scan_id"},
+                interactivity={"peak": "peak_id"},
+            )
+
+            # Create linked LinePlot
+            spectrum_plot = LinePlot.from_sequence_view(
+                sequence_view,
+                cache_id="spectrum",
+                title="Annotated Spectrum",
+            )
+
+            # Render both - annotations flow automatically
+            sv_result = sequence_view(key="sv", state_manager=state_manager)
+            spectrum_plot(key="plot", state_manager=state_manager, sequence_view_key="sv")
+        """
+        # Get peaks data from SequenceView
+        peaks_data = sequence_view._peaks_data
+
+        if peaks_data is None:
+            raise ValueError(
+                "SequenceView has no peaks_data. Cannot create linked LinePlot."
+            )
+
+        # Only include filters whose columns exist in peaks_data
+        # SequenceView may have filters for both sequence_data and peaks_data,
+        # but LinePlot only uses peaks_data
+        peaks_columns = peaks_data.collect_schema().names()
+        valid_filters = {
+            identifier: column
+            for identifier, column in sequence_view._filters.items()
+            if column in peaks_columns
+        } if sequence_view._filters else None
+
+        # Create the LinePlot with filtered filters and interactivity
+        plot = cls(
+            cache_id=cache_id,
+            data=peaks_data,
+            filters=valid_filters,
+            interactivity=sequence_view._interactivity.copy() if sequence_view._interactivity else None,
+            cache_path=cache_path,
+            x_column="mass",
+            y_column="intensity",
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            styling=styling,
+            **kwargs
+        )
+
+        # Store reference to sequence view key for annotation lookup
+        plot._linked_sequence_view_key: Optional[str] = None
+
+        return plot
+
+    def __call__(
+        self,
+        key: Optional[str] = None,
+        state_manager: Optional['StateManager'] = None,
+        height: Optional[int] = None,
+        sequence_view_key: Optional[str] = None,
+    ) -> Any:
+        """
+        Render the component in Streamlit.
+
+        Args:
+            key: Optional unique key for the Streamlit component
+            state_manager: Optional StateManager for cross-component state.
+                If not provided, uses a default shared StateManager.
+            height: Optional height in pixels for the component
+            sequence_view_key: Optional key of a SequenceView component to get
+                annotations from. When provided, automatically applies fragment
+                annotations from that SequenceView.
+
+        Returns:
+            The value returned by the Vue component (usually selection state)
+        """
+        from ..core.state import get_default_state_manager
+        from ..rendering.bridge import render_component, get_component_annotations
+
+        if state_manager is None:
+            state_manager = get_default_state_manager()
+
+        # Apply annotations from linked SequenceView if specified
+        if sequence_view_key:
+            annotations_df = get_component_annotations(sequence_view_key)
+            if annotations_df is not None and annotations_df.height > 0:
+                # Convert annotation DataFrame to dynamic annotations dict
+                # keyed by peak_id for stable lookup
+                dynamic_annotations = {}
+                for row in annotations_df.iter_rows(named=True):
+                    peak_id = row.get('peak_id')
+                    if peak_id is not None:
+                        dynamic_annotations[peak_id] = {
+                            'highlight': True,
+                            'annotation': row.get('annotation', ''),
+                            'color': row.get('highlight_color', '#E4572E'),
+                        }
+                self.set_dynamic_annotations(dynamic_annotations)
+            else:
+                self.clear_dynamic_annotations()
+
+        return render_component(
+            component=self,
+            state_manager=state_manager,
+            key=key,
+            height=height
+        )
+
+
+# Type hint import
+if TYPE_CHECKING:
+    from ..core.state import StateManager
