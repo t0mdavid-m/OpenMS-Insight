@@ -9,11 +9,12 @@ from .core.base import BaseComponent
 from .core.state import StateManager
 from .core.registry import register_component, get_component_class
 from .core.cache import CacheMissError
+from .rendering.bridge import get_component_annotations, clear_component_annotations
 
 from .components.table import Table
 from .components.lineplot import LinePlot
 from .components.heatmap import Heatmap
-from .components.sequenceview import SequenceView
+from .components.sequenceview import SequenceView, SequenceViewResult
 
 __version__ = "0.1.0"
 
@@ -29,4 +30,8 @@ __all__ = [
     "LinePlot",
     "Heatmap",
     "SequenceView",
+    "SequenceViewResult",
+    # Utilities
+    "get_component_annotations",
+    "clear_component_annotations",
 ]
