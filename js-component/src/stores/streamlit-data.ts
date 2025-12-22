@@ -17,6 +17,9 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
     renderData: null as RenderData | null,
     dataForDrawing: {} as Record<string, unknown>,
     hash: '' as string,
+    // Annotations set by components like SequenceView to share with Python
+    // These are sent back to Python alongside selection state
+    annotations: null as { peak_id: number[]; highlight_color: string[]; annotation: string[] } | null,
   }),
 
   getters: {
@@ -220,6 +223,14 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         return result
       }
       return value
+    },
+
+    /**
+     * Set annotations from a component (e.g., SequenceView).
+     * These are sent back to Python to enable cross-component annotation sharing.
+     */
+    setAnnotations(annotations: { peak_id: number[]; highlight_color: string[]; annotation: string[] } | null) {
+      this.annotations = annotations
     },
   },
 })

@@ -48,15 +48,22 @@ export default defineComponent({
     // Counter increments on every selection change, so this captures all updates.
     let lastSentCounter: number | undefined = undefined
     let lastSentHash: string | undefined = undefined
+    let lastSentAnnotationsHash: string | undefined = undefined
 
     const sendStateToStreamlit = () => {
       const currentCounter = selectionStore.$state.counter
       const currentHash = streamlitDataStore.hash || null
+      const currentAnnotations = streamlitDataStore.annotations
+      // Hash annotations to detect changes (use peak_id array as proxy for full content)
+      const annotationsHash = currentAnnotations
+        ? JSON.stringify(currentAnnotations.peak_id)
+        : undefined
 
-      // Avoid duplicate sends for same counter+hash combination
-      if (currentCounter === lastSentCounter && currentHash === lastSentHash) return
+      // Avoid duplicate sends for same counter+hash+annotations combination
+      if (currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) return
       lastSentCounter = currentCounter
       lastSentHash = currentHash ?? undefined
+      lastSentAnnotationsHash = annotationsHash
 
       // Deep clone to remove Vue reactivity proxies before sending to Streamlit
       // This prevents "Proxy object could not be cloned" errors
@@ -64,13 +71,18 @@ export default defineComponent({
       // Echo back Vue's current data hash so Python knows if Vue has the data
       // This enables bidirectional hash confirmation for cache optimization
       plainState._vueDataHash = currentHash
-      console.log('[Vue] sendStateToStreamlit', { counter: currentCounter, hash: currentHash?.substring(0, 8) })
+      // Include annotations from components like SequenceView
+      if (currentAnnotations) {
+        plainState._annotations = JSON.parse(JSON.stringify(currentAnnotations))
+      }
+      console.log('[Vue] sendStateToStreamlit', { counter: currentCounter, hash: currentHash?.substring(0, 8), hasAnnotations: !!currentAnnotations })
       Streamlit.setComponentValue(plainState)
     }
 
-    // Watch both counter and hash to ensure Python always knows Vue's state
+    // Watch counter, hash, and annotations to ensure Python always knows Vue's state
     watch(() => selectionStore.$state.counter, sendStateToStreamlit, { immediate: true })
     watch(() => streamlitDataStore.hash, sendStateToStreamlit)
+    watch(() => streamlitDataStore.annotations, sendStateToStreamlit, { deep: true })
 
     // Watch for height changes and update frame height
     watch(

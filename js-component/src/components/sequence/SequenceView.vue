@@ -597,6 +597,8 @@ export default defineComponent({
     matchFragments(): void {
       if (this.sequence.length === 0 || this.observedMasses.length === 0) {
         this.fragmentTableData = []
+        // Clear annotations when no data
+        this.streamlitDataStore.setAnnotations(null)
         return
       }
 
@@ -605,6 +607,34 @@ export default defineComponent({
         this.fragmentTableData = this.matchFragmentsExternal()
       } else {
         this.fragmentTableData = this.matchFragmentsTheoretical()
+      }
+
+      // Convert fragment table data to annotations for cross-component sharing
+      // This enables LinePlot to display fragment annotations
+      const peakIds: number[] = []
+      const highlightColors: string[] = []
+      const annotations: string[] = []
+
+      for (const row of this.fragmentTableData) {
+        if (row.PeakId !== undefined) {
+          peakIds.push(row.PeakId)
+          // Color based on ion type (a/b/c = red-ish, x/y/z = blue-ish)
+          const ionType = row.IonType.charAt(0).toLowerCase()
+          const color = ['a', 'b', 'c'].includes(ionType) ? '#E4572E' : '#1f77b4'
+          highlightColors.push(color)
+          annotations.push(row.Name)
+        }
+      }
+
+      // Update store with annotations (triggers rerun in Python via state change)
+      if (peakIds.length > 0) {
+        this.streamlitDataStore.setAnnotations({
+          peak_id: peakIds,
+          highlight_color: highlightColors,
+          annotation: annotations,
+        })
+      } else {
+        this.streamlitDataStore.setAnnotations(null)
       }
     },
     isFixedModification(aminoAcid: string): boolean {

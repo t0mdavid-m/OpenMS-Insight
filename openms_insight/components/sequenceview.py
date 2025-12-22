@@ -1,11 +1,15 @@
 """SequenceView component for peptide/protein sequence visualization with fragment matching."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple, Union
+import hashlib
 
 import polars as pl
 
-from ..core.base import BaseComponent
 from ..core.registry import register_component
+
+# Proton mass for m/z calculations
+PROTON_MASS = 1.007276
 
 
 def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
@@ -66,116 +70,239 @@ def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[f
         return list(sequence_str), [None] * len(sequence_str)
 
 
-# Amino acid monoisotopic masses
-AA_MASSES = {
-    'A': 71.037114, 'R': 156.101111, 'N': 114.042927, 'D': 115.026943,
-    'C': 103.009185, 'E': 129.042593, 'Q': 128.058578, 'G': 57.021464,
-    'H': 137.058912, 'I': 113.084064, 'L': 113.084064, 'K': 128.094963,
-    'M': 131.040485, 'F': 147.068414, 'P': 97.052764, 'S': 87.032028,
-    'T': 101.047679, 'U': 150.953633, 'W': 186.079313, 'Y': 163.063329,
-    'V': 99.068414, 'X': 0, 'Z': 0,
-}
-
-# Ion type mass adjustments
-# These are approximate - for precise values, use pyOpenMS
-H2O = 18.010565
-NH3 = 17.026549
-PROTON = 1.007276
-
-# Ion type offsets (from N-terminus for prefix, C-terminus for suffix)
-ION_OFFSETS = {
-    'a': -27.994915,  # CO loss from b
-    'b': 0.0,
-    'c': 17.026549,   # NH3 addition to b
-    'x': 43.989829,   # CO + CO addition to y
-    'y': 18.010565,   # H2O addition (protonated)
-    'z': 1.991841,    # NH loss from y
-}
-
-
-def calculate_prefix_mass(sequence: str, position: int) -> float:
-    """Calculate mass of N-terminal fragment (positions 0 to position inclusive)."""
-    mass = 0.0
-    for i in range(position + 1):
-        mass += AA_MASSES.get(sequence[i], 0.0)
-    return mass
-
-
-def calculate_suffix_mass(sequence: str, position: int) -> float:
-    """Calculate mass of C-terminal fragment (positions position to end)."""
-    mass = 0.0
-    for i in range(position, len(sequence)):
-        mass += AA_MASSES.get(sequence[i], 0.0)
-    return mass
-
-
-def calculate_fragment_masses(sequence: str) -> Dict[str, List[List[float]]]:
-    """
-    Calculate theoretical fragment masses for all ion types.
+def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List[float]]]:
+    """Calculate theoretical fragment masses using pyOpenMS TheoreticalSpectrumGenerator.
 
     Args:
-        sequence: Amino acid sequence string
+        sequence_str: Peptide sequence string (can include modifications)
 
     Returns:
-        Dict with keys fragment_masses_a, fragment_masses_b, etc.
-        Each value is a list of lists (to support ambiguous modifications)
+        Dict with fragment_masses_a, fragment_masses_b, etc.
+        Each is a list of lists (one per position, supporting multiple masses).
     """
-    n = len(sequence)
+    try:
+        from pyopenms import AASequence, TheoreticalSpectrumGenerator, MSSpectrum
+
+        aa_seq = AASequence.fromString(sequence_str)
+        n = aa_seq.size()
+
+        # Configure TheoreticalSpectrumGenerator
+        tsg = TheoreticalSpectrumGenerator()
+        params = tsg.getParameters()
+
+        params.setValue("add_a_ions", "true")
+        params.setValue("add_b_ions", "true")
+        params.setValue("add_c_ions", "true")
+        params.setValue("add_x_ions", "true")
+        params.setValue("add_y_ions", "true")
+        params.setValue("add_z_ions", "true")
+        params.setValue("add_metainfo", "true")
+
+        tsg.setParameters(params)
+
+        # Generate spectrum for charge 1, then convert to neutral masses
+        spec = MSSpectrum()
+        tsg.getSpectrum(spec, aa_seq, 1, 1)
+
+        ion_types = ['a', 'b', 'c', 'x', 'y', 'z']
+        result = {f'fragment_masses_{ion}': [[] for _ in range(n)] for ion in ion_types}
+
+        # Get ion names from StringDataArrays
+        ion_names = []
+        sdas = spec.getStringDataArrays()
+        for sda in sdas:
+            if sda.getName() == "IonNames":
+                for i in range(sda.size()):
+                    name = sda[i]
+                    if isinstance(name, bytes):
+                        name = name.decode('utf-8')
+                    ion_names.append(name)
+                break
+
+        # Parse peaks and organize by ion type and position
+        for i in range(spec.size()):
+            peak = spec[i]
+            # Convert singly-charged m/z to neutral mass
+            mz_charge1 = peak.getMZ()
+            neutral_mass = mz_charge1 - PROTON_MASS
+            ion_name = ion_names[i] if i < len(ion_names) else ""
+
+            if not ion_name:
+                continue
+
+            # Parse ion name (e.g., "b3+", "y5++")
+            ion_type = None
+            ion_number = None
+
+            for t in ion_types:
+                if ion_name.lower().startswith(t):
+                    ion_type = t
+                    try:
+                        num_str = ""
+                        for c in ion_name[1:]:
+                            if c.isdigit():
+                                num_str += c
+                            else:
+                                break
+                        if num_str:
+                            ion_number = int(num_str)
+                    except (ValueError, IndexError):
+                        pass
+                    break
+
+            if ion_type and ion_number and 1 <= ion_number <= n:
+                idx = ion_number - 1
+                key = f'fragment_masses_{ion_type}'
+                if idx < len(result[key]):
+                    result[key][idx].append(neutral_mass)
+
+        return result
+
+    except ImportError:
+        # Fallback to simple calculation without pyOpenMS
+        return _calculate_fragment_masses_simple(sequence_str)
+    except Exception as e:
+        print(f"Error calculating fragments for {sequence_str}: {e}")
+        return {f'fragment_masses_{ion}': [] for ion in ['a', 'b', 'c', 'x', 'y', 'z']}
+
+
+def _calculate_fragment_masses_simple(sequence_str: str) -> Dict[str, List[List[float]]]:
+    """Fallback fragment calculation without pyOpenMS."""
+    # Amino acid monoisotopic masses
+    AA_MASSES = {
+        'A': 71.037114, 'R': 156.101111, 'N': 114.042927, 'D': 115.026943,
+        'C': 103.009185, 'E': 129.042593, 'Q': 128.058578, 'G': 57.021464,
+        'H': 137.058912, 'I': 113.084064, 'L': 113.084064, 'K': 128.094963,
+        'M': 131.040485, 'F': 147.068414, 'P': 97.052764, 'S': 87.032028,
+        'T': 101.047679, 'U': 150.953633, 'W': 186.079313, 'Y': 163.063329,
+        'V': 99.068414,
+    }
+
+    # Ion type offsets
+    ION_OFFSETS = {
+        'a': -27.994915, 'b': 0.0, 'c': 17.026549,
+        'x': 43.989829, 'y': 18.010565, 'z': 1.991841,
+    }
+
+    # Extract plain sequence
+    residues, _ = parse_openms_sequence(sequence_str)
+    n = len(residues)
     result = {}
 
-    # Prefix ions (a, b, c) - from N-terminus
+    # Calculate prefix masses
+    prefix_masses = []
+    mass = 0.0
+    for aa in residues:
+        mass += AA_MASSES.get(aa, 0.0)
+        prefix_masses.append(mass)
+
+    # Calculate suffix masses
+    suffix_masses = []
+    mass = 0.0
+    for aa in reversed(residues):
+        mass += AA_MASSES.get(aa, 0.0)
+        suffix_masses.append(mass)
+    suffix_masses = list(reversed(suffix_masses))
+
+    # Prefix ions (a, b, c)
     for ion_type in ['a', 'b', 'c']:
         masses = []
         for i in range(n):
-            prefix_mass = calculate_prefix_mass(sequence, i)
-            ion_mass = prefix_mass + ION_OFFSETS[ion_type]
+            ion_mass = prefix_masses[i] + ION_OFFSETS[ion_type]
             masses.append([ion_mass])
         result[f'fragment_masses_{ion_type}'] = masses
 
-    # Suffix ions (x, y, z) - from C-terminus
+    # Suffix ions (x, y, z)
     for ion_type in ['x', 'y', 'z']:
         masses = []
         for i in range(n):
-            # For suffix ions, position i means i+1 residues from C-terminus
-            suffix_mass = calculate_suffix_mass(sequence, n - i - 1)
-            ion_mass = suffix_mass + ION_OFFSETS[ion_type]
+            idx = n - i - 1
+            ion_mass = suffix_masses[idx] + ION_OFFSETS[ion_type]
             masses.append([ion_mass])
         result[f'fragment_masses_{ion_type}'] = masses
 
     return result
 
 
-def calculate_theoretical_mass(sequence: str) -> float:
-    """Calculate monoisotopic mass of full sequence."""
-    mass = H2O  # Add water for full peptide
-    for aa in sequence:
-        mass += AA_MASSES.get(aa, 0.0)
-    return mass
+def get_theoretical_mass(sequence_str: str) -> float:
+    """Calculate monoisotopic mass of a peptide sequence."""
+    try:
+        from pyopenms import AASequence
+        aa_seq = AASequence.fromString(sequence_str)
+        return aa_seq.getMonoWeight()
+    except ImportError:
+        # Fallback
+        H2O = 18.010565
+        AA_MASSES = {
+            'A': 71.037114, 'R': 156.101111, 'N': 114.042927, 'D': 115.026943,
+            'C': 103.009185, 'E': 129.042593, 'Q': 128.058578, 'G': 57.021464,
+            'H': 137.058912, 'I': 113.084064, 'L': 113.084064, 'K': 128.094963,
+            'M': 131.040485, 'F': 147.068414, 'P': 97.052764, 'S': 87.032028,
+            'T': 101.047679, 'U': 150.953633, 'W': 186.079313, 'Y': 163.063329,
+            'V': 99.068414,
+        }
+        residues, _ = parse_openms_sequence(sequence_str)
+        mass = H2O
+        for aa in residues:
+            mass += AA_MASSES.get(aa, 0.0)
+        return mass
+    except Exception:
+        return 0.0
+
+
+# Default annotation configuration
+DEFAULT_ANNOTATION_CONFIG = {
+    "ion_types": ["b", "y"],
+    "neutral_losses": True,
+    "tolerance": 20.0,
+    "tolerance_ppm": True,
+    "colors": {
+        "a": "#9B59B6",
+        "b": "#E74C3C",
+        "c": "#E67E22",
+        "x": "#1ABC9C",
+        "y": "#3498DB",
+        "z": "#2ECC71",
+    }
+}
+
+
+@dataclass
+class SequenceViewResult:
+    """Result returned by SequenceView.__call__().
+
+    Attributes:
+        annotations: DataFrame with columns (peak_id, highlight_color, annotation)
+            containing fragment annotations computed by Vue. None if not yet available.
+    """
+    annotations: Optional[pl.DataFrame] = None
 
 
 @register_component("sequence_view")
-class SequenceView(BaseComponent):
+class SequenceView:
     """
     Interactive sequence view component for peptide/protein visualization.
 
     Displays amino acid sequence with fragment ion markers. When provided with
-    observed masses from a spectrum, highlights matched theoretical fragments.
+    peaks data, performs fragment matching on the Vue side and returns annotations.
 
     Features:
     - Amino acid grid display with configurable row width
-    - Fragment ion markers (a, b, c, x, y, z)
-    - Tolerance-based fragment matching
-    - Fragment table showing matches
-    - Residue cleavage percentage calculation
+    - Fragment ion markers (a, b, c, x, y, z) with configurable colors
+    - Tolerance-based fragment matching (done in Vue)
+    - Returns annotation dataframe for linked components
+    - Supports filtering by spectrum and sequence identifiers
 
     Example:
         sequence_view = SequenceView(
             cache_id="peptide_view",
-            sequence="PEPTIDEK",
-            observed_masses=[147.1, 244.2, 359.3, ...],
-            precursor_mass=944.5,
+            sequence_data=pl.scan_parquet("sequences.parquet"),
+            peaks_data=pl.scan_parquet("peaks.parquet"),
+            filters={"spectrum": "scan_id", "sequence": "sequence_id"},
+            annotation_config={"ion_types": ["b", "y"], "tolerance": 20.0},
         )
-        sequence_view(state_manager=state_manager)
+        result = sequence_view(key="sv", state_manager=state_manager)
+        # result.annotations contains the matched fragment annotations
     """
 
     _component_type: str = "sequence_view"
@@ -183,202 +310,310 @@ class SequenceView(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        sequence: str,
-        observed_masses: Optional[List[float]] = None,
-        peak_ids: Optional[List[int]] = None,
-        precursor_mass: Optional[float] = None,
-        data: Optional[pl.LazyFrame] = None,  # Not used but required by base
+        sequence_data: Optional[Union[pl.LazyFrame, Tuple[str, int], str]] = None,
+        sequence_data_path: Optional[str] = None,
+        peaks_data: Optional[pl.LazyFrame] = None,
+        peaks_data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         interactivity: Optional[Dict[str, str]] = None,
+        deconvolved: bool = False,
+        annotation_config: Optional[Dict[str, Any]] = None,
         cache_path: str = ".",
-        regenerate_cache: bool = False,
-        fixed_modifications: Optional[List[str]] = None,
         title: Optional[str] = None,
         height: int = 400,
-        deconvolved: bool = True,
-        precursor_charge: int = 1,
-        _precomputed_sequence_data: Optional[Dict[str, Any]] = None,
         **kwargs
     ):
         """
         Initialize the SequenceView component.
 
         Args:
-            cache_id: Unique identifier for this component's cache.
-            sequence: Amino acid sequence string (single-letter codes).
-            observed_masses: List of observed peak masses from spectrum.
-            peak_ids: List of peak IDs corresponding to observed_masses (for interactivity).
-            precursor_mass: Observed precursor mass.
-            data: Not used for SequenceView, but required by base class.
+            cache_id: Unique identifier for this component instance.
+            sequence_data: Sequence information in one of three formats:
+                - LazyFrame with columns: sequence_id (if filtered), sequence, precursor_charge
+                - Tuple of (sequence_string, precursor_charge)
+                - String with just the sequence (charge defaults to 1)
+            sequence_data_path: Path to parquet file with sequence data.
+            peaks_data: LazyFrame with columns: scan_id (if filtered), peak_id, mass, intensity
+            peaks_data_path: Path to parquet file with peaks data.
             filters: Mapping of identifier names to column names for filtering.
+                Example: {"spectrum": "scan_id", "sequence": "sequence_id"}
             interactivity: Mapping of identifier names to column names for clicks.
-                Example: {'peak': 'peak_id'} sets 'peak' selection to 'peak_id' value on click.
-            cache_path: Base path for cache storage.
-            regenerate_cache: If True, regenerate cache even if valid.
-            fixed_modifications: List of amino acids with fixed modifications (e.g., ['C']).
+                Example: {"peak": "peak_id"} sets 'peak' selection to clicked peak's ID.
+            deconvolved: If False (default), peaks are m/z values and matching considers
+                charge states 1 to precursor_charge. If True, peaks are neutral masses.
+            annotation_config: Configuration for fragment matching:
+                - ion_types: List of ion types to consider (default: ["b", "y"])
+                - neutral_losses: Whether to consider -H2O, -NH3 losses (default: True)
+                - tolerance: Mass tolerance value (default: 20.0)
+                - tolerance_ppm: True for ppm, False for Da (default: True)
+                - colors: Dict mapping ion types to hex colors
+            cache_path: Base path for any cache storage (currently unused).
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
-            deconvolved: If True (default), observed_masses are neutral masses.
-                If False, observed_masses are m/z values and fragment matching
-                considers charge states 1 to precursor_charge.
-            precursor_charge: Maximum charge state to consider for fragment matching
-                when deconvolved=False. Fragments can have charge 1 to this value.
-            _precomputed_sequence_data: Optional pre-computed sequence data dict.
-                If provided, skips fragment mass calculation (used when fragment
-                masses are already cached externally, e.g., in identification preprocessing).
             **kwargs: Additional configuration options.
         """
-        self._sequence_raw = sequence  # Keep original for calculations
-        self._sequence = sequence.upper().replace(' ', '').replace('\n', '')
-        self._observed_masses = observed_masses or []
-        self._peak_ids = peak_ids  # peak_ids corresponding to observed_masses
-        self._precursor_mass = precursor_mass or 0.0
-        self._fixed_modifications = fixed_modifications or []
+        self._cache_id = cache_id
+        self._cache_path = cache_path
         self._title = title
         self._height = height
         self._deconvolved = deconvolved
-        self._precursor_charge = max(1, precursor_charge)
-        self._precomputed_sequence_data = _precomputed_sequence_data
+        self._config = kwargs
 
-        # Parse sequence to extract residues and modifications
-        self._parsed_residues, self._parsed_modifications = parse_openms_sequence(self._sequence)
+        # Store filters and interactivity
+        self._filters = filters or {}
+        self._interactivity = interactivity or {}
 
-        # Build peaks DataFrame for interactivity validation
-        # This allows interactivity={'peak': 'peak_id'} to validate naturally
-        # Note: Cache validity is based on sequence (via _get_cache_config), not peaks data
-        if data is None:
-            if self._observed_masses:
-                ids = self._peak_ids if self._peak_ids is not None else list(range(len(self._observed_masses)))
-                data = pl.LazyFrame({
-                    'peak_id': ids,
-                    'mass': self._observed_masses,
-                })
-            else:
-                # Empty peaks - use schema so validation still passes
-                data = pl.LazyFrame(schema={'peak_id': pl.Int64, 'mass': pl.Float64})
+        # Store annotation config with defaults
+        self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
+        if annotation_config:
+            self._annotation_config.update(annotation_config)
 
-        super().__init__(
-            cache_id=cache_id,
-            data=data,
-            filters=filters,
-            interactivity=interactivity,
-            cache_path=cache_path,
-            regenerate_cache=regenerate_cache,
-            **kwargs
-        )
+        # Process sequence data
+        self._sequence_data: Optional[pl.LazyFrame] = None
+        self._static_sequence: Optional[str] = None
+        self._static_charge: int = 1
 
-    def _get_cache_config(self) -> Dict[str, Any]:
-        """Get configuration that affects cache validity."""
-        return {
-            'sequence': self._sequence,
-            'fixed_modifications': self._fixed_modifications,
-        }
+        if sequence_data is not None and sequence_data_path is not None:
+            raise ValueError("Provide either 'sequence_data' or 'sequence_data_path', not both")
 
-    def _preprocess(self) -> None:
+        if sequence_data_path is not None:
+            self._sequence_data = pl.scan_parquet(sequence_data_path)
+        elif isinstance(sequence_data, pl.LazyFrame):
+            self._sequence_data = sequence_data
+        elif isinstance(sequence_data, tuple):
+            # (sequence_string, charge)
+            self._static_sequence = sequence_data[0]
+            self._static_charge = sequence_data[1]
+        elif isinstance(sequence_data, str):
+            # Just the sequence string
+            self._static_sequence = sequence_data
+            self._static_charge = 1
+
+        # Process peaks data
+        self._peaks_data: Optional[pl.LazyFrame] = None
+
+        if peaks_data is not None and peaks_data_path is not None:
+            raise ValueError("Provide either 'peaks_data' or 'peaks_data_path', not both")
+
+        if peaks_data_path is not None:
+            self._peaks_data = pl.scan_parquet(peaks_data_path)
+        elif peaks_data is not None:
+            self._peaks_data = peaks_data
+
+    def _get_sequence_for_state(self, state: Dict[str, Any]) -> Tuple[str, int]:
+        """Get sequence and charge for current state.
+
+        Returns:
+            Tuple of (sequence_string, precursor_charge)
         """
-        Preprocess sequence data.
+        if self._static_sequence is not None:
+            return self._static_sequence, self._static_charge
 
-        Calculates theoretical fragment masses for all ion types.
-        This is cached so subsequent renders are fast.
+        if self._sequence_data is None:
+            return "", 1
+
+        # Filter sequence data by state
+        filtered = self._sequence_data
+
+        for identifier, column in self._filters.items():
+            # Only apply filters for columns that exist in sequence_data
+            try:
+                schema = filtered.collect_schema()
+                if column in schema.names():
+                    filter_value = state.get(identifier)
+                    if filter_value is not None:
+                        filtered = filtered.filter(pl.col(column) == filter_value)
+            except Exception:
+                pass
+
+        # Collect and get first row
+        try:
+            df = filtered.select(["sequence", "precursor_charge"]).head(1).collect()
+            if df.height > 0:
+                return df["sequence"][0], df["precursor_charge"][0]
+        except Exception:
+            pass
+
+        return "", 1
+
+    def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
+        """Get filtered peaks data for current state.
+
+        Returns:
+            DataFrame with columns: peak_id, mass, intensity
         """
-        # Calculate fragment masses using plain residues
-        plain_sequence = ''.join(self._parsed_residues)
-        fragment_masses = calculate_fragment_masses(plain_sequence)
+        if self._peaks_data is None:
+            return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64, "intensity": pl.Float64})
 
-        # Calculate theoretical mass
-        theoretical_mass = calculate_theoretical_mass(plain_sequence)
+        filtered = self._peaks_data
 
-        # Build sequence data structure
-        sequence_data = {
-            'sequence': self._parsed_residues,
-            'modifications': self._parsed_modifications,  # New: list of mass shifts per position
-            'theoretical_mass': theoretical_mass,
-            'fixed_modifications': self._fixed_modifications,
-            **fragment_masses,
-        }
+        for identifier, column in self._filters.items():
+            # Only apply filters for columns that exist in peaks_data
+            try:
+                schema = filtered.collect_schema()
+                if column in schema.names():
+                    filter_value = state.get(identifier)
+                    if filter_value is not None:
+                        filtered = filtered.filter(pl.col(column) == filter_value)
+            except Exception:
+                pass
 
-        self._preprocessed_data['sequence_data'] = sequence_data
-
-    def _get_vue_component_name(self) -> str:
-        """Return the Vue component name."""
-        return 'SequenceView'
-
-    def _get_data_key(self) -> str:
-        """Return the key used to send primary data to Vue."""
-        return 'sequenceData'
+        # Select required columns
+        try:
+            schema = filtered.collect_schema()
+            cols = ["peak_id", "mass"]
+            if "intensity" in schema.names():
+                cols.append("intensity")
+            return filtered.select(cols).collect()
+        except Exception:
+            return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64, "intensity": pl.Float64})
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Prepare sequence data for Vue component.
+        Prepare data for Vue component.
 
         Args:
             state: Current selection state from StateManager
 
         Returns:
-            Dict with sequenceData, observedMasses, precursorMass, and _hash
+            Dict with sequenceData, peaksData, annotationConfig, etc.
         """
-        # Use precomputed data if available, otherwise use cached/computed data
-        if self._precomputed_sequence_data is not None:
-            sequence_data = self._precomputed_sequence_data
-        else:
-            sequence_data = self._preprocessed_data.get('sequence_data', {})
+        # Get sequence for current state
+        sequence_str, precursor_charge = self._get_sequence_for_state(state)
 
-        # Create a hash based on sequence and observed masses
-        import hashlib
-        hash_input = f"{self._sequence}:{len(self._observed_masses)}:{self._precursor_mass}"
+        # Parse sequence
+        residues, modifications = parse_openms_sequence(sequence_str)
+
+        # Calculate theoretical fragment masses
+        fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
+
+        # Calculate theoretical mass
+        theoretical_mass = get_theoretical_mass(sequence_str)
+
+        # Build sequence data structure
+        sequence_data = {
+            "sequence": residues,
+            "modifications": modifications,
+            "theoretical_mass": theoretical_mass,
+            "fixed_modifications": [],
+            **fragment_masses,
+        }
+
+        # Get filtered peaks
+        peaks_df = self._get_peaks_for_state(state)
+
+        # Extract arrays from peaks DataFrame for Vue
+        # Vue expects observedMasses and peakIds as separate arrays
+        observed_masses: List[float] = []
+        peak_ids: List[int] = []
+        precursor_mass: float = 0.0
+
+        if peaks_df.height > 0:
+            observed_masses = peaks_df["mass"].to_list()
+            peak_ids = peaks_df["peak_id"].to_list()
+
+        # Create hash for change detection
+        hash_input = f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         result = {
-            'sequenceData': sequence_data,
-            'observedMasses': self._observed_masses,
-            'precursorMass': self._precursor_mass,
-            '_hash': data_hash,
+            "sequenceData": sequence_data,
+            "observedMasses": observed_masses,
+            "peakIds": peak_ids,
+            "precursorMass": precursor_mass,
+            "annotationConfig": self._annotation_config,
+            "precursorCharge": precursor_charge,
+            "_hash": data_hash,
         }
 
-        # Include peak_ids if provided (for interactivity linking)
-        if self._peak_ids is not None:
-            result['peakIds'] = self._peak_ids
-
         return result
+
+    def _get_vue_component_name(self) -> str:
+        """Return the Vue component name."""
+        return "SequenceView"
+
+    def _get_data_key(self) -> str:
+        """Return the key used to send primary data to Vue."""
+        return "sequenceData"
 
     def _get_component_args(self) -> Dict[str, Any]:
         """Get component arguments to send to Vue."""
         args: Dict[str, Any] = {
-            'componentType': self._get_vue_component_name(),
-            'height': self._height,
-            'deconvolved': self._deconvolved,
-            'precursorCharge': self._precursor_charge,
+            "componentType": self._get_vue_component_name(),
+            "height": self._height,
+            "deconvolved": self._deconvolved,
         }
 
         if self._title:
-            args['title'] = self._title
+            args["title"] = self._title
 
-        # Pass interactivity mapping to Vue (similar to other components)
         if self._interactivity:
-            args['interactivity'] = self._interactivity
+            args["interactivity"] = self._interactivity
 
         args.update(self._config)
         return args
 
-    def update_observed_masses(
-        self,
-        observed_masses: List[float],
-        precursor_mass: Optional[float] = None
-    ) -> 'SequenceView':
-        """
-        Update the observed masses for fragment matching.
+    def get_filters_mapping(self) -> Dict[str, str]:
+        """Return the filters identifier-to-column mapping."""
+        return self._filters.copy()
 
-        This allows reusing the same cached sequence data with different
-        spectra for matching.
+    def get_interactivity_mapping(self) -> Dict[str, str]:
+        """Return the interactivity identifier-to-column mapping."""
+        return self._interactivity.copy()
+
+    def get_state_dependencies(self) -> List[str]:
+        """Return list of state keys that affect this component's data."""
+        return list(self._filters.keys())
+
+    def __call__(
+        self,
+        key: Optional[str] = None,
+        state_manager: Optional['StateManager'] = None,
+        height: Optional[int] = None
+    ) -> SequenceViewResult:
+        """
+        Render the component in Streamlit.
 
         Args:
-            observed_masses: New list of observed peak masses.
-            precursor_mass: Optional new precursor mass.
+            key: Optional unique key for the Streamlit component
+            state_manager: Optional StateManager for cross-component state.
+                If not provided, uses a default shared StateManager.
+            height: Optional height in pixels for the component
 
         Returns:
-            Self for method chaining.
+            SequenceViewResult with annotations DataFrame (if available)
         """
-        self._observed_masses = observed_masses
-        if precursor_mass is not None:
-            self._precursor_mass = precursor_mass
-        return self
+        from ..core.state import get_default_state_manager
+        from ..rendering.bridge import render_component, get_component_annotations
+
+        if state_manager is None:
+            state_manager = get_default_state_manager()
+
+        # Use provided height or default
+        render_height = height if height is not None else self._height
+
+        render_component(
+            component=self,
+            state_manager=state_manager,
+            key=key,
+            height=render_height
+        )
+
+        # Get annotations from session state (set by Vue)
+        annotations = get_component_annotations(key) if key else None
+
+        return SequenceViewResult(annotations=annotations)
+
+    def __repr__(self) -> str:
+        return (
+            f"SequenceView("
+            f"cache_id='{self._cache_id}', "
+            f"filters={self._filters}, "
+            f"interactivity={self._interactivity})"
+        )
+
+
+# Type hint import for __call__
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ..core.state import StateManager
