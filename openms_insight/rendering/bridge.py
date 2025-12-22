@@ -314,6 +314,21 @@ def render_component(
     if key is None:
         key = f"svc_{component._cache_id}_{hash(str(component._interactivity))}"
 
+    # Check if component has required filters without values
+    # Don't send potentially huge unfiltered datasets - wait for filter selection
+    filters = getattr(component, '_filters', None) or {}
+    filter_defaults = getattr(component, '_filter_defaults', None) or {}
+
+    awaiting_filter = False
+    if filters:
+        # Check each filter - if no value AND no default, we're waiting
+        for identifier in filters.keys():
+            filter_value = state.get(identifier)
+            has_default = identifier in filter_defaults
+            if filter_value is None and not has_default:
+                awaiting_filter = True
+                break
+
     # Extract state keys that affect this component's data for cache key
     # This includes filters and any additional dependencies (e.g., zoom for heatmaps)
     # Uses get_state_dependencies() which can be overridden by subclasses
@@ -332,13 +347,19 @@ def render_component(
     component_type = component._get_vue_component_name()
     component_id = f"{component_type}:{key}"
 
-    # Get component data using per-component cache
-    # Each component stores exactly one entry (current filter state)
-    # - Filterless components: filter_state=() always → always cache hit
-    # - Filtered components: cache hit when filter values unchanged
-    vue_data, data_hash = _prepare_vue_data_cached(
-        component, component_id, filter_state_hashable, relevant_state
-    )
+    # Skip data preparation if awaiting required filter selection
+    # This prevents sending huge unfiltered datasets
+    if awaiting_filter:
+        vue_data = {}
+        data_hash = "awaiting_filter"
+    else:
+        # Get component data using per-component cache
+        # Each component stores exactly one entry (current filter state)
+        # - Filterless components: filter_state=() always → always cache hit
+        # - Filtered components: cache hit when filter values unchanged
+        vue_data, data_hash = _prepare_vue_data_cached(
+            component, component_id, filter_state_hashable, relevant_state
+        )
 
     component_args = component._get_component_args()
 
@@ -385,6 +406,7 @@ def render_component(
             'selection_store': state,
             'hash': data_hash,
             'dataChanged': True,
+            'awaitingFilter': awaiting_filter,
         }
         # Note: We don't pre-set the hash here anymore. We trust Vue's echo
         # at the end of the render cycle. This ensures we detect when Vue
@@ -395,6 +417,7 @@ def render_component(
             'selection_store': state,
             'hash': data_hash,
             'dataChanged': False,
+            'awaitingFilter': awaiting_filter,
         }
 
     # Add height to component args if specified
