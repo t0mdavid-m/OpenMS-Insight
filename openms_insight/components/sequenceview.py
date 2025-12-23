@@ -614,6 +614,9 @@ class SequenceView:
             "modifications": modifications,
             "theoretical_mass": theoretical_mass,
             "fixed_modifications": [],
+            # Include tolerance settings for Vue initialization
+            "fragment_tolerance": self._annotation_config.get("tolerance"),
+            "fragment_tolerance_ppm": self._annotation_config.get("tolerance_ppm"),
             **fragment_masses,
         }
 
