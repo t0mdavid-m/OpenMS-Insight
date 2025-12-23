@@ -545,6 +545,51 @@ class TestInteractivityMapping:
         mapping = plot.get_interactivity_mapping()
         assert mapping == {"peak": "peak_id"}
 
+    def test_table_interactivity_columns_in_vue_data(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        """Test that interactivity columns are included in Vue data even if not in column_definitions.
+
+        This is a regression test for a bug where interactivity columns were filtered out
+        of the data sent to Vue, causing row clicks to not update selections properly.
+        """
+        # Create data with columns for interactivity that are NOT in column_definitions
+        data = pl.LazyFrame({
+            "id": [1, 2, 3],
+            "name": ["a", "b", "c"],
+            "file_index": [10, 20, 30],  # interactivity column, not displayed
+            "scan_id": [100, 200, 300],  # interactivity column, not displayed
+        })
+
+        table = Table(
+            cache_id="test_table_interact_cols",
+            data=data,
+            cache_path=str(temp_cache_dir),
+            # Only 'name' is in column_definitions
+            column_definitions=[
+                {"field": "name", "title": "Name"},
+            ],
+            # But interactivity references columns NOT in column_definitions
+            interactivity={"file": "file_index", "spectrum": "scan_id"},
+            index_field="id",
+        )
+
+        state = {}
+        vue_data = table._prepare_vue_data(state)
+
+        # The Vue data should include interactivity columns even though
+        # they're not in column_definitions
+        df = vue_data["tableData"]
+        columns = list(df.columns)
+
+        # Verify interactivity columns are present
+        assert "file_index" in columns, "Interactivity column 'file_index' missing from Vue data"
+        assert "scan_id" in columns, "Interactivity column 'scan_id' missing from Vue data"
+
+        # Verify we can access the values
+        assert df["file_index"].tolist() == [10, 20, 30]
+        assert df["scan_id"].tolist() == [100, 200, 300]
+
 
 class TestComponentVueArgsKeys:
     """Tests verifying Vue component args have required keys."""

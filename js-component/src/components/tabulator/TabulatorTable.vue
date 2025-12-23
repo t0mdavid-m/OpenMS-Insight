@@ -220,10 +220,17 @@ export default defineComponent({
     },
     preparedTableData(): Record<string, unknown>[] {
       const indexField = this.args.tableIndexField || 'id'
-      const columns = [
+      const interactivity = this.args.interactivity || {}
+      const interactivityColumns = Object.values(interactivity) as string[]
+
+      // Include all columns needed: visible columns, index field, and interactivity columns
+      const allColumns = [
         ...(this.args.columnDefinitions || []).map((col) => col.field),
         indexField,
+        ...interactivityColumns,
       ]
+      // Deduplicate columns
+      const columns = [...new Set(allColumns)]
 
       if (this.tableData.length > 0) {
         const result: Record<string, unknown>[] = []
