@@ -275,7 +275,7 @@ export default defineComponent({
     },
     /** Maximum charge state to consider for fragment matching */
     maxCharge(): number {
-      return (this.args.precursorCharge as number) ?? 1
+      return (this.streamlitDataStore.allDataForDrawing?.precursorCharge as number) ?? 1
     },
     sequence(): string[] {
       return this.sequenceData?.sequence ?? []
