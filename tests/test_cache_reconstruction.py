@@ -13,10 +13,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from openms_insight.components.table import Table
-from openms_insight.components.lineplot import LinePlot
 from openms_insight.components.heatmap import Heatmap
+from openms_insight.components.lineplot import LinePlot
 from openms_insight.components.sequenceview import SequenceView
+from openms_insight.components.table import Table
 from openms_insight.core.cache import CacheMissError
 
 
@@ -29,7 +29,7 @@ class TestTableCacheReconstruction:
         """Test that Table creates cache when initialized with data."""
         cache_id = "test_table"
 
-        table = Table(
+        Table(
             cache_id=cache_id,
             data=sample_table_data,
             cache_path=str(temp_cache_dir),
@@ -136,7 +136,7 @@ class TestLinePlotCacheReconstruction:
         """Test that LinePlot creates cache when initialized with data."""
         cache_id = "test_lineplot"
 
-        plot = LinePlot(
+        LinePlot(
             cache_id=cache_id,
             data=sample_lineplot_data,
             cache_path=str(temp_cache_dir),
@@ -242,7 +242,7 @@ class TestHeatmapCacheReconstruction:
         """Test that Heatmap creates cache when initialized with data."""
         cache_id = "test_heatmap"
 
-        heatmap = Heatmap(
+        Heatmap(
             cache_id=cache_id,
             data=sample_heatmap_data,
             cache_path=str(temp_cache_dir),
@@ -344,7 +344,7 @@ class TestSequenceViewCacheReconstruction:
         """Test that SequenceView creates cache when initialized with data."""
         cache_id = "test_sequenceview"
 
-        sv = SequenceView(
+        SequenceView(
             cache_id=cache_id,
             sequence_data=sample_sequence_data,
             peaks_data=sample_peaks_data,
@@ -356,7 +356,9 @@ class TestSequenceViewCacheReconstruction:
         cache_dir = temp_cache_dir / cache_id
         assert cache_dir.exists(), "Cache directory should be created"
         assert (cache_dir / ".cache_config.json").exists(), "Config file should exist"
-        assert (cache_dir / "sequences.parquet").exists(), "Sequences parquet should exist"
+        assert (cache_dir / "sequences.parquet").exists(), (
+            "Sequences parquet should exist"
+        )
         assert (cache_dir / "peaks.parquet").exists(), "Peaks parquet should exist"
 
     def test_sequenceview_reconstructs_from_cache_only(
@@ -444,7 +446,9 @@ class TestSequenceViewCacheReconstruction:
         )
 
         # Get original data counts
-        original_seq_count = original._cached_sequences.select(pl.len()).collect().item()
+        original_seq_count = (
+            original._cached_sequences.select(pl.len()).collect().item()
+        )
         original_peaks_count = original._cached_peaks.select(pl.len()).collect().item()
 
         # Reconstruct from cache only
@@ -454,8 +458,12 @@ class TestSequenceViewCacheReconstruction:
         )
 
         # Get reconstructed data counts
-        reconstructed_seq_count = reconstructed._cached_sequences.select(pl.len()).collect().item()
-        reconstructed_peaks_count = reconstructed._cached_peaks.select(pl.len()).collect().item()
+        reconstructed_seq_count = (
+            reconstructed._cached_sequences.select(pl.len()).collect().item()
+        )
+        reconstructed_peaks_count = (
+            reconstructed._cached_peaks.select(pl.len()).collect().item()
+        )
 
         # Verify equivalence
         assert reconstructed_seq_count == original_seq_count
@@ -725,6 +733,7 @@ class TestRegenerateCache:
 
         # Get original manifest time
         import json
+
         manifest_path = temp_cache_dir / cache_id / "manifest.json"
         with open(manifest_path) as f:
             original_manifest = json.load(f)
@@ -732,6 +741,7 @@ class TestRegenerateCache:
 
         # Wait a tiny bit and regenerate with new config
         import time
+
         time.sleep(0.01)
 
         Table(

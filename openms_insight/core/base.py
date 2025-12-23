@@ -1,11 +1,12 @@
 """Base component class for all visualization components."""
 
-from abc import ABC, abstractmethod
-from datetime import datetime
 import hashlib
 import json
+from abc import ABC, abstractmethod
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
 import polars as pl
 
 from .cache import CacheMissError, get_cache_dir
@@ -50,7 +51,7 @@ class BaseComponent(ABC):
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize the component.
@@ -102,18 +103,18 @@ class BaseComponent(ABC):
         # Note: We only check filters/interactivity/filter_defaults because component-
         # specific kwargs always have default values passed by subclasses
         has_config = (
-            filters is not None or
-            filter_defaults is not None or
-            interactivity is not None
+            filters is not None
+            or filter_defaults is not None
+            or interactivity is not None
         )
 
         if not has_data and not regenerate_cache:
             # Reconstruction mode - only cache_id and cache_path allowed
             if has_config:
                 raise CacheMissError(
-                    f"Configuration arguments (filters, interactivity, filter_defaults) "
-                    f"require data= or data_path= to be provided. "
-                    f"For reconstruction from cache, use only cache_id and cache_path."
+                    "Configuration arguments (filters, interactivity, filter_defaults) "
+                    "require data= or data_path= to be provided. "
+                    "For reconstruction from cache, use only cache_id and cache_path."
                 )
             if not self._cache_exists():
                 raise CacheMissError(
@@ -126,7 +127,7 @@ class BaseComponent(ABC):
             # Creation mode - use provided config
             if not has_data:
                 raise CacheMissError(
-                    f"regenerate_cache=True requires data= or data_path= to be provided."
+                    "regenerate_cache=True requires data= or data_path= to be provided."
                 )
 
             self._filters = filters or {}
@@ -137,6 +138,7 @@ class BaseComponent(ABC):
             if data_path is not None:
                 # Subprocess preprocessing - memory released after cache creation
                 from .subprocess_preprocess import preprocess_component
+
                 preprocess_component(
                     type(self),
                     data_path=data_path,
@@ -145,7 +147,7 @@ class BaseComponent(ABC):
                     filters=filters,
                     filter_defaults=filter_defaults,
                     interactivity=interactivity,
-                    **kwargs
+                    **kwargs,
                 )
                 self._raw_data = None
                 self._load_from_cache()
@@ -195,7 +197,7 @@ class BaseComponent(ABC):
         config_dict = {
             "filters": self._filters,
             "interactivity": self._interactivity,
-            **self._get_cache_config()
+            **self._get_cache_config(),
         }
         config_str = json.dumps(config_dict, sort_keys=True, default=str)
         return hashlib.sha256(config_str.encode()).hexdigest()
@@ -292,7 +294,10 @@ class BaseComponent(ABC):
 
     def _save_to_cache(self) -> None:
         """Save preprocessed data to cache."""
-        from ..preprocessing.filtering import optimize_for_transfer, optimize_for_transfer_lazy
+        from ..preprocessing.filtering import (
+            optimize_for_transfer,
+            optimize_for_transfer_lazy,
+        )
 
         # Create directories
         self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -323,14 +328,14 @@ class BaseComponent(ABC):
                 # Apply streaming-safe optimization (Float64→Float32 only)
                 # Int64 bounds checking would require collect(), breaking streaming
                 value = optimize_for_transfer_lazy(value)
-                value.sink_parquet(filepath, compression='zstd')
+                value.sink_parquet(filepath, compression="zstd")
                 manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
                 # Full optimization including Int64→Int32 with bounds checking
                 value = optimize_for_transfer(value)
-                value.write_parquet(filepath, compression='zstd')
+                value.write_parquet(filepath, compression="zstd")
                 manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
@@ -388,10 +393,7 @@ class BaseComponent(ABC):
         pass
 
     @abstractmethod
-    def _prepare_vue_data(
-        self,
-        state: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Prepare data payload for Vue component.
 
@@ -460,8 +462,8 @@ class BaseComponent(ABC):
     def __call__(
         self,
         key: Optional[str] = None,
-        state_manager: Optional['StateManager'] = None,
-        height: Optional[int] = None
+        state_manager: Optional["StateManager"] = None,
+        height: Optional[int] = None,
     ) -> Any:
         """
         Render the component in Streamlit.
@@ -475,17 +477,14 @@ class BaseComponent(ABC):
         Returns:
             The value returned by the Vue component (usually selection state)
         """
-        from .state import get_default_state_manager
         from ..rendering.bridge import render_component
+        from .state import get_default_state_manager
 
         if state_manager is None:
             state_manager = get_default_state_manager()
 
         return render_component(
-            component=self,
-            state_manager=state_manager,
-            key=key,
-            height=height
+            component=self, state_manager=state_manager, key=key, height=height
         )
 
     def __repr__(self) -> str:

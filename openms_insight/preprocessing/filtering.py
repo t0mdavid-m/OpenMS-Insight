@@ -1,11 +1,10 @@
 """Data filtering utilities for selection-based filtering."""
 
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import hashlib
 import pandas as pd
 import polars as pl
-import streamlit as st
 
 
 def optimize_for_transfer(df: pl.DataFrame) -> pl.DataFrame:
@@ -35,10 +34,12 @@ def optimize_for_transfer(df: pl.DataFrame) -> pl.DataFrame:
         # JS safe integer is 2^53, but Int32 range is simpler and sufficient for most data
         if dtype == pl.Int64:
             # Get min/max in a single pass
-            stats = df.select([
-                pl.col(col).min().alias('min'),
-                pl.col(col).max().alias('max'),
-            ]).row(0)
+            stats = df.select(
+                [
+                    pl.col(col).min().alias("min"),
+                    pl.col(col).max().alias("max"),
+                ]
+            ).row(0)
             col_min, col_max = stats
 
             if col_min is not None and col_max is not None:
@@ -150,9 +151,18 @@ def compute_dataframe_hash(df: pl.DataFrame) -> str:
         # Add sum of numeric columns for content verification
         for col in df.columns:
             dtype = df[col].dtype
-            if dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-                         pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-                         pl.Float32, pl.Float64):
+            if dtype in (
+                pl.Int8,
+                pl.Int16,
+                pl.Int32,
+                pl.Int64,
+                pl.UInt8,
+                pl.UInt16,
+                pl.UInt32,
+                pl.UInt64,
+                pl.Float32,
+                pl.Float64,
+            ):
                 try:
                     col_sum = df[col].sum()
                     hash_parts.append(f"{col}:{col_sum}")
@@ -165,7 +175,7 @@ def compute_dataframe_hash(df: pl.DataFrame) -> str:
                     hash_parts.append(f"{col}_bool:{true_count}")
                 except Exception:
                     pass
-            elif dtype == pl.Utf8 and col.startswith('_dynamic'):
+            elif dtype == pl.Utf8 and col.startswith("_dynamic"):
                 # Hash content of dynamic string columns (annotations)
                 try:
                     # Use hash of all non-empty values for annotation text
@@ -368,10 +378,10 @@ def filter_by_range(
         data = data.lazy()
 
     return data.filter(
-        (pl.col(x_column) >= x_range[0]) &
-        (pl.col(x_column) <= x_range[1]) &
-        (pl.col(y_column) >= y_range[0]) &
-        (pl.col(y_column) <= y_range[1])
+        (pl.col(x_column) >= x_range[0])
+        & (pl.col(x_column) <= x_range[1])
+        & (pl.col(y_column) >= y_range[0])
+        & (pl.col(y_column) <= y_range[1])
     )
 
 

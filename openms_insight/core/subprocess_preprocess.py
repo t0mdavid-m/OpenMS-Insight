@@ -91,6 +91,4 @@ def preprocess_component(
             )
 
     if process.exitcode != 0:
-        raise RuntimeError(
-            f"Preprocessing failed with exit code {process.exitcode}"
-        )
+        raise RuntimeError(f"Preprocessing failed with exit code {process.exitcode}")

@@ -10,16 +10,13 @@ Note: Fixtures (temp_cache_dir, sample_*_data, mock_streamlit) are defined in co
 """
 
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch
 
 import polars as pl
-import pytest
 
-from openms_insight.components.table import Table
-from openms_insight.components.lineplot import LinePlot
 from openms_insight.components.heatmap import Heatmap
+from openms_insight.components.lineplot import LinePlot
 from openms_insight.components.sequenceview import SequenceView
+from openms_insight.components.table import Table
 from openms_insight.core.state import StateManager, reset_default_state_manager
 
 
@@ -202,7 +199,7 @@ class TestLinePlotStreamlitConstruction:
         )
 
         state = {}
-        vue_data = plot._prepare_vue_data(state)
+        plot._prepare_vue_data(state)
         args = plot._get_component_args()
 
         assert args.get("highlightColumn") == "annotation"
@@ -348,9 +345,7 @@ class TestSequenceViewStreamlitConstruction:
         # Sequence is returned as array of characters for Vue
         assert "".join(seq_data["sequence"]) == "PEPTIDER"
 
-    def test_sequenceview_static_sequence(
-        self, mock_streamlit, temp_cache_dir: Path
-    ):
+    def test_sequenceview_static_sequence(self, mock_streamlit, temp_cache_dir: Path):
         """Test that SequenceView with static sequence works."""
         sv = SequenceView(
             cache_id="test_sequenceview_static",
@@ -554,12 +549,14 @@ class TestInteractivityMapping:
         of the data sent to Vue, causing row clicks to not update selections properly.
         """
         # Create data with columns for interactivity that are NOT in column_definitions
-        data = pl.LazyFrame({
-            "id": [1, 2, 3],
-            "name": ["a", "b", "c"],
-            "file_index": [10, 20, 30],  # interactivity column, not displayed
-            "scan_id": [100, 200, 300],  # interactivity column, not displayed
-        })
+        data = pl.LazyFrame(
+            {
+                "id": [1, 2, 3],
+                "name": ["a", "b", "c"],
+                "file_index": [10, 20, 30],  # interactivity column, not displayed
+                "scan_id": [100, 200, 300],  # interactivity column, not displayed
+            }
+        )
 
         table = Table(
             cache_id="test_table_interact_cols",
@@ -583,8 +580,12 @@ class TestInteractivityMapping:
         columns = list(df.columns)
 
         # Verify interactivity columns are present
-        assert "file_index" in columns, "Interactivity column 'file_index' missing from Vue data"
-        assert "scan_id" in columns, "Interactivity column 'scan_id' missing from Vue data"
+        assert "file_index" in columns, (
+            "Interactivity column 'file_index' missing from Vue data"
+        )
+        assert "scan_id" in columns, (
+            "Interactivity column 'scan_id' missing from Vue data"
+        )
 
         # Verify we can access the values
         assert df["file_index"].tolist() == [10, 20, 30]

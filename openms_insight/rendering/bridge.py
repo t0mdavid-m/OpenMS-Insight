@@ -29,6 +29,7 @@ def _make_hashable(value: Any) -> Any:
         return json.dumps(value)
     return value
 
+
 if TYPE_CHECKING:
     from ..core.base import BaseComponent
     from ..core.state import StateManager
@@ -68,7 +69,9 @@ def clear_component_cache() -> None:
         st.session_state[_COMPONENT_DATA_CACHE_KEY].clear()
 
 
-def _store_component_annotations(component_key: str, annotations: Dict[str, Any]) -> None:
+def _store_component_annotations(
+    component_key: str, annotations: Dict[str, Any]
+) -> None:
     """
     Store annotations returned by a Vue component.
 
@@ -162,7 +165,7 @@ def _set_cached_vue_data(
 
 
 def _prepare_vue_data_cached(
-    component: 'BaseComponent',
+    component: "BaseComponent",
     component_id: str,
     filter_state_hashable: Tuple[Tuple[str, Any], ...],
     state_dict: Dict[str, Any],
@@ -188,7 +191,9 @@ def _prepare_vue_data_cached(
         Tuple of (vue_data dict, data_hash string)
     """
     # Check if component has dynamic annotations (e.g., LinePlot linked to SequenceView)
-    has_dynamic_annotations = getattr(component, '_dynamic_annotations', None) is not None
+    has_dynamic_annotations = (
+        getattr(component, "_dynamic_annotations", None) is not None
+    )
 
     # Try cache first (works for ALL components now)
     cached = _get_cached_vue_data(component_id, filter_state_hashable)
@@ -199,7 +204,7 @@ def _prepare_vue_data_cached(
         if has_dynamic_annotations:
             # Cache hit but need to re-apply annotations (they may have changed)
             # Use component method to apply fresh annotations to cached base data
-            if hasattr(component, '_apply_fresh_annotations'):
+            if hasattr(component, "_apply_fresh_annotations"):
                 # Shallow copy to avoid mutating cache
                 vue_data = component._apply_fresh_annotations(dict(cached_data))
                 # Hash final data (includes new annotations)
@@ -219,11 +224,11 @@ def _prepare_vue_data_cached(
 
     if has_dynamic_annotations:
         # Store BASE data (without dynamic annotation columns) in cache
-        if hasattr(component, '_strip_dynamic_columns'):
+        if hasattr(component, "_strip_dynamic_columns"):
             base_data = component._strip_dynamic_columns(vue_data)
         else:
             # Fallback: store without _plotConfig (may have stale column refs)
-            base_data = {k: v for k, v in vue_data.items() if k != '_plotConfig'}
+            base_data = {k: v for k, v in vue_data.items() if k != "_plotConfig"}
         base_hash = _hash_data(base_data)
         _set_cached_vue_data(component_id, filter_state_hashable, base_data, base_hash)
 
@@ -250,11 +255,11 @@ def get_vue_component_function():
         import streamlit.components.v1 as st_components
 
         # Check for development mode
-        dev_mode = os.environ.get('SVC_DEV_MODE', 'false').lower() == 'true'
+        dev_mode = os.environ.get("SVC_DEV_MODE", "false").lower() == "true"
 
         if dev_mode:
             # Development mode: connect to Vite dev server
-            dev_url = os.environ.get('SVC_DEV_URL', 'http://localhost:5173')
+            dev_url = os.environ.get("SVC_DEV_URL", "http://localhost:5173")
             _vue_component_func = st_components.declare_component(
                 "streamlit_vue_component",
                 url=dev_url,
@@ -262,7 +267,7 @@ def get_vue_component_function():
         else:
             # Production mode: use built component
             parent_dir = os.path.dirname(os.path.abspath(__file__))
-            build_dir = os.path.join(parent_dir, '..', 'js-component', 'dist')
+            build_dir = os.path.join(parent_dir, "..", "js-component", "dist")
 
             if not os.path.exists(build_dir):
                 raise RuntimeError(
@@ -280,8 +285,8 @@ def get_vue_component_function():
 
 
 def render_component(
-    component: 'BaseComponent',
-    state_manager: 'StateManager',
+    component: "BaseComponent",
+    state_manager: "StateManager",
     key: Optional[str] = None,
     height: Optional[int] = None,
 ) -> Any:
@@ -316,8 +321,8 @@ def render_component(
 
     # Check if component has required filters without values
     # Don't send potentially huge unfiltered datasets - wait for filter selection
-    filters = getattr(component, '_filters', None) or {}
-    filter_defaults = getattr(component, '_filter_defaults', None) or {}
+    filters = getattr(component, "_filters", None) or {}
+    filter_defaults = getattr(component, "_filter_defaults", None) or {}
 
     awaiting_filter = False
     if filters:
@@ -335,9 +340,9 @@ def render_component(
     state_keys = set(component.get_state_dependencies())
 
     # Build hashable version for cache key (converts dicts/lists to JSON strings)
-    filter_state_hashable = tuple(sorted(
-        (k, _make_hashable(state.get(k))) for k in state_keys
-    ))
+    filter_state_hashable = tuple(
+        sorted((k, _make_hashable(state.get(k))) for k in state_keys)
+    )
 
     # Build original state dict for passing to _prepare_vue_data
     # (contains actual values, not JSON strings)
@@ -391,7 +396,7 @@ def render_component(
         # Filter out _hash (internal metadata) but keep _plotConfig (needed by Vue)
         converted_data = {}
         for data_key, value in vue_data.items():
-            if data_key == '_hash':
+            if data_key == "_hash":
                 # Skip internal hash metadata
                 continue
             if isinstance(value, pl.LazyFrame):
@@ -403,10 +408,10 @@ def render_component(
             # pandas DataFrames pass through unchanged (optimal for Arrow)
         data_payload = {
             **converted_data,
-            'selection_store': state,
-            'hash': data_hash,
-            'dataChanged': True,
-            'awaitingFilter': awaiting_filter,
+            "selection_store": state,
+            "hash": data_hash,
+            "dataChanged": True,
+            "awaitingFilter": awaiting_filter,
         }
         # Note: We don't pre-set the hash here anymore. We trust Vue's echo
         # at the end of the render cycle. This ensures we detect when Vue
@@ -414,29 +419,29 @@ def render_component(
     else:
         # Data unchanged - only send hash and state, Vue will use cached data
         data_payload = {
-            'selection_store': state,
-            'hash': data_hash,
-            'dataChanged': False,
-            'awaitingFilter': awaiting_filter,
+            "selection_store": state,
+            "hash": data_hash,
+            "dataChanged": False,
+            "awaitingFilter": awaiting_filter,
         }
 
     # Add height to component args if specified
     if height is not None:
-        component_args['height'] = height
+        component_args["height"] = height
 
     # Component layout: [[{componentArgs: {...}}]]
-    components = [[{'componentArgs': component_args}]]
+    components = [[{"componentArgs": component_args}]]
 
     # Call Vue component
     vue_func = get_vue_component_function()
 
     kwargs = {
-        'components': components,
-        'key': key,
+        "components": components,
+        "key": key,
         **data_payload,
     }
     if height is not None:
-        kwargs['height'] = height
+        kwargs["height"] = height
 
     result = vue_func(**kwargs)
 
@@ -445,17 +450,17 @@ def render_component(
         # Store Vue's echoed hash for next render comparison
         # ALWAYS update from Vue's echo - if Vue lost its data (page navigation),
         # it echoes None, and we need to know that to resend data next time
-        vue_hash = result.get('_vueDataHash')
+        vue_hash = result.get("_vueDataHash")
         st.session_state[_VUE_ECHOED_HASH_KEY][hash_tracking_key] = vue_hash
 
         # Capture annotations from Vue (e.g., from SequenceView)
         # Use hash-based change detection for robustness
-        annotations = result.get('_annotations')
+        annotations = result.get("_annotations")
         annotations_changed = False
 
         if annotations is not None:
             # Compute hash of new annotations
-            peak_ids = annotations.get('peak_id', [])
+            peak_ids = annotations.get("peak_id", [])
             new_hash = hash(tuple(peak_ids)) if peak_ids else 0
 
             # Compare with stored hash
@@ -501,7 +506,7 @@ def _hash_data(data: Dict[str, Any]) -> str:
     hash_parts = []
     for key, value in sorted(data.items()):
         # Skip internal metadata but NOT dynamic annotation columns
-        if key.startswith('_') and not key.startswith('_dynamic'):
+        if key.startswith("_") and not key.startswith("_dynamic"):
             continue
         if isinstance(value, pd.DataFrame):
             # Efficient hash for DataFrames

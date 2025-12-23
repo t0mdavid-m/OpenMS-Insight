@@ -5,16 +5,15 @@ This package provides reusable, interactive Streamlit components backed by Vue.j
 visualizations with cross-component selection state management.
 """
 
-from .core.base import BaseComponent
-from .core.state import StateManager
-from .core.registry import register_component, get_component_class
-from .core.cache import CacheMissError
-from .rendering.bridge import get_component_annotations, clear_component_annotations
-
-from .components.table import Table
-from .components.lineplot import LinePlot
 from .components.heatmap import Heatmap
+from .components.lineplot import LinePlot
 from .components.sequenceview import SequenceView, SequenceViewResult
+from .components.table import Table
+from .core.base import BaseComponent
+from .core.cache import CacheMissError
+from .core.registry import get_component_class, register_component
+from .core.state import StateManager
+from .rendering.bridge import clear_component_annotations, get_component_annotations
 
 __version__ = "0.1.0"
 

@@ -22,10 +22,10 @@ def _make_zoom_cache_key(zoom: Optional[Dict[str, Any]]) -> tuple:
     if zoom is None:
         return (None,)
     return (
-        ('x0', zoom.get('xRange', [-1, -1])[0]),
-        ('x1', zoom.get('xRange', [-1, -1])[1]),
-        ('y0', zoom.get('yRange', [-1, -1])[0]),
-        ('y1', zoom.get('yRange', [-1, -1])[1]),
+        ("x0", zoom.get("xRange", [-1, -1])[0]),
+        ("x1", zoom.get("xRange", [-1, -1])[1]),
+        ("y0", zoom.get("yRange", [-1, -1])[0]),
+        ("y1", zoom.get("yRange", [-1, -1])[1]),
     )
 
 
@@ -79,15 +79,15 @@ class Heatmap(BaseComponent):
         min_points: int = 20000,
         x_bins: int = 400,
         y_bins: int = 50,
-        zoom_identifier: str = 'heatmap_zoom',
+        zoom_identifier: str = "heatmap_zoom",
         title: Optional[str] = None,
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
-        colorscale: str = 'Portland',
+        colorscale: str = "Portland",
         use_simple_downsample: bool = False,
         use_streaming: bool = True,
         categorical_filters: Optional[List[str]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize the Heatmap component.
@@ -165,7 +165,7 @@ class Heatmap(BaseComponent):
             use_simple_downsample=use_simple_downsample,
             use_streaming=use_streaming,
             categorical_filters=categorical_filters,
-            **kwargs
+            **kwargs,
         )
 
     def _get_cache_config(self) -> Dict[str, Any]:
@@ -176,38 +176,38 @@ class Heatmap(BaseComponent):
             Dict of config values that affect preprocessing
         """
         return {
-            'x_column': self._x_column,
-            'y_column': self._y_column,
-            'intensity_column': self._intensity_column,
-            'min_points': self._min_points,
-            'x_bins': self._x_bins,
-            'y_bins': self._y_bins,
-            'use_simple_downsample': self._use_simple_downsample,
-            'use_streaming': self._use_streaming,
-            'categorical_filters': sorted(self._categorical_filters),
-            'zoom_identifier': self._zoom_identifier,
-            'title': self._title,
-            'x_label': self._x_label,
-            'y_label': self._y_label,
-            'colorscale': self._colorscale,
+            "x_column": self._x_column,
+            "y_column": self._y_column,
+            "intensity_column": self._intensity_column,
+            "min_points": self._min_points,
+            "x_bins": self._x_bins,
+            "y_bins": self._y_bins,
+            "use_simple_downsample": self._use_simple_downsample,
+            "use_streaming": self._use_streaming,
+            "categorical_filters": sorted(self._categorical_filters),
+            "zoom_identifier": self._zoom_identifier,
+            "title": self._title,
+            "x_label": self._x_label,
+            "y_label": self._y_label,
+            "colorscale": self._colorscale,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
-        self._x_column = config.get('x_column')
-        self._y_column = config.get('y_column')
-        self._intensity_column = config.get('intensity_column', 'intensity')
-        self._min_points = config.get('min_points', 20000)
-        self._x_bins = config.get('x_bins', 400)
-        self._y_bins = config.get('y_bins', 50)
-        self._use_simple_downsample = config.get('use_simple_downsample', False)
-        self._use_streaming = config.get('use_streaming', True)
-        self._categorical_filters = config.get('categorical_filters', [])
-        self._zoom_identifier = config.get('zoom_identifier', 'heatmap_zoom')
-        self._title = config.get('title')
-        self._x_label = config.get('x_label', self._x_column)
-        self._y_label = config.get('y_label', self._y_column)
-        self._colorscale = config.get('colorscale', 'Portland')
+        self._x_column = config.get("x_column")
+        self._y_column = config.get("y_column")
+        self._intensity_column = config.get("intensity_column", "intensity")
+        self._min_points = config.get("min_points", 20000)
+        self._x_bins = config.get("x_bins", 400)
+        self._y_bins = config.get("y_bins", 50)
+        self._use_simple_downsample = config.get("use_simple_downsample", False)
+        self._use_streaming = config.get("use_streaming", True)
+        self._categorical_filters = config.get("categorical_filters", [])
+        self._zoom_identifier = config.get("zoom_identifier", "heatmap_zoom")
+        self._title = config.get("title")
+        self._x_label = config.get("x_label", self._x_column)
+        self._y_label = config.get("y_label", self._y_column)
+        self._colorscale = config.get("colorscale", "Portland")
 
     def get_state_dependencies(self) -> list:
         """
@@ -266,53 +266,71 @@ class Heatmap(BaseComponent):
             self._x_column,
             self._y_column,
         )
-        self._preprocessed_data['x_range'] = x_range
-        self._preprocessed_data['y_range'] = y_range
+        self._preprocessed_data["x_range"] = x_range
+        self._preprocessed_data["y_range"] = y_range
 
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
-        self._preprocessed_data['total'] = total
+        self._preprocessed_data["total"] = total
 
         # Store metadata about categorical filters
-        self._preprocessed_data['has_categorical_filters'] = True
-        self._preprocessed_data['categorical_filter_values'] = {}
+        self._preprocessed_data["has_categorical_filters"] = True
+        self._preprocessed_data["categorical_filter_values"] = {}
 
         # Process each categorical filter
         for filter_id in self._categorical_filters:
             if filter_id not in self._filters:
-                print(f"[HEATMAP] Warning: categorical_filter '{filter_id}' not in filters, skipping", file=sys.stderr)
+                print(
+                    f"[HEATMAP] Warning: categorical_filter '{filter_id}' not in filters, skipping",
+                    file=sys.stderr,
+                )
                 continue
 
             column_name = self._filters[filter_id]
 
             # Get unique values for this filter
             unique_values = (
-                self._raw_data
-                .select(pl.col(column_name))
+                self._raw_data.select(pl.col(column_name))
                 .unique()
                 .collect()
                 .to_series()
                 .to_list()
             )
-            unique_values = sorted([v for v in unique_values if v is not None and v >= 0])
+            unique_values = sorted(
+                [v for v in unique_values if v is not None and v >= 0]
+            )
 
-            print(f"[HEATMAP] Categorical filter '{filter_id}' ({column_name}): {len(unique_values)} unique values", file=sys.stderr)
+            print(
+                f"[HEATMAP] Categorical filter '{filter_id}' ({column_name}): {len(unique_values)} unique values",
+                file=sys.stderr,
+            )
 
-            self._preprocessed_data['categorical_filter_values'][filter_id] = unique_values
+            self._preprocessed_data["categorical_filter_values"][filter_id] = (
+                unique_values
+            )
 
             # Create compression levels for each filter value
             for filter_value in unique_values:
                 # Filter data to this value
-                filtered_data = self._raw_data.filter(pl.col(column_name) == filter_value)
+                filtered_data = self._raw_data.filter(
+                    pl.col(column_name) == filter_value
+                )
                 filtered_total = filtered_data.select(pl.len()).collect().item()
 
                 # Compute level sizes for this filtered subset
-                level_sizes = compute_compression_levels(self._min_points, filtered_total)
+                level_sizes = compute_compression_levels(
+                    self._min_points, filtered_total
+                )
 
-                print(f"[HEATMAP]   Value {filter_value}: {filtered_total:,} pts → levels {level_sizes}", file=sys.stderr)
+                print(
+                    f"[HEATMAP]   Value {filter_value}: {filtered_total:,} pts → levels {level_sizes}",
+                    file=sys.stderr,
+                )
 
                 # Store level sizes for this filter value
-                self._preprocessed_data[f'cat_level_sizes_{filter_id}_{filter_value}'] = level_sizes
+                self._preprocessed_data[
+                    f"cat_level_sizes_{filter_id}_{filter_value}"
+                ] = level_sizes
 
                 # Build each compressed level
                 for level_idx, target_size in enumerate(level_sizes):
@@ -341,22 +359,24 @@ class Heatmap(BaseComponent):
                     # Sort by x, y for efficient range query predicate pushdown
                     level = level.sort([self._x_column, self._y_column])
                     # Store LazyFrame for streaming to disk
-                    level_key = f'cat_level_{filter_id}_{filter_value}_{level_idx}'
+                    level_key = f"cat_level_{filter_id}_{filter_value}_{level_idx}"
                     self._preprocessed_data[level_key] = level  # Keep lazy
 
                 # Add full resolution as final level (for zoom fallback)
                 # Also sorted for consistent predicate pushdown behavior
                 num_compressed = len(level_sizes)
-                full_res_key = f'cat_level_{filter_id}_{filter_value}_{num_compressed}'
+                full_res_key = f"cat_level_{filter_id}_{filter_value}_{num_compressed}"
                 self._preprocessed_data[full_res_key] = filtered_data.sort(
                     [self._x_column, self._y_column]
                 )
-                self._preprocessed_data[f'cat_num_levels_{filter_id}_{filter_value}'] = num_compressed + 1
+                self._preprocessed_data[
+                    f"cat_num_levels_{filter_id}_{filter_value}"
+                ] = num_compressed + 1
 
         # Also create global levels for when no categorical filter is selected
         # (fallback to standard behavior)
         level_sizes = compute_compression_levels(self._min_points, total)
-        self._preprocessed_data['level_sizes'] = level_sizes
+        self._preprocessed_data["level_sizes"] = level_sizes
 
         for i, size in enumerate(level_sizes):
             # If target size equals total, skip downsampling - use all data
@@ -382,15 +402,15 @@ class Heatmap(BaseComponent):
                 )
             # Sort by x, y for efficient range query predicate pushdown
             level = level.sort([self._x_column, self._y_column])
-            self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
+            self._preprocessed_data[f"level_{i}"] = level  # Keep lazy
 
         # Add full resolution as final level (for zoom fallback)
         # Also sorted for consistent predicate pushdown behavior
         num_compressed = len(level_sizes)
-        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data.sort(
+        self._preprocessed_data[f"level_{num_compressed}"] = self._raw_data.sort(
             [self._x_column, self._y_column]
         )
-        self._preprocessed_data['num_levels'] = num_compressed + 1
+        self._preprocessed_data["num_levels"] = num_compressed + 1
 
     def _preprocess_streaming(self) -> None:
         """
@@ -405,19 +425,19 @@ class Heatmap(BaseComponent):
             self._x_column,
             self._y_column,
         )
-        self._preprocessed_data['x_range'] = x_range
-        self._preprocessed_data['y_range'] = y_range
+        self._preprocessed_data["x_range"] = x_range
+        self._preprocessed_data["y_range"] = y_range
 
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
-        self._preprocessed_data['total'] = total
+        self._preprocessed_data["total"] = total
 
         # Compute target sizes for levels
         level_sizes = compute_compression_levels(self._min_points, total)
-        self._preprocessed_data['level_sizes'] = level_sizes
+        self._preprocessed_data["level_sizes"] = level_sizes
 
         # Build and collect each level
-        self._preprocessed_data['levels'] = []
+        self._preprocessed_data["levels"] = []
 
         for i, size in enumerate(level_sizes):
             # If target size equals total, skip downsampling - use all data
@@ -446,17 +466,17 @@ class Heatmap(BaseComponent):
             level = level.sort([self._x_column, self._y_column])
             # Store LazyFrame for streaming to disk
             # Base class will use sink_parquet() to stream without full materialization
-            self._preprocessed_data[f'level_{i}'] = level  # Keep lazy
+            self._preprocessed_data[f"level_{i}"] = level  # Keep lazy
 
         # Add full resolution as final level (for zoom fallback)
         # Also sorted for consistent predicate pushdown behavior
         num_compressed = len(level_sizes)
-        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data.sort(
+        self._preprocessed_data[f"level_{num_compressed}"] = self._raw_data.sort(
             [self._x_column, self._y_column]
         )
 
         # Store number of levels for reconstruction (includes full resolution)
-        self._preprocessed_data['num_levels'] = num_compressed + 1
+        self._preprocessed_data["num_levels"] = num_compressed + 1
 
     def _preprocess_eager(self) -> None:
         """
@@ -472,16 +492,16 @@ class Heatmap(BaseComponent):
             self._x_column,
             self._y_column,
         )
-        self._preprocessed_data['x_range'] = x_range
-        self._preprocessed_data['y_range'] = y_range
+        self._preprocessed_data["x_range"] = x_range
+        self._preprocessed_data["y_range"] = y_range
 
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
-        self._preprocessed_data['total'] = total
+        self._preprocessed_data["total"] = total
 
         # Compute compression level target sizes
         level_sizes = compute_compression_levels(self._min_points, total)
-        self._preprocessed_data['level_sizes'] = level_sizes
+        self._preprocessed_data["level_sizes"] = level_sizes
 
         # Build levels from largest to smallest
         if level_sizes:
@@ -515,21 +535,23 @@ class Heatmap(BaseComponent):
                 # Store LazyFrame for streaming to disk
                 level_idx = len(level_sizes) - 1 - i
                 if isinstance(downsampled, pl.LazyFrame):
-                    self._preprocessed_data[f'level_{level_idx}'] = downsampled  # Keep lazy
+                    self._preprocessed_data[f"level_{level_idx}"] = (
+                        downsampled  # Keep lazy
+                    )
                 else:
                     # DataFrame from downsample_2d - convert back to lazy
-                    self._preprocessed_data[f'level_{level_idx}'] = downsampled.lazy()
+                    self._preprocessed_data[f"level_{level_idx}"] = downsampled.lazy()
                 current = downsampled
 
         # Add full resolution as final level (for zoom fallback)
         # Also sorted for consistent predicate pushdown behavior
         num_compressed = len(level_sizes)
-        self._preprocessed_data[f'level_{num_compressed}'] = self._raw_data.sort(
+        self._preprocessed_data[f"level_{num_compressed}"] = self._raw_data.sort(
             [self._x_column, self._y_column]
         )
 
         # Store number of levels for reconstruction (includes full resolution)
-        self._preprocessed_data['num_levels'] = num_compressed + 1
+        self._preprocessed_data["num_levels"] = num_compressed + 1
 
     def _get_levels(self) -> list:
         """
@@ -538,11 +560,11 @@ class Heatmap(BaseComponent):
         Reconstructs the levels list from preprocessed data,
         adding full resolution at the end.
         """
-        num_levels = self._preprocessed_data.get('num_levels', 0)
+        num_levels = self._preprocessed_data.get("num_levels", 0)
         levels = []
 
         for i in range(num_levels):
-            level_data = self._preprocessed_data.get(f'level_{i}')
+            level_data = self._preprocessed_data.get(f"level_{i}")
             if level_data is not None:
                 levels.append(level_data)
 
@@ -565,7 +587,7 @@ class Heatmap(BaseComponent):
             Returns ([], None) if no categorical levels exist for this filter
         """
         # Check if we have categorical levels for this filter/value
-        num_levels_key = f'cat_num_levels_{filter_id}_{filter_value}'
+        num_levels_key = f"cat_num_levels_{filter_id}_{filter_value}"
         num_levels = self._preprocessed_data.get(num_levels_key, 0)
 
         if num_levels == 0:
@@ -573,14 +595,16 @@ class Heatmap(BaseComponent):
 
         levels = []
         for i in range(num_levels):
-            level_key = f'cat_level_{filter_id}_{filter_value}_{i}'
+            level_key = f"cat_level_{filter_id}_{filter_value}_{i}"
             level_data = self._preprocessed_data.get(level_key)
             if level_data is not None:
                 levels.append(level_data)
 
         return levels, None  # Full resolution included in cached levels
 
-    def _get_levels_for_state(self, state: Dict[str, Any]) -> Tuple[list, Optional[pl.LazyFrame]]:
+    def _get_levels_for_state(
+        self, state: Dict[str, Any]
+    ) -> Tuple[list, Optional[pl.LazyFrame]]:
         """
         Get appropriate compression levels based on current filter state.
 
@@ -595,8 +619,10 @@ class Heatmap(BaseComponent):
             Tuple of (levels list, raw data for full resolution)
         """
         # Check if we have categorical filters and a selected value
-        if self._preprocessed_data.get('has_categorical_filters'):
-            cat_filter_values = self._preprocessed_data.get('categorical_filter_values', {})
+        if self._preprocessed_data.get("has_categorical_filters"):
+            cat_filter_values = self._preprocessed_data.get(
+                "categorical_filter_values", {}
+            )
 
             for filter_id in self._categorical_filters:
                 if filter_id not in cat_filter_values:
@@ -612,7 +638,9 @@ class Heatmap(BaseComponent):
 
                 # Check if this value has per-filter levels
                 if selected_value in cat_filter_values[filter_id]:
-                    levels, filtered_raw = self._get_categorical_levels(filter_id, selected_value)
+                    levels, filtered_raw = self._get_categorical_levels(
+                        filter_id, selected_value
+                    )
                     if levels:
                         return levels, filtered_raw
 
@@ -621,22 +649,19 @@ class Heatmap(BaseComponent):
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
-        return 'PlotlyHeatmap'
+        return "PlotlyHeatmap"
 
     def _get_data_key(self) -> str:
         """Return the key used to send primary data to Vue."""
-        return 'heatmapData'
+        return "heatmapData"
 
     def _is_no_zoom(self, zoom: Optional[Dict[str, Any]]) -> bool:
         """Check if zoom state represents no zoom (full view)."""
         if zoom is None:
             return True
-        x_range = zoom.get('xRange', [-1, -1])
-        y_range = zoom.get('yRange', [-1, -1])
-        return (
-            x_range[0] < 0 and x_range[1] < 0 and
-            y_range[0] < 0 and y_range[1] < 0
-        )
+        x_range = zoom.get("xRange", [-1, -1])
+        y_range = zoom.get("yRange", [-1, -1])
+        return x_range[0] < 0 and x_range[1] < 0 and y_range[0] < 0 and y_range[1] < 0
 
     def _select_level_for_zoom(
         self,
@@ -663,8 +688,9 @@ class Heatmap(BaseComponent):
             Filtered Polars DataFrame at appropriate resolution
         """
         import sys
-        x0, x1 = zoom['xRange']
-        y0, y1 = zoom['yRange']
+
+        x0, x1 = zoom["xRange"]
+        y0, y1 = zoom["yRange"]
 
         # Add raw data as final level if available
         all_levels = list(levels)
@@ -680,10 +706,10 @@ class Heatmap(BaseComponent):
 
             # Filter to zoom range
             filtered_lazy = level_data.filter(
-                (pl.col(self._x_column) >= x0) &
-                (pl.col(self._x_column) <= x1) &
-                (pl.col(self._y_column) >= y0) &
-                (pl.col(self._y_column) <= y1)
+                (pl.col(self._x_column) >= x0)
+                & (pl.col(self._x_column) <= x1)
+                & (pl.col(self._y_column) >= y0)
+                & (pl.col(self._y_column) <= y1)
             )
 
             # Apply non-categorical filters if any
@@ -702,7 +728,10 @@ class Heatmap(BaseComponent):
 
             count = len(filtered)
             last_filtered = filtered
-            print(f"[HEATMAP] Level {level_idx}: {count} pts in zoom range", file=sys.stderr)
+            print(
+                f"[HEATMAP] Level {level_idx}: {count} pts in zoom range",
+                file=sys.stderr,
+            )
 
             if count >= self._min_points:
                 # This level has enough detail
@@ -762,6 +791,7 @@ class Heatmap(BaseComponent):
             Dict with heatmapData (pandas DataFrame) and _hash for change detection
         """
         import sys
+
         zoom = state.get(self._zoom_identifier)
 
         # Build columns to select
@@ -783,7 +813,9 @@ class Heatmap(BaseComponent):
 
         # Get levels based on current state (may use per-filter levels)
         levels, filtered_raw = self._get_levels_for_state(state)
-        level_sizes = [len(l) if isinstance(l, pl.DataFrame) else '?' for l in levels]
+        level_sizes = [
+            len(lvl) if isinstance(lvl, pl.DataFrame) else "?" for lvl in levels
+        ]
 
         # Determine which filters still need to be applied at render time
         # (filters not in categorical_filters need runtime application)
@@ -797,12 +829,15 @@ class Heatmap(BaseComponent):
             # No zoom - use smallest level
             if not levels:
                 # No levels available
-                print(f"[HEATMAP] No levels available", file=sys.stderr)
-                return {'heatmapData': pl.DataFrame().to_pandas(), '_hash': ''}
+                print("[HEATMAP] No levels available", file=sys.stderr)
+                return {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}
 
             data = levels[0]
-            using_cat = self._preprocessed_data.get('has_categorical_filters', False)
-            print(f"[HEATMAP] No zoom → level 0 ({level_sizes[0]} pts), levels={level_sizes}, categorical={using_cat}", file=sys.stderr)
+            using_cat = self._preprocessed_data.get("has_categorical_filters", False)
+            print(
+                f"[HEATMAP] No zoom → level 0 ({level_sizes[0]} pts), levels={level_sizes}, categorical={using_cat}",
+                file=sys.stderr,
+            )
 
             # Ensure we have a LazyFrame
             if isinstance(data, pl.DataFrame):
@@ -818,7 +853,9 @@ class Heatmap(BaseComponent):
                     filter_defaults=self._filter_defaults,
                 )
                 # Sort by intensity ascending so high-intensity points are drawn on top
-                df_pandas = df_pandas.sort_values(self._intensity_column).reset_index(drop=True)
+                df_pandas = df_pandas.sort_values(self._intensity_column).reset_index(
+                    drop=True
+                )
             else:
                 # No filters to apply - levels already filtered by categorical filter
                 schema_names = data.collect_schema().names()
@@ -839,13 +876,16 @@ class Heatmap(BaseComponent):
             df_polars = df_polars.select(available_cols)
             # Sort by intensity ascending so high-intensity points are drawn on top
             df_polars = df_polars.sort(self._intensity_column)
-            print(f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}", file=sys.stderr)
+            print(
+                f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}",
+                file=sys.stderr,
+            )
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 
         return {
-            'heatmapData': df_pandas,
-            '_hash': data_hash,
+            "heatmapData": df_pandas,
+            "_hash": data_hash,
         }
 
     def _get_component_args(self) -> Dict[str, Any]:
@@ -856,19 +896,19 @@ class Heatmap(BaseComponent):
             Dict with all heatmap configuration for Vue
         """
         args: Dict[str, Any] = {
-            'componentType': self._get_vue_component_name(),
-            'xColumn': self._x_column,
-            'yColumn': self._y_column,
-            'intensityColumn': self._intensity_column,
-            'xLabel': self._x_label,
-            'yLabel': self._y_label,
-            'colorscale': self._colorscale,
-            'zoomIdentifier': self._zoom_identifier,
-            'interactivity': self._interactivity,
+            "componentType": self._get_vue_component_name(),
+            "xColumn": self._x_column,
+            "yColumn": self._y_column,
+            "intensityColumn": self._intensity_column,
+            "xLabel": self._x_label,
+            "yLabel": self._y_label,
+            "colorscale": self._colorscale,
+            "zoomIdentifier": self._zoom_identifier,
+            "interactivity": self._interactivity,
         }
 
         if self._title:
-            args['title'] = self._title
+            args["title"] = self._title
 
         # Add any extra config options
         args.update(self._config)
@@ -880,7 +920,7 @@ class Heatmap(BaseComponent):
         colorscale: Optional[str] = None,
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
-    ) -> 'Heatmap':
+    ) -> "Heatmap":
         """
         Update heatmap styling.
 

@@ -1,6 +1,6 @@
 """Line plot component using Plotly.js."""
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import polars as pl
 
@@ -54,8 +54,8 @@ class LinePlot(BaseComponent):
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
-        x_column: str = 'x',
-        y_column: str = 'y',
+        x_column: str = "x",
+        y_column: str = "y",
         title: Optional[str] = None,
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
@@ -63,7 +63,7 @@ class LinePlot(BaseComponent):
         annotation_column: Optional[str] = None,
         styling: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize the LinePlot component.
@@ -137,7 +137,7 @@ class LinePlot(BaseComponent):
             annotation_column=annotation_column,
             styling=styling,
             config=config,
-            **kwargs
+            **kwargs,
         )
 
     def _get_cache_config(self) -> Dict[str, Any]:
@@ -148,28 +148,28 @@ class LinePlot(BaseComponent):
             Dict of config values that affect preprocessing
         """
         return {
-            'x_column': self._x_column,
-            'y_column': self._y_column,
-            'highlight_column': self._highlight_column,
-            'annotation_column': self._annotation_column,
-            'title': self._title,
-            'x_label': self._x_label,
-            'y_label': self._y_label,
-            'styling': self._styling,
-            'plot_config': self._plot_config,
+            "x_column": self._x_column,
+            "y_column": self._y_column,
+            "highlight_column": self._highlight_column,
+            "annotation_column": self._annotation_column,
+            "title": self._title,
+            "x_label": self._x_label,
+            "y_label": self._y_label,
+            "styling": self._styling,
+            "plot_config": self._plot_config,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
-        self._x_column = config.get('x_column', 'x')
-        self._y_column = config.get('y_column', 'y')
-        self._highlight_column = config.get('highlight_column')
-        self._annotation_column = config.get('annotation_column')
-        self._title = config.get('title')
-        self._x_label = config.get('x_label', self._x_column)
-        self._y_label = config.get('y_label', self._y_column)
-        self._styling = config.get('styling', {})
-        self._plot_config = config.get('plot_config', {})
+        self._x_column = config.get("x_column", "x")
+        self._y_column = config.get("y_column", "y")
+        self._highlight_column = config.get("highlight_column")
+        self._annotation_column = config.get("annotation_column")
+        self._title = config.get("title")
+        self._x_label = config.get("x_label", self._x_column)
+        self._y_label = config.get("y_label", self._y_column)
+        self._styling = config.get("styling", {})
+        self._plot_config = config.get("plot_config", {})
         # Initialize dynamic annotations (not cached)
         self._dynamic_annotations = None
         self._dynamic_title = None
@@ -198,8 +198,10 @@ class LinePlot(BaseComponent):
         column_names = schema.names()
 
         # Validate x and y columns exist
-        for col_name, col_label in [(self._x_column, 'x_column'),
-                                     (self._y_column, 'y_column')]:
+        for col_name, col_label in [
+            (self._x_column, "x_column"),
+            (self._y_column, "y_column"),
+        ]:
             if col_name not in column_names:
                 raise ValueError(
                     f"{col_label} '{col_name}' not found in data. "
@@ -237,24 +239,24 @@ class LinePlot(BaseComponent):
             data = data.sort(sort_columns)
 
         # Store configuration in preprocessed data for serialization
-        self._preprocessed_data['plot_config'] = {
-            'x_column': self._x_column,
-            'y_column': self._y_column,
-            'highlight_column': self._highlight_column,
-            'annotation_column': self._annotation_column,
+        self._preprocessed_data["plot_config"] = {
+            "x_column": self._x_column,
+            "y_column": self._y_column,
+            "highlight_column": self._highlight_column,
+            "annotation_column": self._annotation_column,
         }
 
         # Store LazyFrame for streaming to disk (filter happens at render time)
         # Base class will use sink_parquet() to stream without full materialization
-        self._preprocessed_data['data'] = data  # Keep lazy
+        self._preprocessed_data["data"] = data  # Keep lazy
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
-        return 'PlotlyLineplotUnified'
+        return "PlotlyLineplotUnified"
 
     def _get_data_key(self) -> str:
         """Return the key used to send primary data to Vue."""
-        return 'plotData'
+        return "plotData"
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -289,7 +291,7 @@ class LinePlot(BaseComponent):
                     columns_to_select.append(col)
 
         # Get cached data (DataFrame or LazyFrame)
-        data = self._preprocessed_data.get('data')
+        data = self._preprocessed_data.get("data")
         if data is None:
             # Fallback to raw data if available
             data = self._raw_data
@@ -316,7 +318,7 @@ class LinePlot(BaseComponent):
         if self._dynamic_annotations and len(df_pandas) > 0:
             num_rows = len(df_pandas)
             highlights = [False] * num_rows
-            annotations = [''] * num_rows
+            annotations = [""] * num_rows
 
             # Get the interactivity column to use for lookup (e.g., 'peak_id')
             # Use the first interactivity column as the ID column for annotation lookup
@@ -330,35 +332,38 @@ class LinePlot(BaseComponent):
                 for row_idx, peak_id in enumerate(peak_ids):
                     if peak_id in self._dynamic_annotations:
                         ann_data = self._dynamic_annotations[peak_id]
-                        highlights[row_idx] = ann_data.get('highlight', False)
-                        annotations[row_idx] = ann_data.get('annotation', '')
+                        highlights[row_idx] = ann_data.get("highlight", False)
+                        annotations[row_idx] = ann_data.get("annotation", "")
             else:
                 # Fallback: use row index as key (legacy behavior)
                 for idx, ann_data in self._dynamic_annotations.items():
                     if isinstance(idx, int) and 0 <= idx < num_rows:
-                        highlights[idx] = ann_data.get('highlight', False)
-                        annotations[idx] = ann_data.get('annotation', '')
+                        highlights[idx] = ann_data.get("highlight", False)
+                        annotations[idx] = ann_data.get("annotation", "")
 
             # Add dynamic columns to dataframe
             df_pandas = df_pandas.copy()
-            df_pandas['_dynamic_highlight'] = highlights
-            df_pandas['_dynamic_annotation'] = annotations
+            df_pandas["_dynamic_highlight"] = highlights
+            df_pandas["_dynamic_annotation"] = annotations
 
             # Update column names to use dynamic columns
-            highlight_col = '_dynamic_highlight'
-            annotation_col = '_dynamic_annotation'
+            highlight_col = "_dynamic_highlight"
+            annotation_col = "_dynamic_annotation"
 
             # Update hash to include dynamic annotation state
             import hashlib
-            ann_hash = hashlib.md5(str(sorted(self._dynamic_annotations.keys())).encode()).hexdigest()[:8]
+
+            ann_hash = hashlib.md5(
+                str(sorted(self._dynamic_annotations.keys())).encode()
+            ).hexdigest()[:8]
             data_hash = f"{data_hash}_{ann_hash}"
 
         # Send as DataFrame for Arrow serialization (efficient binary transfer)
         # Vue will parse and extract columns using the config
         return {
-            'plotData': df_pandas,
-            '_hash': data_hash,
-            '_plotConfig': self._build_plot_config(highlight_col, annotation_col),
+            "plotData": df_pandas,
+            "_hash": data_hash,
+            "_plotConfig": self._build_plot_config(highlight_col, annotation_col),
         }
 
     def _get_component_args(self) -> Dict[str, Any]:
@@ -370,45 +375,45 @@ class LinePlot(BaseComponent):
         """
         # Default styling
         default_styling = {
-            'highlightColor': '#E4572E',
-            'selectedColor': '#F3A712',
-            'unhighlightedColor': 'lightblue',
-            'highlightHiddenColor': '#1f77b4',
-            'annotationColors': {
-                'massButton': '#E4572E',
-                'selectedMassButton': '#F3A712',
-                'sequenceArrow': '#E4572E',
-                'selectedSequenceArrow': '#F3A712',
-                'background': '#f0f0f0',
-                'buttonHover': '#e0e0e0',
-            }
+            "highlightColor": "#E4572E",
+            "selectedColor": "#F3A712",
+            "unhighlightedColor": "lightblue",
+            "highlightHiddenColor": "#1f77b4",
+            "annotationColors": {
+                "massButton": "#E4572E",
+                "selectedMassButton": "#F3A712",
+                "sequenceArrow": "#E4572E",
+                "selectedSequenceArrow": "#F3A712",
+                "background": "#f0f0f0",
+                "buttonHover": "#e0e0e0",
+            },
         }
 
         # Merge user styling with defaults
         styling = {**default_styling, **self._styling}
-        if 'annotationColors' in self._styling:
-            styling['annotationColors'] = {
-                **default_styling['annotationColors'],
-                **self._styling['annotationColors']
+        if "annotationColors" in self._styling:
+            styling["annotationColors"] = {
+                **default_styling["annotationColors"],
+                **self._styling["annotationColors"],
             }
 
         # Use dynamic title if set, otherwise static title
-        title = self._dynamic_title if self._dynamic_title else (self._title or '')
+        title = self._dynamic_title if self._dynamic_title else (self._title or "")
 
         args: Dict[str, Any] = {
-            'componentType': self._get_vue_component_name(),
-            'title': title,
-            'xLabel': self._x_label,
-            'yLabel': self._y_label,
-            'styling': styling,
-            'config': self._plot_config,
+            "componentType": self._get_vue_component_name(),
+            "title": title,
+            "xLabel": self._x_label,
+            "yLabel": self._y_label,
+            "styling": styling,
+            "config": self._plot_config,
             # Pass interactivity for click handling (sets selection on peak click)
-            'interactivity': self._interactivity,
+            "interactivity": self._interactivity,
             # Column mappings for Arrow data parsing in Vue
-            'xColumn': self._x_column,
-            'yColumn': self._y_column,
-            'highlightColumn': self._highlight_column,
-            'annotationColumn': self._annotation_column,
+            "xColumn": self._x_column,
+            "yColumn": self._y_column,
+            "highlightColumn": self._highlight_column,
+            "annotationColumn": self._annotation_column,
         }
 
         # Add any extra config options
@@ -421,7 +426,7 @@ class LinePlot(BaseComponent):
         highlight_color: Optional[str] = None,
         selected_color: Optional[str] = None,
         unhighlighted_color: Optional[str] = None,
-    ) -> 'LinePlot':
+    ) -> "LinePlot":
         """
         Update plot styling.
 
@@ -434,11 +439,11 @@ class LinePlot(BaseComponent):
             Self for method chaining
         """
         if highlight_color:
-            self._styling['highlightColor'] = highlight_color
+            self._styling["highlightColor"] = highlight_color
         if selected_color:
-            self._styling['selectedColor'] = selected_color
+            self._styling["selectedColor"] = selected_color
         if unhighlighted_color:
-            self._styling['unhighlightedColor'] = unhighlighted_color
+            self._styling["unhighlightedColor"] = unhighlighted_color
         return self
 
     def with_annotations(
@@ -446,7 +451,7 @@ class LinePlot(BaseComponent):
         background_color: Optional[str] = None,
         button_color: Optional[str] = None,
         selected_button_color: Optional[str] = None,
-    ) -> 'LinePlot':
+    ) -> "LinePlot":
         """
         Configure annotation styling.
 
@@ -458,15 +463,17 @@ class LinePlot(BaseComponent):
         Returns:
             Self for method chaining
         """
-        if 'annotationColors' not in self._styling:
-            self._styling['annotationColors'] = {}
+        if "annotationColors" not in self._styling:
+            self._styling["annotationColors"] = {}
 
         if background_color:
-            self._styling['annotationColors']['background'] = background_color
+            self._styling["annotationColors"]["background"] = background_color
         if button_color:
-            self._styling['annotationColors']['massButton'] = button_color
+            self._styling["annotationColors"]["massButton"] = button_color
         if selected_button_color:
-            self._styling['annotationColors']['selectedMassButton'] = selected_button_color
+            self._styling["annotationColors"]["selectedMassButton"] = (
+                selected_button_color
+            )
 
         return self
 
@@ -474,7 +481,7 @@ class LinePlot(BaseComponent):
         self,
         annotations: Optional[Dict[int, Dict[str, Any]]] = None,
         title: Optional[str] = None,
-    ) -> 'LinePlot':
+    ) -> "LinePlot":
         """
         Set dynamic annotations to be applied at render time.
 
@@ -507,7 +514,7 @@ class LinePlot(BaseComponent):
         self._dynamic_title = title
         return self
 
-    def clear_dynamic_annotations(self) -> 'LinePlot':
+    def clear_dynamic_annotations(self) -> "LinePlot":
         """
         Clear any dynamic annotations.
 
@@ -534,12 +541,13 @@ class LinePlot(BaseComponent):
             Config dict with column mappings for Vue
         """
         return {
-            'xColumn': self._x_column,
-            'yColumn': self._y_column,
-            'highlightColumn': highlight_col,
-            'annotationColumn': annotation_col,
-            'interactivityColumns': {
-                col: col for col in (self._interactivity.values() if self._interactivity else [])
+            "xColumn": self._x_column,
+            "yColumn": self._y_column,
+            "highlightColumn": highlight_col,
+            "annotationColumn": annotation_col,
+            "interactivityColumns": {
+                col: col
+                for col in (self._interactivity.values() if self._interactivity else [])
             },
         }
 
@@ -559,16 +567,16 @@ class LinePlot(BaseComponent):
         import pandas as pd
 
         vue_data = dict(vue_data)
-        df = vue_data.get('plotData')
+        df = vue_data.get("plotData")
 
         if df is not None and isinstance(df, pd.DataFrame):
-            dynamic_cols = ['_dynamic_highlight', '_dynamic_annotation']
+            dynamic_cols = ["_dynamic_highlight", "_dynamic_annotation"]
             cols_to_drop = [c for c in dynamic_cols if c in df.columns]
             if cols_to_drop:
-                vue_data['plotData'] = df.drop(columns=cols_to_drop)
+                vue_data["plotData"] = df.drop(columns=cols_to_drop)
 
         # Remove _plotConfig since it may reference dynamic columns
-        vue_data.pop('_plotConfig', None)
+        vue_data.pop("_plotConfig", None)
         return vue_data
 
     def _apply_fresh_annotations(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -586,7 +594,7 @@ class LinePlot(BaseComponent):
         """
         import pandas as pd
 
-        df_pandas = vue_data.get('plotData')
+        df_pandas = vue_data.get("plotData")
         if df_pandas is None:
             return vue_data
 
@@ -603,7 +611,7 @@ class LinePlot(BaseComponent):
             df_pandas = df_pandas.copy()
             num_rows = len(df_pandas)
             highlights = [False] * num_rows
-            annotations = [''] * num_rows
+            annotations = [""] * num_rows
 
             # Get the interactivity column for lookup
             id_column = None
@@ -616,38 +624,38 @@ class LinePlot(BaseComponent):
                 for row_idx, peak_id in enumerate(peak_ids):
                     if peak_id in self._dynamic_annotations:
                         ann_data = self._dynamic_annotations[peak_id]
-                        highlights[row_idx] = ann_data.get('highlight', False)
-                        annotations[row_idx] = ann_data.get('annotation', '')
+                        highlights[row_idx] = ann_data.get("highlight", False)
+                        annotations[row_idx] = ann_data.get("annotation", "")
             else:
                 # Fallback: use row index as key
                 for idx, ann_data in self._dynamic_annotations.items():
                     if isinstance(idx, int) and 0 <= idx < num_rows:
-                        highlights[idx] = ann_data.get('highlight', False)
-                        annotations[idx] = ann_data.get('annotation', '')
+                        highlights[idx] = ann_data.get("highlight", False)
+                        annotations[idx] = ann_data.get("annotation", "")
 
-            df_pandas['_dynamic_highlight'] = highlights
-            df_pandas['_dynamic_annotation'] = annotations
-            highlight_col = '_dynamic_highlight'
-            annotation_col = '_dynamic_annotation'
+            df_pandas["_dynamic_highlight"] = highlights
+            df_pandas["_dynamic_annotation"] = annotations
+            highlight_col = "_dynamic_highlight"
+            annotation_col = "_dynamic_annotation"
 
         # Build result
         vue_data = dict(vue_data)
-        vue_data['plotData'] = df_pandas
-        vue_data['_plotConfig'] = self._build_plot_config(highlight_col, annotation_col)
+        vue_data["plotData"] = df_pandas
+        vue_data["_plotConfig"] = self._build_plot_config(highlight_col, annotation_col)
         return vue_data
 
     @classmethod
     def from_sequence_view(
         cls,
-        sequence_view: 'SequenceView',
+        sequence_view: "SequenceView",
         cache_id: str,
         cache_path: str = ".",
         title: Optional[str] = None,
         x_label: str = "m/z",
         y_label: str = "Intensity",
         styling: Optional[Dict[str, Any]] = None,
-        **kwargs
-    ) -> 'LinePlot':
+        **kwargs,
+    ) -> "LinePlot":
         """
         Create a LinePlot linked to a SequenceView for annotated spectrum display.
 
@@ -702,18 +710,24 @@ class LinePlot(BaseComponent):
         # SequenceView may have filters for both sequence_data and peaks_data,
         # but LinePlot only uses peaks_data
         peaks_columns = peaks_data.collect_schema().names()
-        valid_filters = {
-            identifier: column
-            for identifier, column in sequence_view._filters.items()
-            if column in peaks_columns
-        } if sequence_view._filters else None
+        valid_filters = (
+            {
+                identifier: column
+                for identifier, column in sequence_view._filters.items()
+                if column in peaks_columns
+            }
+            if sequence_view._filters
+            else None
+        )
 
         # Create the LinePlot with filtered filters and interactivity
         plot = cls(
             cache_id=cache_id,
             data=peaks_data,
             filters=valid_filters,
-            interactivity=sequence_view._interactivity.copy() if sequence_view._interactivity else None,
+            interactivity=sequence_view._interactivity.copy()
+            if sequence_view._interactivity
+            else None,
             cache_path=cache_path,
             x_column="mass",
             y_column="intensity",
@@ -721,7 +735,7 @@ class LinePlot(BaseComponent):
             x_label=x_label,
             y_label=y_label,
             styling=styling,
-            **kwargs
+            **kwargs,
         )
 
         # Store reference to sequence view key for annotation lookup
@@ -732,7 +746,7 @@ class LinePlot(BaseComponent):
     def __call__(
         self,
         key: Optional[str] = None,
-        state_manager: Optional['StateManager'] = None,
+        state_manager: Optional["StateManager"] = None,
         height: Optional[int] = None,
         sequence_view_key: Optional[str] = None,
     ) -> Any:
@@ -752,7 +766,7 @@ class LinePlot(BaseComponent):
             The value returned by the Vue component (usually selection state)
         """
         from ..core.state import get_default_state_manager
-        from ..rendering.bridge import render_component, get_component_annotations
+        from ..rendering.bridge import get_component_annotations, render_component
 
         if state_manager is None:
             state_manager = get_default_state_manager()
@@ -765,22 +779,19 @@ class LinePlot(BaseComponent):
                 # keyed by peak_id for stable lookup
                 dynamic_annotations = {}
                 for row in annotations_df.iter_rows(named=True):
-                    peak_id = row.get('peak_id')
+                    peak_id = row.get("peak_id")
                     if peak_id is not None:
                         dynamic_annotations[peak_id] = {
-                            'highlight': True,
-                            'annotation': row.get('annotation', ''),
-                            'color': row.get('highlight_color', '#E4572E'),
+                            "highlight": True,
+                            "annotation": row.get("annotation", ""),
+                            "color": row.get("highlight_color", "#E4572E"),
                         }
                 self.set_dynamic_annotations(dynamic_annotations)
             else:
                 self.clear_dynamic_annotations()
 
         return render_component(
-            component=self,
-            state_manager=state_manager,
-            key=key,
-            height=height
+            component=self, state_manager=state_manager, key=key, height=height
         )
 
 

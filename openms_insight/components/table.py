@@ -6,7 +6,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
-from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
+from ..preprocessing.filtering import filter_and_collect_cached
 
 
 @register_component("table")
@@ -57,14 +57,14 @@ class Table(BaseComponent):
         regenerate_cache: bool = False,
         column_definitions: Optional[List[Dict[str, Any]]] = None,
         title: Optional[str] = None,
-        index_field: str = 'id',
+        index_field: str = "id",
         go_to_fields: Optional[List[str]] = None,
-        layout: str = 'fitDataFill',
+        layout: str = "fitDataFill",
         default_row: int = 0,
         initial_sort: Optional[List[Dict[str, Any]]] = None,
         pagination: bool = True,
         page_size: int = 100,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize the Table component.
@@ -138,7 +138,7 @@ class Table(BaseComponent):
             initial_sort=initial_sort,
             pagination=pagination,
             page_size=page_size,
-            **kwargs
+            **kwargs,
         )
 
     def _get_cache_config(self) -> Dict[str, Any]:
@@ -149,28 +149,28 @@ class Table(BaseComponent):
             Dict of config values that affect preprocessing
         """
         return {
-            'column_definitions': self._column_definitions,
-            'index_field': self._index_field,
-            'title': self._title,
-            'go_to_fields': self._go_to_fields,
-            'layout': self._layout,
-            'default_row': self._default_row,
-            'initial_sort': self._initial_sort,
-            'pagination': self._pagination,
-            'page_size': self._page_size,
+            "column_definitions": self._column_definitions,
+            "index_field": self._index_field,
+            "title": self._title,
+            "go_to_fields": self._go_to_fields,
+            "layout": self._layout,
+            "default_row": self._default_row,
+            "initial_sort": self._initial_sort,
+            "pagination": self._pagination,
+            "page_size": self._page_size,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
-        self._column_definitions = config.get('column_definitions')
-        self._index_field = config.get('index_field', 'id')
-        self._title = config.get('title')
-        self._go_to_fields = config.get('go_to_fields')
-        self._layout = config.get('layout', 'fitDataFill')
-        self._default_row = config.get('default_row', 0)
-        self._initial_sort = config.get('initial_sort')
-        self._pagination = config.get('pagination', True)
-        self._page_size = config.get('page_size', 100)
+        self._column_definitions = config.get("column_definitions")
+        self._index_field = config.get("index_field", "id")
+        self._title = config.get("title")
+        self._go_to_fields = config.get("go_to_fields")
+        self._layout = config.get("layout", "fitDataFill")
+        self._default_row = config.get("default_row", 0)
+        self._initial_sort = config.get("initial_sort")
+        self._pagination = config.get("pagination", True)
+        self._page_size = config.get("page_size", 100)
 
     def _get_row_group_size(self) -> int:
         """
@@ -214,31 +214,40 @@ class Table(BaseComponent):
             self._column_definitions = []
             for name, dtype in zip(schema.names(), schema.dtypes()):
                 col_def: Dict[str, Any] = {
-                    'field': name,
-                    'title': name.replace('_', ' ').title(),
-                    'headerTooltip': True,
+                    "field": name,
+                    "title": name.replace("_", " ").title(),
+                    "headerTooltip": True,
                 }
                 # Set sorter based on data type
-                if dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-                             pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-                             pl.Float32, pl.Float64):
-                    col_def['sorter'] = 'number'
-                    col_def['hozAlign'] = 'right'
+                if dtype in (
+                    pl.Int8,
+                    pl.Int16,
+                    pl.Int32,
+                    pl.Int64,
+                    pl.UInt8,
+                    pl.UInt16,
+                    pl.UInt32,
+                    pl.UInt64,
+                    pl.Float32,
+                    pl.Float64,
+                ):
+                    col_def["sorter"] = "number"
+                    col_def["hozAlign"] = "right"
                 elif dtype == pl.Boolean:
-                    col_def['sorter'] = 'boolean'
+                    col_def["sorter"] = "boolean"
                 elif dtype in (pl.Date, pl.Datetime, pl.Time):
-                    col_def['sorter'] = 'date'
+                    col_def["sorter"] = "date"
                 else:
-                    col_def['sorter'] = 'string'
+                    col_def["sorter"] = "string"
 
                 self._column_definitions.append(col_def)
 
         # Store column definitions in preprocessed data for serialization
-        self._preprocessed_data['column_definitions'] = self._column_definitions
+        self._preprocessed_data["column_definitions"] = self._column_definitions
 
         # Store LazyFrame for streaming to disk (filter happens at render time)
         # Base class will use sink_parquet() to stream without full materialization
-        self._preprocessed_data['data'] = data  # Keep lazy
+        self._preprocessed_data["data"] = data  # Keep lazy
 
     def _get_columns_to_select(self) -> Optional[List[str]]:
         """Get list of columns needed for this table."""
@@ -246,9 +255,9 @@ class Table(BaseComponent):
             return None
 
         columns_to_select = [
-            col_def['field']
+            col_def["field"]
             for col_def in self._column_definitions
-            if 'field' in col_def
+            if "field" in col_def
         ]
         # Always include index field for row identification
         if self._index_field and self._index_field not in columns_to_select:
@@ -268,11 +277,11 @@ class Table(BaseComponent):
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
-        return 'TabulatorTable'
+        return "TabulatorTable"
 
     def _get_data_key(self) -> str:
         """Return the key used to send primary data to Vue."""
-        return 'tableData'
+        return "tableData"
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -291,7 +300,7 @@ class Table(BaseComponent):
         columns = self._get_columns_to_select()
 
         # Get cached data (DataFrame or LazyFrame)
-        data = self._preprocessed_data.get('data')
+        data = self._preprocessed_data.get("data")
         if data is None:
             # Fallback to raw data if available
             data = self._raw_data
@@ -309,7 +318,7 @@ class Table(BaseComponent):
             filter_defaults=self._filter_defaults,
         )
 
-        return {'tableData': df_pandas, '_hash': data_hash}
+        return {"tableData": df_pandas, "_hash": data_hash}
 
     def _get_component_args(self) -> Dict[str, Any]:
         """
@@ -321,29 +330,29 @@ class Table(BaseComponent):
         # Get column definitions (may have been loaded from cache)
         column_defs = self._column_definitions
         if column_defs is None:
-            column_defs = self._preprocessed_data.get('column_definitions', [])
+            column_defs = self._preprocessed_data.get("column_definitions", [])
 
         args: Dict[str, Any] = {
-            'componentType': self._get_vue_component_name(),
-            'columnDefinitions': column_defs,
-            'tableIndexField': self._index_field,
-            'tableLayoutParam': self._layout,
-            'defaultRow': self._default_row,
+            "componentType": self._get_vue_component_name(),
+            "columnDefinitions": column_defs,
+            "tableIndexField": self._index_field,
+            "tableLayoutParam": self._layout,
+            "defaultRow": self._default_row,
             # Pass interactivity so Vue knows which identifier to update on row click
-            'interactivity': self._interactivity,
+            "interactivity": self._interactivity,
             # Pagination settings
-            'pagination': self._pagination,
-            'pageSize': self._page_size,
+            "pagination": self._pagination,
+            "pageSize": self._page_size,
         }
 
         if self._title:
-            args['title'] = self._title
+            args["title"] = self._title
 
         if self._go_to_fields:
-            args['goToFields'] = self._go_to_fields
+            args["goToFields"] = self._go_to_fields
 
         if self._initial_sort:
-            args['initialSort'] = self._initial_sort
+            args["initialSort"] = self._initial_sort
 
         # Add any extra config options
         args.update(self._config)
@@ -354,8 +363,8 @@ class Table(BaseComponent):
         self,
         field: str,
         formatter: str,
-        formatter_params: Optional[Dict[str, Any]] = None
-    ) -> 'Table':
+        formatter_params: Optional[Dict[str, Any]] = None,
+    ) -> "Table":
         """
         Add or update a column formatter.
 
@@ -368,10 +377,10 @@ class Table(BaseComponent):
             Self for method chaining
         """
         for col_def in self._column_definitions or []:
-            if col_def.get('field') == field:
-                col_def['formatter'] = formatter
+            if col_def.get("field") == field:
+                col_def["formatter"] = formatter
                 if formatter_params:
-                    col_def['formatterParams'] = formatter_params
+                    col_def["formatterParams"] = formatter_params
                 break
         return self
 
@@ -379,10 +388,10 @@ class Table(BaseComponent):
         self,
         field: str,
         precision: int = 2,
-        symbol: str = '',
-        thousand: str = ',',
-        decimal: str = '.'
-    ) -> 'Table':
+        symbol: str = "",
+        thousand: str = ",",
+        decimal: str = ".",
+    ) -> "Table":
         """
         Format a column as currency/money.
 
@@ -398,13 +407,13 @@ class Table(BaseComponent):
         """
         return self.with_column_formatter(
             field,
-            'money',
+            "money",
             {
-                'precision': precision,
-                'symbol': symbol,
-                'thousand': thousand,
-                'decimal': decimal,
-            }
+                "precision": precision,
+                "symbol": symbol,
+                "thousand": thousand,
+                "decimal": decimal,
+            },
         )
 
     def with_progress_bar(
@@ -412,8 +421,8 @@ class Table(BaseComponent):
         field: str,
         min_val: float = 0,
         max_val: float = 100,
-        color: Optional[str] = None
-    ) -> 'Table':
+        color: Optional[str] = None,
+    ) -> "Table":
         """
         Format a column as a progress bar.
 
@@ -426,7 +435,7 @@ class Table(BaseComponent):
         Returns:
             Self for method chaining
         """
-        params: Dict[str, Any] = {'min': min_val, 'max': max_val}
+        params: Dict[str, Any] = {"min": min_val, "max": max_val}
         if color:
-            params['color'] = color
-        return self.with_column_formatter(field, 'progress', params)
+            params["color"] = color
+        return self.with_column_formatter(field, "progress", params)

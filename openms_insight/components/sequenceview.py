@@ -1,10 +1,10 @@
 """SequenceView component for peptide/protein sequence visualization with fragment matching."""
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
 import hashlib
 import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
@@ -61,9 +61,9 @@ def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[f
                 residues.append(sequence_str[i])
                 modifications.append(None)
                 i += 1
-            elif sequence_str[i] == '(':
+            elif sequence_str[i] == "(":
                 # Skip modification name in parentheses
-                end = sequence_str.find(')', i)
+                end = sequence_str.find(")", i)
                 if end > i:
                     i = end + 1
                 else:
@@ -76,7 +76,9 @@ def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[f
         return list(sequence_str), [None] * len(sequence_str)
 
 
-def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List[float]]]:
+def calculate_fragment_masses_pyopenms(
+    sequence_str: str,
+) -> Dict[str, List[List[float]]]:
     """Calculate theoretical fragment masses using pyOpenMS TheoreticalSpectrumGenerator.
 
     Args:
@@ -87,7 +89,7 @@ def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List
         Each is a list of lists (one per position, supporting multiple masses).
     """
     try:
-        from pyopenms import AASequence, TheoreticalSpectrumGenerator, MSSpectrum
+        from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
 
         aa_seq = AASequence.fromString(sequence_str)
         n = aa_seq.size()
@@ -111,8 +113,8 @@ def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List
         spec = MSSpectrum()
         tsg.getSpectrum(spec, aa_seq, 1, 1)
 
-        ion_types = ['a', 'b', 'c', 'x', 'y', 'z']
-        result = {f'fragment_masses_{ion}': [[] for _ in range(n)] for ion in ion_types}
+        ion_types = ["a", "b", "c", "x", "y", "z"]
+        result = {f"fragment_masses_{ion}": [[] for _ in range(n)] for ion in ion_types}
 
         # Get ion names from StringDataArrays
         ion_names = []
@@ -122,7 +124,7 @@ def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List
                 for i in range(sda.size()):
                     name = sda[i]
                     if isinstance(name, bytes):
-                        name = name.decode('utf-8')
+                        name = name.decode("utf-8")
                     ion_names.append(name)
                 break
 
@@ -159,7 +161,7 @@ def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List
 
             if ion_type and ion_number and 1 <= ion_number <= n:
                 idx = ion_number - 1
-                key = f'fragment_masses_{ion_type}'
+                key = f"fragment_masses_{ion_type}"
                 if idx < len(result[key]):
                     result[key][idx].append(neutral_mass)
 
@@ -170,25 +172,46 @@ def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List
         return _calculate_fragment_masses_simple(sequence_str)
     except Exception as e:
         print(f"Error calculating fragments for {sequence_str}: {e}")
-        return {f'fragment_masses_{ion}': [] for ion in ['a', 'b', 'c', 'x', 'y', 'z']}
+        return {f"fragment_masses_{ion}": [] for ion in ["a", "b", "c", "x", "y", "z"]}
 
 
-def _calculate_fragment_masses_simple(sequence_str: str) -> Dict[str, List[List[float]]]:
+def _calculate_fragment_masses_simple(
+    sequence_str: str,
+) -> Dict[str, List[List[float]]]:
     """Fallback fragment calculation without pyOpenMS."""
     # Amino acid monoisotopic masses
     AA_MASSES = {
-        'A': 71.037114, 'R': 156.101111, 'N': 114.042927, 'D': 115.026943,
-        'C': 103.009185, 'E': 129.042593, 'Q': 128.058578, 'G': 57.021464,
-        'H': 137.058912, 'I': 113.084064, 'L': 113.084064, 'K': 128.094963,
-        'M': 131.040485, 'F': 147.068414, 'P': 97.052764, 'S': 87.032028,
-        'T': 101.047679, 'U': 150.953633, 'W': 186.079313, 'Y': 163.063329,
-        'V': 99.068414,
+        "A": 71.037114,
+        "R": 156.101111,
+        "N": 114.042927,
+        "D": 115.026943,
+        "C": 103.009185,
+        "E": 129.042593,
+        "Q": 128.058578,
+        "G": 57.021464,
+        "H": 137.058912,
+        "I": 113.084064,
+        "L": 113.084064,
+        "K": 128.094963,
+        "M": 131.040485,
+        "F": 147.068414,
+        "P": 97.052764,
+        "S": 87.032028,
+        "T": 101.047679,
+        "U": 150.953633,
+        "W": 186.079313,
+        "Y": 163.063329,
+        "V": 99.068414,
     }
 
     # Ion type offsets
     ION_OFFSETS = {
-        'a': -27.994915, 'b': 0.0, 'c': 17.026549,
-        'x': 43.989829, 'y': 18.010565, 'z': 1.991841,
+        "a": -27.994915,
+        "b": 0.0,
+        "c": 17.026549,
+        "x": 43.989829,
+        "y": 18.010565,
+        "z": 1.991841,
     }
 
     # Extract plain sequence
@@ -212,21 +235,21 @@ def _calculate_fragment_masses_simple(sequence_str: str) -> Dict[str, List[List[
     suffix_masses = list(reversed(suffix_masses))
 
     # Prefix ions (a, b, c)
-    for ion_type in ['a', 'b', 'c']:
+    for ion_type in ["a", "b", "c"]:
         masses = []
         for i in range(n):
             ion_mass = prefix_masses[i] + ION_OFFSETS[ion_type]
             masses.append([ion_mass])
-        result[f'fragment_masses_{ion_type}'] = masses
+        result[f"fragment_masses_{ion_type}"] = masses
 
     # Suffix ions (x, y, z)
-    for ion_type in ['x', 'y', 'z']:
+    for ion_type in ["x", "y", "z"]:
         masses = []
         for i in range(n):
             idx = n - i - 1
             ion_mass = suffix_masses[idx] + ION_OFFSETS[ion_type]
             masses.append([ion_mass])
-        result[f'fragment_masses_{ion_type}'] = masses
+        result[f"fragment_masses_{ion_type}"] = masses
 
     return result
 
@@ -235,18 +258,34 @@ def get_theoretical_mass(sequence_str: str) -> float:
     """Calculate monoisotopic mass of a peptide sequence."""
     try:
         from pyopenms import AASequence
+
         aa_seq = AASequence.fromString(sequence_str)
         return aa_seq.getMonoWeight()
     except ImportError:
         # Fallback
         H2O = 18.010565
         AA_MASSES = {
-            'A': 71.037114, 'R': 156.101111, 'N': 114.042927, 'D': 115.026943,
-            'C': 103.009185, 'E': 129.042593, 'Q': 128.058578, 'G': 57.021464,
-            'H': 137.058912, 'I': 113.084064, 'L': 113.084064, 'K': 128.094963,
-            'M': 131.040485, 'F': 147.068414, 'P': 97.052764, 'S': 87.032028,
-            'T': 101.047679, 'U': 150.953633, 'W': 186.079313, 'Y': 163.063329,
-            'V': 99.068414,
+            "A": 71.037114,
+            "R": 156.101111,
+            "N": 114.042927,
+            "D": 115.026943,
+            "C": 103.009185,
+            "E": 129.042593,
+            "Q": 128.058578,
+            "G": 57.021464,
+            "H": 137.058912,
+            "I": 113.084064,
+            "L": 113.084064,
+            "K": 128.094963,
+            "M": 131.040485,
+            "F": 147.068414,
+            "P": 97.052764,
+            "S": 87.032028,
+            "T": 101.047679,
+            "U": 150.953633,
+            "W": 186.079313,
+            "Y": 163.063329,
+            "V": 99.068414,
         }
         residues, _ = parse_openms_sequence(sequence_str)
         mass = H2O
@@ -271,7 +310,7 @@ DEFAULT_ANNOTATION_CONFIG = {
         "x": "#1ABC9C",
         "y": "#3498DB",
         "z": "#2ECC71",
-    }
+    },
 }
 
 
@@ -283,6 +322,7 @@ class SequenceViewResult:
         annotations: DataFrame with columns (peak_id, highlight_color, annotation)
             containing fragment annotations computed by Vue. None if not yet available.
     """
+
     annotations: Optional[pl.DataFrame] = None
 
 
@@ -329,7 +369,7 @@ class SequenceView:
         cache_path: str = ".",
         title: Optional[str] = None,
         height: int = 400,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize the SequenceView component.
@@ -365,30 +405,27 @@ class SequenceView:
         self._cache_dir = self._cache_path / cache_id
 
         # Determine if data is provided (creation mode vs reconstruction mode)
-        has_sequence_data = (
-            sequence_data is not None or
-            sequence_data_path is not None
-        )
+        has_sequence_data = sequence_data is not None or sequence_data_path is not None
 
         # Check if any configuration arguments were provided
         has_config = (
-            peaks_data is not None or
-            peaks_data_path is not None or
-            filters is not None or
-            interactivity is not None or
-            deconvolved is not False or
-            annotation_config is not None or
-            title is not None or
-            height != 400 or
-            bool(kwargs)
+            peaks_data is not None
+            or peaks_data_path is not None
+            or filters is not None
+            or interactivity is not None
+            or deconvolved is not False
+            or annotation_config is not None
+            or title is not None
+            or height != 400
+            or bool(kwargs)
         )
 
         if not has_sequence_data:
             # Reconstruction mode - only cache_id and cache_path allowed
             if has_config:
                 raise ValueError(
-                    f"Configuration arguments require sequence_data= or sequence_data_path= to be provided. "
-                    f"For reconstruction from cache, use only cache_id and cache_path."
+                    "Configuration arguments require sequence_data= or sequence_data_path= to be provided. "
+                    "For reconstruction from cache, use only cache_id and cache_path."
                 )
             if not self._cache_exists():
                 raise ValueError(
@@ -412,7 +449,9 @@ class SequenceView:
 
             # Parse sequence data input
             if sequence_data is not None and sequence_data_path is not None:
-                raise ValueError("Provide either 'sequence_data' or 'sequence_data_path', not both")
+                raise ValueError(
+                    "Provide either 'sequence_data' or 'sequence_data_path', not both"
+                )
 
             self._source_sequence_data: Optional[pl.LazyFrame] = None
             self._source_static_sequence: Optional[str] = None
@@ -431,7 +470,9 @@ class SequenceView:
 
             # Parse peaks data input
             if peaks_data is not None and peaks_data_path is not None:
-                raise ValueError("Provide either 'peaks_data' or 'peaks_data_path', not both")
+                raise ValueError(
+                    "Provide either 'peaks_data' or 'peaks_data_path', not both"
+                )
 
             self._source_peaks_data: Optional[pl.LazyFrame] = None
             if peaks_data_path is not None:
@@ -497,13 +538,13 @@ class SequenceView:
         self._title = config.get("title")
         self._height = config.get("height", 400)
         self._deconvolved = config.get("deconvolved", False)
-        self._annotation_config = config.get("annotation_config", {**DEFAULT_ANNOTATION_CONFIG})
+        self._annotation_config = config.get(
+            "annotation_config", {**DEFAULT_ANNOTATION_CONFIG}
+        )
         self._config = {}
 
         # Load cached LazyFrames
-        self._cached_sequences = pl.scan_parquet(
-            self._cache_dir / "sequences.parquet"
-        )
+        self._cached_sequences = pl.scan_parquet(self._cache_dir / "sequences.parquet")
         peaks_path = self._cache_dir / "peaks.parquet"
         self._cached_peaks = (
             pl.scan_parquet(peaks_path) if peaks_path.exists() else None
@@ -534,7 +575,11 @@ class SequenceView:
 
             # Build column list: filter columns + required columns
             required = ["sequence", "precursor_charge"]
-            cols = list(dict.fromkeys(filter_cols + [c for c in required if c in schema.names()]))
+            cols = list(
+                dict.fromkeys(
+                    filter_cols + [c for c in required if c in schema.names()]
+                )
+            )
 
             lf = self._source_sequence_data.select(cols)
 
@@ -545,10 +590,12 @@ class SequenceView:
             df = lf.collect()
         else:
             # Static input (string or tuple) - create single-row DataFrame
-            df = pl.DataFrame({
-                "sequence": [self._source_static_sequence or ""],
-                "precursor_charge": [self._source_static_charge],
-            })
+            df = pl.DataFrame(
+                {
+                    "sequence": [self._source_static_sequence or ""],
+                    "precursor_charge": [self._source_static_charge],
+                }
+            )
 
         # Optimize types and write
         df = optimize_for_transfer(df)
@@ -566,11 +613,13 @@ class SequenceView:
         # Build column list: filter columns + required columns
         required = ["peak_id", "mass"]
         optional = ["intensity"]
-        cols = list(dict.fromkeys(
-            filter_cols +
-            [c for c in required if c in schema.names()] +
-            [c for c in optional if c in schema.names()]
-        ))
+        cols = list(
+            dict.fromkeys(
+                filter_cols
+                + [c for c in required if c in schema.names()]
+                + [c for c in optional if c in schema.names()]
+            )
+        )
 
         lf = self._source_peaks_data.select(cols)
 
@@ -753,8 +802,8 @@ class SequenceView:
     def __call__(
         self,
         key: Optional[str] = None,
-        state_manager: Optional['StateManager'] = None,
-        height: Optional[int] = None
+        state_manager: Optional["StateManager"] = None,
+        height: Optional[int] = None,
     ) -> SequenceViewResult:
         """
         Render the component in Streamlit.
@@ -769,7 +818,7 @@ class SequenceView:
             SequenceViewResult with annotations DataFrame (if available)
         """
         from ..core.state import get_default_state_manager
-        from ..rendering.bridge import render_component, get_component_annotations
+        from ..rendering.bridge import get_component_annotations, render_component
 
         if state_manager is None:
             state_manager = get_default_state_manager()
@@ -778,10 +827,7 @@ class SequenceView:
         render_height = height if height is not None else self._height
 
         render_component(
-            component=self,
-            state_manager=state_manager,
-            key=key,
-            height=render_height
+            component=self, state_manager=state_manager, key=key, height=render_height
         )
 
         # Get annotations from session state (set by Vue)
@@ -798,7 +844,5 @@ class SequenceView:
         )
 
 
-# Type hint import for __call__
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..core.state import StateManager

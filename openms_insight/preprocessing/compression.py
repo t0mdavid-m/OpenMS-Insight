@@ -13,6 +13,7 @@ import polars as pl
 
 try:
     from scipy.stats import binned_statistic_2d
+
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -55,12 +56,10 @@ def compute_compression_levels(min_size: int, total: int) -> List[int]:
 
     # Generate levels at each power of 10, scaled by the fractional part
     scale_factor = int(10 ** (np.log10(min_size) % 1))
-    levels = np.logspace(
-        min_power,
-        max_power,
-        max_power - min_power + 1,
-        dtype='int'
-    ) * scale_factor
+    levels = (
+        np.logspace(min_power, max_power, max_power - min_power + 1, dtype="int")
+        * scale_factor
+    )
 
     # Filter out levels >= total (don't include full resolution for large datasets)
     levels = levels[levels < total].tolist()
@@ -75,9 +74,9 @@ def compute_compression_levels(min_size: int, total: int) -> List[int]:
 def downsample_2d(
     data: Union[pl.LazyFrame, pl.DataFrame],
     max_points: int = 20000,
-    x_column: str = 'x',
-    y_column: str = 'y',
-    intensity_column: str = 'intensity',
+    x_column: str = "x",
+    y_column: str = "y",
+    intensity_column: str = "intensity",
     x_bins: int = 400,
     y_bins: int = 50,
 ) -> pl.LazyFrame:
@@ -106,8 +105,7 @@ def downsample_2d(
     """
     if not HAS_SCIPY:
         raise ImportError(
-            "scipy is required for downsample_2d. "
-            "Install with: pip install scipy"
+            "scipy is required for downsample_2d. Install with: pip install scipy"
         )
 
     if (x_bins * y_bins) > max_points:
@@ -122,12 +120,9 @@ def downsample_2d(
 
     # Sort by intensity (descending) to prioritize high-intensity points
     sorted_data = (
-        data
-        .sort([x_column, intensity_column], descending=[False, True])
-        .with_columns([
-            pl.int_range(pl.len()).over(x_column).alias('_rank')
-        ])
-        .sort(['_rank', intensity_column], descending=[False, True])
+        data.sort([x_column, intensity_column], descending=[False, True])
+        .with_columns([pl.int_range(pl.len()).over(x_column).alias("_rank")])
+        .sort(["_rank", intensity_column], descending=[False, True])
     )
 
     # Collect for scipy binning (requires numpy arrays)
@@ -136,7 +131,7 @@ def downsample_2d(
     total_count = len(collected)
     if total_count <= max_points:
         # No downsampling needed
-        return collected.drop('_rank').lazy()
+        return collected.drop("_rank").lazy()
 
     # Extract arrays for scipy
     x_array = collected[x_column].to_numpy()
@@ -145,18 +140,20 @@ def downsample_2d(
 
     # Compute 2D bins
     count, _, _, mapping = binned_statistic_2d(
-        x_array, y_array, intensity_array, 'count',
+        x_array,
+        y_array,
+        intensity_array,
+        "count",
         bins=[x_bins, y_bins],
-        expand_binnumbers=True
+        expand_binnumbers=True,
     )
 
     # Add bin indices to dataframe
-    binned_data = (
-        collected.lazy()
-        .with_columns([
-            pl.Series('_x_bin', mapping[0] - 1),  # scipy uses 1-based indexing
-            pl.Series('_y_bin', mapping[1] - 1)
-        ])
+    binned_data = collected.lazy().with_columns(
+        [
+            pl.Series("_x_bin", mapping[0] - 1),  # scipy uses 1-based indexing
+            pl.Series("_y_bin", mapping[1] - 1),
+        ]
     )
 
     # Compute max peaks per bin to stay under limit
@@ -174,11 +171,10 @@ def downsample_2d(
 
     # Keep top N peaks per bin
     result = (
-        binned_data
-        .group_by(['_x_bin', '_y_bin'])
+        binned_data.group_by(["_x_bin", "_y_bin"])
         .head(max_peaks_per_bin)
         .sort(intensity_column)
-        .drop(['_rank', '_x_bin', '_y_bin'])
+        .drop(["_rank", "_x_bin", "_y_bin"])
     )
 
     return result
@@ -187,7 +183,7 @@ def downsample_2d(
 def downsample_2d_simple(
     data: Union[pl.LazyFrame, pl.DataFrame],
     max_points: int = 20000,
-    intensity_column: str = 'intensity',
+    intensity_column: str = "intensity",
 ) -> pl.LazyFrame:
     """
     Simple downsampling by keeping highest-intensity points.
@@ -206,19 +202,15 @@ def downsample_2d_simple(
     if isinstance(data, pl.DataFrame):
         data = data.lazy()
 
-    return (
-        data
-        .sort(intensity_column, descending=True)
-        .head(max_points)
-    )
+    return data.sort(intensity_column, descending=True).head(max_points)
 
 
 def downsample_2d_streaming(
     data: Union[pl.LazyFrame, pl.DataFrame],
     max_points: int = 20000,
-    x_column: str = 'x',
-    y_column: str = 'y',
-    intensity_column: str = 'intensity',
+    x_column: str = "x",
+    y_column: str = "y",
+    intensity_column: str = "intensity",
     x_bins: int = 400,
     y_bins: int = 50,
     x_range: Optional[tuple] = None,
@@ -262,43 +254,51 @@ def downsample_2d_streaming(
             ((pl.col(x_column) - x_min) / (x_max - x_min + 1e-10) * x_bins)
             .cast(pl.Int32)
             .clip(0, x_bins - 1)
-            .alias('_x_bin')
+            .alias("_x_bin")
         )
         y_bin_expr = (
             ((pl.col(y_column) - y_min) / (y_max - y_min + 1e-10) * y_bins)
             .cast(pl.Int32)
             .clip(0, y_bins - 1)
-            .alias('_y_bin')
+            .alias("_y_bin")
         )
 
         result = (
-            data
-            .with_columns([x_bin_expr, y_bin_expr])
+            data.with_columns([x_bin_expr, y_bin_expr])
             .sort(intensity_column, descending=True)
-            .group_by(['_x_bin', '_y_bin'])
+            .group_by(["_x_bin", "_y_bin"])
             .head(points_per_bin)
-            .drop(['_x_bin', '_y_bin'])
+            .drop(["_x_bin", "_y_bin"])
         )
     else:
         # Need to compute ranges - still lazy using over() window
         # First pass: add normalized bin columns using min/max over entire frame
         result = (
-            data
-            .with_columns([
-                # Compute bin indices using window functions for min/max
-                (
-                    (pl.col(x_column) - pl.col(x_column).min()) /
-                    (pl.col(x_column).max() - pl.col(x_column).min() + 1e-10) * x_bins
-                ).cast(pl.Int32).clip(0, x_bins - 1).alias('_x_bin'),
-                (
-                    (pl.col(y_column) - pl.col(y_column).min()) /
-                    (pl.col(y_column).max() - pl.col(y_column).min() + 1e-10) * y_bins
-                ).cast(pl.Int32).clip(0, y_bins - 1).alias('_y_bin'),
-            ])
+            data.with_columns(
+                [
+                    # Compute bin indices using window functions for min/max
+                    (
+                        (pl.col(x_column) - pl.col(x_column).min())
+                        / (pl.col(x_column).max() - pl.col(x_column).min() + 1e-10)
+                        * x_bins
+                    )
+                    .cast(pl.Int32)
+                    .clip(0, x_bins - 1)
+                    .alias("_x_bin"),
+                    (
+                        (pl.col(y_column) - pl.col(y_column).min())
+                        / (pl.col(y_column).max() - pl.col(y_column).min() + 1e-10)
+                        * y_bins
+                    )
+                    .cast(pl.Int32)
+                    .clip(0, y_bins - 1)
+                    .alias("_y_bin"),
+                ]
+            )
             .sort(intensity_column, descending=True)
-            .group_by(['_x_bin', '_y_bin'])
+            .group_by(["_x_bin", "_y_bin"])
             .head(points_per_bin)
-            .drop(['_x_bin', '_y_bin'])
+            .drop(["_x_bin", "_y_bin"])
         )
 
     return result
@@ -325,14 +325,16 @@ def get_data_range(
     if isinstance(data, pl.DataFrame):
         data = data.lazy()
 
-    stats = data.select([
-        pl.col(x_column).min().alias('x_min'),
-        pl.col(x_column).max().alias('x_max'),
-        pl.col(y_column).min().alias('y_min'),
-        pl.col(y_column).max().alias('y_max'),
-    ]).collect()
+    stats = data.select(
+        [
+            pl.col(x_column).min().alias("x_min"),
+            pl.col(x_column).max().alias("x_max"),
+            pl.col(y_column).min().alias("y_min"),
+            pl.col(y_column).max().alias("y_max"),
+        ]
+    ).collect()
 
     return (
-        (stats['x_min'][0], stats['x_max'][0]),
-        (stats['y_min'][0], stats['y_max'][0]),
+        (stats["x_min"][0], stats["x_max"][0]),
+        (stats["y_min"][0], stats["y_max"][0]),
     )
