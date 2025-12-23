@@ -48,6 +48,10 @@ export interface SequenceData {
   fragment_tolerance?: number
   /** Whether fragment tolerance is in ppm (true) or Da (false) */
   fragment_tolerance_ppm?: boolean
+  /** Whether to enable neutral loss matching (water loss, ammonium loss) by default */
+  neutral_losses?: boolean
+  /** Whether to enable proton loss/addition matching by default */
+  proton_loss_addition?: boolean
 }
 
 /**

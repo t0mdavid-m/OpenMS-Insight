@@ -261,6 +261,7 @@ def get_theoretical_mass(sequence_str: str) -> float:
 DEFAULT_ANNOTATION_CONFIG = {
     "ion_types": ["b", "y"],
     "neutral_losses": True,
+    "proton_loss_addition": False,
     "tolerance": 20.0,
     "tolerance_ppm": True,
     "colors": {
@@ -614,9 +615,11 @@ class SequenceView:
             "modifications": modifications,
             "theoretical_mass": theoretical_mass,
             "fixed_modifications": [],
-            # Include tolerance settings for Vue initialization
+            # Include settings for Vue initialization
             "fragment_tolerance": self._annotation_config.get("tolerance"),
             "fragment_tolerance_ppm": self._annotation_config.get("tolerance_ppm"),
+            "neutral_losses": self._annotation_config.get("neutral_losses"),
+            "proton_loss_addition": self._annotation_config.get("proton_loss_addition"),
             **fragment_masses,
         }
 
