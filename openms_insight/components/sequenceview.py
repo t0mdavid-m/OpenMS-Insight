@@ -102,6 +102,7 @@ def calculate_fragment_masses_pyopenms(sequence_str: str) -> Dict[str, List[List
         params.setValue("add_x_ions", "true")
         params.setValue("add_y_ions", "true")
         params.setValue("add_z_ions", "true")
+        params.setValue("add_first_prefix_ion", "true")  # Include b1/a1/c1 ions
         params.setValue("add_metainfo", "true")
 
         tsg.setParameters(params)
