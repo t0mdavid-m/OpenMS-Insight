@@ -223,6 +223,7 @@ export default defineComponent({
     return {
       rowWidth: 35,
       fontSize: 12,
+      autoZoomApplied: false,
       showFragments: true,
       ionTypes: [
         { text: 'a', selected: false },
@@ -345,8 +346,19 @@ export default defineComponent({
   },
   watch: {
     sequenceData: {
-      handler() {
+      handler(newData, oldData) {
+        // Reset auto-zoom flag when sequence changes
+        const newSeq = newData?.sequence?.join('') ?? ''
+        const oldSeq = oldData?.sequence?.join('') ?? ''
+        if (newSeq !== oldSeq) {
+          this.autoZoomApplied = false
+        }
+
         this.initializeSequenceObjects()
+
+        // Apply auto-zoom for short sequences
+        this.applyAutoZoom()
+
         // Initialize tolerance from search params if available
         if (this.sequenceData?.fragment_tolerance !== undefined) {
           this.fragmentMassTolerance = this.sequenceData.fragment_tolerance
@@ -416,6 +428,27 @@ export default defineComponent({
           extraTypes: [],
         })
       }
+    },
+    /**
+     * Apply auto-zoom for short sequences.
+     * If the sequence fits on one line at minimum rowWidth (20),
+     * set rowWidth to minimum and fontSize to maximum for maximum zoom.
+     * Only applies once per sequence to avoid overriding user preferences.
+     */
+    applyAutoZoom(): void {
+      if (this.autoZoomApplied) return
+
+      const minRowWidth = 20
+      const maxFontSize = 16
+
+      // If sequence fits on one line at minimum row width, apply max zoom
+      // (minimum AAs per row = maximum zoom level)
+      if (this.sequence.length > 0 && this.sequence.length <= minRowWidth) {
+        this.rowWidth = minRowWidth
+        this.fontSize = maxFontSize
+      }
+
+      this.autoZoomApplied = true
     },
     resetFragmentMarkers(): void {
       for (const obj of this.sequenceObjects) {
