@@ -19,6 +19,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: js-component/package-lock.json
+
+      - name: Build Vue component
+        run: |
+          cd js-component
+          npm ci
+          npm run build
+
+      - name: Copy dist to package
+        run: |
+          mkdir -p openms_insight/js-component
+          cp -r js-component/dist openms_insight/js-component/
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -62,3 +80,25 @@ jobs:
 
       - name: Run ruff format check
         run: ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: js-component/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd js-component
+          npm ci
+
+      - name: Run TypeScript type check
+        run: |
+          cd js-component
+          npm run type-check
