@@ -48,6 +48,7 @@ export default defineComponent({
       isInitialized: false as boolean,
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
+      textMeasureCanvas: null as HTMLCanvasElement | null,
     }
   },
   computed: {
@@ -349,10 +350,11 @@ export default defineComponent({
       const ypos_high = ymax * 1.32
       const boxHeight = ypos_high - ypos_low
 
-      const xpos_scaling = this.xPosScalingFactor
-      const xPadding = (xRange[1] - xRange[0]) * 0.01
+      // Padding around text in pixels (8px on each side)
+      const textPaddingPx = 16
 
       // Create boxes for each annotation with peak intensity preserved
+      // Box width is calculated from actual text width + padding
       const boxes: Array<{
         x: number
         y: number
@@ -367,10 +369,14 @@ export default defineComponent({
 
       for (const peak of peaks) {
         const inVisibleRange = peak.x >= xRange[0] && peak.x <= xRange[1]
+        // Measure text width and convert to data units
+        const textWidthPx = this.measureTextWidth(peak.label)
+        const boxWidthDataUnits = this.pixelWidthToDataUnits(textWidthPx + textPaddingPx)
+
         boxes.push({
           x: peak.x,
           y: (ypos_low + ypos_high) / 2,
-          width: xpos_scaling * 2,
+          width: boxWidthDataUnits,
           height: boxHeight,
           label: peak.label,
           visible: false,  // Will be set by overlap resolution
@@ -390,17 +396,19 @@ export default defineComponent({
         })
 
       // Greedy overlap resolution: show highest intensity, hide overlapping lower ones
+      // Use a small gap between boxes (4px converted to data units)
+      const gapDataUnits = this.pixelWidthToDataUnits(4)
       const committedBoxes: typeof visibleBoxes = []
 
       for (const box of visibleBoxes) {
-        const boxLeft = box.x - box.width / 2 - xPadding
-        const boxRight = box.x + box.width / 2 + xPadding
+        const boxLeft = box.x - box.width / 2 - gapDataUnits
+        const boxRight = box.x + box.width / 2 + gapDataUnits
 
         // Check overlap with all committed (visible) boxes
         let hasOverlap = false
         for (const committed of committedBoxes) {
-          const committedLeft = committed.x - committed.width / 2 - xPadding
-          const committedRight = committed.x + committed.width / 2 + xPadding
+          const committedLeft = committed.x - committed.width / 2
+          const committedRight = committed.x + committed.width / 2
 
           // Check x overlap (y is the same for all annotation boxes)
           if (!(boxRight < committedLeft || boxLeft > committedRight)) {
@@ -724,6 +732,32 @@ export default defineComponent({
   },
 
   methods: {
+    /**
+     * Measure text width in pixels using Canvas API.
+     * Caches the canvas context for performance.
+     */
+    measureTextWidth(text: string): number {
+      if (!this.textMeasureCanvas) {
+        this.textMeasureCanvas = document.createElement('canvas')
+      }
+      const ctx = this.textMeasureCanvas.getContext('2d')
+      if (!ctx) return text.length * 8 // Fallback estimate
+      ctx.font = '14px Arial'
+      return ctx.measureText(text).width
+    },
+
+    /**
+     * Convert pixel width to data units (x-axis scale).
+     * Accounts for current zoom level and plot width.
+     */
+    pixelWidthToDataUnits(pixelWidth: number): number {
+      const xRange = this.xRange
+      const rangeWidth = xRange[1] - xRange[0]
+      const plotWidth = this.actualPlotWidth
+      // pixels / (pixels/dataUnit) = dataUnits
+      return pixelWidth / (plotWidth / rangeWidth)
+    },
+
     async renderPlot(): Promise<void> {
       try {
         const element = document.getElementById(this.id)

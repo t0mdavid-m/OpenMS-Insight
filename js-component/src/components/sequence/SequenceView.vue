@@ -555,7 +555,8 @@ export default defineComponent({
                     const massDiffPpm = (massDiffDa / theoreticalValue) * 1e6
 
                     // Found a match - report all matches (multiple charge states)
-                    const baseIonName = `${ionType.text}${theoIndex + 1}`
+                    // Include neutral loss/addition in name (e.g., "y5-H2O²⁺")
+                    const baseIonName = `${ionType.text}${theoIndex + 1}${typeName}`
                     const ionName = this.deconvolved
                       ? baseIonName
                       : `${baseIonName}${toSuperscript(charge)}⁺`
