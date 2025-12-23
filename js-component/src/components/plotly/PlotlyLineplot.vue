@@ -324,7 +324,8 @@ export default defineComponent({
     /**
      * Compute annotation boxes with overlap detection.
      * Returns which annotations should be visible.
-     * Only checks for collisions between labels within the visible x range.
+     * Uses greedy intensity-based resolution: highest intensity annotations
+     * get priority, lower intensity ones are hidden if they would overlap.
      */
     annotationBoxData(): Array<{
       x: number
@@ -349,7 +350,9 @@ export default defineComponent({
       const boxHeight = ypos_high - ypos_low
 
       const xpos_scaling = this.xPosScalingFactor
+      const xPadding = (xRange[1] - xRange[0]) * 0.01
 
+      // Create boxes for each annotation with peak intensity preserved
       const boxes: Array<{
         x: number
         y: number
@@ -359,9 +362,9 @@ export default defineComponent({
         visible: boolean
         inVisibleRange: boolean
         index: number
+        peakY: number  // Original peak intensity for sorting
       }> = []
 
-      // Create boxes for each annotation, marking if they're in visible range
       for (const peak of peaks) {
         const inVisibleRange = peak.x >= xRange[0] && peak.x <= xRange[1]
         boxes.push({
@@ -370,42 +373,45 @@ export default defineComponent({
           width: xpos_scaling * 2,
           height: boxHeight,
           label: peak.label,
-          visible: inVisibleRange, // Only visible if in range
+          visible: false,  // Will be set by overlap resolution
           inVisibleRange: inVisibleRange,
           index: peak.index,
+          peakY: peak.y,  // Preserve intensity for sorting
         })
       }
 
-      // Filter to only visible boxes for overlap detection
-      const visibleBoxes = boxes.filter((box) => box.inVisibleRange)
+      // Filter to visible boxes and sort by intensity (descending)
+      // Use x position as secondary sort for determinism when intensities are equal
+      const visibleBoxes = boxes
+        .filter((box) => box.inVisibleRange)
+        .sort((a, b) => {
+          if (b.peakY !== a.peakY) return b.peakY - a.peakY  // Highest intensity first
+          return a.x - b.x  // Leftmost first as tiebreaker
+        })
 
-      // Check for overlaps only among visible boxes
-      if (visibleBoxes.length > 1) {
+      // Greedy overlap resolution: show highest intensity, hide overlapping lower ones
+      const committedBoxes: typeof visibleBoxes = []
+
+      for (const box of visibleBoxes) {
+        const boxLeft = box.x - box.width / 2 - xPadding
+        const boxRight = box.x + box.width / 2 + xPadding
+
+        // Check overlap with all committed (visible) boxes
         let hasOverlap = false
-        const xPadding = (xRange[1] - xRange[0]) * 0.01
+        for (const committed of committedBoxes) {
+          const committedLeft = committed.x - committed.width / 2 - xPadding
+          const committedRight = committed.x + committed.width / 2 + xPadding
 
-        for (let i = 0; i < visibleBoxes.length && !hasOverlap; i++) {
-          for (let j = i + 1; j < visibleBoxes.length; j++) {
-            const box1Left = visibleBoxes[i].x - visibleBoxes[i].width / 2 - xPadding
-            const box1Right = visibleBoxes[i].x + visibleBoxes[i].width / 2 + xPadding
-            const box2Left = visibleBoxes[j].x - visibleBoxes[j].width / 2 - xPadding
-            const box2Right = visibleBoxes[j].x + visibleBoxes[j].width / 2 + xPadding
-
-            // Check x overlap (y is the same for all boxes)
-            if (!(box1Right < box2Left || box2Right < box1Left)) {
-              hasOverlap = true
-              break
-            }
+          // Check x overlap (y is the same for all annotation boxes)
+          if (!(boxRight < committedLeft || boxLeft > committedRight)) {
+            hasOverlap = true
+            break
           }
         }
 
-        // If overlap detected, hide all visible boxes
-        if (hasOverlap) {
-          boxes.forEach((box) => {
-            if (box.inVisibleRange) {
-              box.visible = false
-            }
-          })
+        if (!hasOverlap) {
+          box.visible = true
+          committedBoxes.push(box)
         }
       }
 
