@@ -256,6 +256,30 @@ All components accept these common arguments:
 | `cache_path` | `str` | `"."` | Base directory for cache storage |
 | `regenerate_cache` | `bool` | `False` | Force cache regeneration |
 
+## Memory-Efficient Preprocessing
+
+When working with large datasets (especially heatmaps with millions of points), use `data_path` instead of `data` to enable subprocess preprocessing:
+
+```python
+# Subprocess preprocessing (recommended for large datasets)
+# Memory is fully released after cache creation
+heatmap = Heatmap(
+    data_path="large_peaks.parquet",  # triggers subprocess
+    cache_id="peaks_heatmap",
+    ...
+)
+
+# In-process preprocessing (for smaller datasets or debugging)
+# Memory may be retained by allocator after preprocessing
+heatmap = Heatmap(
+    data=pl.scan_parquet("large_peaks.parquet"),  # runs in main process
+    cache_id="peaks_heatmap",
+    ...
+)
+```
+
+**Why this matters:** Memory allocators like mimalloc (used by Polars) retain freed memory for performance. For large datasets, this can cause memory usage to stay high even after preprocessing completes. Running preprocessing in a subprocess guarantees all memory is returned to the OS when the subprocess exits.
+
 ## Cache Reconstruction
 
 Components can be reconstructed from cache using only `cache_id` and `cache_path`. All configuration is restored from the cached manifest:
