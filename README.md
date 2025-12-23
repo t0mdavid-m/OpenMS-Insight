@@ -2,6 +2,7 @@
 
 [![PyPI version](https://badge.fury.io/py/openms-insight.svg)](https://badge.fury.io/py/openms-insight)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://github.com/kohlbacherlab/openms-insight/actions/workflows/tests.yml/badge.svg)](https://github.com/kohlbacherlab/openms-insight/actions/workflows/tests.yml)
 
 Interactive visualization components for mass spectrometry data in Streamlit, backed by Vue.js.
 
@@ -10,10 +11,11 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Cross-component selection linking** via shared identifiers
 - **Memory-efficient preprocessing** via subprocess isolation
 - **Automatic disk caching** with config-based invalidation
-- **Table component** (Tabulator.js) with filtering, sorting, go-to, pagination
+- **Cache reconstruction** - components can be restored from cache without re-specifying configuration
+- **Table component** (Tabulator.js) with filtering, sorting, go-to, pagination, CSV export
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
-- **Heatmap component** (Plotly scattergl) with multi-resolution downsampling
-- **Sequence view component** for peptide/protein visualization
+- **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
+- **Sequence view component** for peptide visualization with fragment ion matching and auto-zoom
 
 ## Installation
 
@@ -55,9 +57,10 @@ plot(state_manager=state_manager)
 
 ## Cross-Component Linking
 
-Components communicate through **identifiers** using two mechanisms:
+Components communicate through **identifiers** using three mechanisms:
 
 - **`filters`**: INPUT - filter this component's data by the selection
+- **`filter_defaults`**: INPUT - default value when selection is None
 - **`interactivity`**: OUTPUT - set a selection when user clicks
 
 ```python
@@ -85,6 +88,14 @@ plot = LinePlot(
     x_column='mass',
     y_column='intensity',
 )
+
+# Table with filter defaults - shows unannotated data when no identification selected
+annotations = Table(
+    cache_id="annotations",
+    data_path="annotations.parquet",
+    filters={'identification': 'id_idx'},
+    filter_defaults={'identification': -1},  # Use -1 when identification is None
+)
 ```
 
 ---
@@ -102,16 +113,26 @@ Table(
     interactivity={'spectrum': 'scan_id'},
     column_definitions=[
         {'field': 'scan_id', 'title': 'Scan', 'sorter': 'number'},
-        {'field': 'rt', 'title': 'RT (min)', 'sorter': 'number', 'hozAlign': 'right'},
+        {'field': 'rt', 'title': 'RT (min)', 'sorter': 'number', 'hozAlign': 'right',
+         'formatter': 'money', 'formatterParams': {'precision': 2, 'symbol': ''}},
         {'field': 'precursor_mz', 'title': 'm/z', 'sorter': 'number'},
     ],
     index_field='scan_id',
     go_to_fields=['scan_id'],
+    initial_sort=[{'column': 'scan_id', 'dir': 'asc'}],
     default_row=0,
     pagination=True,
-    page_size=50,
+    page_size=100,
 )
 ```
+
+**Key parameters:**
+- `column_definitions`: List of Tabulator column configs (field, title, sorter, formatter, etc.)
+- `index_field`: Column used as unique row identifier (default: 'id')
+- `go_to_fields`: Columns available in "Go to" navigation
+- `initial_sort`: Default sort configuration
+- `pagination`: Enable pagination for large tables (default: True)
+- `page_size`: Rows per page (default: 100)
 
 ### LinePlot
 
@@ -130,8 +151,19 @@ LinePlot(
     title="MS/MS Spectrum",
     x_label="m/z",
     y_label="Intensity",
+    styling={
+        'highlightColor': '#E4572E',
+        'selectedColor': '#F3A712',
+        'unhighlightedColor': 'lightblue',
+    },
 )
 ```
+
+**Key parameters:**
+- `x_column`, `y_column`: Column names for x/y values
+- `highlight_column`: Boolean/int column indicating which points to highlight
+- `annotation_column`: Text column for labels on highlighted points
+- `styling`: Color configuration dict
 
 ### Heatmap
 
@@ -146,27 +178,66 @@ Heatmap(
     intensity_column='intensity',
     interactivity={'spectrum': 'scan_id', 'peak': 'peak_id'},
     min_points=30000,
+    x_bins=400,
+    y_bins=50,
     title="Peak Map",
     x_label="Retention Time (min)",
     y_label="m/z",
+    colorscale='Portland',
 )
 ```
+
+**Key parameters:**
+- `x_column`, `y_column`, `intensity_column`: Column names for axes and color
+- `min_points`: Target size for downsampling (default: 20000)
+- `x_bins`, `y_bins`: Grid resolution for spatial binning
+- `colorscale`: Plotly colorscale name (default: 'Portland')
 
 ### SequenceView
 
-Peptide/protein sequence visualization with fragment ion matching.
+Peptide sequence visualization with fragment ion matching. Supports both dynamic (filtered by selection) and static sequences.
 
 ```python
+# Dynamic: sequence from DataFrame filtered by selection
 SequenceView(
     cache_id="peptide_view",
-    sequence="PEPTIDEK",
-    observed_masses=[147.1, 244.2, 359.3, 456.4],
-    peak_ids=[0, 1, 2, 3],
-    precursor_mass=944.5,
+    sequence_data_path="sequences.parquet",  # columns: scan_id, sequence, precursor_charge
+    peaks_data_path="peaks.parquet",         # columns: scan_id, peak_id, mass, intensity
+    filters={'spectrum': 'scan_id'},
     interactivity={'peak': 'peak_id'},
+    deconvolved=False,  # peaks are m/z values, consider charge states
     title="Fragment Coverage",
 )
+
+# Static: single sequence with optional peaks
+SequenceView(
+    cache_id="static_peptide",
+    sequence_data=("PEPTIDEK", 2),  # (sequence, charge) tuple
+    peaks_data=peaks_df,            # Optional: LazyFrame with mass, intensity columns
+    deconvolved=True,               # peaks are neutral masses
+)
+
+# Simplest: just a sequence string
+SequenceView(
+    cache_id="simple_seq",
+    sequence_data="PEPTIDEK",  # charge defaults to 1
+)
 ```
+
+**Key parameters:**
+- `sequence_data`: LazyFrame, (sequence, charge) tuple, or sequence string
+- `sequence_data_path`: Path to parquet with sequence data
+- `peaks_data` / `peaks_data_path`: Optional peak data for fragment matching
+- `deconvolved`: If False (default), peaks are m/z and matching considers charge states
+- `annotation_config`: Dict with ion_types, tolerance, neutral_losses settings
+
+**Features:**
+- Automatic fragment ion matching (a/b/c/x/y/z ions)
+- Configurable mass tolerance (ppm or Da)
+- Neutral loss support (-H2O, -NH3)
+- Auto-zoom for short sequences (≤20 amino acids)
+- Fragment coverage statistics
+- Click-to-select peaks with cross-component linking
 
 ---
 
@@ -177,11 +248,35 @@ All components accept these common arguments:
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `cache_id` | `str` | **Required** | Unique identifier for disk cache |
-| `data_path` | `str` | `None` | Path to parquet file (preferred - uses subprocess for memory efficiency) |
-| `data` | `pl.LazyFrame` | `None` | Polars LazyFrame (alternative to data_path, in-process preprocessing) |
+| `data_path` | `str` | `None` | Path to parquet file (preferred for memory efficiency) |
+| `data` | `pl.LazyFrame` | `None` | Polars LazyFrame (alternative to data_path) |
 | `filters` | `Dict[str, str]` | `None` | Map identifier -> column for filtering |
+| `filter_defaults` | `Dict[str, Any]` | `None` | Default values when selection is None |
 | `interactivity` | `Dict[str, str]` | `None` | Map identifier -> column for click actions |
 | `cache_path` | `str` | `"."` | Base directory for cache storage |
+| `regenerate_cache` | `bool` | `False` | Force cache regeneration |
+
+## Cache Reconstruction
+
+Components can be reconstructed from cache using only `cache_id` and `cache_path`. All configuration is restored from the cached manifest:
+
+```python
+# First run: create component with data and config
+table = Table(
+    cache_id="my_table",
+    data_path="data.parquet",
+    filters={'spectrum': 'scan_id'},
+    column_definitions=[...],
+    cache_path="./cache",
+)
+
+# Subsequent runs: reconstruct from cache only
+table = Table(
+    cache_id="my_table",
+    cache_path="./cache",
+)
+# All config (filters, column_definitions, etc.) restored from cache
+```
 
 ## Rendering
 
@@ -208,14 +303,38 @@ npm install
 npm run build
 ```
 
-### Development Mode
+### Development Mode (Hot Reload)
 
 ```bash
+# Terminal 1: Vue dev server
 cd js-component
 npm run dev
 
-# In another terminal:
-export SVC_DEV_MODE=true
-export SVC_DEV_URL=http://localhost:5173
-streamlit run app.py
+# Terminal 2: Streamlit with dev mode
+SVC_DEV_MODE=true SVC_DEV_URL=http://localhost:5173 streamlit run app.py
+```
+
+### Running Tests
+
+```bash
+# Python tests
+pip install -e ".[dev]"
+pytest tests/ -v
+
+# TypeScript type checking
+cd js-component
+npm run type-check
+```
+
+### Linting and Formatting
+
+```bash
+# Python
+ruff check .
+ruff format .
+
+# JavaScript/TypeScript
+cd js-component
+npm run lint
+npm run format
 ```
