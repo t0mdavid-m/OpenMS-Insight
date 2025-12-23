@@ -151,7 +151,26 @@ class Table(BaseComponent):
         return {
             'column_definitions': self._column_definitions,
             'index_field': self._index_field,
+            'title': self._title,
+            'go_to_fields': self._go_to_fields,
+            'layout': self._layout,
+            'default_row': self._default_row,
+            'initial_sort': self._initial_sort,
+            'pagination': self._pagination,
+            'page_size': self._page_size,
         }
+
+    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+        """Restore component-specific configuration from cached config."""
+        self._column_definitions = config.get('column_definitions')
+        self._index_field = config.get('index_field', 'id')
+        self._title = config.get('title')
+        self._go_to_fields = config.get('go_to_fields')
+        self._layout = config.get('layout', 'fitDataFill')
+        self._default_row = config.get('default_row', 0)
+        self._initial_sort = config.get('initial_sort')
+        self._pagination = config.get('pagination', True)
+        self._page_size = config.get('page_size', 100)
 
     def _get_row_group_size(self) -> int:
         """

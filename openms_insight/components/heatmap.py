@@ -66,11 +66,11 @@ class Heatmap(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        x_column: str,
-        y_column: str,
+        x_column: Optional[str] = None,
+        y_column: Optional[str] = None,
         data: Optional[pl.LazyFrame] = None,
         data_path: Optional[str] = None,
-        intensity_column: str = 'intensity',
+        intensity_column: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
@@ -185,7 +185,29 @@ class Heatmap(BaseComponent):
             'use_simple_downsample': self._use_simple_downsample,
             'use_streaming': self._use_streaming,
             'categorical_filters': sorted(self._categorical_filters),
+            'zoom_identifier': self._zoom_identifier,
+            'title': self._title,
+            'x_label': self._x_label,
+            'y_label': self._y_label,
+            'colorscale': self._colorscale,
         }
+
+    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+        """Restore component-specific configuration from cached config."""
+        self._x_column = config.get('x_column')
+        self._y_column = config.get('y_column')
+        self._intensity_column = config.get('intensity_column', 'intensity')
+        self._min_points = config.get('min_points', 20000)
+        self._x_bins = config.get('x_bins', 400)
+        self._y_bins = config.get('y_bins', 50)
+        self._use_simple_downsample = config.get('use_simple_downsample', False)
+        self._use_streaming = config.get('use_streaming', True)
+        self._categorical_filters = config.get('categorical_filters', [])
+        self._zoom_identifier = config.get('zoom_identifier', 'heatmap_zoom')
+        self._title = config.get('title')
+        self._x_label = config.get('x_label', self._x_column)
+        self._y_label = config.get('y_label', self._y_column)
+        self._colorscale = config.get('colorscale', 'Portland')
 
     def get_state_dependencies(self) -> list:
         """

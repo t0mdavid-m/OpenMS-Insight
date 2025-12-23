@@ -152,7 +152,27 @@ class LinePlot(BaseComponent):
             'y_column': self._y_column,
             'highlight_column': self._highlight_column,
             'annotation_column': self._annotation_column,
+            'title': self._title,
+            'x_label': self._x_label,
+            'y_label': self._y_label,
+            'styling': self._styling,
+            'plot_config': self._plot_config,
         }
+
+    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+        """Restore component-specific configuration from cached config."""
+        self._x_column = config.get('x_column', 'x')
+        self._y_column = config.get('y_column', 'y')
+        self._highlight_column = config.get('highlight_column')
+        self._annotation_column = config.get('annotation_column')
+        self._title = config.get('title')
+        self._x_label = config.get('x_label', self._x_column)
+        self._y_label = config.get('y_label', self._y_column)
+        self._styling = config.get('styling', {})
+        self._plot_config = config.get('plot_config', {})
+        # Initialize dynamic annotations (not cached)
+        self._dynamic_annotations = None
+        self._dynamic_title = None
 
     def _get_row_group_size(self) -> int:
         """

@@ -55,10 +55,19 @@ class BaseComponent(ABC):
         """
         Initialize the component.
 
+        Components can be created in two modes:
+
+        1. **Creation mode** (data provided): Creates cache with specified config.
+           All configuration (filters, interactivity, component-specific) is stored.
+
+        2. **Reconstruction mode** (no data): Loads everything from cache.
+           Only cache_id and cache_path are needed. All configuration is restored
+           from the cached manifest. Any other parameters passed are ignored.
+
         Args:
             cache_id: Unique identifier for this component's cache (MANDATORY).
                 Creates a folder {cache_path}/{cache_id}/ for cached data.
-            data: Polars LazyFrame with source data. Optional if cache exists.
+            data: Polars LazyFrame with source data. Required for creation mode.
             data_path: Path to parquet file with source data. Preferred over
                 data= for large datasets as preprocessing runs in a subprocess
                 to ensure memory is released after cache creation.
@@ -84,19 +93,46 @@ class BaseComponent(ABC):
 
         self._cache_id = cache_id
         self._cache_dir = get_cache_dir(cache_path, cache_id)
-        self._filters = filters or {}
-        self._filter_defaults = filter_defaults or {}
-        self._interactivity = interactivity or {}
         self._preprocessed_data: Dict[str, Any] = {}
-        self._config = kwargs
 
-        # Check if we should load from cache or preprocess
-        if regenerate_cache or not self._is_cache_valid():
-            if data is None and data_path is None:
+        # Determine mode: reconstruction (no data) or creation (data provided)
+        has_data = data is not None or data_path is not None
+
+        # Check if any configuration arguments were explicitly provided
+        # Note: We only check filters/interactivity/filter_defaults because component-
+        # specific kwargs always have default values passed by subclasses
+        has_config = (
+            filters is not None or
+            filter_defaults is not None or
+            interactivity is not None
+        )
+
+        if not has_data and not regenerate_cache:
+            # Reconstruction mode - only cache_id and cache_path allowed
+            if has_config:
                 raise CacheMissError(
-                    f"Cache not found at '{self._cache_dir}' and no data provided. "
-                    f"Either provide data=, data_path=, or ensure cache exists."
+                    f"Configuration arguments (filters, interactivity, filter_defaults) "
+                    f"require data= or data_path= to be provided. "
+                    f"For reconstruction from cache, use only cache_id and cache_path."
                 )
+            if not self._cache_exists():
+                raise CacheMissError(
+                    f"Cache not found at '{self._cache_dir}'. "
+                    f"Provide data= or data_path= to create the cache."
+                )
+            self._raw_data = None
+            self._load_from_cache()
+        else:
+            # Creation mode - use provided config
+            if not has_data:
+                raise CacheMissError(
+                    f"regenerate_cache=True requires data= or data_path= to be provided."
+                )
+
+            self._filters = filters or {}
+            self._filter_defaults = filter_defaults or {}
+            self._interactivity = interactivity or {}
+            self._config = kwargs
 
             if data_path is not None:
                 # Subprocess preprocessing - memory released after cache creation
@@ -114,15 +150,11 @@ class BaseComponent(ABC):
                 self._raw_data = None
                 self._load_from_cache()
             else:
-                # In-process preprocessing (backward compatible)
+                # In-process preprocessing
                 self._raw_data = data
                 self._validate_mappings()
                 self._preprocess()
                 self._save_to_cache()
-        else:
-            # Load from valid cache
-            self._raw_data = None
-            self._load_from_cache()
 
     def _validate_mappings(self) -> None:
         """Validate that filter and interactivity columns exist in the data schema."""
@@ -176,15 +208,17 @@ class BaseComponent(ABC):
         """Get path to preprocessed data directory."""
         return self._cache_dir / "preprocessed"
 
-    def _is_cache_valid(self) -> bool:
+    def _cache_exists(self) -> bool:
         """
-        Check if cache is valid and can be loaded.
+        Check if a valid cache exists that can be loaded.
 
-        Cache is valid when:
-        1. manifest.json exists
+        Cache exists when:
+        1. manifest.json exists and is readable
         2. version matches current CACHE_VERSION
         3. component_type matches
-        4. config_hash matches current config
+
+        Note: This does NOT check config hash. In reconstruction mode,
+        all configuration is restored from the cache manifest.
         """
         manifest_path = self._get_manifest_path()
         if not manifest_path.exists():
@@ -204,24 +238,32 @@ class BaseComponent(ABC):
         if manifest.get("component_type") != self._component_type:
             return False
 
-        # Check config hash
-        current_hash = self._compute_config_hash()
-        if manifest.get("config_hash") != current_hash:
-            return False
-
         return True
 
     def _load_from_cache(self) -> None:
-        """Load preprocessed data from cache."""
+        """Load all configuration and preprocessed data from cache.
+
+        Restores:
+        - filters mapping
+        - filter_defaults mapping
+        - interactivity mapping
+        - Component-specific configuration via _restore_cache_config()
+        - All preprocessed data files
+        """
         manifest_path = self._get_manifest_path()
         preprocessed_dir = self._get_preprocessed_dir()
 
         with open(manifest_path) as f:
             manifest = json.load(f)
 
-        # Load filters and interactivity from manifest
+        # Restore filters, filter_defaults, and interactivity from manifest
         self._filters = manifest.get("filters", {})
+        self._filter_defaults = manifest.get("filter_defaults", {})
         self._interactivity = manifest.get("interactivity", {})
+        self._config = manifest.get("config", {})
+
+        # Restore component-specific configuration
+        self._restore_cache_config(manifest.get("config", {}))
 
         # Load preprocessed data files
         data_files = manifest.get("data_files", {})
@@ -234,6 +276,19 @@ class BaseComponent(ABC):
         data_values = manifest.get("data_values", {})
         for key, value in data_values.items():
             self._preprocessed_data[key] = value
+
+    @abstractmethod
+    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+        """
+        Restore component-specific configuration from cached config dict.
+
+        Called during reconstruction mode to restore all component attributes
+        that were stored in the manifest's config section.
+
+        Args:
+            config: The config dict from manifest (result of _get_cache_config())
+        """
+        pass
 
     def _save_to_cache(self) -> None:
         """Save preprocessed data to cache."""
@@ -252,6 +307,7 @@ class BaseComponent(ABC):
             "config_hash": self._compute_config_hash(),
             "config": self._get_cache_config(),
             "filters": self._filters,
+            "filter_defaults": self._filter_defaults,
             "interactivity": self._interactivity,
             "data_files": {},
             "data_values": {},

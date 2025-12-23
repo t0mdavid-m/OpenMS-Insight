@@ -363,80 +363,113 @@ class SequenceView:
         self._cache_id = cache_id
         self._cache_path = Path(cache_path)
         self._cache_dir = self._cache_path / cache_id
-        self._title = title
-        self._height = height
-        self._deconvolved = deconvolved
-        self._config = kwargs
 
-        # Store filters and interactivity
-        self._filters = filters or {}
-        self._interactivity = interactivity or {}
-
-        # Store annotation config with defaults
-        self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
-        if annotation_config:
-            self._annotation_config.update(annotation_config)
-
-        # Temporarily store source data for preprocessing
-        # These will be discarded after cache is created
-        self._source_sequence_data: Optional[pl.LazyFrame] = None
-        self._source_static_sequence: Optional[str] = None
-        self._source_static_charge: int = 1
-        self._source_peaks_data: Optional[pl.LazyFrame] = None
-
-        # Parse sequence data input
-        if sequence_data is not None and sequence_data_path is not None:
-            raise ValueError("Provide either 'sequence_data' or 'sequence_data_path', not both")
-
-        if sequence_data_path is not None:
-            self._source_sequence_data = pl.scan_parquet(sequence_data_path)
-        elif isinstance(sequence_data, pl.LazyFrame):
-            self._source_sequence_data = sequence_data
-        elif isinstance(sequence_data, tuple):
-            self._source_static_sequence = sequence_data[0]
-            self._source_static_charge = sequence_data[1]
-        elif isinstance(sequence_data, str):
-            self._source_static_sequence = sequence_data
-            self._source_static_charge = 1
-
-        # Parse peaks data input
-        if peaks_data is not None and peaks_data_path is not None:
-            raise ValueError("Provide either 'peaks_data' or 'peaks_data_path', not both")
-
-        if peaks_data_path is not None:
-            self._source_peaks_data = pl.scan_parquet(peaks_data_path)
-        elif peaks_data is not None:
-            self._source_peaks_data = peaks_data
-
-        # Ensure cache exists and is valid
-        self._ensure_cache()
-
-        # Discard source references - only cache is used from now on
-        self._source_sequence_data = None
-        self._source_static_sequence = None
-        self._source_peaks_data = None
-
-        # Load cached LazyFrames for reading
-        self._cached_sequences: pl.LazyFrame = pl.scan_parquet(
-            self._cache_dir / "sequences.parquet"
-        )
-        peaks_path = self._cache_dir / "peaks.parquet"
-        self._cached_peaks: Optional[pl.LazyFrame] = (
-            pl.scan_parquet(peaks_path) if peaks_path.exists() else None
+        # Determine if data is provided (creation mode vs reconstruction mode)
+        has_sequence_data = (
+            sequence_data is not None or
+            sequence_data_path is not None
         )
 
-    def _get_cache_config_hash(self) -> str:
-        """Compute hash of configuration that affects cache validity."""
-        config = {
+        # Check if any configuration arguments were provided
+        has_config = (
+            peaks_data is not None or
+            peaks_data_path is not None or
+            filters is not None or
+            interactivity is not None or
+            deconvolved is not False or
+            annotation_config is not None or
+            title is not None or
+            height != 400 or
+            bool(kwargs)
+        )
+
+        if not has_sequence_data:
+            # Reconstruction mode - only cache_id and cache_path allowed
+            if has_config:
+                raise ValueError(
+                    f"Configuration arguments require sequence_data= or sequence_data_path= to be provided. "
+                    f"For reconstruction from cache, use only cache_id and cache_path."
+                )
+            if not self._cache_exists():
+                raise ValueError(
+                    f"Cache not found at '{self._cache_dir}'. "
+                    f"Provide sequence_data= or sequence_data_path= to create the cache."
+                )
+            self._load_from_cache()
+        else:
+            # Creation mode - use provided config
+            self._title = title
+            self._height = height
+            self._deconvolved = deconvolved
+            self._config = kwargs
+            self._filters = filters or {}
+            self._interactivity = interactivity or {}
+
+            # Store annotation config with defaults
+            self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
+            if annotation_config:
+                self._annotation_config.update(annotation_config)
+
+            # Parse sequence data input
+            if sequence_data is not None and sequence_data_path is not None:
+                raise ValueError("Provide either 'sequence_data' or 'sequence_data_path', not both")
+
+            self._source_sequence_data: Optional[pl.LazyFrame] = None
+            self._source_static_sequence: Optional[str] = None
+            self._source_static_charge: int = 1
+
+            if sequence_data_path is not None:
+                self._source_sequence_data = pl.scan_parquet(sequence_data_path)
+            elif isinstance(sequence_data, pl.LazyFrame):
+                self._source_sequence_data = sequence_data
+            elif isinstance(sequence_data, tuple):
+                self._source_static_sequence = sequence_data[0]
+                self._source_static_charge = sequence_data[1]
+            elif isinstance(sequence_data, str):
+                self._source_static_sequence = sequence_data
+                self._source_static_charge = 1
+
+            # Parse peaks data input
+            if peaks_data is not None and peaks_data_path is not None:
+                raise ValueError("Provide either 'peaks_data' or 'peaks_data_path', not both")
+
+            self._source_peaks_data: Optional[pl.LazyFrame] = None
+            if peaks_data_path is not None:
+                self._source_peaks_data = pl.scan_parquet(peaks_data_path)
+            elif peaks_data is not None:
+                self._source_peaks_data = peaks_data
+
+            # Create and save cache
+            self._create_cache()
+
+            # Discard source references - only cache is used from now on
+            self._source_sequence_data = None
+            self._source_static_sequence = None
+            self._source_peaks_data = None
+
+            # Load cached LazyFrames for reading
+            self._cached_sequences = pl.scan_parquet(
+                self._cache_dir / "sequences.parquet"
+            )
+            peaks_path = self._cache_dir / "peaks.parquet"
+            self._cached_peaks = (
+                pl.scan_parquet(peaks_path) if peaks_path.exists() else None
+            )
+
+    def _get_cache_config(self) -> Dict[str, Any]:
+        """Get all configuration to store in cache."""
+        return {
             "version": CACHE_VERSION,
-            "filters": sorted(self._filters.items()),
-            "has_peaks": self._source_peaks_data is not None,
-            "is_static_sequence": self._source_static_sequence is not None,
+            "filters": self._filters,
+            "interactivity": self._interactivity,
+            "title": self._title,
+            "height": self._height,
+            "deconvolved": self._deconvolved,
+            "annotation_config": self._annotation_config,
         }
-        return hashlib.md5(json.dumps(config, sort_keys=True).encode()).hexdigest()[:16]
 
-    def _is_cache_valid(self) -> bool:
-        """Check if cache exists and is valid."""
+    def _cache_exists(self) -> bool:
+        """Check if a valid cache exists that can be loaded."""
         config_file = self._cache_dir / ".cache_config.json"
         sequences_file = self._cache_dir / "sequences.parquet"
 
@@ -446,15 +479,38 @@ class SequenceView:
         try:
             with open(config_file, "r") as f:
                 cached_config = json.load(f)
-            return cached_config.get("hash") == self._get_cache_config_hash()
+            # Just check version matches
+            return cached_config.get("version") == CACHE_VERSION
         except Exception:
             return False
 
-    def _ensure_cache(self) -> None:
-        """Ensure cache exists and is valid, creating it if necessary."""
-        if self._is_cache_valid():
-            return
+    def _load_from_cache(self) -> None:
+        """Load all configuration and data from cache."""
+        config_file = self._cache_dir / ".cache_config.json"
 
+        with open(config_file, "r") as f:
+            config = json.load(f)
+
+        # Restore all configuration
+        self._filters = config.get("filters", {})
+        self._interactivity = config.get("interactivity", {})
+        self._title = config.get("title")
+        self._height = config.get("height", 400)
+        self._deconvolved = config.get("deconvolved", False)
+        self._annotation_config = config.get("annotation_config", {**DEFAULT_ANNOTATION_CONFIG})
+        self._config = {}
+
+        # Load cached LazyFrames
+        self._cached_sequences = pl.scan_parquet(
+            self._cache_dir / "sequences.parquet"
+        )
+        peaks_path = self._cache_dir / "peaks.parquet"
+        self._cached_peaks = (
+            pl.scan_parquet(peaks_path) if peaks_path.exists() else None
+        )
+
+    def _create_cache(self) -> None:
+        """Create cache from source data."""
         # Create cache directory
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -462,10 +518,10 @@ class SequenceView:
         self._preprocess_sequences()
         self._preprocess_peaks()
 
-        # Write config hash
+        # Write config
         config_file = self._cache_dir / ".cache_config.json"
         with open(config_file, "w") as f:
-            json.dump({"hash": self._get_cache_config_hash()}, f)
+            json.dump(self._get_cache_config(), f, indent=2)
 
     def _preprocess_sequences(self) -> None:
         """Preprocess and cache sequence data."""
