@@ -670,8 +670,8 @@ class LinePlot(BaseComponent):
             sv_result = sequence_view(key="sv", state_manager=state_manager)
             spectrum_plot(key="plot", state_manager=state_manager, sequence_view_key="sv")
         """
-        # Get peaks data from SequenceView
-        peaks_data = sequence_view._peaks_data
+        # Get peaks data from SequenceView (uses cached data)
+        peaks_data = sequence_view.peaks_data
 
         if peaks_data is None:
             raise ValueError(

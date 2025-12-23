@@ -1,15 +1,21 @@
 """SequenceView component for peptide/protein sequence visualization with fragment matching."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import hashlib
+import json
 
 import polars as pl
 
 from ..core.registry import register_component
+from ..preprocessing.filtering import optimize_for_transfer
 
 # Proton mass for m/z calculations
 PROTON_MASS = 1.007276
+
+# Cache version - increment when cache format changes
+CACHE_VERSION = 1
 
 
 def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
@@ -347,13 +353,14 @@ class SequenceView:
                 - tolerance: Mass tolerance value (default: 20.0)
                 - tolerance_ppm: True for ppm, False for Da (default: True)
                 - colors: Dict mapping ion types to hex colors
-            cache_path: Base path for any cache storage (currently unused).
+            cache_path: Base path for cache storage.
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
-        self._cache_path = cache_path
+        self._cache_path = Path(cache_path)
+        self._cache_dir = self._cache_path / cache_id
         self._title = title
         self._height = height
         self._deconvolved = deconvolved
@@ -368,63 +375,174 @@ class SequenceView:
         if annotation_config:
             self._annotation_config.update(annotation_config)
 
-        # Process sequence data
-        self._sequence_data: Optional[pl.LazyFrame] = None
-        self._static_sequence: Optional[str] = None
-        self._static_charge: int = 1
+        # Temporarily store source data for preprocessing
+        # These will be discarded after cache is created
+        self._source_sequence_data: Optional[pl.LazyFrame] = None
+        self._source_static_sequence: Optional[str] = None
+        self._source_static_charge: int = 1
+        self._source_peaks_data: Optional[pl.LazyFrame] = None
 
+        # Parse sequence data input
         if sequence_data is not None and sequence_data_path is not None:
             raise ValueError("Provide either 'sequence_data' or 'sequence_data_path', not both")
 
         if sequence_data_path is not None:
-            self._sequence_data = pl.scan_parquet(sequence_data_path)
+            self._source_sequence_data = pl.scan_parquet(sequence_data_path)
         elif isinstance(sequence_data, pl.LazyFrame):
-            self._sequence_data = sequence_data
+            self._source_sequence_data = sequence_data
         elif isinstance(sequence_data, tuple):
-            # (sequence_string, charge)
-            self._static_sequence = sequence_data[0]
-            self._static_charge = sequence_data[1]
+            self._source_static_sequence = sequence_data[0]
+            self._source_static_charge = sequence_data[1]
         elif isinstance(sequence_data, str):
-            # Just the sequence string
-            self._static_sequence = sequence_data
-            self._static_charge = 1
+            self._source_static_sequence = sequence_data
+            self._source_static_charge = 1
 
-        # Process peaks data
-        self._peaks_data: Optional[pl.LazyFrame] = None
-
+        # Parse peaks data input
         if peaks_data is not None and peaks_data_path is not None:
             raise ValueError("Provide either 'peaks_data' or 'peaks_data_path', not both")
 
         if peaks_data_path is not None:
-            self._peaks_data = pl.scan_parquet(peaks_data_path)
+            self._source_peaks_data = pl.scan_parquet(peaks_data_path)
         elif peaks_data is not None:
-            self._peaks_data = peaks_data
+            self._source_peaks_data = peaks_data
+
+        # Ensure cache exists and is valid
+        self._ensure_cache()
+
+        # Discard source references - only cache is used from now on
+        self._source_sequence_data = None
+        self._source_static_sequence = None
+        self._source_peaks_data = None
+
+        # Load cached LazyFrames for reading
+        self._cached_sequences: pl.LazyFrame = pl.scan_parquet(
+            self._cache_dir / "sequences.parquet"
+        )
+        peaks_path = self._cache_dir / "peaks.parquet"
+        self._cached_peaks: Optional[pl.LazyFrame] = (
+            pl.scan_parquet(peaks_path) if peaks_path.exists() else None
+        )
+
+    def _get_cache_config_hash(self) -> str:
+        """Compute hash of configuration that affects cache validity."""
+        config = {
+            "version": CACHE_VERSION,
+            "filters": sorted(self._filters.items()),
+            "has_peaks": self._source_peaks_data is not None,
+            "is_static_sequence": self._source_static_sequence is not None,
+        }
+        return hashlib.md5(json.dumps(config, sort_keys=True).encode()).hexdigest()[:16]
+
+    def _is_cache_valid(self) -> bool:
+        """Check if cache exists and is valid."""
+        config_file = self._cache_dir / ".cache_config.json"
+        sequences_file = self._cache_dir / "sequences.parquet"
+
+        if not config_file.exists() or not sequences_file.exists():
+            return False
+
+        try:
+            with open(config_file, "r") as f:
+                cached_config = json.load(f)
+            return cached_config.get("hash") == self._get_cache_config_hash()
+        except Exception:
+            return False
+
+    def _ensure_cache(self) -> None:
+        """Ensure cache exists and is valid, creating it if necessary."""
+        if self._is_cache_valid():
+            return
+
+        # Create cache directory
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Preprocess and write caches
+        self._preprocess_sequences()
+        self._preprocess_peaks()
+
+        # Write config hash
+        config_file = self._cache_dir / ".cache_config.json"
+        with open(config_file, "w") as f:
+            json.dump({"hash": self._get_cache_config_hash()}, f)
+
+    def _preprocess_sequences(self) -> None:
+        """Preprocess and cache sequence data."""
+        output_path = self._cache_dir / "sequences.parquet"
+
+        if self._source_sequence_data is not None:
+            # LazyFrame input - select required columns, sort by filters
+            schema = self._source_sequence_data.collect_schema()
+            filter_cols = [c for c in self._filters.values() if c in schema.names()]
+
+            # Build column list: filter columns + required columns
+            required = ["sequence", "precursor_charge"]
+            cols = list(dict.fromkeys(filter_cols + [c for c in required if c in schema.names()]))
+
+            lf = self._source_sequence_data.select(cols)
+
+            # Sort by filter columns for predicate pushdown
+            if filter_cols:
+                lf = lf.sort(filter_cols)
+
+            df = lf.collect()
+        else:
+            # Static input (string or tuple) - create single-row DataFrame
+            df = pl.DataFrame({
+                "sequence": [self._source_static_sequence or ""],
+                "precursor_charge": [self._source_static_charge],
+            })
+
+        # Optimize types and write
+        df = optimize_for_transfer(df)
+        df.write_parquet(output_path, compression="zstd")
+
+    def _preprocess_peaks(self) -> None:
+        """Preprocess and cache peaks data."""
+        if self._source_peaks_data is None:
+            return  # No peaks to cache
+
+        output_path = self._cache_dir / "peaks.parquet"
+        schema = self._source_peaks_data.collect_schema()
+        filter_cols = [c for c in self._filters.values() if c in schema.names()]
+
+        # Build column list: filter columns + required columns
+        required = ["peak_id", "mass"]
+        optional = ["intensity"]
+        cols = list(dict.fromkeys(
+            filter_cols +
+            [c for c in required if c in schema.names()] +
+            [c for c in optional if c in schema.names()]
+        ))
+
+        lf = self._source_peaks_data.select(cols)
+
+        # Sort by filter columns for predicate pushdown
+        if filter_cols:
+            lf = lf.sort(filter_cols)
+
+        df = lf.collect()
+
+        # Optimize types and write
+        df = optimize_for_transfer(df)
+        df.write_parquet(output_path, compression="zstd")
 
     def _get_sequence_for_state(self, state: Dict[str, Any]) -> Tuple[str, int]:
         """Get sequence and charge for current state.
 
+        Reads from cached sequences.parquet with predicate pushdown.
+
         Returns:
             Tuple of (sequence_string, precursor_charge)
         """
-        if self._static_sequence is not None:
-            return self._static_sequence, self._static_charge
+        filtered = self._cached_sequences
 
-        if self._sequence_data is None:
-            return "", 1
-
-        # Filter sequence data by state
-        filtered = self._sequence_data
-
+        # Apply filters for columns that exist in cached data
+        schema = filtered.collect_schema()
         for identifier, column in self._filters.items():
-            # Only apply filters for columns that exist in sequence_data
-            try:
-                schema = filtered.collect_schema()
-                if column in schema.names():
-                    filter_value = state.get(identifier)
-                    if filter_value is not None:
-                        filtered = filtered.filter(pl.col(column) == filter_value)
-            except Exception:
-                pass
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
 
         # Collect and get first row
         try:
@@ -439,34 +557,33 @@ class SequenceView:
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
 
+        Reads from cached peaks.parquet with predicate pushdown.
+
         Returns:
-            DataFrame with columns: peak_id, mass, intensity
+            DataFrame with columns: peak_id, mass, (intensity if available)
         """
-        if self._peaks_data is None:
-            return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64, "intensity": pl.Float64})
+        if self._cached_peaks is None:
+            return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64})
 
-        filtered = self._peaks_data
+        filtered = self._cached_peaks
 
+        # Apply filters for columns that exist in cached data
+        schema = filtered.collect_schema()
         for identifier, column in self._filters.items():
-            # Only apply filters for columns that exist in peaks_data
-            try:
-                schema = filtered.collect_schema()
-                if column in schema.names():
-                    filter_value = state.get(identifier)
-                    if filter_value is not None:
-                        filtered = filtered.filter(pl.col(column) == filter_value)
-            except Exception:
-                pass
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
 
-        # Select required columns
+        # Select available columns
+        cols = ["peak_id", "mass"]
+        if "intensity" in schema.names():
+            cols.append("intensity")
+
         try:
-            schema = filtered.collect_schema()
-            cols = ["peak_id", "mass"]
-            if "intensity" in schema.names():
-                cols.append("intensity")
             return filtered.select(cols).collect()
         except Exception:
-            return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64, "intensity": pl.Float64})
+            return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64})
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -552,6 +669,11 @@ class SequenceView:
 
         args.update(self._config)
         return args
+
+    @property
+    def peaks_data(self) -> Optional[pl.LazyFrame]:
+        """Return the cached peaks LazyFrame for linked components."""
+        return self._cached_peaks
 
     def get_filters_mapping(self) -> Dict[str, str]:
         """Return the filters identifier-to-column mapping."""
