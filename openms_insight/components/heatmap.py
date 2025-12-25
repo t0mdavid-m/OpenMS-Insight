@@ -457,9 +457,7 @@ class Heatmap(BaseComponent):
                 filtered_total = filtered_data.select(pl.len()).collect().item()
 
                 # Compute level sizes for this filtered subset (2× for cache buffer)
-                level_sizes = compute_compression_levels(
-                    cache_target, filtered_total
-                )
+                level_sizes = compute_compression_levels(cache_target, filtered_total)
 
                 print(
                     f"[HEATMAP]   Value {filter_value}: {filtered_total:,} pts → levels {level_sizes}",

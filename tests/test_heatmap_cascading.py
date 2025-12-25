@@ -227,8 +227,6 @@ class TestDownsampleCascadingAccuracy:
 
         # Each bin should have the point with intensity 100 + x_bin + y_bin
         # Since we have 10x10 bins, check a few
-        collected_data = data.collect()
-
         for x_bin in range(10):
             for y_bin in range(10):
                 # Expected max intensity for this bin
