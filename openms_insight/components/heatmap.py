@@ -8,6 +8,7 @@ from ..core.base import BaseComponent
 from ..core.registry import register_component
 from ..preprocessing.compression import (
     compute_compression_levels,
+    compute_optimal_bins,
     downsample_2d,
     downsample_2d_simple,
     downsample_2d_streaming,
@@ -76,9 +77,10 @@ class Heatmap(BaseComponent):
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
-        min_points: int = 20000,
-        x_bins: int = 400,
-        y_bins: int = 50,
+        min_points: int = 10000,
+        display_aspect_ratio: float = 16 / 9,
+        x_bins: Optional[int] = None,
+        y_bins: Optional[int] = None,
         zoom_identifier: str = "heatmap_zoom",
         title: Optional[str] = None,
         x_label: Optional[str] = None,
@@ -106,10 +108,17 @@ class Heatmap(BaseComponent):
                 point's value in the corresponding column.
             cache_path: Base path for cache storage. Default "." (current dir).
             regenerate_cache: If True, regenerate cache even if valid cache exists.
-            min_points: Target size for smallest compression level and
-                threshold for level selection (default: 20000)
-            x_bins: Number of bins along x-axis for downsampling (default: 400)
-            y_bins: Number of bins along y-axis for downsampling (default: 50)
+            min_points: Target number of points to display (default: 10000).
+                Cache levels are built at 2× this value; final downsample
+                at render time reduces to exactly min_points.
+            display_aspect_ratio: Expected display width/height ratio for
+                optimal bin computation during caching (default: 16/9).
+                At render time, the actual zoom region's aspect ratio is used.
+            x_bins: Number of bins along x-axis for downsampling. If None
+                (default), auto-computed from display_aspect_ratio such that
+                x_bins × y_bins ≈ 2×min_points with even spatial distribution.
+            y_bins: Number of bins along y-axis for downsampling. If None
+                (default), auto-computed from display_aspect_ratio.
             zoom_identifier: State key for storing zoom range (default: 'heatmap_zoom')
             title: Heatmap title displayed above the plot
             x_label: X-axis label (defaults to x_column)
@@ -130,6 +139,7 @@ class Heatmap(BaseComponent):
         self._y_column = y_column
         self._intensity_column = intensity_column
         self._min_points = min_points
+        self._display_aspect_ratio = display_aspect_ratio
         self._x_bins = x_bins
         self._y_bins = y_bins
         self._zoom_identifier = zoom_identifier
@@ -155,6 +165,7 @@ class Heatmap(BaseComponent):
             y_column=y_column,
             intensity_column=intensity_column,
             min_points=min_points,
+            display_aspect_ratio=display_aspect_ratio,
             x_bins=x_bins,
             y_bins=y_bins,
             zoom_identifier=zoom_identifier,
@@ -180,6 +191,7 @@ class Heatmap(BaseComponent):
             "y_column": self._y_column,
             "intensity_column": self._intensity_column,
             "min_points": self._min_points,
+            "display_aspect_ratio": self._display_aspect_ratio,
             "x_bins": self._x_bins,
             "y_bins": self._y_bins,
             "use_simple_downsample": self._use_simple_downsample,
@@ -197,7 +209,10 @@ class Heatmap(BaseComponent):
         self._x_column = config.get("x_column")
         self._y_column = config.get("y_column")
         self._intensity_column = config.get("intensity_column", "intensity")
-        self._min_points = config.get("min_points", 20000)
+        self._min_points = config.get("min_points", 10000)
+        self._display_aspect_ratio = config.get("display_aspect_ratio", 16 / 9)
+        # x_bins/y_bins are computed during preprocessing and stored in cache
+        # Fallback to old defaults for backward compatibility with old caches
         self._x_bins = config.get("x_bins", 400)
         self._y_bins = config.get("y_bins", 50)
         self._use_simple_downsample = config.get("use_simple_downsample", False)
@@ -242,14 +257,116 @@ class Heatmap(BaseComponent):
         else:
             self._preprocess_eager()
 
+    def _build_cascading_levels(
+        self,
+        source_data: pl.LazyFrame,
+        level_sizes: list,
+        x_range: tuple,
+        y_range: tuple,
+        cache_dir,
+        prefix: str = "level",
+    ) -> dict:
+        """
+        Build cascading compression levels from source data.
+
+        Each level is built from the previous larger level rather than from
+        raw data. This is efficient (raw data read once) and produces identical
+        results because the downsampling keeps top N highest-intensity points
+        per bin - points surviving at larger levels will also be selected at
+        smaller levels.
+
+        Args:
+            source_data: LazyFrame with raw/filtered data
+            level_sizes: List of target sizes for compressed levels (smallest first)
+            x_range: (x_min, x_max) for consistent bin boundaries
+            y_range: (y_min, y_max) for consistent bin boundaries
+            cache_dir: Path to save parquet files
+            prefix: Filename prefix (e.g., "level" or "cat_level_im_0")
+
+        Returns:
+            Dict with level LazyFrames keyed by "{prefix}_{idx}" and "num_levels"
+        """
+        import sys
+
+        result = {}
+        num_compressed = len(level_sizes)
+
+        # Get total count
+        total = source_data.select(pl.len()).collect().item()
+
+        # First: save full resolution as the largest level
+        full_res_path = cache_dir / f"{prefix}_{num_compressed}.parquet"
+        full_res = source_data.sort([self._x_column, self._y_column])
+        full_res.sink_parquet(full_res_path, compression="zstd")
+        print(
+            f"[HEATMAP] Saved {prefix}_{num_compressed} ({total:,} pts)",
+            file=sys.stderr,
+        )
+
+        # Start cascading from full resolution
+        current_source = pl.scan_parquet(full_res_path)
+        current_size = total
+
+        # Build compressed levels from largest to smallest
+        for i, target_size in enumerate(reversed(level_sizes)):
+            level_idx = num_compressed - 1 - i
+            level_path = cache_dir / f"{prefix}_{level_idx}.parquet"
+
+            # If target size equals or exceeds current, just copy reference
+            if target_size >= current_size:
+                level = current_source
+            elif self._use_simple_downsample:
+                level = downsample_2d_simple(
+                    current_source,
+                    max_points=target_size,
+                    intensity_column=self._intensity_column,
+                )
+            else:
+                level = downsample_2d_streaming(
+                    current_source,
+                    max_points=target_size,
+                    x_column=self._x_column,
+                    y_column=self._y_column,
+                    intensity_column=self._intensity_column,
+                    x_bins=self._x_bins,
+                    y_bins=self._y_bins,
+                    x_range=x_range,
+                    y_range=y_range,
+                )
+
+            # Sort and save immediately
+            level = level.sort([self._x_column, self._y_column])
+            level.sink_parquet(level_path, compression="zstd")
+
+            print(
+                f"[HEATMAP] Saved {prefix}_{level_idx} (target {target_size:,} pts)",
+                file=sys.stderr,
+            )
+
+            # Next iteration uses this level as source (cascading)
+            current_source = pl.scan_parquet(level_path)
+            current_size = target_size
+
+        # Load all levels back as LazyFrames
+        for i in range(num_compressed + 1):
+            level_path = cache_dir / f"{prefix}_{i}.parquet"
+            result[f"{prefix}_{i}"] = pl.scan_parquet(level_path)
+
+        result["num_levels"] = num_compressed + 1
+
+        return result
+
     def _preprocess_with_categorical_filters(self) -> None:
         """
-        Preprocess with per-filter-value compression levels.
+        Preprocess with per-filter-value compression levels using cascading.
 
         For each unique value of each categorical filter, creates separate
-        compression levels. This ensures that when a filter is applied at
-        render time, the resulting data has ~min_points regardless of the
-        filter value selected.
+        compression levels using cascading (building smaller levels from larger).
+        This ensures that when a filter is applied at render time, the resulting
+        data has ~min_points regardless of the filter value selected.
+
+        Uses cascading downsampling for efficiency - each level is built from
+        the previous larger level rather than from raw data.
 
         Data is sorted by x, y columns for efficient range query predicate pushdown.
 
@@ -261,6 +378,7 @@ class Heatmap(BaseComponent):
         import sys
 
         # Get data ranges (for the full dataset)
+        # These ranges are used for ALL levels to ensure consistent binning
         x_range, y_range = get_data_range(
             self._raw_data,
             self._x_column,
@@ -269,9 +387,30 @@ class Heatmap(BaseComponent):
         self._preprocessed_data["x_range"] = x_range
         self._preprocessed_data["y_range"] = y_range
 
+        # Compute optimal bins if not provided
+        # Cache at 2×min_points, use display_aspect_ratio for bin computation
+        cache_target = 2 * self._min_points
+        if self._x_bins is None or self._y_bins is None:
+            # Use display aspect ratio (not data aspect ratio) for optimal bins
+            self._x_bins, self._y_bins = compute_optimal_bins(
+                cache_target,
+                (0, self._display_aspect_ratio),  # Fake x_range matching aspect
+                (0, 1.0),  # Fake y_range
+            )
+            print(
+                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
+                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
+                f"display aspect: {self._display_aspect_ratio:.2f})",
+                file=sys.stderr,
+            )
+
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
         self._preprocessed_data["total"] = total
+
+        # Create cache directory for immediate level saving
+        cache_dir = self._cache_dir / "preprocessed"
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Store metadata about categorical filters
         self._preprocessed_data["has_categorical_filters"] = True
@@ -309,7 +448,7 @@ class Heatmap(BaseComponent):
                 unique_values
             )
 
-            # Create compression levels for each filter value
+            # Create compression levels for each filter value using cascading
             for filter_value in unique_values:
                 # Filter data to this value
                 filtered_data = self._raw_data.filter(
@@ -317,9 +456,9 @@ class Heatmap(BaseComponent):
                 )
                 filtered_total = filtered_data.select(pl.len()).collect().item()
 
-                # Compute level sizes for this filtered subset
+                # Compute level sizes for this filtered subset (2× for cache buffer)
                 level_sizes = compute_compression_levels(
-                    self._min_points, filtered_total
+                    cache_target, filtered_total
                 )
 
                 print(
@@ -332,94 +471,71 @@ class Heatmap(BaseComponent):
                     f"cat_level_sizes_{filter_id}_{filter_value}"
                 ] = level_sizes
 
-                # Build each compressed level
-                for level_idx, target_size in enumerate(level_sizes):
-                    # If target size equals total, skip downsampling - use all data
-                    if target_size >= filtered_total:
-                        level = filtered_data
-                    elif self._use_simple_downsample:
-                        level = downsample_2d_simple(
-                            filtered_data,
-                            max_points=target_size,
-                            intensity_column=self._intensity_column,
-                        )
-                    else:
-                        level = downsample_2d_streaming(
-                            filtered_data,
-                            max_points=target_size,
-                            x_column=self._x_column,
-                            y_column=self._y_column,
-                            intensity_column=self._intensity_column,
-                            x_bins=self._x_bins,
-                            y_bins=self._y_bins,
-                            x_range=x_range,
-                            y_range=y_range,
-                        )
-
-                    # Sort by x, y for efficient range query predicate pushdown
-                    level = level.sort([self._x_column, self._y_column])
-                    # Store LazyFrame for streaming to disk
-                    level_key = f"cat_level_{filter_id}_{filter_value}_{level_idx}"
-                    self._preprocessed_data[level_key] = level  # Keep lazy
-
-                # Add full resolution as final level (for zoom fallback)
-                # Also sorted for consistent predicate pushdown behavior
-                num_compressed = len(level_sizes)
-                full_res_key = f"cat_level_{filter_id}_{filter_value}_{num_compressed}"
-                self._preprocessed_data[full_res_key] = filtered_data.sort(
-                    [self._x_column, self._y_column]
-                )
-                self._preprocessed_data[
-                    f"cat_num_levels_{filter_id}_{filter_value}"
-                ] = num_compressed + 1
-
-        # Also create global levels for when no categorical filter is selected
-        # (fallback to standard behavior)
-        level_sizes = compute_compression_levels(self._min_points, total)
-        self._preprocessed_data["level_sizes"] = level_sizes
-
-        for i, size in enumerate(level_sizes):
-            # If target size equals total, skip downsampling - use all data
-            if size >= total:
-                level = self._raw_data
-            elif self._use_simple_downsample:
-                level = downsample_2d_simple(
-                    self._raw_data,
-                    max_points=size,
-                    intensity_column=self._intensity_column,
-                )
-            else:
-                level = downsample_2d_streaming(
-                    self._raw_data,
-                    max_points=size,
-                    x_column=self._x_column,
-                    y_column=self._y_column,
-                    intensity_column=self._intensity_column,
-                    x_bins=self._x_bins,
-                    y_bins=self._y_bins,
+                # Build cascading levels using helper
+                prefix = f"cat_level_{filter_id}_{filter_value}"
+                levels_result = self._build_cascading_levels(
+                    source_data=filtered_data,
+                    level_sizes=level_sizes,
                     x_range=x_range,
                     y_range=y_range,
+                    cache_dir=cache_dir,
+                    prefix=prefix,
                 )
-            # Sort by x, y for efficient range query predicate pushdown
-            level = level.sort([self._x_column, self._y_column])
-            self._preprocessed_data[f"level_{i}"] = level  # Keep lazy
 
-        # Add full resolution as final level (for zoom fallback)
-        # Also sorted for consistent predicate pushdown behavior
-        num_compressed = len(level_sizes)
-        self._preprocessed_data[f"level_{num_compressed}"] = self._raw_data.sort(
-            [self._x_column, self._y_column]
+                # Copy results to preprocessed_data
+                for key, value in levels_result.items():
+                    if key == "num_levels":
+                        self._preprocessed_data[
+                            f"cat_num_levels_{filter_id}_{filter_value}"
+                        ] = value
+                    else:
+                        self._preprocessed_data[key] = value
+
+        # Also create global levels for when no categorical filter is selected
+        # (fallback to standard behavior) - using cascading with 2× cache buffer
+        level_sizes = compute_compression_levels(cache_target, total)
+        self._preprocessed_data["level_sizes"] = level_sizes
+
+        # Build global cascading levels using helper
+        levels_result = self._build_cascading_levels(
+            source_data=self._raw_data,
+            level_sizes=level_sizes,
+            x_range=x_range,
+            y_range=y_range,
+            cache_dir=cache_dir,
+            prefix="level",
         )
-        self._preprocessed_data["num_levels"] = num_compressed + 1
+
+        # Copy results to preprocessed_data
+        for key, value in levels_result.items():
+            if key == "num_levels":
+                self._preprocessed_data["num_levels"] = value
+            else:
+                self._preprocessed_data[key] = value
+
+        # Mark that files are already saved
+        self._preprocessed_data["_files_already_saved"] = True
 
     def _preprocess_streaming(self) -> None:
         """
-        Streaming preprocessing - levels stay lazy through caching.
+        Streaming preprocessing with cascading - builds smaller levels from larger.
 
-        Builds lazy query plans that are streamed to disk via sink_parquet().
+        Uses cascading downsampling: each level is built from the previous larger
+        level rather than from raw data. This is more efficient (raw data read once)
+        and produces identical results because the downsampling algorithm keeps
+        the TOP N highest-intensity points per bin - points that survive at a larger
+        level will also be selected at smaller levels.
+
+        Levels are saved to disk immediately after creation, then read back as the
+        source for the next smaller level. This keeps memory low while enabling
+        cascading.
+
         Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
+        import sys
+
         # Get data ranges (minimal collect - just 4 values)
+        # These ranges are used for ALL levels to ensure consistent binning
         x_range, y_range = get_data_range(
             self._raw_data,
             self._x_column,
@@ -428,55 +544,55 @@ class Heatmap(BaseComponent):
         self._preprocessed_data["x_range"] = x_range
         self._preprocessed_data["y_range"] = y_range
 
+        # Compute optimal bins if not provided
+        # Cache at 2×min_points, use display_aspect_ratio for bin computation
+        cache_target = 2 * self._min_points
+        if self._x_bins is None or self._y_bins is None:
+            # Use display aspect ratio (not data aspect ratio) for optimal bins
+            # This ensures even distribution in the expected display dimensions
+            self._x_bins, self._y_bins = compute_optimal_bins(
+                cache_target,
+                (0, self._display_aspect_ratio),  # Fake x_range matching aspect
+                (0, 1.0),  # Fake y_range
+            )
+            print(
+                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
+                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
+                f"display aspect: {self._display_aspect_ratio:.2f})",
+                file=sys.stderr,
+            )
+
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
         self._preprocessed_data["total"] = total
 
-        # Compute target sizes for levels
-        level_sizes = compute_compression_levels(self._min_points, total)
+        # Compute target sizes for levels (use 2×min_points for smallest cache level)
+        level_sizes = compute_compression_levels(cache_target, total)
         self._preprocessed_data["level_sizes"] = level_sizes
 
-        # Build and collect each level
-        self._preprocessed_data["levels"] = []
+        # Create cache directory for immediate level saving
+        cache_dir = self._cache_dir / "preprocessed"
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-        for i, size in enumerate(level_sizes):
-            # If target size equals total, skip downsampling - use all data
-            if size >= total:
-                level = self._raw_data
-            elif self._use_simple_downsample:
-                level = downsample_2d_simple(
-                    self._raw_data,
-                    max_points=size,
-                    intensity_column=self._intensity_column,
-                )
-            else:
-                level = downsample_2d_streaming(
-                    self._raw_data,
-                    max_points=size,
-                    x_column=self._x_column,
-                    y_column=self._y_column,
-                    intensity_column=self._intensity_column,
-                    x_bins=self._x_bins,
-                    y_bins=self._y_bins,
-                    x_range=x_range,
-                    y_range=y_range,
-                )
-            # Sort by x, y for efficient range query predicate pushdown
-            # This clusters spatially close points together in row groups
-            level = level.sort([self._x_column, self._y_column])
-            # Store LazyFrame for streaming to disk
-            # Base class will use sink_parquet() to stream without full materialization
-            self._preprocessed_data[f"level_{i}"] = level  # Keep lazy
-
-        # Add full resolution as final level (for zoom fallback)
-        # Also sorted for consistent predicate pushdown behavior
-        num_compressed = len(level_sizes)
-        self._preprocessed_data[f"level_{num_compressed}"] = self._raw_data.sort(
-            [self._x_column, self._y_column]
+        # Build cascading levels using helper
+        levels_result = self._build_cascading_levels(
+            source_data=self._raw_data,
+            level_sizes=level_sizes,
+            x_range=x_range,
+            y_range=y_range,
+            cache_dir=cache_dir,
+            prefix="level",
         )
 
-        # Store number of levels for reconstruction (includes full resolution)
-        self._preprocessed_data["num_levels"] = num_compressed + 1
+        # Copy results to preprocessed_data
+        for key, value in levels_result.items():
+            if key == "num_levels":
+                self._preprocessed_data["num_levels"] = value
+            else:
+                self._preprocessed_data[key] = value
+
+        # Mark that files are already saved (base class should skip saving)
+        self._preprocessed_data["_files_already_saved"] = True
 
     def _preprocess_eager(self) -> None:
         """
@@ -486,6 +602,8 @@ class Heatmap(BaseComponent):
         downsampling for better spatial distribution.
         Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
+        import sys
+
         # Get data ranges
         x_range, y_range = get_data_range(
             self._raw_data,
@@ -495,12 +613,29 @@ class Heatmap(BaseComponent):
         self._preprocessed_data["x_range"] = x_range
         self._preprocessed_data["y_range"] = y_range
 
+        # Compute optimal bins if not provided
+        # Cache at 2×min_points, use display_aspect_ratio for bin computation
+        cache_target = 2 * self._min_points
+        if self._x_bins is None or self._y_bins is None:
+            # Use display aspect ratio (not data aspect ratio) for optimal bins
+            self._x_bins, self._y_bins = compute_optimal_bins(
+                cache_target,
+                (0, self._display_aspect_ratio),  # Fake x_range matching aspect
+                (0, 1.0),  # Fake y_range
+            )
+            print(
+                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
+                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
+                f"display aspect: {self._display_aspect_ratio:.2f})",
+                file=sys.stderr,
+            )
+
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
         self._preprocessed_data["total"] = total
 
-        # Compute compression level target sizes
-        level_sizes = compute_compression_levels(self._min_points, total)
+        # Compute compression level target sizes (2× for cache buffer)
+        level_sizes = compute_compression_levels(cache_target, total)
         self._preprocessed_data["level_sizes"] = level_sizes
 
         # Build levels from largest to smallest
@@ -736,10 +871,18 @@ class Heatmap(BaseComponent):
             if count >= self._min_points:
                 # This level has enough detail
                 if count > self._min_points:
-                    # Over limit - downsample to stay at/under max
-                    # Use ZOOM range for binning (not global) to avoid sparse bins
+                    # Over limit - downsample to exactly min_points
+                    # Compute optimal bins from ACTUAL zoom region aspect ratio
                     zoom_x_range = (x0, x1)
                     zoom_y_range = (y0, y1)
+                    render_x_bins, render_y_bins = compute_optimal_bins(
+                        self._min_points, zoom_x_range, zoom_y_range
+                    )
+                    print(
+                        f"[HEATMAP] Render downsample: {count:,} → {self._min_points:,} pts "
+                        f"(bins: {render_x_bins}x{render_y_bins})",
+                        file=sys.stderr,
+                    )
                     if self._use_streaming or self._use_simple_downsample:
                         if self._use_simple_downsample:
                             return downsample_2d_simple(
@@ -754,8 +897,8 @@ class Heatmap(BaseComponent):
                                 x_column=self._x_column,
                                 y_column=self._y_column,
                                 intensity_column=self._intensity_column,
-                                x_bins=self._x_bins,
-                                y_bins=self._y_bins,
+                                x_bins=render_x_bins,
+                                y_bins=render_y_bins,
                                 x_range=zoom_x_range,
                                 y_range=zoom_y_range,
                             ).collect()
@@ -766,8 +909,8 @@ class Heatmap(BaseComponent):
                             x_column=self._x_column,
                             y_column=self._y_column,
                             intensity_column=self._intensity_column,
-                            x_bins=self._x_bins,
-                            y_bins=self._y_bins,
+                            x_bins=render_x_bins,
+                            y_bins=render_y_bins,
                         ).collect()
                 return filtered
 

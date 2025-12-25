@@ -6,7 +6,8 @@ data, enabling efficient visualization of datasets with millions of points.
 Supports both streaming (lazy) and eager downsampling approaches.
 """
 
-from typing import List, Optional, Union
+import math
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
@@ -17,6 +18,59 @@ try:
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
+
+
+def compute_optimal_bins(
+    target_points: int,
+    x_range: Tuple[float, float],
+    y_range: Tuple[float, float],
+) -> Tuple[int, int]:
+    """
+    Compute optimal x_bins, y_bins for even spatial distribution.
+
+    The bin grid matches the data's aspect ratio so bins are approximately
+    square in data space. Total bins ≈ target_points for 1 point per bin.
+
+    Solves the system:
+        x_bins × y_bins = target_points
+        x_bins / y_bins = aspect_ratio
+
+    Solution:
+        y_bins = sqrt(target_points / aspect_ratio)
+        x_bins = sqrt(target_points × aspect_ratio)
+
+    Args:
+        target_points: Target number of bins (and thus max points with 1 per bin)
+        x_range: (x_min, x_max) data range
+        y_range: (y_min, y_max) data range
+
+    Returns:
+        (x_bins, y_bins) tuple
+
+    Examples:
+        >>> compute_optimal_bins(10000, (0, 1000), (0, 100))  # 10:1 aspect
+        (316, 31)
+        >>> compute_optimal_bins(10000, (0, 100), (0, 100))   # 1:1 aspect
+        (100, 100)
+    """
+    x_span = x_range[1] - x_range[0]
+    y_span = y_range[1] - y_range[0]
+
+    # Handle edge cases
+    if y_span < 1e-10:
+        y_span = x_span if x_span > 1e-10 else 1.0
+    if x_span < 1e-10:
+        x_span = y_span
+
+    aspect_ratio = x_span / y_span
+
+    # Clamp to reasonable bounds (avoid extreme rectangles)
+    aspect_ratio = max(0.05, min(20.0, aspect_ratio))
+
+    y_bins = max(1, int(math.sqrt(target_points / aspect_ratio)))
+    x_bins = max(1, int(math.sqrt(target_points * aspect_ratio)))
+
+    return x_bins, y_bins
 
 
 def compute_compression_levels(min_size: int, total: int) -> List[int]:

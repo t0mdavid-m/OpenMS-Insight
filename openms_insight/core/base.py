@@ -318,6 +318,9 @@ class BaseComponent(ABC):
             "data_values": {},
         }
 
+        # Check if files were already saved during preprocessing (e.g., cascading)
+        files_already_saved = self._preprocessed_data.pop("_files_already_saved", False)
+
         # Save preprocessed data with type optimization for efficient transfer
         # Float64→Float32 reduces Arrow payload size
         # Int64→Int32 (when safe) avoids BigInt overhead in JavaScript
@@ -325,18 +328,28 @@ class BaseComponent(ABC):
             if isinstance(value, pl.LazyFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
-                # Apply streaming-safe optimization (Float64→Float32 only)
-                # Int64 bounds checking would require collect(), breaking streaming
-                value = optimize_for_transfer_lazy(value)
-                value.sink_parquet(filepath, compression="zstd")
-                manifest["data_files"][key] = filename
+
+                if files_already_saved and filepath.exists():
+                    # File was saved during preprocessing (cascading) - just register it
+                    manifest["data_files"][key] = filename
+                else:
+                    # Apply streaming-safe optimization (Float64→Float32 only)
+                    # Int64 bounds checking would require collect(), breaking streaming
+                    value = optimize_for_transfer_lazy(value)
+                    value.sink_parquet(filepath, compression="zstd")
+                    manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
                 filepath = preprocessed_dir / filename
-                # Full optimization including Int64→Int32 with bounds checking
-                value = optimize_for_transfer(value)
-                value.write_parquet(filepath, compression="zstd")
-                manifest["data_files"][key] = filename
+
+                if files_already_saved and filepath.exists():
+                    # File was saved during preprocessing - just register it
+                    manifest["data_files"][key] = filename
+                else:
+                    # Full optimization including Int64→Int32 with bounds checking
+                    value = optimize_for_transfer(value)
+                    value.write_parquet(filepath, compression="zstd")
+                    manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
 
