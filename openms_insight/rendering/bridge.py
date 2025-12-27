@@ -2,12 +2,17 @@
 
 import hashlib
 import json
+import logging
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import pandas as pd
 import polars as pl
 import streamlit as st
+
+# Configure debug logging for hash tracking
+_DEBUG_HASH_TRACKING = os.environ.get("SVC_DEBUG_HASH", "").lower() == "true"
+_logger = logging.getLogger(__name__)
 
 
 def _make_hashable(value: Any) -> Any:
@@ -316,8 +321,10 @@ def render_component(
 
     # Generate unique key if not provided (needed for cache)
     # Use cache_id instead of id(component) since components are recreated each rerun
+    # Use JSON serialization for deterministic key generation (hash() can vary)
     if key is None:
-        key = f"svc_{component._cache_id}_{hash(str(component._interactivity))}"
+        interactivity_str = json.dumps(component._interactivity or {}, sort_keys=True)
+        key = f"svc_{component._cache_id}_{hashlib.md5(interactivity_str.encode()).hexdigest()[:8]}"
 
     # Check if component has required filters without values
     # Don't send potentially huge unfiltered datasets - wait for filter selection
@@ -388,6 +395,16 @@ def render_component(
     # NOTE: Hash now correctly reflects annotation state (annotations included in hash),
     # so normal comparison works for all components including those with dynamic annotations
     data_changed = (vue_echoed_hash is None) or (vue_echoed_hash != data_hash)
+
+    # Debug logging for hash tracking issues
+    if _DEBUG_HASH_TRACKING:
+        _logger.warning(
+            f"[HashTrack] {component._cache_id}: "
+            f"data_changed={data_changed}, "
+            f"vue_echoed={vue_echoed_hash[:8] if vue_echoed_hash else 'None'}, "
+            f"data_hash={data_hash[:8] if data_hash else 'None'}, "
+            f"key={hash_tracking_key[:50]}..."
+        )
 
     # Only include full data if hash changed
     if data_changed:
