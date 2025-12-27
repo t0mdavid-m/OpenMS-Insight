@@ -89,6 +89,10 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   zoomIdentifier?: string
   interactivity?: InteractivityMapping
   height?: number
+  /** Column for categorical coloring (if set, uses discrete colors instead of colorscale) */
+  categoryColumn?: string
+  /** Map of category values to colors (e.g., { "Control": "#FF0000", "Treatment": "#00FF00" }) */
+  categoryColors?: Record<string, string>
 }
 
 /**
@@ -107,6 +111,42 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
 }
 
 /**
+ * VolcanoPlot component arguments.
+ */
+export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyVolcano'
+  /** Column name for log2 fold change (x-axis) */
+  log2fcColumn: string
+  /** Column name for -log10(p-value) (y-axis, pre-computed) */
+  neglog10pColumn: string
+  /** Column name for raw p-value (for hover display) */
+  pvalueColumn: string
+  /** Column name for point labels (hover and annotations) */
+  labelColumn?: string
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  /** Color for up-regulated points */
+  upColor?: string
+  /** Color for down-regulated points */
+  downColor?: string
+  /** Color for not significant points */
+  nsColor?: string
+  /** Show threshold lines on plot */
+  showThresholdLines?: boolean
+  /** Line style for thresholds ("dash", "solid", "dot") */
+  thresholdLineStyle?: string
+  /** Fold change threshold (|log2FC| >= fcThreshold is significant) */
+  fcThreshold?: number
+  /** P-value threshold (p < pThreshold is significant) */
+  pThreshold?: number
+  /** Max number of labels to show on significant points */
+  maxLabels?: number
+  interactivity?: InteractivityMapping
+  height?: number
+}
+
+/**
  * Heatmap data format.
  * Each entry is a row with x, y, intensity, and any additional columns
  * needed for interactivity (e.g., scan_id, mass_idx).
@@ -114,9 +154,21 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
 export type HeatmapData = Record<string, unknown>
 
 /**
+ * VolcanoPlot data format.
+ * Each entry is a row with log2fc, neglog10p, pvalue, label, and any
+ * additional columns needed for interactivity.
+ */
+export type VolcanoData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
-export type ComponentArgs = TableComponentArgs | LinePlotComponentArgs | HeatmapComponentArgs | SequenceViewComponentArgs
+export type ComponentArgs =
+  | TableComponentArgs
+  | LinePlotComponentArgs
+  | HeatmapComponentArgs
+  | SequenceViewComponentArgs
+  | VolcanoPlotComponentArgs
 
 /**
  * Component layout entry.

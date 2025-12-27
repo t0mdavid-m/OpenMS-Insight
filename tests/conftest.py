@@ -106,3 +106,42 @@ def sample_peaks_data() -> pl.LazyFrame:
             "intensity": [1000.0, 2000.0, 1500.0, 3000.0, 2500.0, 500.0],
         }
     )
+
+
+@pytest.fixture
+def sample_volcanoplot_data() -> pl.LazyFrame:
+    """Create sample data for VolcanoPlot component."""
+    import random
+
+    random.seed(42)
+
+    n_proteins = 100
+    return pl.LazyFrame(
+        {
+            "protein_id": [f"PROT{i:04d}" for i in range(n_proteins)],
+            "protein_name": [f"Protein_{i}" for i in range(n_proteins)],
+            "log2FC": [random.uniform(-4, 4) for _ in range(n_proteins)],
+            "pvalue": [random.uniform(0.0001, 1) for _ in range(n_proteins)],
+            "comparison_id": [random.choice(["A_vs_B", "C_vs_D"]) for _ in range(n_proteins)],
+        }
+    )
+
+
+@pytest.fixture
+def sample_categorical_heatmap_data() -> pl.LazyFrame:
+    """Create sample data for categorical Heatmap component."""
+    import random
+
+    random.seed(42)
+
+    n_points = 500
+    categories = ["Control", "Treatment_A", "Treatment_B"]
+    return pl.LazyFrame(
+        {
+            "retention_time": [random.uniform(0, 100) for _ in range(n_points)],
+            "mz": [random.uniform(100, 2000) for _ in range(n_points)],
+            "intensity": [random.uniform(100, 10000) for _ in range(n_points)],
+            "sample_group": [random.choice(categories) for _ in range(n_points)],
+            "scan_id": [random.randint(1, 10) for _ in range(n_points)],
+        }
+    )

@@ -3,11 +3,10 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, type PropType } from 'vue'
+import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
-import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
-import { useSelectionStore } from '@/stores/selection'
+import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import type { HeatmapComponentArgs, HeatmapData } from '@/types/component'
 
 export default defineComponent({
@@ -22,10 +21,24 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
-    const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore }
+
+    // Use shared Plotly scatter composable
+    const plotlyScatter = usePlotlyScatter({
+      id: computed(() => `heatmap-${props.index}`),
+      interactivity: computed(() => props.args.interactivity || {}),
+      getData: () => {
+        const data = streamlitDataStore.allDataForDrawing?.heatmapData
+        return (data as HeatmapData[]) || []
+      },
+      title: computed(() => props.args.title),
+    })
+
+    return {
+      streamlitDataStore,
+      ...plotlyScatter,
+    }
   },
   data() {
     return {
@@ -33,21 +46,12 @@ export default defineComponent({
       zoomRange: undefined as { xRange: number[]; yRange: number[] } | undefined,
       colorbarVisible: true,
       userOverrideColorbar: false,
-      plotWidth: 800,
-      resizeObserver: null as ResizeObserver | null,
+      heatmapResizeObserver: null as ResizeObserver | null,
     }
   },
   computed: {
     id(): string {
       return `heatmap-${this.index}`
-    },
-
-    theme(): Theme | undefined {
-      return this.streamlitDataStore.theme
-    },
-
-    isNarrowPlot(): boolean {
-      return this.plotWidth < 600
     },
 
     effectiveColorbarVisible(): boolean {
@@ -114,6 +118,67 @@ export default defineComponent({
     },
 
     /**
+     * Check if categorical coloring mode is enabled.
+     */
+    isCategoricalMode(): boolean {
+      return !!this.args.categoryColumn
+    },
+
+    /**
+     * Get category values from data (when in categorical mode).
+     */
+    categoryValues(): (string | number)[] {
+      if (!this.isDataReady || !this.args.categoryColumn) return []
+      return this.heatmapData.map((row) => row[this.args.categoryColumn!] as string | number)
+    },
+
+    /**
+     * Get unique categories for building separate traces.
+     */
+    uniqueCategories(): (string | number)[] {
+      if (!this.isCategoricalMode) return []
+      const seen = new Set<string | number>()
+      const unique: (string | number)[] = []
+      for (const cat of this.categoryValues) {
+        if (!seen.has(cat)) {
+          seen.add(cat)
+          unique.push(cat)
+        }
+      }
+      return unique
+    },
+
+    /**
+     * Default color palette for categorical mode.
+     * Uses Plotly's qualitative color palette.
+     */
+    defaultCategoryColors(): string[] {
+      return [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+      ]
+    },
+
+    /**
+     * Get color for a specific category value.
+     */
+    getCategoryColor(): (category: string | number) => string {
+      const customColors = this.args.categoryColors || {}
+      const defaults = this.defaultCategoryColors
+      let colorIndex = 0
+
+      return (category: string | number): string => {
+        const key = String(category)
+        if (customColors[key]) {
+          return customColors[key]
+        }
+        // Use default colors in order
+        const idx = this.uniqueCategories.indexOf(category)
+        return defaults[idx % defaults.length]
+      }
+    },
+
+    /**
      * Current x range from zoom state.
      */
     xRange(): number[] | undefined {
@@ -160,13 +225,21 @@ export default defineComponent({
     },
 
     /**
-     * Build Plotly data trace.
+     * Build Plotly data trace(s).
+     * In categorical mode, creates separate traces per category.
+     * In continuous mode, creates a single trace with colorscale.
      */
     data(): Plotly.Data[] {
       if (!this.isDataReady) {
         return this.getFallbackData()
       }
 
+      // Categorical mode: create separate traces per category
+      if (this.isCategoricalMode) {
+        return this.buildCategoricalTraces()
+      }
+
+      // Continuous mode: single trace with colorscale
       const { tickvals, ticktext } = this.colorbarTicks
 
       return [
@@ -197,9 +270,26 @@ export default defineComponent({
      * Build Plotly layout.
      */
     layout(): Partial<Plotly.Layout> {
+      // In categorical mode, show legend instead of colorbar
+      const showLegend = this.isCategoricalMode
+      // Use extra right margin for colorbar (continuous) or legend (categorical)
+      const needsExtraRightMargin = this.isCategoricalMode || this.effectiveColorbarVisible
+
       return {
+        ...this.themeLayout,
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
-        showlegend: false,
+        showlegend: showLegend,
+        legend: showLegend
+          ? {
+              x: 1.02,
+              y: 1,
+              xanchor: 'left',
+              yanchor: 'top',
+              bgcolor: 'rgba(255, 255, 255, 0.8)',
+              bordercolor: '#ccc',
+              borderwidth: 1,
+            }
+          : undefined,
         height: this.args.height || 400,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
@@ -209,15 +299,9 @@ export default defineComponent({
           title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
           range: this.yRange,
         },
-        paper_bgcolor: this.theme?.backgroundColor || 'white',
-        plot_bgcolor: this.theme?.secondaryBackgroundColor || '#f5f5f5',
-        font: {
-          color: this.theme?.textColor || 'black',
-          family: this.theme?.font || 'Arial',
-        },
         margin: {
           l: 60,
-          r: this.effectiveColorbarVisible ? 120 : 20,
+          r: needsExtraRightMargin ? 120 : 20,
           t: this.args.title ? 60 : 20,
           b: 60,
         },
@@ -261,15 +345,55 @@ export default defineComponent({
       if (this.isDataReady) {
         this.renderPlot()
       }
-      this.setupResizeObserver()
+      this.setupHeatmapResizeObserver()
     })
   },
 
   beforeUnmount() {
-    this.cleanupResizeObserver()
+    this.cleanupHeatmapResizeObserver()
   },
 
   methods: {
+    /**
+     * Build separate traces for each category.
+     * Each category gets its own color and appears in the legend.
+     */
+    buildCategoricalTraces(): Plotly.Data[] {
+      const getColor = this.getCategoryColor
+      const traces: Plotly.Data[] = []
+
+      for (const category of this.uniqueCategories) {
+        // Get indices of points belonging to this category
+        const indices: number[] = []
+        for (let i = 0; i < this.categoryValues.length; i++) {
+          if (this.categoryValues[i] === category) {
+            indices.push(i)
+          }
+        }
+
+        // Extract x, y, and hovertext for this category
+        const x = indices.map((i) => this.xValues[i])
+        const y = indices.map((i) => this.yValues[i])
+        const hovertext = indices.map((i) => this.intensityValues[i].toExponential(2))
+
+        traces.push({
+          type: 'scattergl',
+          name: String(category),
+          x,
+          y,
+          mode: 'markers',
+          marker: {
+            color: getColor(category),
+            size: 6,
+          },
+          hovertext,
+          hoverinfo: 'x+y+text',
+        } as Plotly.Data)
+      }
+
+      return traces
+    },
+
     async renderPlot(): Promise<void> {
       try {
         const element = document.getElementById(this.id)
@@ -278,12 +402,12 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.data, this.layout, this.getPlotConfig())
+        await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
         this.setupPlotEventHandlers()
 
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
-          Streamlit.setFrameHeight()
+          this.updateFrameHeight()
         })
       } catch (error) {
         console.error('PlotlyHeatmap: Error rendering plot:', error)
@@ -291,48 +415,30 @@ export default defineComponent({
       }
     },
 
-    getPlotConfig(): Partial<Plotly.Config> {
-      return {
-        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'] as any,
-        modeBarButtonsToAdd: [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: Plotly.Icons.camera,
-            click: (plotlyElement: any) => {
-              Plotly.downloadImage(plotlyElement, {
-                filename: this.args.title || 'heatmap',
-                height: 400,
-                width: 1200,
-                format: 'svg',
-              })
-            },
-          },
-          {
-            title: 'Toggle Colorbar',
-            name: 'toggleColorbar',
-            icon: {
-              width: 1792,
-              height: 1792,
-              path: 'M1408 768v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V768q0-40 28-68t68-28h832q40 0 68 28t28 68zm0-384v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V384q0-40 28-68t68-28h832q40 0 68 28t28 68zm0-384v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V0q0-40 28-68t68-28h832q40 0 68 28t28 68z',
-              transform: 'matrix(1 0 0 -1 0 1792)',
-            },
-            click: () => {
-              this.toggleColorbar()
-            },
-          },
-        ],
-        scrollZoom: true,
-        responsive: true,
+    getHeatmapPlotConfig(): Partial<Plotly.Config> {
+      // Use base config from composable with additional colorbar toggle button
+      const colorbarToggleButton: Plotly.ModeBarButton = {
+        title: 'Toggle Colorbar',
+        name: 'toggleColorbar',
+        icon: {
+          width: 1792,
+          height: 1792,
+          path: 'M1408 768v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V768q0-40 28-68t68-28h832q40 0 68 28t28 68zm0-384v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V384q0-40 28-68t68-28h832q40 0 68 28t28 68zm0-384v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V0q0-40 28-68t68-28h832q40 0 68 28t28 68z',
+          transform: 'matrix(1 0 0 -1 0 1792)',
+        },
+        click: () => {
+          this.toggleColorbar()
+        },
       }
+      return this.getPlotConfig([colorbarToggleButton])
     },
 
     setupPlotEventHandlers() {
-      const plotElement = document.getElementById(this.id) as any
+      const plotElement = document.getElementById(this.id) as Plotly.PlotlyHTMLElement | null
       if (!plotElement) return
 
-      // Handle zoom/pan events
-      plotElement.on('plotly_relayout', (eventData: any) => {
+      // Handle zoom/pan events (heatmap-specific)
+      plotElement.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
         if (eventData['xaxis.autorange']) {
           // Reset zoom
           this.zoomRange = {
@@ -346,33 +452,20 @@ export default defineComponent({
           eventData['yaxis.range[1]'] !== undefined
         ) {
           this.zoomRange = {
-            xRange: [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']],
-            yRange: [eventData['yaxis.range[0]'], eventData['yaxis.range[1]']],
+            xRange: [
+              eventData['xaxis.range[0]'] as number,
+              eventData['xaxis.range[1]'] as number,
+            ],
+            yRange: [
+              eventData['yaxis.range[0]'] as number,
+              eventData['yaxis.range[1]'] as number,
+            ],
           }
         }
       })
 
-      // Handle click events
-      plotElement.on('plotly_click', (eventData: any) => {
-        if (!this.interactivity || Object.keys(this.interactivity).length === 0) {
-          return
-        }
-
-        if (eventData.points && eventData.points.length > 0) {
-          const pointIndex = eventData.points[0].pointIndex
-          const pointData = this.heatmapData[pointIndex]
-
-          if (pointData) {
-            // Update selection store for each interactivity mapping
-            for (const [identifier, column] of Object.entries(this.interactivity)) {
-              const value = pointData[column]
-              if (value !== undefined) {
-                this.selectionStore.updateSelection(identifier, value)
-              }
-            }
-          }
-        }
-      })
+      // Handle click events via composable
+      this.setupClickHandler()
     },
 
     async toggleColorbar() {
@@ -400,10 +493,10 @@ export default defineComponent({
       }
     },
 
-    setupResizeObserver() {
+    setupHeatmapResizeObserver() {
       const plotElement = document.getElementById(this.id)
       if (plotElement && window.ResizeObserver) {
-        this.resizeObserver = new ResizeObserver((entries) => {
+        this.heatmapResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const newWidth = entry.contentRect.width
             if (Math.abs(newWidth - this.plotWidth) > 10) {
@@ -418,14 +511,14 @@ export default defineComponent({
             }
           }
         })
-        this.resizeObserver.observe(plotElement)
+        this.heatmapResizeObserver.observe(plotElement)
       }
     },
 
-    cleanupResizeObserver() {
-      if (this.resizeObserver) {
-        this.resizeObserver.disconnect()
-        this.resizeObserver = null
+    cleanupHeatmapResizeObserver() {
+      if (this.heatmapResizeObserver) {
+        this.heatmapResizeObserver.disconnect()
+        this.heatmapResizeObserver = null
       }
     },
 
@@ -445,16 +538,11 @@ export default defineComponent({
     async renderFallback(): Promise<void> {
       try {
         const fallbackLayout: Partial<Plotly.Layout> = {
+          ...this.themeLayout,
           title: { text: '<b>No Data Available</b>' },
           showlegend: false,
           xaxis: { title: { text: 'X' } },
           yaxis: { title: { text: 'Y' } },
-          paper_bgcolor: this.theme?.backgroundColor || 'white',
-          plot_bgcolor: this.theme?.secondaryBackgroundColor || '#f5f5f5',
-          font: {
-            color: this.theme?.textColor || 'black',
-            family: this.theme?.font || 'Arial',
-          },
         }
 
         await Plotly.newPlot(this.id, this.getFallbackData(), fallbackLayout, {

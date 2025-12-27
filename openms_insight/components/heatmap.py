@@ -89,6 +89,8 @@ class Heatmap(BaseComponent):
         use_simple_downsample: bool = False,
         use_streaming: bool = True,
         categorical_filters: Optional[List[str]] = None,
+        category_column: Optional[str] = None,
+        category_colors: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         """
@@ -133,6 +135,14 @@ class Heatmap(BaseComponent):
                 are sent to the client regardless of filter selection. Should be
                 used for filters with a small number of unique values (<20).
                 Example: ['im_dimension'] for ion mobility filtering.
+            category_column: Optional column name for categorical coloring.
+                When provided, points are colored by discrete category values
+                instead of the continuous intensity colorscale. Useful for
+                condition-based heatmaps (e.g., coloring by sample group).
+            category_colors: Optional mapping of category values to colors.
+                Keys should match values in category_column.
+                Values should be CSS color strings (e.g., '#FF0000', 'red').
+                If not provided, default Plotly colors will be used.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -148,6 +158,8 @@ class Heatmap(BaseComponent):
         self._y_label = y_label or y_column
         self._colorscale = colorscale
         self._use_simple_downsample = use_simple_downsample
+        self._category_column = category_column
+        self._category_colors = category_colors or {}
         self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
 
@@ -176,6 +188,8 @@ class Heatmap(BaseComponent):
             use_simple_downsample=use_simple_downsample,
             use_streaming=use_streaming,
             categorical_filters=categorical_filters,
+            category_column=category_column,
+            category_colors=category_colors,
             **kwargs,
         )
 
@@ -202,6 +216,8 @@ class Heatmap(BaseComponent):
             "x_label": self._x_label,
             "y_label": self._y_label,
             "colorscale": self._colorscale,
+            "category_column": self._category_column,
+            # Note: category_colors is render-time styling, doesn't affect cache
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -223,6 +239,8 @@ class Heatmap(BaseComponent):
         self._x_label = config.get("x_label", self._x_column)
         self._y_label = config.get("y_label", self._y_column)
         self._colorscale = config.get("colorscale", "Portland")
+        self._category_column = config.get("category_column")
+        # category_colors is not stored in cache (render-time styling)
 
     def get_state_dependencies(self) -> list:
         """
@@ -941,6 +959,9 @@ class Heatmap(BaseComponent):
             self._y_column,
             self._intensity_column,
         ]
+        # Include category column if specified
+        if self._category_column and self._category_column not in columns_to_select:
+            columns_to_select.append(self._category_column)
         # Include columns needed for interactivity
         if self._interactivity:
             for col in self._interactivity.values():
@@ -1050,6 +1071,12 @@ class Heatmap(BaseComponent):
 
         if self._title:
             args["title"] = self._title
+
+        # Add category column configuration for categorical coloring mode
+        if self._category_column:
+            args["categoryColumn"] = self._category_column
+            if self._category_colors:
+                args["categoryColors"] = self._category_colors
 
         # Add any extra config options
         args.update(self._config)
