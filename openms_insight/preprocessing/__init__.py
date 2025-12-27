@@ -10,6 +10,10 @@ from .filtering import (
     filter_by_index,
     filter_by_selection,
 )
+from .scatter import (
+    build_scatter_columns,
+    prepare_scatter_data,
+)
 
 __all__ = [
     "filter_by_selection",
@@ -18,4 +22,6 @@ __all__ = [
     "compute_compression_levels",
     "downsample_2d",
     "downsample_2d_simple",
+    "build_scatter_columns",
+    "prepare_scatter_data",
 ]
