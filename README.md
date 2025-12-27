@@ -15,6 +15,7 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Table component** (Tabulator.js) with filtering, sorting, go-to, pagination, CSV export
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
 - **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
+- **Volcano plot component** for differential expression visualization with significance thresholds
 - **Sequence view component** for peptide visualization with fragment ion matching and auto-zoom
 
 ## Installation
@@ -27,7 +28,7 @@ pip install openms-insight
 
 ```python
 import streamlit as st
-from openms_insight import Table, LinePlot, StateManager
+from openms_insight import Table, LinePlot, Heatmap, VolcanoPlot, StateManager
 
 # Create state manager for cross-component linking
 state_manager = StateManager()
@@ -134,6 +135,21 @@ Table(
 - `pagination`: Enable pagination for large tables (default: True)
 - `page_size`: Rows per page (default: 100)
 
+**Custom formatters:**
+In addition to Tabulator's built-in formatters, these custom formatters are available:
+- `scientific`: Exponential notation (e.g., "1.23e-05") - use `formatterParams: {precision: 3}`
+- `signed`: Explicit +/- prefix (e.g., "+1.234") - use `formatterParams: {precision: 3, showPositive: true}`
+- `badge`: Colored pill/badge for categorical values - use `formatterParams: {colorMap: {"Up": "#FF0000"}, defaultColor: "#888"}`
+
+```python
+column_definitions=[
+    {'field': 'pvalue', 'title': 'P-value', 'formatter': 'scientific', 'formatterParams': {'precision': 2}},
+    {'field': 'log2fc', 'title': 'Log2 FC', 'formatter': 'signed', 'formatterParams': {'precision': 3}},
+    {'field': 'regulation', 'title': 'Status', 'formatter': 'badge',
+     'formatterParams': {'colorMap': {'Up': '#d62728', 'Down': '#1f77b4', 'NS': '#888888'}}},
+]
+```
+
 ### LinePlot
 
 Stick-style line plot using Plotly.js for mass spectra visualization.
@@ -192,6 +208,64 @@ Heatmap(
 - `min_points`: Target size for downsampling (default: 20000)
 - `x_bins`, `y_bins`: Grid resolution for spatial binning
 - `colorscale`: Plotly colorscale name (default: 'Portland')
+
+**Categorical mode:**
+Use `category_column` for discrete coloring by category instead of continuous intensity colorscale:
+
+```python
+Heatmap(
+    cache_id="samples_heatmap",
+    data_path="samples.parquet",
+    x_column='retention_time',
+    y_column='mass',
+    intensity_column='intensity',
+    category_column='sample_group',  # Color by category instead of intensity
+    category_colors={                 # Optional custom colors
+        'Control': '#1f77b4',
+        'Treatment_A': '#ff7f0e',
+        'Treatment_B': '#2ca02c',
+    },
+)
+```
+
+### VolcanoPlot
+
+Interactive volcano plot for differential expression analysis with significance thresholds.
+
+```python
+from openms_insight import VolcanoPlot
+
+VolcanoPlot(
+    cache_id="de_volcano",
+    data_path="differential_expression.parquet",
+    log2fc_column='log2FC',
+    pvalue_column='pvalue',
+    label_column='protein_name',       # Optional: labels for significant points
+    filters={'comparison': 'comparison_id'},
+    interactivity={'protein': 'protein_id'},
+    title="Differential Expression",
+    x_label="Log2 Fold Change",
+    y_label="-log10(p-value)",
+    up_color='#d62728',               # Color for up-regulated
+    down_color='#1f77b4',             # Color for down-regulated
+    ns_color='#888888',               # Color for not significant
+)(
+    state_manager=state_manager,
+    fc_threshold=1.0,                  # Fold change threshold (render-time)
+    p_threshold=0.05,                  # P-value threshold (render-time)
+    max_labels=20,                     # Max labels to show
+)
+```
+
+**Key parameters:**
+- `log2fc_column`: Column with log2 fold change values
+- `pvalue_column`: Column with p-values (automatically converted to -log10)
+- `label_column`: Optional column for point labels
+- `up_color`, `down_color`, `ns_color`: Colors for significance categories
+- `fc_threshold`, `p_threshold`: Significance thresholds (passed at render time, not cached)
+- `max_labels`: Maximum number of labels to display on significant points
+
+**Render-time thresholds:** The `fc_threshold` and `p_threshold` are passed via `__call__()`, not `__init__()`. This allows instant threshold adjustment without cache invalidation.
 
 ### SequenceView
 
