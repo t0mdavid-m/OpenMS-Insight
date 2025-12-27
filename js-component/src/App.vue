@@ -28,6 +28,7 @@ import type { ComponentArgs, ComponentLayout } from './types/component'
 import TabulatorTable from './components/tabulator/TabulatorTable.vue'
 import PlotlyLineplot from './components/plotly/PlotlyLineplot.vue'
 import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
+import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
 
 export default defineComponent({
@@ -36,6 +37,7 @@ export default defineComponent({
     TabulatorTable,
     PlotlyLineplot,
     PlotlyHeatmap,
+    PlotlyVolcano,
     SequenceView,
   },
   setup() {
@@ -128,6 +130,8 @@ export default defineComponent({
           return PlotlyLineplot
         case 'PlotlyHeatmap':
           return PlotlyHeatmap
+        case 'PlotlyVolcano':
+          return PlotlyVolcano
         case 'SequenceView':
           return SequenceView
         default:

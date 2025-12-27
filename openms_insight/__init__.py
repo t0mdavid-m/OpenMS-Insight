@@ -9,6 +9,7 @@ from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.table import Table
+from .components.volcanoplot import VolcanoPlot
 from .core.base import BaseComponent
 from .core.cache import CacheMissError
 from .core.registry import get_component_class, register_component
@@ -28,6 +29,7 @@ __all__ = [
     "Table",
     "LinePlot",
     "Heatmap",
+    "VolcanoPlot",
     "SequenceView",
     "SequenceViewResult",
     # Utilities
