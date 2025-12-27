@@ -100,6 +100,7 @@ import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { TableComponentArgs } from '@/types/component'
+import { isCustomFormatter, getCustomFormatter, type CustomFormatterFunction } from './formatters'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -369,11 +370,22 @@ export default defineComponent({
           hozAlign: 'right',
         },
         columns: (this.args.columnDefinitions || []).map((col) => {
-          const colDef = { ...col }
+          // Use a flexible type that allows both string and function formatters
+          // Tabulator accepts function formatters but the TS types only declare string
+          const colDef: Record<string, unknown> = { ...col }
           if (colDef.headerTooltip === undefined) {
             colDef.headerTooltip = true
           }
-          return colDef
+          // Resolve custom formatter names to their implementations
+          // Python sends formatter as a string (e.g., "scientific", "signed", "badge")
+          // We replace it with the actual formatter function
+          if (typeof colDef.formatter === 'string' && isCustomFormatter(colDef.formatter)) {
+            const customFormatter = getCustomFormatter(colDef.formatter)
+            if (customFormatter) {
+              colDef.formatter = customFormatter
+            }
+          }
+          return colDef as ColumnDefinition
         }),
         initialSort: this.args.initialSort,
       }
