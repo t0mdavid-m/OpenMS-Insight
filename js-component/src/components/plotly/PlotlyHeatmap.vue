@@ -118,6 +118,30 @@ export default defineComponent({
     },
 
     /**
+     * Check if log scale is enabled (default: true).
+     */
+    isLogScale(): boolean {
+      return this.args.logScale !== false
+    },
+
+    /**
+     * Get effective color values based on log/linear scale setting.
+     */
+    effectiveColorValues(): number[] {
+      if (!this.isLogScale) {
+        return this.intensityValues
+      }
+      return this.logIntensityValues
+    },
+
+    /**
+     * Get the colorbar label.
+     */
+    colorbarLabel(): string {
+      return this.args.intensityLabel || 'Intensity'
+    },
+
+    /**
      * Check if categorical coloring mode is enabled.
      */
     isCategoricalMode(): boolean {
@@ -199,9 +223,16 @@ export default defineComponent({
     },
 
     /**
-     * Build colorbar tick values and text for log scale.
+     * Build colorbar tick values and text.
+     * For log scale: power-of-10 ticks with exponential labels
+     * For linear scale: returns null to let Plotly auto-calculate
      */
-    colorbarTicks(): { tickvals: number[]; ticktext: string[] } {
+    colorbarTicks(): { tickvals: number[]; ticktext: string[] } | null {
+      // For linear scale, let Plotly auto-calculate ticks
+      if (!this.isLogScale) {
+        return null
+      }
+
       const intensities = this.intensityValues.filter((x) => x > 0)
       if (intensities.length === 0) {
         return { tickvals: [0], ticktext: ['0'] }
@@ -240,7 +271,17 @@ export default defineComponent({
       }
 
       // Continuous mode: single trace with colorscale
-      const { tickvals, ticktext } = this.colorbarTicks
+      const ticks = this.colorbarTicks
+
+      // Build colorbar config - use custom ticks for log scale, auto for linear
+      const colorbarConfig: Record<string, unknown> = {
+        title: { text: this.colorbarLabel },
+      }
+      if (ticks) {
+        colorbarConfig.tickvals = ticks.tickvals
+        colorbarConfig.ticktext = ticks.ticktext
+        colorbarConfig.tickmode = 'array'
+      }
 
       return [
         {
@@ -250,15 +291,10 @@ export default defineComponent({
           y: this.yValues,
           mode: 'markers',
           marker: {
-            color: this.logIntensityValues,
+            color: this.effectiveColorValues,
             colorscale: this.args.colorscale || 'Portland',
             showscale: this.effectiveColorbarVisible,
-            colorbar: {
-              title: { text: 'Intensity' },
-              tickvals: tickvals,
-              ticktext: ticktext,
-              tickmode: 'array' as const,
-            },
+            colorbar: colorbarConfig,
           },
           hovertext: this.intensityValues.map((v) => v.toExponential(2)),
           hoverinfo: 'x+y+text',

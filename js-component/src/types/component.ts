@@ -93,6 +93,10 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   categoryColumn?: string
   /** Map of category values to colors (e.g., { "Control": "#FF0000", "Treatment": "#00FF00" }) */
   categoryColors?: Record<string, string>
+  /** Use log10 transformation for intensity color mapping (default: true) */
+  logScale?: boolean
+  /** Custom label for the colorbar (default: "Intensity") */
+  intensityLabel?: string
 }
 
 /**

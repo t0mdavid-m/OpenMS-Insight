@@ -91,6 +91,8 @@ class Heatmap(BaseComponent):
         categorical_filters: Optional[List[str]] = None,
         category_column: Optional[str] = None,
         category_colors: Optional[Dict[str, str]] = None,
+        log_scale: bool = True,
+        intensity_label: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -143,6 +145,10 @@ class Heatmap(BaseComponent):
                 Keys should match values in category_column.
                 Values should be CSS color strings (e.g., '#FF0000', 'red').
                 If not provided, default Plotly colors will be used.
+            log_scale: If True (default), apply log10 transformation to intensity
+                values for color mapping. Set to False for linear color mapping.
+            intensity_label: Custom label for the colorbar. Default is "Intensity".
+                Useful when displaying non-intensity values like scores or counts.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -160,6 +166,8 @@ class Heatmap(BaseComponent):
         self._use_simple_downsample = use_simple_downsample
         self._category_column = category_column
         self._category_colors = category_colors or {}
+        self._log_scale = log_scale
+        self._intensity_label = intensity_label
         self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
 
@@ -1077,6 +1085,11 @@ class Heatmap(BaseComponent):
             args["categoryColumn"] = self._category_column
             if self._category_colors:
                 args["categoryColors"] = self._category_colors
+
+        # Add log scale and intensity label configuration
+        args["logScale"] = self._log_scale
+        if self._intensity_label:
+            args["intensityLabel"] = self._intensity_label
 
         # Add any extra config options
         args.update(self._config)

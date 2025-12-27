@@ -208,6 +208,22 @@ Heatmap(
 - `min_points`: Target size for downsampling (default: 20000)
 - `x_bins`, `y_bins`: Grid resolution for spatial binning
 - `colorscale`: Plotly colorscale name (default: 'Portland')
+- `log_scale`: Use log10 color mapping (default: True). Set to False for linear.
+- `intensity_label`: Custom colorbar label (default: 'Intensity')
+
+**Linear scale example:**
+```python
+Heatmap(
+    cache_id="psm_scores",
+    data_path="psm_data.parquet",
+    x_column='rt',
+    y_column='mz',
+    intensity_column='score',
+    log_scale=False,              # Linear color mapping
+    intensity_label='Score',      # Custom colorbar label
+    colorscale='Blues',
+)
+```
 
 **Categorical mode:**
 Use `category_column` for discrete coloring by category instead of continuous intensity colorscale:
