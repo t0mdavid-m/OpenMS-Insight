@@ -47,6 +47,11 @@ export default defineComponent({
       colorbarVisible: true,
       userOverrideColorbar: false,
       heatmapResizeObserver: null as ResizeObserver | null,
+      // Phase 1: Debounce zoom events to reduce Python round-trips
+      zoomDebounceTimer: null as ReturnType<typeof setTimeout> | null,
+      pendingZoomRange: undefined as { xRange: number[]; yRange: number[] } | undefined,
+      // Phase 2: Track plot initialization for Plotly.react() optimization
+      plotInitialized: false as boolean,
     }
   },
   computed: {
@@ -386,6 +391,13 @@ export default defineComponent({
   },
 
   beforeUnmount() {
+    // Clean up debounce timer
+    if (this.zoomDebounceTimer) {
+      clearTimeout(this.zoomDebounceTimer)
+      this.zoomDebounceTimer = null
+    }
+    // Reset plot initialization state
+    this.plotInitialized = false
     this.cleanupHeatmapResizeObserver()
   },
 
@@ -438,8 +450,19 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
-        this.setupPlotEventHandlers()
+        if (!this.plotInitialized) {
+          // First render: use newPlot to create the plot
+          console.debug('[PlotlyHeatmap] renderPlot: using Plotly.newPlot() (first render)')
+          await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
+          this.setupPlotEventHandlers()
+          this.plotInitialized = true
+        } else {
+          // Subsequent renders: use react for efficient updates
+          // react() preserves WebGL context and event handlers
+          console.debug('[PlotlyHeatmap] renderPlot: using Plotly.react() (update)')
+          await Plotly.react(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
+          // Note: No need to re-setup event handlers - they persist with react()
+        }
 
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
@@ -447,6 +470,7 @@ export default defineComponent({
         })
       } catch (error) {
         console.error('PlotlyHeatmap: Error rendering plot:', error)
+        this.plotInitialized = false // Reset on error so next render uses newPlot
         this.renderFallback()
       }
     },
@@ -474,20 +498,20 @@ export default defineComponent({
       if (!plotElement) return
 
       // Handle zoom/pan events (heatmap-specific)
+      // Uses debouncing to reduce Python round-trips during drag operations
       plotElement.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        let newZoom: { xRange: number[]; yRange: number[] } | undefined
+
         if (eventData['xaxis.autorange']) {
           // Reset zoom
-          this.zoomRange = {
-            xRange: [-1, -1],
-            yRange: [-1, -1],
-          }
+          newZoom = { xRange: [-1, -1], yRange: [-1, -1] }
         } else if (
           eventData['xaxis.range[0]'] !== undefined &&
           eventData['xaxis.range[1]'] !== undefined &&
           eventData['yaxis.range[0]'] !== undefined &&
           eventData['yaxis.range[1]'] !== undefined
         ) {
-          this.zoomRange = {
+          newZoom = {
             xRange: [
               eventData['xaxis.range[0]'] as number,
               eventData['xaxis.range[1]'] as number,
@@ -498,10 +522,39 @@ export default defineComponent({
             ],
           }
         }
+
+        if (newZoom) {
+          // Store pending zoom and debounce the update
+          this.pendingZoomRange = newZoom
+          this.debouncedUpdateZoom()
+        }
       })
 
       // Handle click events via composable
       this.setupClickHandler()
+    },
+
+    /**
+     * Debounced zoom update to reduce Python round-trips.
+     * Waits 150ms after last zoom event before triggering state update.
+     * This batches rapid zoom/pan events during drag operations.
+     */
+    debouncedUpdateZoom() {
+      // Clear existing timer
+      if (this.zoomDebounceTimer) {
+        clearTimeout(this.zoomDebounceTimer)
+        console.debug('[PlotlyHeatmap] Zoom debounced (timer reset)')
+      }
+
+      // Set new timer - only fires after user stops interacting
+      this.zoomDebounceTimer = setTimeout(() => {
+        if (this.pendingZoomRange) {
+          console.debug('[PlotlyHeatmap] Zoom debounce complete, updating state:', this.pendingZoomRange)
+          this.zoomRange = this.pendingZoomRange
+          this.pendingZoomRange = undefined
+        }
+        this.zoomDebounceTimer = null
+      }, 150) // 150ms debounce delay
     },
 
     async toggleColorbar() {
