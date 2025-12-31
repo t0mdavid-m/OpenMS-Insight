@@ -298,6 +298,7 @@ export default defineComponent({
           marker: {
             color: this.effectiveColorValues,
             colorscale: this.args.colorscale || 'Portland',
+            reversescale: this.args.reversescale ?? false,
             showscale: this.effectiveColorbarVisible,
             colorbar: colorbarConfig,
           },

@@ -86,6 +86,7 @@ class Heatmap(BaseComponent):
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
         colorscale: str = "Portland",
+        reversescale: bool = False,
         use_simple_downsample: bool = False,
         use_streaming: bool = True,
         categorical_filters: Optional[List[str]] = None,
@@ -163,6 +164,7 @@ class Heatmap(BaseComponent):
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
         self._colorscale = colorscale
+        self._reversescale = reversescale
         self._use_simple_downsample = use_simple_downsample
         self._category_column = category_column
         self._category_colors = category_colors or {}
@@ -225,6 +227,8 @@ class Heatmap(BaseComponent):
             "y_label": self._y_label,
             "colorscale": self._colorscale,
             "category_column": self._category_column,
+            "log_scale": self._log_scale,
+            "intensity_label": self._intensity_label,
             # Note: category_colors is render-time styling, doesn't affect cache
         }
 
@@ -248,6 +252,8 @@ class Heatmap(BaseComponent):
         self._y_label = config.get("y_label", self._y_column)
         self._colorscale = config.get("colorscale", "Portland")
         self._category_column = config.get("category_column")
+        self._log_scale = config.get("log_scale", True)
+        self._intensity_label = config.get("intensity_label")
         # category_colors is not stored in cache (render-time styling)
 
     def get_state_dependencies(self) -> list:
@@ -961,11 +967,10 @@ class Heatmap(BaseComponent):
 
         zoom = state.get(self._zoom_identifier)
 
-        # Build columns to select
+        # Build columns to select (filter out None values)
         columns_to_select = [
-            self._x_column,
-            self._y_column,
-            self._intensity_column,
+            col for col in [self._x_column, self._y_column, self._intensity_column]
+            if col is not None
         ]
         # Include category column if specified
         if self._category_column and self._category_column not in columns_to_select:
@@ -1022,17 +1027,19 @@ class Heatmap(BaseComponent):
                     columns=columns_to_select,
                     filter_defaults=self._filter_defaults,
                 )
-                # Sort by intensity ascending so high-intensity points are drawn on top
-                df_pandas = df_pandas.sort_values(self._intensity_column).reset_index(
-                    drop=True
-                )
+                # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
+                if self._intensity_column and self._intensity_column in df_pandas.columns:
+                    df_pandas = df_pandas.sort_values(
+                        self._intensity_column, ascending=True
+                    ).reset_index(drop=True)
             else:
                 # No filters to apply - levels already filtered by categorical filter
                 schema_names = data.collect_schema().names()
                 available_cols = [c for c in columns_to_select if c in schema_names]
                 df_polars = data.select(available_cols).collect()
-                # Sort by intensity ascending so high-intensity points are drawn on top
-                df_polars = df_polars.sort(self._intensity_column)
+                # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
+                if self._intensity_column and self._intensity_column in df_polars.columns:
+                    df_polars = df_polars.sort(self._intensity_column)
                 data_hash = compute_dataframe_hash(df_polars)
                 df_pandas = df_polars.to_pandas()
         else:
@@ -1044,8 +1051,9 @@ class Heatmap(BaseComponent):
             # Select only needed columns
             available_cols = [c for c in columns_to_select if c in df_polars.columns]
             df_polars = df_polars.select(available_cols)
-            # Sort by intensity ascending so high-intensity points are drawn on top
-            df_polars = df_polars.sort(self._intensity_column)
+            # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
+            if self._intensity_column and self._intensity_column in df_polars.columns:
+                df_polars = df_polars.sort(self._intensity_column)
             print(
                 f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}",
                 file=sys.stderr,
@@ -1073,6 +1081,7 @@ class Heatmap(BaseComponent):
             "xLabel": self._x_label,
             "yLabel": self._y_label,
             "colorscale": self._colorscale,
+            "reversescale": self._reversescale,
             "zoomIdentifier": self._zoom_identifier,
             "interactivity": self._interactivity,
         }

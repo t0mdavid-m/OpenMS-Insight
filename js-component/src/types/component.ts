@@ -86,6 +86,8 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   xLabel?: string
   yLabel?: string
   colorscale?: string
+  /** Reverse the colorscale direction (default: false) */
+  reversescale?: boolean
   zoomIdentifier?: string
   interactivity?: InteractivityMapping
   height?: number
