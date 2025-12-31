@@ -2,7 +2,7 @@
 
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import polars as pl
@@ -245,9 +245,7 @@ class VolcanoPlot(BaseComponent):
         """Return the key for the primary data in Vue payload."""
         return "volcanoData"
 
-    def _prepare_vue_data(
-        self, state: Dict[str, Any]
-    ) -> Tuple[Dict[str, pd.DataFrame], str]:
+    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare filtered data for Vue component.
 
         Uses shared prepare_scatter_data for filtering and conversion.
@@ -296,7 +294,7 @@ class VolcanoPlot(BaseComponent):
                     self._neglog10p_column, ascending=True
                 ).reset_index(drop=True)
 
-            return {"volcanoData": df_pandas}, data_hash
+            return {"volcanoData": df_pandas, "_hash": data_hash}
         else:
             # No filters - select columns and convert to pandas
             available_cols = [c for c in columns if c in df_polars.columns]
@@ -313,11 +311,12 @@ class VolcanoPlot(BaseComponent):
             data_hash = compute_dataframe_hash(df_filtered)
             df_pandas = df_filtered.to_pandas()
 
-            return {"volcanoData": df_pandas}, data_hash
+            return {"volcanoData": df_pandas, "_hash": data_hash}
 
     def _get_component_args(self) -> Dict[str, Any]:
         """Return configuration for Vue component."""
         return {
+            "componentType": self._get_vue_component_name(),
             "log2fcColumn": self._log2fc_column,
             "neglog10pColumn": self._neglog10p_column,
             "pvalueColumn": self._pvalue_column,

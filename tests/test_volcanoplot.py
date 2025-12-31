@@ -177,7 +177,11 @@ class TestVolcanoPlotFiltering:
 
         # Prepare data with filter applied
         state = {"comparison": "A_vs_B"}
-        vue_data, data_hash = volcano._prepare_vue_data(state)
+        vue_data = volcano._prepare_vue_data(state)
+
+        # Verify return format matches contract
+        assert isinstance(vue_data, dict), "Expected dict, not tuple"
+        assert "_hash" in vue_data, "Missing _hash key"
 
         # All returned rows should be A_vs_B
         df = vue_data["volcanoData"]
