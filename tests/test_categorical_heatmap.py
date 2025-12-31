@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import polars as pl
-import pytest
 
 from openms_insight import Heatmap
 
@@ -224,7 +223,7 @@ class TestCategoricalHeatmapCacheReconstruction:
     ):
         """Test that category_column is preserved after cache reconstruction."""
         # Create and save to cache
-        heatmap1 = Heatmap(
+        Heatmap(
             cache_id="test_reconstruct_category",
             data=sample_categorical_heatmap_data,
             x_column="retention_time",

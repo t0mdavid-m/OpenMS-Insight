@@ -7,7 +7,7 @@ are lost when reconstructing from cache.
 
 import pytest
 
-from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
+from openms_insight import Heatmap
 
 
 class TestHeatmapCacheConfig:

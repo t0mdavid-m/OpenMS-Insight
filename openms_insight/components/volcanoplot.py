@@ -1,15 +1,12 @@
 """VolcanoPlot component for differential expression visualization."""
 
-import math
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-import pandas as pd
 import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
-from ..preprocessing.scatter import build_scatter_columns, prepare_scatter_data
+from ..preprocessing.scatter import build_scatter_columns
 
 
 @register_component("volcanoplot")

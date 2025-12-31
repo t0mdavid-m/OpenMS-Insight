@@ -96,7 +96,7 @@ class TestVolcanoPlotPreprocessing:
         self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
     ):
         """Test that cache files are created."""
-        volcano = VolcanoPlot(
+        VolcanoPlot(
             cache_id="test_volcano_cache",
             data=sample_volcanoplot_data,
             log2fc_column="log2FC",
