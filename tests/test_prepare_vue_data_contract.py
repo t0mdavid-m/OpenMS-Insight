@@ -49,10 +49,10 @@ def test_prepare_vue_data_returns_dict_with_hash(
 
     result = component._prepare_vue_data({})
 
-    assert isinstance(
-        result, dict
-    ), f"{ComponentClass.__name__} returned {type(result)}, expected dict"
+    assert isinstance(result, dict), (
+        f"{ComponentClass.__name__} returned {type(result)}, expected dict"
+    )
     assert "_hash" in result, f"{ComponentClass.__name__} missing _hash key"
-    assert isinstance(
-        result["_hash"], str
-    ), f"{ComponentClass.__name__} _hash must be string"
+    assert isinstance(result["_hash"], str), (
+        f"{ComponentClass.__name__} _hash must be string"
+    )

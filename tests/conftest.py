@@ -122,7 +122,9 @@ def sample_volcanoplot_data() -> pl.LazyFrame:
             "protein_name": [f"Protein_{i}" for i in range(n_proteins)],
             "log2FC": [random.uniform(-4, 4) for _ in range(n_proteins)],
             "pvalue": [random.uniform(0.0001, 1) for _ in range(n_proteins)],
-            "comparison_id": [random.choice(["A_vs_B", "C_vs_D"]) for _ in range(n_proteins)],
+            "comparison_id": [
+                random.choice(["A_vs_B", "C_vs_D"]) for _ in range(n_proteins)
+            ],
         }
     )
 

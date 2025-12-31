@@ -258,7 +258,11 @@ class VolcanoPlot(BaseComponent):
             df_polars = data
 
         # Build columns to select (remove duplicates)
-        extra_cols = [self._label_column, self._pvalue_column] if self._label_column else [self._pvalue_column]
+        extra_cols = (
+            [self._label_column, self._pvalue_column]
+            if self._label_column
+            else [self._pvalue_column]
+        )
         columns = build_scatter_columns(
             x_column=self._log2fc_column,
             y_column=self._neglog10p_column,
@@ -299,9 +303,7 @@ class VolcanoPlot(BaseComponent):
 
             # Sort by significance
             if self._neglog10p_column in df_filtered.columns:
-                df_filtered = df_filtered.sort(
-                    self._neglog10p_column, descending=False
-                )
+                df_filtered = df_filtered.sort(self._neglog10p_column, descending=False)
 
             from ..preprocessing.filtering import compute_dataframe_hash
 

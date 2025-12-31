@@ -75,7 +75,9 @@ class TestHeatmapCacheConfig:
             intensity_column="intensity",
         )
         heatmap2._restore_cache_config(config)
-        assert heatmap2._intensity_label == "Score", "intensity_label not restored from cache"
+        assert heatmap2._intensity_label == "Score", (
+            "intensity_label not restored from cache"
+        )
 
     def test_cache_config_roundtrip_preserves_all_params(
         self, mock_streamlit, temp_cache_dir, sample_heatmap_data
@@ -139,7 +141,13 @@ class TestCacheConfigCompleteness:
         ],
     )
     def test_all_cache_config_keys_are_restored(
-        self, mock_streamlit, temp_cache_dir, request, ComponentClass, data_fixture, extra_kwargs
+        self,
+        mock_streamlit,
+        temp_cache_dir,
+        request,
+        ComponentClass,
+        data_fixture,
+        extra_kwargs,
     ):
         """Every key in _get_cache_config should be handled by _restore_cache_config."""
         data = request.getfixturevalue(data_fixture)
@@ -170,4 +178,6 @@ class TestCacheConfigCompleteness:
         # All keys from original config should be in restored config
         for key in config:
             assert key in config2, f"Key '{key}' not restored by _restore_cache_config"
-            assert config[key] == config2[key], f"Key '{key}' value mismatch after restore"
+            assert config[key] == config2[key], (
+                f"Key '{key}' value mismatch after restore"
+            )

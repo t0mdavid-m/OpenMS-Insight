@@ -13,7 +13,10 @@ class TestVolcanoPlotInit:
     """Tests for VolcanoPlot initialization."""
 
     def test_init_with_lazyframe(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test initialization with a LazyFrame."""
         volcano = VolcanoPlot(
@@ -29,7 +32,10 @@ class TestVolcanoPlotInit:
         assert volcano._pvalue_column == "pvalue"
 
     def test_init_with_label_column(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test initialization with label column."""
         volcano = VolcanoPlot(
@@ -44,7 +50,10 @@ class TestVolcanoPlotInit:
         assert volcano._label_column == "protein_name"
 
     def test_init_missing_column(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test initialization fails with missing column (via filter mapping validation)."""
         # Mapping validation catches missing columns for filter/interactivity columns
@@ -63,7 +72,10 @@ class TestVolcanoPlotPreprocessing:
     """Tests for VolcanoPlot preprocessing."""
 
     def test_neglog10_computation(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test that -log10(pvalue) is correctly computed."""
         volcano = VolcanoPlot(
@@ -93,7 +105,10 @@ class TestVolcanoPlotPreprocessing:
             assert abs(expected_neglog10 - actual_neglog10) < 1e-6
 
     def test_cache_creation(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test that cache files are created."""
         VolcanoPlot(
@@ -116,7 +131,10 @@ class TestVolcanoPlotThresholds:
     """Tests for render-time thresholds."""
 
     def test_thresholds_not_in_cache_hash(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test that thresholds don't affect cache invalidation."""
         # Create first volcano
@@ -136,7 +154,10 @@ class TestVolcanoPlotThresholds:
         assert "p_threshold" not in hash_inputs
 
     def test_call_with_thresholds(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test that thresholds are passed via __call__."""
         volcano = VolcanoPlot(
@@ -163,7 +184,10 @@ class TestVolcanoPlotFiltering:
     """Tests for filtering functionality."""
 
     def test_filter_by_comparison(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test filtering by comparison identifier."""
         volcano = VolcanoPlot(
@@ -193,7 +217,10 @@ class TestVolcanoPlotComponentArgs:
     """Tests for component args generation."""
 
     def test_component_args_structure(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test that component args have correct structure."""
         volcano = VolcanoPlot(
@@ -221,7 +248,10 @@ class TestVolcanoPlotComponentArgs:
         assert args["nsColor"] == "#808080"
 
     def test_vue_component_name(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test Vue component name."""
         volcano = VolcanoPlot(
@@ -240,7 +270,10 @@ class TestVolcanoPlotCacheReconstruction:
     """Tests for cache reconstruction."""
 
     def test_reconstruct_from_cache(
-        self, mock_streamlit, temp_cache_dir: Path, sample_volcanoplot_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_volcanoplot_data: pl.LazyFrame,
     ):
         """Test reconstructing volcano plot from cache."""
         # Create and save to cache

@@ -969,7 +969,8 @@ class Heatmap(BaseComponent):
 
         # Build columns to select (filter out None values)
         columns_to_select = [
-            col for col in [self._x_column, self._y_column, self._intensity_column]
+            col
+            for col in [self._x_column, self._y_column, self._intensity_column]
             if col is not None
         ]
         # Include category column if specified
@@ -1028,7 +1029,10 @@ class Heatmap(BaseComponent):
                     filter_defaults=self._filter_defaults,
                 )
                 # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
-                if self._intensity_column and self._intensity_column in df_pandas.columns:
+                if (
+                    self._intensity_column
+                    and self._intensity_column in df_pandas.columns
+                ):
                     df_pandas = df_pandas.sort_values(
                         self._intensity_column, ascending=True
                     ).reset_index(drop=True)
@@ -1038,7 +1042,10 @@ class Heatmap(BaseComponent):
                 available_cols = [c for c in columns_to_select if c in schema_names]
                 df_polars = data.select(available_cols).collect()
                 # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
-                if self._intensity_column and self._intensity_column in df_polars.columns:
+                if (
+                    self._intensity_column
+                    and self._intensity_column in df_polars.columns
+                ):
                     df_polars = df_polars.sort(self._intensity_column)
                 data_hash = compute_dataframe_hash(df_polars)
                 df_pandas = df_polars.to_pandas()

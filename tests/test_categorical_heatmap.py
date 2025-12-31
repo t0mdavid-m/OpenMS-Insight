@@ -11,7 +11,10 @@ class TestCategoricalHeatmapInit:
     """Tests for Heatmap initialization with category_column."""
 
     def test_init_with_category_column(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test initialization with a category column."""
         heatmap = Heatmap(
@@ -28,7 +31,10 @@ class TestCategoricalHeatmapInit:
         assert heatmap._category_column == "sample_group"
 
     def test_init_with_category_colors(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test initialization with custom category colors."""
         custom_colors = {
@@ -70,7 +76,10 @@ class TestCategoricalHeatmapCacheConfig:
     """Tests for cache config with category_column."""
 
     def test_category_column_in_cache_config(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test that category_column is included in cache config."""
         heatmap = Heatmap(
@@ -88,7 +97,10 @@ class TestCategoricalHeatmapCacheConfig:
         assert cache_config["category_column"] == "sample_group"
 
     def test_category_colors_not_in_cache_config(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test that category_colors is NOT in cache config (it's render-time styling)."""
         heatmap = Heatmap(
@@ -110,7 +122,10 @@ class TestCategoricalHeatmapComponentArgs:
     """Tests for component args with categorical mode."""
 
     def test_component_args_include_category_column(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test that component args include categoryColumn when set."""
         heatmap = Heatmap(
@@ -128,7 +143,10 @@ class TestCategoricalHeatmapComponentArgs:
         assert args["categoryColumn"] == "sample_group"
 
     def test_component_args_include_category_colors(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test that component args include categoryColors when set."""
         custom_colors = {"Control": "#0000FF", "Treatment_A": "#FF0000"}
@@ -169,7 +187,10 @@ class TestCategoricalHeatmapPrepareData:
     """Tests for data preparation with category column."""
 
     def test_category_column_included_in_data(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test that category column is included in prepared Vue data."""
         heatmap = Heatmap(
@@ -190,7 +211,10 @@ class TestCategoricalHeatmapPrepareData:
         assert "sample_group" in df.columns
 
     def test_category_values_preserved(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test that category values are preserved in the data."""
         heatmap = Heatmap(
@@ -219,7 +243,10 @@ class TestCategoricalHeatmapCacheReconstruction:
     """Tests for cache reconstruction with category_column."""
 
     def test_reconstruct_preserves_category_column(
-        self, mock_streamlit, temp_cache_dir: Path, sample_categorical_heatmap_data: pl.LazyFrame
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_categorical_heatmap_data: pl.LazyFrame,
     ):
         """Test that category_column is preserved after cache reconstruction."""
         # Create and save to cache
