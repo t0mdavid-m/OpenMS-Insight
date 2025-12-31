@@ -50,6 +50,9 @@ export default defineComponent({
       // Phase 1: Debounce zoom events to reduce Python round-trips
       zoomDebounceTimer: null as ReturnType<typeof setTimeout> | null,
       pendingZoomRange: undefined as { xRange: number[]; yRange: number[] } | undefined,
+      // Phase 1b: Throttle to enforce minimum interval between updates
+      zoomThrottleTimer: null as ReturnType<typeof setTimeout> | null,
+      lastZoomUpdateTime: 0 as number,
       // Phase 2: Track plot initialization for Plotly.react() optimization
       plotInitialized: false as boolean,
     }
@@ -397,6 +400,11 @@ export default defineComponent({
       clearTimeout(this.zoomDebounceTimer)
       this.zoomDebounceTimer = null
     }
+    // Clean up throttle timer
+    if (this.zoomThrottleTimer) {
+      clearTimeout(this.zoomThrottleTimer)
+      this.zoomThrottleTimer = null
+    }
     // Reset plot initialization state
     this.plotInitialized = false
     this.cleanupHeatmapResizeObserver()
@@ -524,7 +532,7 @@ export default defineComponent({
           }
         }
 
-        if (newZoom) {
+        if (newZoom && !this.zoomRangesEqual(newZoom, this.zoomRange)) {
           // Store pending zoom and debounce the update
           this.pendingZoomRange = newZoom
           this.debouncedUpdateZoom()
@@ -536,26 +544,74 @@ export default defineComponent({
     },
 
     /**
-     * Debounced zoom update to reduce Python round-trips.
-     * Waits 150ms after last zoom event before triggering state update.
-     * This batches rapid zoom/pan events during drag operations.
+     * Debounced zoom update with minimum interval enforcement.
+     * - Debounce: Waits 150ms after last event before attempting update
+     * - Throttle: Ensures at least 500ms between actual state updates
      */
     debouncedUpdateZoom() {
-      // Clear existing timer
+      const DEBOUNCE_MS = 150
+      const MIN_INTERVAL_MS = 500
+
+      // Clear existing debounce timer
       if (this.zoomDebounceTimer) {
         clearTimeout(this.zoomDebounceTimer)
         console.debug('[PlotlyHeatmap] Zoom debounced (timer reset)')
       }
 
-      // Set new timer - only fires after user stops interacting
+      // Set debounce timer
       this.zoomDebounceTimer = setTimeout(() => {
-        if (this.pendingZoomRange) {
-          console.debug('[PlotlyHeatmap] Zoom debounce complete, updating state:', this.pendingZoomRange)
-          this.zoomRange = this.pendingZoomRange
-          this.pendingZoomRange = undefined
-        }
         this.zoomDebounceTimer = null
-      }, 150) // 150ms debounce delay
+
+        // Check if minimum interval has passed since last update
+        const now = Date.now()
+        const timeSinceLastUpdate = now - this.lastZoomUpdateTime
+
+        if (timeSinceLastUpdate >= MIN_INTERVAL_MS) {
+          // Interval passed - update now
+          this.applyZoomUpdate()
+        } else {
+          // Clear any existing throttle timer (we have newer data)
+          if (this.zoomThrottleTimer) {
+            clearTimeout(this.zoomThrottleTimer)
+          }
+          // Schedule update for when minimum interval elapses
+          const delay = MIN_INTERVAL_MS - timeSinceLastUpdate
+          console.debug(`[PlotlyHeatmap] Throttling zoom update, waiting ${delay}ms`)
+          this.zoomThrottleTimer = setTimeout(() => {
+            this.zoomThrottleTimer = null
+            this.applyZoomUpdate()
+          }, delay)
+        }
+      }, DEBOUNCE_MS)
+    },
+
+    /**
+     * Apply the pending zoom update to state.
+     */
+    applyZoomUpdate() {
+      if (this.pendingZoomRange) {
+        console.debug('[PlotlyHeatmap] Applying zoom update:', this.pendingZoomRange)
+        this.lastZoomUpdateTime = Date.now()
+        this.zoomRange = this.pendingZoomRange
+        this.pendingZoomRange = undefined
+      }
+    },
+
+    /**
+     * Check if two zoom ranges are equal (prevents Plotly feedback loops).
+     */
+    zoomRangesEqual(
+      a: { xRange: number[]; yRange: number[] } | undefined,
+      b: { xRange: number[]; yRange: number[] } | undefined
+    ): boolean {
+      if (a === b) return true
+      if (!a || !b) return false
+      return (
+        a.xRange[0] === b.xRange[0] &&
+        a.xRange[1] === b.xRange[1] &&
+        a.yRange[0] === b.yRange[0] &&
+        a.yRange[1] === b.yRange[1]
+      )
     },
 
     async toggleColorbar() {
