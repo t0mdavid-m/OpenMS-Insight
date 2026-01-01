@@ -19,6 +19,10 @@ if TYPE_CHECKING:
 # Version 3: Downcast numeric types (Int64→Int32, Float64→Float32) for efficient transfer
 CACHE_VERSION = 3
 
+# Default height for components when not specified
+# This is the single source of truth for component height
+DEFAULT_COMPONENT_HEIGHT = 400
+
 
 class BaseComponent(ABC):
     """
@@ -485,7 +489,8 @@ class BaseComponent(ABC):
             key: Optional unique key for the Streamlit component
             state_manager: Optional StateManager for cross-component state.
                 If not provided, uses a default shared StateManager.
-            height: Optional height in pixels for the component
+            height: Optional height in pixels for the component.
+                If not provided, uses DEFAULT_COMPONENT_HEIGHT (400px).
 
         Returns:
             The value returned by the Vue component (usually selection state)
@@ -495,6 +500,10 @@ class BaseComponent(ABC):
 
         if state_manager is None:
             state_manager = get_default_state_manager()
+
+        # Use default height if not specified
+        if height is None:
+            height = DEFAULT_COMPONENT_HEIGHT
 
         return render_component(
             component=self, state_manager=state_manager, key=key, height=height

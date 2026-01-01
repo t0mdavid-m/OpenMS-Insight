@@ -160,9 +160,9 @@ export default defineComponent({
       this.resizeObserver.disconnect()
     }
   },
-  updated() {
-    Streamlit.setFrameHeight()
-  },
+  // Removed: updated() hook that called Streamlit.setFrameHeight()
+  // This was redundant - height is now set explicitly by components
+  // and via the watch on allDataForDrawing.height
   methods: {
     async updateStreamlitData(event: Event): Promise<void> {
       this.streamlitDataStore.updateRenderData((event as CustomEvent<RenderData>).detail)

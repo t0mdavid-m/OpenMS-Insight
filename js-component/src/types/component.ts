@@ -49,6 +49,7 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   yColumn?: string // Column name for y-axis values
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
+  height?: number // Component height in pixels
 }
 
 export interface LinePlotStyling {

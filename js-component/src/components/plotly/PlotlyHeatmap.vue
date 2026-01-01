@@ -713,6 +713,6 @@ export default defineComponent({
 .heatmap-container {
   position: relative;
   width: 100%;
-  min-height: 400px;
+  min-height: 100px;
 }
 </style>

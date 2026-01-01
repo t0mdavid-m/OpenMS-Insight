@@ -5,7 +5,7 @@
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
-import type { Theme } from 'streamlit-component-lib'
+import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { LinePlotComponentArgs, PlotData } from '@/types/component'
@@ -623,7 +623,7 @@ export default defineComponent({
       return {
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: false,
-        height: 400,
+        height: this.args.height || 400,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           showgrid: false,
@@ -794,6 +794,15 @@ export default defineComponent({
           modeBarButtonsToAdd: modeBarButtons,
           scrollZoom: true,
           responsive: true,
+        })
+
+        // Update Streamlit iframe height after plot is rendered
+        this.$nextTick(() => {
+          if (this.args.height) {
+            Streamlit.setFrameHeight(this.args.height)
+          } else {
+            Streamlit.setFrameHeight()
+          }
         })
 
         // Add event listeners
@@ -1019,6 +1028,6 @@ export default defineComponent({
 .plot-container {
   position: relative;
   width: 100%;
-  min-height: 400px;
+  min-height: 100px;
 }
 </style>
