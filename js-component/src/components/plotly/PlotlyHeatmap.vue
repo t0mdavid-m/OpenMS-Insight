@@ -558,6 +558,13 @@ export default defineComponent({
         console.debug('[PlotlyHeatmap] Zoom debounced (timer reset)')
       }
 
+      // Clear existing throttle timer - user is still interacting
+      if (this.zoomThrottleTimer) {
+        clearTimeout(this.zoomThrottleTimer)
+        this.zoomThrottleTimer = null
+        console.debug('[PlotlyHeatmap] Throttle timer cancelled (user still interacting)')
+      }
+
       // Set debounce timer
       this.zoomDebounceTimer = setTimeout(() => {
         this.zoomDebounceTimer = null
