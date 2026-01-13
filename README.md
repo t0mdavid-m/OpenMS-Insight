@@ -345,6 +345,7 @@ All components accept these common arguments:
 | `interactivity` | `Dict[str, str]` | `None` | Map identifier -> column for click actions |
 | `cache_path` | `str` | `"."` | Base directory for cache storage |
 | `regenerate_cache` | `bool` | `False` | Force cache regeneration |
+| `height` | `int` | `400` | Component height in pixels (render-time parameter) |
 
 ## Memory-Efficient Preprocessing
 
@@ -426,6 +427,14 @@ npm run dev
 
 # Terminal 2: Streamlit with dev mode
 SVC_DEV_MODE=true SVC_DEV_URL=http://localhost:5173 streamlit run app.py
+```
+
+### Debug Mode
+
+Enable hash tracking logs to debug data synchronization issues:
+
+```bash
+SVC_DEBUG_HASH=true streamlit run app.py
 ```
 
 ### Running Tests
