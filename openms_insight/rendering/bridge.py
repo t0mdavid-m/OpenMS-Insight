@@ -465,10 +465,12 @@ def render_component(
     # Update state from Vue response
     if result is not None:
         # Store Vue's echoed hash for next render comparison
-        # ALWAYS update from Vue's echo - if Vue lost its data (page navigation),
-        # it echoes None, and we need to know that to resend data next time
+        # Only store non-None hashes - Vue echoes None during initialization
+        # before receiving data, which would corrupt our tracking. Preserving
+        # the previous valid hash prevents unnecessary data resends.
         vue_hash = result.get("_vueDataHash")
-        st.session_state[_VUE_ECHOED_HASH_KEY][hash_tracking_key] = vue_hash
+        if vue_hash is not None:
+            st.session_state[_VUE_ECHOED_HASH_KEY][hash_tracking_key] = vue_hash
 
         # Capture annotations from Vue (e.g., from SequenceView)
         # Use hash-based change detection for robustness
