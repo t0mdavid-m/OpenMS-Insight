@@ -1,5 +1,5 @@
 <template>
-  <div class="sequence-view-container">
+  <div class="sequence-view-container" :style="containerStyle">
     <v-sheet class="pa-4 rounded-lg" :theme="theme?.base ?? 'light'" border>
       <!-- Header with mass information -->
       <div class="d-flex justify-center mb-2">
@@ -250,6 +250,12 @@ export default defineComponent({
     }
   },
   computed: {
+    containerStyle(): Record<string, string> {
+      return {
+        height: `${this.args.height || 400}px`,
+        overflowY: 'auto'
+      }
+    },
     theme(): Theme | undefined {
       return this.streamlitDataStore.theme
     },
