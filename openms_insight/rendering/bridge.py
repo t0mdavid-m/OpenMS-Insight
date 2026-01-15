@@ -472,6 +472,13 @@ def render_component(
         if vue_hash is not None:
             st.session_state[_VUE_ECHOED_HASH_KEY][hash_tracking_key] = vue_hash
 
+        # Check if Vue is requesting data due to cache miss (e.g., after page navigation)
+        # Vue's cache was empty when it received dataChanged=false, so it needs data resent
+        request_data = result.get("_requestData", False)
+        if request_data:
+            # Clear our stored hash to force data resend on next render
+            st.session_state[_VUE_ECHOED_HASH_KEY].pop(hash_tracking_key, None)
+
         # Capture annotations from Vue (e.g., from SequenceView)
         # Use hash-based change detection for robustness
         annotations = result.get("_annotations")
@@ -498,10 +505,10 @@ def render_component(
                 annotations_changed = True
                 st.session_state[ann_hash_key] = None
 
-        # Update state and rerun if state changed OR annotations changed
+        # Update state and rerun if state changed OR annotations changed OR data requested
         # Hash comparison will naturally detect changes on the next render
         state_changed = state_manager.update_from_vue(result)
-        if state_changed or annotations_changed:
+        if state_changed or annotations_changed or request_data:
             st.rerun()
 
     return result

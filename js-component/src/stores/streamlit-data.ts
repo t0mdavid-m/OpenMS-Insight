@@ -20,6 +20,8 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
     // Annotations set by components like SequenceView to share with Python
     // These are sent back to Python alongside selection state
     annotations: null as { peak_id: number[]; highlight_color: string[]; annotation: string[] } | null,
+    // Flag to request data from Python when cache is empty after page navigation
+    requestData: false,
   }),
 
   getters: {
@@ -93,14 +95,25 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         this.hash = newHash
       } else if (!dataChanged) {
         // Data unchanged - Python only sent hash and state, keep cached data
-        console.log('[StreamlitDataStore] Data unchanged, using cached data')
-        // Update components config without changing data
-        if (newData.args.components) {
-          if (!this.renderData) {
-            this.renderData = newData
-          } else {
-            this.renderData.args.components = newData.args.components
+        // But first check if we actually have cached data (may be empty after page navigation)
+        const hasCache = Object.keys(this.dataForDrawing).length > 0
+
+        if (hasCache) {
+          console.log('[StreamlitDataStore] Data unchanged, using cached data')
+          // Update components config without changing data
+          if (newData.args.components) {
+            if (!this.renderData) {
+              this.renderData = newData
+            } else {
+              this.renderData.args.components = newData.args.components
+            }
           }
+        } else {
+          // Cache is empty (e.g., after page navigation) - request data from Python
+          console.warn('[StreamlitDataStore] Cache miss - requesting data from Python')
+          this.requestData = true
+          // Don't update renderData - wait for Python to resend with actual data
+          return
         }
       }
 
@@ -231,6 +244,13 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
      */
     setAnnotations(annotations: { peak_id: number[]; highlight_color: string[]; annotation: string[] } | null) {
       this.annotations = annotations
+    },
+
+    /**
+     * Clear the requestData flag after it has been sent to Python.
+     */
+    clearRequestData() {
+      this.requestData = false
     },
   },
 })

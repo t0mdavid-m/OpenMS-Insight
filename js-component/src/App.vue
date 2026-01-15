@@ -77,14 +77,20 @@ export default defineComponent({
       if (currentAnnotations) {
         plainState._annotations = JSON.parse(JSON.stringify(currentAnnotations))
       }
-      console.log('[Vue] sendStateToStreamlit', { counter: currentCounter, hash: currentHash?.substring(0, 8), hasAnnotations: !!currentAnnotations })
+      // Signal Python if we need data (cache miss after page navigation)
+      if (streamlitDataStore.requestData) {
+        plainState._requestData = true
+        streamlitDataStore.clearRequestData()
+      }
+      console.log('[Vue] sendStateToStreamlit', { counter: currentCounter, hash: currentHash?.substring(0, 8), hasAnnotations: !!currentAnnotations, requestData: plainState._requestData })
       Streamlit.setComponentValue(plainState)
     }
 
-    // Watch counter, hash, and annotations to ensure Python always knows Vue's state
+    // Watch counter, hash, annotations, and requestData to ensure Python always knows Vue's state
     watch(() => selectionStore.$state.counter, sendStateToStreamlit, { immediate: true })
     watch(() => streamlitDataStore.hash, sendStateToStreamlit)
     watch(() => streamlitDataStore.annotations, sendStateToStreamlit, { deep: true })
+    watch(() => streamlitDataStore.requestData, (newVal) => { if (newVal) sendStateToStreamlit() })
 
     // Watch for height changes and update frame height
     watch(
