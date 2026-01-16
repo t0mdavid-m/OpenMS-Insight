@@ -52,6 +52,11 @@ export default defineComponent({
     let lastSentHash: string | undefined = undefined
     let lastSentAnnotationsHash: string | undefined = undefined
 
+    // Debounce utility for selection state updates
+    // This prevents rapid clicks from overwhelming Streamlit with reruns
+    let sendStateTimeout: ReturnType<typeof setTimeout> | null = null
+    const DEBOUNCE_MS = 100 // 100ms debounce window
+
     const sendStateToStreamlit = () => {
       const currentCounter = selectionStore.$state.counter
       const currentHash = streamlitDataStore.hash || null
@@ -86,11 +91,46 @@ export default defineComponent({
       Streamlit.setComponentValue(plainState)
     }
 
+    // Debounced version for selection changes - batches rapid clicks
+    const debouncedSendState = () => {
+      if (sendStateTimeout) {
+        clearTimeout(sendStateTimeout)
+      }
+      sendStateTimeout = setTimeout(() => {
+        sendStateToStreamlit()
+        sendStateTimeout = null
+      }, DEBOUNCE_MS)
+    }
+
+    // Flush any pending debounced state (used before immediate sends)
+    const flushPendingState = () => {
+      if (sendStateTimeout) {
+        clearTimeout(sendStateTimeout)
+        sendStateTimeout = null
+      }
+    }
+
     // Watch counter, hash, annotations, and requestData to ensure Python always knows Vue's state
-    watch(() => selectionStore.$state.counter, sendStateToStreamlit, { immediate: true })
+    // Counter changes (selection updates) are debounced to prevent rapid click cascades
+    watch(() => selectionStore.$state.counter, (newVal, oldVal) => {
+      // On first load (immediate: true), send immediately
+      if (oldVal === undefined) {
+        sendStateToStreamlit()
+      } else {
+        // Debounce subsequent selection changes to batch rapid clicks
+        debouncedSendState()
+      }
+    }, { immediate: true })
+    // Hash and annotation changes are sent immediately (data sync, not user interaction)
     watch(() => streamlitDataStore.hash, sendStateToStreamlit)
     watch(() => streamlitDataStore.annotations, sendStateToStreamlit, { deep: true })
-    watch(() => streamlitDataStore.requestData, (newVal) => { if (newVal) sendStateToStreamlit() })
+    // RequestData needs immediate response - flush any pending debounced state first
+    watch(() => streamlitDataStore.requestData, (newVal) => {
+      if (newVal) {
+        flushPendingState()
+        sendStateToStreamlit()
+      }
+    })
 
     // Watch for height changes and update frame height
     watch(

@@ -56,6 +56,11 @@ _COMPONENT_DATA_CACHE_KEY = "_svc_component_data_cache"
 # Stores annotation dataframes returned by components like SequenceView
 _COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
 
+# Session state key for batch resend flag
+# When any component requests data (e.g., after page navigation), we clear
+# ALL hashes on the next render so all components get data in one rerun
+_BATCH_RESEND_KEY = "_svc_batch_resend"
+
 
 def _get_component_cache() -> Dict[str, Any]:
     """Get per-component data cache from session state."""
@@ -319,6 +324,12 @@ def render_component(
     # Get current state
     state = state_manager.get_state_for_vue()
 
+    # Batch resend: if any component requested data in previous run, clear ALL hashes
+    # This ensures all components get data in one rerun instead of O(N) reruns
+    if st.session_state.get(_BATCH_RESEND_KEY):
+        st.session_state[_VUE_ECHOED_HASH_KEY] = {}
+        st.session_state.pop(_BATCH_RESEND_KEY, None)
+
     # Generate unique key if not provided (needed for cache)
     # Use cache_id instead of id(component) since components are recreated each rerun
     # Use JSON serialization for deterministic key generation (hash() can vary)
@@ -379,12 +390,12 @@ def render_component(
     if _VUE_ECHOED_HASH_KEY not in st.session_state:
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
 
-    # Hash tracking key includes filter state so different filter values have separate tracking
-    # This ensures data is re-sent when filters change (e.g., different spectrum selected)
-    hash_tracking_key = f"{key}:{filter_state_hashable}"
+    # Hash tracking key is the component's Streamlit key
+    # Filter state changes are handled by data_hash comparison (different data = different hash)
+    hash_tracking_key = key
 
-    # Get Vue's last-echoed hash for this component + filter state
-    # This is what Vue reported having in its last response for this exact filter state
+    # Get Vue's last-echoed hash for this component
+    # This is what Vue reported having in its last response
     vue_echoed_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(hash_tracking_key)
 
     # Send data if Vue's hash doesn't match current hash
@@ -475,9 +486,12 @@ def render_component(
         # Check if Vue is requesting data due to cache miss (e.g., after page navigation)
         # Vue's cache was empty when it received dataChanged=false, so it needs data resent
         request_data = result.get("_requestData", False)
-        if request_data:
-            # Clear our stored hash to force data resend on next render
-            st.session_state[_VUE_ECHOED_HASH_KEY].pop(hash_tracking_key, None)
+        if request_data and not data_changed:
+            # Vue needs data and we didn't just send it - batch for next run
+            # This triggers ONE rerun that clears ALL hashes, so all components
+            # get data together instead of O(N) separate reruns
+            st.session_state[_BATCH_RESEND_KEY] = True
+            # Note: if data_changed=True, we just sent data so requestData is stale
 
         # Capture annotations from Vue (e.g., from SequenceView)
         # Use hash-based change detection for robustness
@@ -505,10 +519,11 @@ def render_component(
                 annotations_changed = True
                 st.session_state[ann_hash_key] = None
 
-        # Update state and rerun if state changed OR annotations changed OR data requested
-        # Hash comparison will naturally detect changes on the next render
+        # Update state and rerun if state changed OR annotations changed OR batch resend needed
+        # Only rerun for requestData if we didn't already send data (to avoid stale triggers)
         state_changed = state_manager.update_from_vue(result)
-        if state_changed or annotations_changed or request_data:
+        needs_batch_resend = request_data and not data_changed
+        if state_changed or annotations_changed or needs_batch_resend:
             st.rerun()
 
     return result
