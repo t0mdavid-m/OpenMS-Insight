@@ -68,6 +68,10 @@ export default defineComponent({
 
       // Avoid duplicate sends for same counter+hash+annotations combination
       if (currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) {
+        console.log('[App] sendStateToStreamlit: SKIPPED (duplicate)', {
+          timestamp: Date.now(),
+          counter: currentCounter,
+        })
         return
       }
       lastSentCounter = currentCounter
@@ -77,6 +81,21 @@ export default defineComponent({
       // Deep clone to remove Vue reactivity proxies before sending to Streamlit
       // This prevents "Proxy object could not be cloned" errors
       const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
+
+      // Find pagination identifier and value for logging
+      const paginationIdentifier = Object.keys(plainState).find(k =>
+        typeof plainState[k] === 'object' && plainState[k]?.page !== undefined
+      )
+      const paginationValue = paginationIdentifier ? plainState[paginationIdentifier] : undefined
+
+      console.log('[App] ===== sendStateToStreamlit =====', {
+        timestamp: Date.now(),
+        counter: currentCounter,
+        hash: currentHash?.substring(0, 8),
+        paginationIdentifier,
+        paginationValue,
+        requestData: streamlitDataStore.requestData,
+      })
 
       // Echo back Vue's current data hash so Python knows if Vue has the data
       // This enables bidirectional hash confirmation for cache optimization
@@ -91,6 +110,7 @@ export default defineComponent({
         streamlitDataStore.clearRequestData()
       }
       Streamlit.setComponentValue(plainState)
+      console.log('[App] setComponentValue CALLED')
     }
 
     // Debounced version for selection changes - batches rapid clicks

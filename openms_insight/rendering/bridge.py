@@ -210,6 +210,12 @@ def _prepare_vue_data_cached(
     # Try cache first (works for ALL components now)
     cached = _get_cached_vue_data(component_id, filter_state_hashable)
 
+    if _DEBUG_HASH_TRACKING:
+        cache_hit = cached is not None
+        _logger.warning(
+            f"[CacheDebug] {component._cache_id}: cache_hit={cache_hit}"
+        )
+
     if cached is not None:
         cached_data, cached_hash = cached
 
@@ -326,6 +332,21 @@ def render_component(
     # Get current state
     state = state_manager.get_state_for_vue()
 
+    # Pre-compute initial selections BEFORE Vue renders
+    # This prevents race conditions when multiple tables render simultaneously
+    # All default selections are set in Python before any Vue component can trigger a rerun
+    initial_selection = None
+    if hasattr(component, "get_initial_selection"):
+        initial_selection = component.get_initial_selection(state)
+        if initial_selection:
+            selections_changed = False
+            for identifier, value in initial_selection.items():
+                if state_manager.set_selection(identifier, value):
+                    selections_changed = True
+            if selections_changed:
+                # Re-fetch state after setting initial selections
+                state = state_manager.get_state_for_vue()
+
     # Batch resend: if any component requested data in previous run, clear ALL hashes
     # This ensures all components get data in one rerun instead of O(N) reruns
     if st.session_state.get(_BATCH_RESEND_KEY):
@@ -364,6 +385,17 @@ def render_component(
         sorted((k, _make_hashable(state.get(k))) for k in state_keys)
     )
 
+    # Debug: log the actual cache key being used
+    if _DEBUG_HASH_TRACKING:
+        _logger.warning(
+            f"[CacheKey] {component._cache_id}: state_keys={list(state_keys)}"
+        )
+        for k in state_keys:
+            if "page" in k.lower():
+                _logger.warning(
+                    f"[CacheKey] {component._cache_id}: {k}={state.get(k)}"
+                )
+
     # Build original state dict for passing to _prepare_vue_data
     # (contains actual values, not JSON strings)
     relevant_state = {k: state.get(k) for k in state_keys}
@@ -378,6 +410,19 @@ def render_component(
         vue_data = {}
         data_hash = "awaiting_filter"
     else:
+        # Debug: log state keys and pagination state
+        if _DEBUG_HASH_TRACKING:
+            pagination_keys = [k for k in state_keys if "page" in k.lower()]
+            for pk in pagination_keys:
+                _logger.warning(
+                    f"[CacheDebug] {component._cache_id}: "
+                    f"pagination_key={pk}, value={relevant_state.get(pk)}"
+                )
+            _logger.warning(
+                f"[CacheDebug] {component._cache_id}: "
+                f"filter_state_hashable={filter_state_hashable[:3]}..."
+            )
+
         # Get component data using per-component cache
         # Each component stores exactly one entry (current filter state)
         # - Filterless components: filter_state=() always → always cache hit
@@ -419,6 +464,15 @@ def render_component(
             f"key={hash_tracking_key[:50]}..."
         )
 
+    # Log what we're about to send
+    import time
+    _logger.info(f"[bridge] ===== render_component ===== ts={time.time()}")
+    _logger.info(f"[bridge] component={component._cache_id}, dataChanged={data_changed}")
+    _logger.info(f"[bridge] hash={data_hash[:8] if data_hash else 'None'}")
+    _logger.info(f"[bridge] has_pagination={bool(vue_data.get('_pagination'))}")
+    if vue_data.get('_pagination'):
+        _logger.info(f"[bridge] pagination_page={vue_data.get('_pagination', {}).get('page')}")
+
     # Only include full data if hash changed
     if data_changed:
         # Convert any non-pandas data to pandas for Arrow serialization
@@ -443,6 +497,7 @@ def render_component(
             "dataChanged": True,
             "awaitingFilter": awaiting_filter,
         }
+        _logger.info(f"[bridge] Sending data payload with {len(converted_data)} keys")
         # Note: We don't pre-set the hash here anymore. We trust Vue's echo
         # at the end of the render cycle. This ensures we detect when Vue
         # loses its data (e.g., page navigation) and needs it resent.
@@ -564,8 +619,8 @@ def _hash_data(data: Dict[str, Any]) -> str:
 
     hash_parts = []
     for key, value in sorted(data.items()):
-        # Skip internal metadata but NOT dynamic annotation columns
-        if key.startswith("_") and not key.startswith("_dynamic"):
+        # Skip internal metadata but NOT dynamic annotation columns or pagination
+        if key.startswith("_") and not key.startswith("_dynamic") and not key.startswith("_pagination"):
             continue
         if isinstance(value, pd.DataFrame):
             # Efficient hash for DataFrames

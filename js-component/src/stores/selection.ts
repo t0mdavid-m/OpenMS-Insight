@@ -56,11 +56,19 @@ export const useSelectionStore = defineStore('selection', {
      * @param value - The selected value
      */
     updateSelection(identifier: string, value: unknown) {
+      console.log('[SelectionStore] ===== updateSelection =====', {
+        timestamp: Date.now(),
+        identifier,
+        value,
+        isPaginationRequest: typeof value === 'object' && value !== null && 'page' in (value as object),
+        currentCounter: this.$state.counter,
+      })
       this.$patch((state) => {
         state[identifier] = value
         // Increment counter for change detection
         state.counter = (state.counter || 0) + 1
       })
+      console.log('[SelectionStore] updateSelection DONE, newCounter:', this.$state.counter)
     },
 
     /**

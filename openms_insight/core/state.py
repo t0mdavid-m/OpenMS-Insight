@@ -188,6 +188,18 @@ class StateManager:
         vue_state.pop("id", None)
         old_counter = self._state["counter"]
 
+        # Debug: log pagination state updates
+        if _DEBUG_STATE_SYNC:
+            pagination_keys = [k for k in vue_state.keys() if "page" in k.lower() and not k.startswith("_")]
+            for pk in pagination_keys:
+                old_val = self._state["selections"].get(pk)
+                new_val = vue_state.get(pk)
+                _logger.warning(
+                    f"[StateManager] Pagination update: key={pk}, "
+                    f"old={old_val}, new={new_val}, "
+                    f"vue_counter={vue_counter}, python_counter={old_counter}"
+                )
+
         # Filter out internal keys (starting with _)
         vue_state = {k: v for k, v in vue_state.items() if not k.startswith("_")}
 

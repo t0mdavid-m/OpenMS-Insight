@@ -467,6 +467,26 @@ class BaseComponent(ABC):
         """
         return list(self._filters.keys())
 
+    def get_initial_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Compute initial selection values for this component.
+
+        Called by render_component() BEFORE Vue renders to pre-populate
+        selections. This prevents race conditions when multiple tables
+        render simultaneously - all default selections are set in Python
+        before any Vue component has a chance to trigger a rerun.
+
+        Override in subclasses that support default selection (e.g., Table).
+
+        Args:
+            state: Current selection state from StateManager
+
+        Returns:
+            Dict mapping identifier names to their initial values,
+            or None if no initial selection should be set.
+        """
+        return None
+
     def _get_primary_data(self) -> Optional[pl.LazyFrame]:
         """
         Get the primary data for operations.

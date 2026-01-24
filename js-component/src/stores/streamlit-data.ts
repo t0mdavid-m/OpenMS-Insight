@@ -50,12 +50,15 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       delete newData.args.hash
       delete newData.args.dataChanged
 
-      console.log('[StreamlitDataStore] updateRenderData:', {
+      console.log('[StreamlitDataStore] ===== updateRenderData START =====', {
+        timestamp: Date.now(),
         dataChanged,
         oldHash: this.hash?.substring(0, 8),
         newHash: newHash?.substring(0, 8),
-        pythonStateSpectrum: pythonState?.spectrum,
-        pythonStatePeak: pythonState?.peak,
+        hasPagination: !!(newData.args as any)._pagination,
+        paginationPage: ((newData.args as any)._pagination as any)?.page,
+        hasTableData: !!(newData.args as any).tableData,
+        pythonStateCounter: pythonState?.counter,
       })
 
       // IMPORTANT: Update selection store FIRST, before hash update
@@ -136,6 +139,13 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         // Data unchanged - Python only sent hash and state, keep cached data
         // But first check if we actually have cached data (may be empty after page navigation)
         const hasCache = Object.keys(this.dataForDrawing).length > 0
+
+        console.log('[StreamlitDataStore] Using cached data branch:', {
+          timestamp: Date.now(),
+          hasCache,
+          incomingPagination: (newData.args as any)._pagination,
+          cachedPagination: this.dataForDrawing._pagination,
+        })
 
         if (hasCache) {
           console.log('[StreamlitDataStore] Data unchanged, using cached data')

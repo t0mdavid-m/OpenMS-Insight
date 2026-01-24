@@ -175,6 +175,13 @@ export default defineComponent({
       isTableBuilt: false as boolean,
       // Track if we're in the middle of a user-initiated page navigation
       isNavigatingPages: false as boolean,
+      // Pending target row index for selection after page navigation completes
+      pendingTargetRowIndex: null as number | null,
+      // Flag to track programmatic navigation via navigate_to_page (forces data injection)
+      pendingPageNavigation: false as boolean,
+      // Flag to prevent selectDefaultRow from updating selection during initial render
+      // This prevents orphaned AJAX promises when Streamlit reruns before tableBuilt
+      initialLoadComplete: false as boolean,
     }
   },
   computed: {
@@ -295,10 +302,20 @@ export default defineComponent({
     // Watch data hash instead of tableData directly
     // This prevents unnecessary redraws when only selection changes (data unchanged)
     currentDataHash(newHash, oldHash) {
+      console.log(`[TabulatorTable ${this.args.title}] ===== currentDataHash WATCHER FIRED =====`, {
+        timestamp: Date.now(),
+        newHash: newHash?.slice(0, 8),
+        oldHash: oldHash?.slice(0, 8),
+        lastDataHash: this.lastDataHash?.slice(0, 8),
+        hasPendingRequest: !!this.pendingDataRequest,
+        pendingTargetRowIndex: this.pendingTargetRowIndex,
+      })
+
       // Skip if hash hasn't actually changed (e.g., on initial load or selection-only updates)
       if (newHash === this.lastDataHash) {
         // Note: Don't call syncSelectionFromStore here - the selection store watcher
         // already handles selection changes. Calling it here was causing double work.
+        console.log(`[TabulatorTable ${this.args.title}] currentDataHash watcher: early return (hash unchanged)`)
         return
       }
 
@@ -346,29 +363,40 @@ export default defineComponent({
     },
     // Watch for navigation hints from Python (selection on different page)
     navigateToPage(newPage: number | null) {
+      console.log(`[TabulatorTable ${this.args.title}] navigateToPage watcher:`, {
+        newPage,
+        targetRowIndex: this.targetRowIndex,
+        isServerSidePagination: this.isServerSidePagination,
+        hasTabulator: !!this.tabulator,
+      })
       if (newPage && this.tabulator && this.isServerSidePagination) {
-        // Use type assertion as setPage is available but not in TS types
+        // Store target row index for selection after data injection
+        // Do NOT attempt selection here - data hasn't arrived yet
+        this.pendingTargetRowIndex = this.targetRowIndex
+        // Mark that we're navigating programmatically (forces data injection even without AJAX request)
+        this.pendingPageNavigation = true
+        console.log(`[TabulatorTable ${this.args.title}] Set pendingTargetRowIndex:`, this.pendingTargetRowIndex)
+        // Navigate to the page - selection will happen in paginationState watcher
         ;(this.tabulator as any).setPage(newPage)
-      }
-    },
-    // Watch for target row index to highlight after navigation
-    targetRowIndex(newIndex: number | null) {
-      if (newIndex !== null && this.tabulator && this.isServerSidePagination) {
-        // Wait for page change to complete, then highlight the row
-        this.$nextTick(() => {
-          const rows = this.tabulator?.getRows('active')
-          if (rows && rows[newIndex]) {
-            this.tabulator?.deselectRow()
-            rows[newIndex].select()
-            rows[newIndex].scrollTo('center', false)
-          }
-        })
       }
     },
     // Watch pagination state to update table when server sends new data
     paginationState: {
       handler(newState: PaginationState | null, oldState: PaginationState | null) {
+        console.log(`[TabulatorTable ${this.args.title}] ===== paginationState WATCHER FIRED =====`, {
+          timestamp: Date.now(),
+          newPage: newState?.page,
+          oldPage: oldState?.page,
+          newTotalRows: newState?.total_rows,
+          pendingTargetRowIndex: this.pendingTargetRowIndex,
+          hasPendingDataRequest: !!this.pendingDataRequest,
+          isTableBuilt: this.isTableBuilt,
+          isServerSidePagination: this.isServerSidePagination,
+          preparedDataLength: this.preparedTableData.length,
+        })
+
         if (!newState || !this.isServerSidePagination || !this.tabulator) {
+          console.log(`[TabulatorTable ${this.args.title}] paginationState watcher: early return`)
           return
         }
 
@@ -377,9 +405,29 @@ export default defineComponent({
         // (watchers receive new values before computed properties re-evaluate)
         this.injectServerSideData(newState)
 
+        // After data injection, attempt pending row selection
+        // This is the correct place to select because data is now available
+        if (this.pendingTargetRowIndex !== null) {
+          console.log(`[TabulatorTable ${this.args.title}] paginationState watcher: scheduling selectPendingTargetRow`)
+          this.$nextTick(() => {
+            this.selectPendingTargetRow()
+          })
+        }
+
         // Resolve any pending data request (if using ajaxRequestFunc)
         if (this.pendingDataRequest) {
           this.resolveDataRequest()
+        }
+
+        // After successful data injection or AJAX resolution, mark initial load complete
+        // Python pre-computes initial selections, so selectDefaultRow only highlights existing selection
+        if (!this.initialLoadComplete && this.isTableBuilt) {
+          this.$nextTick(() => {
+            this.initialLoadComplete = true
+            console.log(`[TabulatorTable ${this.args.title}] initialLoadComplete set to true`)
+            // Call selectDefaultRow to highlight any pre-computed selection from Python
+            this.selectDefaultRow()
+          })
         }
 
         // Clear loading state
@@ -404,6 +452,8 @@ export default defineComponent({
     drawTable(): void {
       // Reset table built flag - new table being created
       this.isTableBuilt = false
+      // Reset initial load flag - need to wait for data again
+      this.initialLoadComplete = false
 
       // Destroy existing table if any
       if (this.tabulator) {
@@ -504,7 +554,12 @@ export default defineComponent({
         // Try to inject data (will succeed if paginationState is already available)
         this.injectServerSideData()
 
-        this.selectDefaultRow()
+        // Only call selectDefaultRow for client-side pagination
+        // For server-side, we call it after paginationState confirms data is ready (see paginationState watcher)
+        // This prevents orphaned AJAX promises when selection update triggers Streamlit rerun
+        if (!this.isServerSidePagination) {
+          this.selectDefaultRow()
+        }
         this.applyFilters()
 
         // Update Streamlit iframe height after table is rendered
@@ -559,6 +614,15 @@ export default defineComponent({
       const sortColumn = params.sorters?.[0]?.field
       const sortDir = (params.sorters?.[0]?.dir || 'asc') as 'asc' | 'desc'
 
+      console.log(`[TabulatorTable ${this.args.title}] ===== handleRemoteRequest START =====`, {
+        timestamp: Date.now(),
+        requestedPage: page,
+        requestedSize: pageSize,
+        paginationIdentifier: this.args.paginationIdentifier,
+        currentPaginationState: this.paginationState,
+        hasPendingRequest: !!this.pendingDataRequest,
+      })
+
       // Check if we already have data for this request (initial load or same page)
       // This happens when Python sends initial data before Tabulator calls ajaxRequestFunc
       if (
@@ -567,6 +631,7 @@ export default defineComponent({
         this.paginationState.page_size === pageSize &&
         this.tableData.length > 0
       ) {
+        console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: using cached data (already have page ${page})`)
         // Use setTimeout(0) to delay resolution to next tick
         // This allows Tabulator's internal state machine to complete setup
         const responseData = {
@@ -590,6 +655,7 @@ export default defineComponent({
       // Request new data from Python via selection store
       const paginationIdentifier = this.args.paginationIdentifier
       if (paginationIdentifier) {
+        console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: requesting page ${page} via selectionStore`)
         this.selectionStore.updateSelection(paginationIdentifier, {
           page,
           page_size: pageSize,
@@ -602,6 +668,9 @@ export default defineComponent({
       // Return promise that will be resolved when Python returns data
       return new Promise((resolve, reject) => {
         this.pendingDataRequest = { resolve, reject }
+        console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: pendingDataRequest SET`, {
+          timestamp: Date.now(),
+        })
         // Timeout after 30 seconds to prevent hanging
         setTimeout(() => {
           if (this.pendingDataRequest) {
@@ -619,9 +688,26 @@ export default defineComponent({
      * Called by the paginationState watcher.
      */
     resolveDataRequest(): void {
+      console.log(`[TabulatorTable ${this.args.title}] ===== resolveDataRequest CALLED =====`, {
+        timestamp: Date.now(),
+        hasPendingRequest: !!this.pendingDataRequest,
+        paginationState: this.paginationState,
+        preparedDataLength: this.preparedTableData.length,
+      })
+
       if (!this.pendingDataRequest || !this.paginationState) {
+        console.log(`[TabulatorTable ${this.args.title}] resolveDataRequest: EARLY RETURN (missing data)`, {
+          hasPendingRequest: !!this.pendingDataRequest,
+          hasPaginationState: !!this.paginationState,
+        })
         return
       }
+
+      console.log(`[TabulatorTable ${this.args.title}] resolveDataRequest: RESOLVING PROMISE`, {
+        lastPage: this.paginationState.total_pages,
+        lastRow: this.paginationState.total_rows,
+        dataLength: this.preparedTableData.length,
+      })
 
       // Resolve the promise with Tabulator's expected format
       this.pendingDataRequest.resolve({
@@ -632,6 +718,7 @@ export default defineComponent({
 
       this.pendingDataRequest = null
       this.isLoadingServerData = false
+      console.log(`[TabulatorTable ${this.args.title}] resolveDataRequest: PROMISE RESOLVED`)
       // NOTE: Do NOT clear isNavigatingPages here - it must persist until
       // replaceData().then() completes in updateTableData() to prevent
       // selectDefaultRow() from resetting the page during navigation
@@ -649,19 +736,49 @@ export default defineComponent({
     injectServerSideData(paginationStateOverride?: PaginationState | null): void {
       const paginationState = paginationStateOverride ?? this.paginationState
 
+      console.log(`[TabulatorTable ${this.args.title}] ===== injectServerSideData CALLED =====`, {
+        timestamp: Date.now(),
+        hasPaginationState: !!paginationState,
+        paginationPage: paginationState?.page,
+        isTableBuilt: this.isTableBuilt,
+        hasPendingRequest: !!this.pendingDataRequest,
+        pendingPageNavigation: this.pendingPageNavigation,
+        tabulatorRows: this.tabulator?.getRows().length,
+        preparedDataLength: this.preparedTableData.length,
+        isServerSidePagination: this.isServerSidePagination,
+      })
+
       if (!this.tabulator || !this.isServerSidePagination || !paginationState || !this.isTableBuilt) {
+        console.log(`[TabulatorTable ${this.args.title}] injectServerSideData: early return (preconditions)`)
         return
       }
 
-      // If we have a pending request, always inject to complete the AJAX cycle
-      // Otherwise, only inject if table is empty (initial load)
       const hasPendingRequest = !!this.pendingDataRequest
       const tabulatorRows = this.tabulator.getRows().length
 
-      if (!hasPendingRequest && (tabulatorRows > 0 || this.preparedTableData.length === 0)) {
-        return // No pending request and already has data (or no data to inject)
+      // If there's a pending AJAX request, let resolveDataRequest handle it
+      // Don't manually inject - Tabulator will handle data via Promise resolution
+      if (hasPendingRequest) {
+        console.log(`[TabulatorTable ${this.args.title}] injectServerSideData: skipping (AJAX pending)`)
+        return
       }
 
+      // Force injection only for programmatic navigation (no AJAX request)
+      // This handles programmatic navigation via navigate_to_page where Tabulator doesn't
+      // call ajaxRequestFunc (common in Streamlit iframe environments)
+      const forceInject = this.pendingPageNavigation && this.preparedTableData.length > 0
+
+      if (!forceInject && (tabulatorRows > 0 || this.preparedTableData.length === 0)) {
+        console.log(`[TabulatorTable ${this.args.title}] injectServerSideData: early return (has data/no request)`)
+        return
+      }
+
+      // Clear the navigation flag after injection
+      if (this.pendingPageNavigation) {
+        this.pendingPageNavigation = false
+      }
+
+      console.log(`[TabulatorTable ${this.args.title}] injectServerSideData: injecting data`)
       const tab = this.tabulator as any
       tab.rowManager.setData(this.preparedTableData, false, false)
 
@@ -671,6 +788,38 @@ export default defineComponent({
       }
 
       tab.redraw(true)
+
+      // Clear the loading overlay that setPage() shows when expecting AJAX response
+      // In iframe environments, we manually inject data so we must clear the alert
+      if (tab.clearAlert) {
+        tab.clearAlert()
+      }
+    },
+
+    selectPendingTargetRow(): void {
+      const targetIndex = this.pendingTargetRowIndex
+      this.pendingTargetRowIndex = null
+
+      console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow:`, {
+        targetIndex,
+        hasTabulator: !!this.tabulator,
+        activeRowCount: this.tabulator?.getRows('active').length,
+      })
+
+      if (targetIndex === null || !this.tabulator) {
+        console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: early return`)
+        return
+      }
+
+      const rows = this.tabulator.getRows('active')
+      console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: rows[${targetIndex}] exists:`, !!rows?.[targetIndex])
+
+      if (rows && rows[targetIndex]) {
+        this.tabulator.deselectRow()
+        rows[targetIndex].select()
+        rows[targetIndex].scrollTo('center', false)
+        console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: SUCCESS - selected row ${targetIndex}`)
+      }
     },
 
     syncSelectionFromStore(): void {
@@ -714,8 +863,10 @@ export default defineComponent({
                 row.select()
                 row.scrollTo('center', false)
               }
+            } else {
+              // Store as pending - row may be on different page awaiting navigation
+              this.pendingSelection = { [identifier]: selectedValue }
             }
-            // Don't store pending selection - Python will navigate to correct page
             break
           }
         }
@@ -775,6 +926,13 @@ export default defineComponent({
     },
 
     selectDefaultRow(): void {
+      // Skip auto-selection during initial load for server-side pagination.
+      // Wait for paginationState watcher to confirm data is ready.
+      if (this.isServerSidePagination && !this.initialLoadComplete) {
+        console.log(`[TabulatorTable ${this.args.title}] selectDefaultRow: SKIPPED (initial load not complete)`)
+        return
+      }
+
       // Skip auto-selection during page navigation for server-side pagination
       // The user explicitly changed pages - don't override their navigation intent
       if (this.isServerSidePagination && this.isNavigatingPages) {
@@ -817,7 +975,8 @@ export default defineComponent({
         }
       }
 
-      // If no pending selection worked, try current selection state
+      // Check current selection state - Python pre-computes initial selections,
+      // so we only need to highlight the row (no store update needed)
       if (!selectedFromState) {
         for (const [identifier, column] of Object.entries(interactivity)) {
           const selectedValue = this.selectionStore.$state[identifier]
@@ -842,16 +1001,23 @@ export default defineComponent({
                 } else {
                   row.scrollTo('center', false)
                 }
+                // KEY: Don't call updateSelection - Python already set it
                 selectedFromState = true
                 break
               }
             }
+            // Count as selected even if row not on current page
+            // Python handles page navigation via navigate_to_page
+            selectedFromState = true
+            break
           }
         }
       }
 
-      // If no selection from state, use default row
-      if (!selectedFromState) {
+      // If no selection exists in state AND default_row is enabled,
+      // this is a fallback for edge cases (e.g., client-side pagination)
+      // For server-side pagination, Python pre-computes initial selection
+      if (!selectedFromState && !this.isServerSidePagination) {
         const defaultRow = this.args.defaultRow ?? 0
         if (defaultRow >= 0) {
           // Use setTimeout to ensure Tabulator has fully rendered rows
@@ -860,7 +1026,7 @@ export default defineComponent({
             if (visibleRows && visibleRows.length > 0 && defaultRow < visibleRows.length) {
               const row = visibleRows[defaultRow]
               row.select()
-              // Directly get the row data and update selection
+              // For client-side only: update selection store
               const rowData = row.getData()
               if (rowData) {
                 const interactivity = this.args.interactivity || {}
@@ -964,6 +1130,17 @@ export default defineComponent({
 
       // replaceData silently replaces all data without updating scroll position, sort or filtering
       this.tabulator.replaceData(this.preparedTableData).then(() => {
+        // Clear loading overlay if we were navigating programmatically via navigate_to_page
+        // setPage() shows loading, but replaceData() doesn't clear it
+        if (this.pendingPageNavigation && (this.tabulator as any).clearAlert) {
+          ;(this.tabulator as any).clearAlert()
+          this.pendingPageNavigation = false
+          // Select the target row after programmatic navigation
+          this.$nextTick(() => {
+            this.selectPendingTargetRow()
+          })
+        }
+
         // Only re-apply filters if NOT navigating pages
         // During page navigation, filter state is already correct - calling applyFilters()
         // would incorrectly reset the page to 1 (server-side pagination always resets page)

@@ -1,5 +1,6 @@
 """Table component using Tabulator.js."""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import polars as pl
@@ -7,6 +8,11 @@ import polars as pl
 from ..core.base import BaseComponent
 from ..core.registry import register_component
 from ..preprocessing.filtering import compute_dataframe_hash
+
+logger = logging.getLogger(__name__)
+
+# Session state key for tracking last rendered selection per table component
+_LAST_SELECTION_KEY = "_svc_table_last_selection"
 
 
 @register_component("table")
@@ -188,15 +194,92 @@ class Table(BaseComponent):
         """
         Return list of state keys that affect this component's data.
 
-        Tables depend on both filters (for data filtering) and the pagination
-        state (for page, sort, and column filters).
+        Tables depend on:
+        - filters (for data filtering)
+        - pagination state (for page, sort, and column filters)
+        - interactivity identifiers (for page navigation to selected row)
 
         Returns:
-            List of state identifier keys including pagination_identifier
+            List of state identifier keys
         """
         deps = list(self._filters.keys()) if self._filters else []
         deps.append(self._pagination_identifier)
+        # Include interactivity identifiers for page navigation
+        if self._interactivity:
+            deps.extend(self._interactivity.keys())
         return deps
+
+    def get_initial_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Compute the initial selection for this table WITHOUT triggering Vue updates.
+
+        Only returns a value on INITIAL LOAD when:
+        - Table has interactivity configured
+        - default_row >= 0 (not disabled)
+        - No selection already exists for any interactivity identifier
+        - Not awaiting a required filter value
+        - No pagination state exists yet (truly initial load, not page navigation)
+
+        This is safe because:
+        - We compute from the same data _prepare_vue_data() returns
+        - Initial load always shows page 1 with default sort
+        - No user-applied column filters exist yet
+
+        Args:
+            state: Current selection state from StateManager
+
+        Returns:
+            Dict mapping identifier names to their initial values,
+            or None if no initial selection should be set.
+        """
+        # Skip if no interactivity or default_row disabled
+        if not self._interactivity or self._default_row < 0:
+            return None
+
+        # Skip if selection already exists for ANY interactivity identifier
+        for identifier in self._interactivity.keys():
+            if state.get(identifier) is not None:
+                return None
+
+        # Skip if NOT initial load (pagination state exists = user already interacted)
+        # This ensures we only pre-compute for the true first render
+        pagination_state = state.get(self._pagination_identifier)
+        if pagination_state is not None:
+            return None
+
+        # Skip if awaiting required filter (no data to select from)
+        for identifier in self._filters.keys():
+            filter_value = state.get(identifier)
+            has_default = self._filter_defaults and identifier in self._filter_defaults
+            if filter_value is None and not has_default:
+                return None
+
+        # Get first page data and extract default row values
+        try:
+            vue_data = self._prepare_vue_data(state)
+            table_data = vue_data.get("tableData")
+            if table_data is None or len(table_data) == 0:
+                return None
+
+            # Clamp to available rows
+            default_idx = min(self._default_row, len(table_data) - 1)
+            if default_idx < 0:
+                return None
+
+            result = {}
+            for identifier, column in self._interactivity.items():
+                if column in table_data.columns:
+                    value = table_data[column].iloc[default_idx]
+                    # Convert numpy types to Python types for JSON serialization
+                    if hasattr(value, "item"):
+                        value = value.item()
+                    result[identifier] = value
+
+            return result if result else None
+
+        except Exception:
+            # If anything fails, let Vue handle it normally
+            return None
 
     def _get_row_group_size(self) -> int:
         """
@@ -313,9 +396,9 @@ class Table(BaseComponent):
                         .to_series()
                         .to_list()
                     )
-                    meta["unique_values"] = [
-                        v for v in unique_vals if v is not None
-                    ][:100]
+                    meta["unique_values"] = [v for v in unique_vals if v is not None][
+                        :100
+                    ]
                 else:
                     meta["type"] = "numeric"
                     if min_val is not None:
@@ -403,6 +486,18 @@ class Table(BaseComponent):
             Dict with tableData (pandas DataFrame), _hash, _pagination metadata,
             and optional _navigate_to_page/_target_row_index for selection navigation
         """
+        import time
+
+        logger.info(f"[Table._prepare_vue_data] ===== START ===== ts={time.time()}")
+        logger.info(f"[Table._prepare_vue_data] cache_id={self._cache_id}")
+        logger.info(
+            f"[Table._prepare_vue_data] pagination_identifier={self._pagination_identifier}"
+        )
+        pagination_state_for_log = state.get(self._pagination_identifier)
+        logger.info(
+            f"[Table._prepare_vue_data] pagination_state={pagination_state_for_log}"
+        )
+
         # Get columns to select for projection pushdown
         columns = self._get_columns_to_select()
 
@@ -526,32 +621,65 @@ class Table(BaseComponent):
                     target_row_index = row_num % page_size
                     page = target_page  # Jump to target page
 
-        # Check if interactivity selection exists on different page
-        if self._interactivity and navigate_to_page is None:
-            for identifier, column in self._interactivity.items():
-                selected_value = state.get(identifier)
-                if selected_value is not None:
-                    # Convert float to int if needed
-                    if isinstance(selected_value, float) and selected_value.is_integer():
-                        selected_value = int(selected_value)
+        # === Selection-based navigation ===
+        # Only navigate to selection's page if selection CHANGED since last render
+        # This prevents overriding user's manual page navigation
+        if self._interactivity and self._pagination:
+            import streamlit as st
 
-                    # Find the row with this value
-                    search_result = (
-                        data.with_row_index("_row_num")
-                        .filter(pl.col(column) == selected_value)
-                        .select("_row_num")
-                        .head(1)
-                        .collect()
-                    )
+            # Get/initialize last selection tracking
+            if _LAST_SELECTION_KEY not in st.session_state:
+                st.session_state[_LAST_SELECTION_KEY] = {}
 
-                    if len(search_result) > 0:
-                        row_num = search_result["_row_num"][0]
-                        target_page = (row_num // page_size) + 1
-                        if target_page != page:
-                            # Selection is on a different page
-                            navigate_to_page = target_page
-                            target_row_index = row_num % page_size
-                    break  # Only check first interactivity column
+            component_key = self._cache_id
+            last_selections = st.session_state[_LAST_SELECTION_KEY].get(
+                component_key, {}
+            )
+
+            # Check if any interactivity selection changed
+            selection_changed = False
+            current_selections = {}
+
+            for identifier in self._interactivity.keys():
+                current_value = state.get(identifier)
+                current_selections[identifier] = current_value
+
+                if current_value != last_selections.get(identifier):
+                    selection_changed = True
+
+            # Update last selections AFTER checking for change
+            st.session_state[_LAST_SELECTION_KEY][component_key] = current_selections
+
+            # Only navigate if selection changed (not on manual page navigation)
+            if selection_changed and navigate_to_page is None:
+                for identifier, column in self._interactivity.items():
+                    selected_value = state.get(identifier)
+                    if selected_value is not None:
+                        # Convert float to int if needed
+                        if (
+                            isinstance(selected_value, float)
+                            and selected_value.is_integer()
+                        ):
+                            selected_value = int(selected_value)
+
+                        # Find the row with this value
+                        search_result = (
+                            data.with_row_index("_row_num")
+                            .filter(pl.col(column) == selected_value)
+                            .select("_row_num")
+                            .head(1)
+                            .collect()
+                        )
+
+                        if len(search_result) > 0:
+                            row_num = search_result["_row_num"][0]
+                            target_page = (row_num // page_size) + 1
+                            # Only navigate if selection is on a different page
+                            if target_page != page:
+                                navigate_to_page = target_page
+                                target_row_index = row_num % page_size
+                                page = target_page
+                        break
 
         # Clamp page to valid range
         page = max(1, min(page, total_pages))
@@ -582,6 +710,12 @@ class Table(BaseComponent):
         if target_row_index is not None:
             result["_target_row_index"] = target_row_index
 
+        logger.info(
+            f"[Table._prepare_vue_data] Returning: page={page}, total_rows={total_rows}, data_rows={len(df_polars)}"
+        )
+        logger.info(
+            f"[Table._prepare_vue_data] hash={data_hash[:8] if data_hash else 'None'}"
+        )
         return result
 
     def _get_component_args(self) -> Dict[str, Any]:
