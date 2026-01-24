@@ -50,8 +50,6 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       delete newData.args.hash
       delete newData.args.dataChanged
 
-      // IMPORTANT: Update data FIRST, before selection store
-      // This ensures that when selection watchers fire, the correct data is already in place
       console.log('[StreamlitDataStore] updateRenderData:', {
         dataChanged,
         oldHash: this.hash?.substring(0, 8),
@@ -59,6 +57,35 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         pythonStateSpectrum: pythonState?.spectrum,
         pythonStatePeak: pythonState?.peak,
       })
+
+      // IMPORTANT: Update selection store FIRST, before hash update
+      // This ensures that when the hash change triggers watchers (which call sendStateToStreamlit),
+      // all components see the correct counter value from Python. This prevents race conditions
+      // where components with stale counters trigger spurious reruns that lose pagination state.
+      if (pythonState) {
+        const pythonCounter = (pythonState.counter as number) || 0
+        const vueCounter = (selectionStore.$state.counter as number) || 0
+
+        selectionStore.$patch((state) => {
+          // Clear state if different session
+          if (pythonState.id !== state.id) {
+            for (const key in state) {
+              (state as Record<string, unknown>)[key] = undefined
+            }
+            Object.assign(state, pythonState)
+          } else if (pythonCounter >= vueCounter) {
+            // Only accept Python's state if it's at least as recent as ours
+            Object.assign(state, pythonState)
+          } else {
+            // Vue has newer state, only accept new keys from Python
+            for (const key in pythonState) {
+              if (!(key in state) || state[key] === undefined) {
+                (state as Record<string, unknown>)[key] = pythonState[key]
+              }
+            }
+          }
+        })
+      }
 
       // Only process data if Python says it changed (optimization to avoid re-parsing same data)
       if (dataChanged && newHash) {
@@ -91,6 +118,18 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
           }
         })
 
+        // Explicitly copy pagination metadata for streaming tables
+        // These are sent alongside tableData for server-side pagination
+        if (data._pagination !== undefined) {
+          this.dataForDrawing._pagination = data._pagination
+        }
+        if (data._navigate_to_page !== undefined) {
+          this.dataForDrawing._navigate_to_page = data._navigate_to_page
+        }
+        if (data._target_row_index !== undefined) {
+          this.dataForDrawing._target_row_index = data._target_row_index
+        }
+
         // Update hash AFTER data is parsed - this triggers watchers that depend on hash
         this.hash = newHash
       } else if (!dataChanged) {
@@ -115,33 +154,6 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
           // Don't update renderData - wait for Python to resend with actual data
           return
         }
-      }
-
-      // Update selection store AFTER data is updated
-      // This ensures watchers see the correct data when they fire
-      if (pythonState) {
-        const pythonCounter = (pythonState.counter as number) || 0
-        const vueCounter = (selectionStore.$state.counter as number) || 0
-
-        selectionStore.$patch((state) => {
-          // Clear state if different session
-          if (pythonState.id !== state.id) {
-            for (const key in state) {
-              (state as Record<string, unknown>)[key] = undefined
-            }
-            Object.assign(state, pythonState)
-          } else if (pythonCounter >= vueCounter) {
-            // Only accept Python's state if it's at least as recent as ours
-            Object.assign(state, pythonState)
-          } else {
-            // Vue has newer state, only accept new keys from Python
-            for (const key in pythonState) {
-              if (!(key in state) || state[key] === undefined) {
-                (state as Record<string, unknown>)[key] = pythonState[key]
-              }
-            }
-          }
-        })
       }
     },
 

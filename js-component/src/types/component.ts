@@ -17,6 +17,33 @@ export interface BaseComponentArgs {
 export type InteractivityMapping = Record<string, string>
 
 /**
+ * Pagination state for server-side pagination.
+ * Stored in StateManager via paginationIdentifier.
+ */
+export interface PaginationState {
+  page: number
+  page_size: number
+  total_rows: number
+  total_pages: number
+  sort_column?: string
+  sort_dir?: 'asc' | 'desc'
+}
+
+/**
+ * Column metadata for server-side filter dialogs.
+ * Precomputed during preprocessing to avoid client-side data scanning.
+ */
+export interface ColumnMetadata {
+  type: 'categorical' | 'numeric' | 'text'
+  /** Unique values for categorical columns (max 100 values) */
+  unique_values?: (string | number | boolean)[]
+  /** Min value for numeric columns */
+  min?: number
+  /** Max value for numeric columns */
+  max?: number
+}
+
+/**
  * Table component arguments.
  */
 export interface TableComponentArgs extends BaseComponentArgs {
@@ -32,6 +59,10 @@ export interface TableComponentArgs extends BaseComponentArgs {
   height?: number
   pagination?: boolean
   pageSize?: number
+  /** State key for storing pagination state (page, sort, filters) */
+  paginationIdentifier?: string
+  /** Column metadata for filter dialogs (precomputed unique values, min/max) */
+  columnMetadata?: Record<string, ColumnMetadata>
 }
 
 /**

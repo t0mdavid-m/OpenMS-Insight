@@ -12,6 +12,8 @@ import streamlit as st
 
 # Configure debug logging for hash tracking
 _DEBUG_HASH_TRACKING = os.environ.get("SVC_DEBUG_HASH", "").lower() == "true"
+# Debug logging for page navigation / state sync issues
+_DEBUG_STATE_SYNC = os.environ.get("SVC_DEBUG_STATE", "").lower() == "true"
 _logger = logging.getLogger(__name__)
 
 
@@ -471,10 +473,26 @@ def render_component(
     if height is not None:
         kwargs["height"] = height
 
+    # Debug logging: what we're sending to Vue
+    if _DEBUG_STATE_SYNC:
+        _logger.warning(
+            f"[Bridge:{component._cache_id}] Sending counter={state.get('counter')}, "
+            f"dataChanged={data_changed}, hash={data_hash[:8] if data_hash else 'None'}"
+        )
+
     result = vue_func(**kwargs)
 
     # Update state from Vue response
     if result is not None:
+        # Debug logging: what we received from Vue
+        if _DEBUG_STATE_SYNC:
+            vue_counter = result.get("counter")
+            vue_keys = [k for k in result.keys() if not k.startswith("_")]
+            _logger.warning(
+                f"[Bridge:{component._cache_id}] Received counter={vue_counter}, "
+                f"keys={vue_keys}, _requestData={result.get('_requestData', False)}"
+            )
+
         # Store Vue's echoed hash for next render comparison
         # Only store non-None hashes - Vue echoes None during initialization
         # before receiving data, which would corrupt our tracking. Preserving

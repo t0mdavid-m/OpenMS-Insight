@@ -6,7 +6,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
-from ..preprocessing.filtering import filter_and_collect_cached
+from ..preprocessing.filtering import compute_dataframe_hash
 
 
 @register_component("table")
@@ -64,6 +64,7 @@ class Table(BaseComponent):
         initial_sort: Optional[List[Dict[str, Any]]] = None,
         pagination: bool = True,
         page_size: int = 100,
+        pagination_identifier: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -104,9 +105,13 @@ class Table(BaseComponent):
             default_row: Default row to select on load (-1 for none)
             initial_sort: List of sort configurations like [{'column': 'field', 'dir': 'asc'}]
             pagination: Enable pagination for large tables (default: True).
-                Pagination dramatically improves performance for tables with
-                thousands of rows by only rendering one page at a time.
+                When enabled, uses server-side pagination where only the current
+                page of data is sent to the frontend, dramatically reducing browser
+                memory usage for large datasets.
             page_size: Number of rows per page when pagination is enabled (default: 100)
+            pagination_identifier: State key for storing pagination state (page, sort,
+                filters). Default: "{cache_id}_page". Used by StateManager to track
+                pagination state across reruns.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -118,6 +123,8 @@ class Table(BaseComponent):
         self._initial_sort = initial_sort
         self._pagination = pagination
         self._page_size = page_size
+        # Default pagination identifier based on cache_id
+        self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
 
         super().__init__(
             cache_id=cache_id,
@@ -138,6 +145,7 @@ class Table(BaseComponent):
             initial_sort=initial_sort,
             pagination=pagination,
             page_size=page_size,
+            pagination_identifier=self._pagination_identifier,
             **kwargs,
         )
 
@@ -158,6 +166,7 @@ class Table(BaseComponent):
             "initial_sort": self._initial_sort,
             "pagination": self._pagination,
             "page_size": self._page_size,
+            "pagination_identifier": self._pagination_identifier,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -171,6 +180,23 @@ class Table(BaseComponent):
         self._initial_sort = config.get("initial_sort")
         self._pagination = config.get("pagination", True)
         self._page_size = config.get("page_size", 100)
+        self._pagination_identifier = config.get(
+            "pagination_identifier", f"{self._cache_id}_page"
+        )
+
+    def get_state_dependencies(self) -> List[str]:
+        """
+        Return list of state keys that affect this component's data.
+
+        Tables depend on both filters (for data filtering) and the pagination
+        state (for page, sort, and column filters).
+
+        Returns:
+            List of state identifier keys including pagination_identifier
+        """
+        deps = list(self._filters.keys()) if self._filters else []
+        deps.append(self._pagination_identifier)
+        return deps
 
     def _get_row_group_size(self) -> int:
         """
@@ -194,6 +220,7 @@ class Table(BaseComponent):
 
         Sorts by filter columns for efficient predicate pushdown, then
         collects the LazyFrame and generates column definitions if needed.
+        Also computes column metadata for server-side filtering in filter dialogs.
         Data is cached by base class for fast subsequent loads.
         """
         data = self._raw_data
@@ -245,6 +272,84 @@ class Table(BaseComponent):
         # Store column definitions in preprocessed data for serialization
         self._preprocessed_data["column_definitions"] = self._column_definitions
 
+        # Compute column metadata for server-side filter dialogs
+        # This is computed once at preprocessing time and cached
+        column_metadata: Dict[str, Dict[str, Any]] = {}
+        for name, dtype in zip(schema.names(), schema.dtypes()):
+            meta: Dict[str, Any] = {}
+
+            if dtype in (
+                pl.Int8,
+                pl.Int16,
+                pl.Int32,
+                pl.Int64,
+                pl.UInt8,
+                pl.UInt16,
+                pl.UInt32,
+                pl.UInt64,
+                pl.Float32,
+                pl.Float64,
+            ):
+                # Numeric column - compute min/max and unique count
+                stats = data.select(
+                    [
+                        pl.col(name).min().alias("min"),
+                        pl.col(name).max().alias("max"),
+                        pl.col(name).n_unique().alias("n_unique"),
+                    ]
+                ).collect()
+                min_val = stats["min"][0]
+                max_val = stats["max"][0]
+                n_unique = stats["n_unique"][0]
+
+                # If few unique values, treat as categorical
+                if n_unique is not None and n_unique <= 10:
+                    meta["type"] = "categorical"
+                    unique_vals = (
+                        data.select(pl.col(name))
+                        .unique()
+                        .sort(name)
+                        .collect()
+                        .to_series()
+                        .to_list()
+                    )
+                    meta["unique_values"] = [
+                        v for v in unique_vals if v is not None
+                    ][:100]
+                else:
+                    meta["type"] = "numeric"
+                    if min_val is not None:
+                        meta["min"] = float(min_val)
+                    if max_val is not None:
+                        meta["max"] = float(max_val)
+            elif dtype == pl.Utf8:
+                # String column - check unique count
+                n_unique = data.select(pl.col(name).n_unique()).collect().item()
+                if n_unique is not None and n_unique <= 50:
+                    meta["type"] = "categorical"
+                    unique_vals = (
+                        data.select(pl.col(name))
+                        .unique()
+                        .sort(name, nulls_last=True)
+                        .collect()
+                        .to_series()
+                        .to_list()
+                    )
+                    meta["unique_values"] = [
+                        v for v in unique_vals if v is not None and v != ""
+                    ][:100]
+                else:
+                    meta["type"] = "text"
+            elif dtype == pl.Boolean:
+                meta["type"] = "categorical"
+                meta["unique_values"] = [True, False]
+            else:
+                meta["type"] = "text"
+
+            column_metadata[name] = meta
+
+        self._preprocessed_data["column_metadata"] = column_metadata
+
         # Store LazyFrame for streaming to disk (filter happens at render time)
         # Base class will use sink_parquet() to stream without full materialization
         self._preprocessed_data["data"] = data  # Keep lazy
@@ -285,16 +390,18 @@ class Table(BaseComponent):
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Prepare table data for Vue component.
+        Prepare table data for Vue component with server-side pagination.
 
-        Returns pandas DataFrame for efficient Arrow serialization to frontend.
-        Data is filtered based on current selection state.
+        Implements streaming pagination where only the current page of data
+        is sent to the frontend. Handles server-side sorting, column filtering,
+        and cross-component selection navigation.
 
         Args:
             state: Current selection state from StateManager
 
         Returns:
-            Dict with tableData (pandas DataFrame) and _hash keys
+            Dict with tableData (pandas DataFrame), _hash, _pagination metadata,
+            and optional _navigate_to_page/_target_row_index for selection navigation
         """
         # Get columns to select for projection pushdown
         columns = self._get_columns_to_select()
@@ -302,23 +409,180 @@ class Table(BaseComponent):
         # Get cached data (DataFrame or LazyFrame)
         data = self._preprocessed_data.get("data")
         if data is None:
-            # Fallback to raw data if available
             data = self._raw_data
 
         # Ensure we have a LazyFrame for filtering
         if isinstance(data, pl.DataFrame):
             data = data.lazy()
 
-        # Use cached filter+collect - returns (pandas DataFrame, hash)
-        df_pandas, data_hash = filter_and_collect_cached(
-            data,
-            self._filters,
-            state,
-            columns=columns,
-            filter_defaults=self._filter_defaults,
-        )
+        # Apply column projection first for efficiency
+        if columns:
+            schema_names = data.collect_schema().names()
+            available_cols = [c for c in columns if c in schema_names]
+            if available_cols:
+                data = data.select(available_cols)
 
-        return {"tableData": df_pandas, "_hash": data_hash}
+        # Apply cross-component filters (from self._filters)
+        for identifier, column in self._filters.items():
+            selected_value = state.get(identifier)
+            # Apply default if value is None and default exists
+            if (
+                selected_value is None
+                and self._filter_defaults
+                and identifier in self._filter_defaults
+            ):
+                selected_value = self._filter_defaults[identifier]
+
+            if selected_value is None:
+                # No selection for this filter - return empty DataFrame
+                df_polars = data.head(0).collect()
+                data_hash = compute_dataframe_hash(df_polars)
+                return {
+                    "tableData": df_polars.to_pandas(),
+                    "_hash": data_hash,
+                    "_pagination": {
+                        "page": 1,
+                        "page_size": self._page_size,
+                        "total_rows": 0,
+                        "total_pages": 0,
+                    },
+                }
+
+            # Convert float to int for integer columns (JS numbers come as floats)
+            if isinstance(selected_value, float) and selected_value.is_integer():
+                selected_value = int(selected_value)
+            data = data.filter(pl.col(column) == selected_value)
+
+        # Get pagination state
+        pagination_state = state.get(self._pagination_identifier)
+        if pagination_state is None:
+            pagination_state = {}
+
+        page = pagination_state.get("page", 1)
+        page_size = pagination_state.get("page_size", self._page_size)
+        sort_column = pagination_state.get("sort_column")
+        sort_dir = pagination_state.get("sort_dir", "asc")
+        column_filters = pagination_state.get("column_filters", [])
+        go_to_request = pagination_state.get("go_to_request")
+
+        # Apply column filters from filter dialog
+        for col_filter in column_filters:
+            field = col_filter.get("field")
+            filter_type = col_filter.get("type")
+            value = col_filter.get("value")
+
+            if not field or value is None:
+                continue
+
+            if filter_type == "in" and isinstance(value, list):
+                # Categorical filter - match any of the values
+                data = data.filter(pl.col(field).is_in(value))
+            elif filter_type == ">=":
+                data = data.filter(pl.col(field) >= value)
+            elif filter_type == "<=":
+                data = data.filter(pl.col(field) <= value)
+            elif filter_type == "regex":
+                # Text search with regex
+                data = data.filter(pl.col(field).str.contains(value, literal=False))
+
+        # Apply server-side sort
+        if sort_column:
+            descending = sort_dir == "desc"
+            data = data.sort(sort_column, descending=descending)
+
+        # Get total row count (after filters, before pagination)
+        total_rows = data.select(pl.len()).collect().item()
+        total_pages = max(1, (total_rows + page_size - 1) // page_size)
+
+        # Handle go-to request (server-side search for row by field value)
+        navigate_to_page = None
+        target_row_index = None
+
+        if go_to_request:
+            go_to_field = go_to_request.get("field")
+            go_to_value = go_to_request.get("value")
+            if go_to_field and go_to_value is not None:
+                # Try to convert to number if applicable
+                try:
+                    go_to_value = float(go_to_value)
+                    if go_to_value.is_integer():
+                        go_to_value = int(go_to_value)
+                except (ValueError, TypeError):
+                    pass
+
+                # Find the row with row_number
+                search_result = (
+                    data.with_row_index("_row_num")
+                    .filter(pl.col(go_to_field) == go_to_value)
+                    .select("_row_num")
+                    .head(1)
+                    .collect()
+                )
+
+                if len(search_result) > 0:
+                    row_num = search_result["_row_num"][0]
+                    target_page = (row_num // page_size) + 1
+                    navigate_to_page = target_page
+                    target_row_index = row_num % page_size
+                    page = target_page  # Jump to target page
+
+        # Check if interactivity selection exists on different page
+        if self._interactivity and navigate_to_page is None:
+            for identifier, column in self._interactivity.items():
+                selected_value = state.get(identifier)
+                if selected_value is not None:
+                    # Convert float to int if needed
+                    if isinstance(selected_value, float) and selected_value.is_integer():
+                        selected_value = int(selected_value)
+
+                    # Find the row with this value
+                    search_result = (
+                        data.with_row_index("_row_num")
+                        .filter(pl.col(column) == selected_value)
+                        .select("_row_num")
+                        .head(1)
+                        .collect()
+                    )
+
+                    if len(search_result) > 0:
+                        row_num = search_result["_row_num"][0]
+                        target_page = (row_num // page_size) + 1
+                        if target_page != page:
+                            # Selection is on a different page
+                            navigate_to_page = target_page
+                            target_row_index = row_num % page_size
+                    break  # Only check first interactivity column
+
+        # Clamp page to valid range
+        page = max(1, min(page, total_pages))
+
+        # Slice to current page
+        offset = (page - 1) * page_size
+        df_polars = data.slice(offset, page_size).collect()
+
+        # Compute hash for change detection
+        data_hash = compute_dataframe_hash(df_polars)
+
+        # Build result
+        result: Dict[str, Any] = {
+            "tableData": df_polars.to_pandas(),
+            "_hash": data_hash,
+            "_pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_rows": total_rows,
+                "total_pages": total_pages,
+                "sort_column": sort_column,
+                "sort_dir": sort_dir,
+            },
+        }
+
+        if navigate_to_page is not None:
+            result["_navigate_to_page"] = navigate_to_page
+        if target_row_index is not None:
+            result["_target_row_index"] = target_row_index
+
+        return result
 
     def _get_component_args(self) -> Dict[str, Any]:
         """
@@ -332,6 +596,9 @@ class Table(BaseComponent):
         if column_defs is None:
             column_defs = self._preprocessed_data.get("column_definitions", [])
 
+        # Get column metadata for filter dialogs (computed during preprocessing)
+        column_metadata = self._preprocessed_data.get("column_metadata", {})
+
         args: Dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "columnDefinitions": column_defs,
@@ -340,9 +607,12 @@ class Table(BaseComponent):
             "defaultRow": self._default_row,
             # Pass interactivity so Vue knows which identifier to update on row click
             "interactivity": self._interactivity,
-            # Pagination settings
+            # Pagination settings - always use server-side pagination
             "pagination": self._pagination,
             "pageSize": self._page_size,
+            "paginationIdentifier": self._pagination_identifier,
+            # Column metadata for filter dialogs (precomputed unique values, min/max)
+            "columnMetadata": column_metadata,
         }
 
         if self._title:

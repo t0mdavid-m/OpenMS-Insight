@@ -67,7 +67,9 @@ export default defineComponent({
         : undefined
 
       // Avoid duplicate sends for same counter+hash+annotations combination
-      if (currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) return
+      if (currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) {
+        return
+      }
       lastSentCounter = currentCounter
       lastSentHash = currentHash ?? undefined
       lastSentAnnotationsHash = annotationsHash
@@ -75,6 +77,7 @@ export default defineComponent({
       // Deep clone to remove Vue reactivity proxies before sending to Streamlit
       // This prevents "Proxy object could not be cloned" errors
       const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
+
       // Echo back Vue's current data hash so Python knows if Vue has the data
       // This enables bidirectional hash confirmation for cache optimization
       plainState._vueDataHash = currentHash
@@ -87,7 +90,6 @@ export default defineComponent({
         plainState._requestData = true
         streamlitDataStore.clearRequestData()
       }
-      console.log('[Vue] sendStateToStreamlit', { counter: currentCounter, hash: currentHash?.substring(0, 8), hasAnnotations: !!currentAnnotations, requestData: plainState._requestData })
       Streamlit.setComponentValue(plainState)
     }
 
@@ -122,8 +124,8 @@ export default defineComponent({
       }
     }, { immediate: true })
     // Hash and annotation changes are sent immediately (data sync, not user interaction)
-    watch(() => streamlitDataStore.hash, sendStateToStreamlit)
-    watch(() => streamlitDataStore.annotations, sendStateToStreamlit, { deep: true })
+    watch(() => streamlitDataStore.hash, () => sendStateToStreamlit())
+    watch(() => streamlitDataStore.annotations, () => sendStateToStreamlit(), { deep: true })
     // RequestData needs immediate response - flush any pending debounced state first
     watch(() => streamlitDataStore.requestData, (newVal) => {
       if (newVal) {

@@ -1,8 +1,14 @@
 """State management for cross-component selection synchronization."""
 
+import logging
+import os
 from typing import Any, Dict, Optional
 
 import numpy as np
+
+# Debug logging for state sync issues
+_DEBUG_STATE_SYNC = os.environ.get("SVC_DEBUG_STATE", "").lower() == "true"
+_logger = logging.getLogger(__name__)
 
 # Module-level default state manager
 _default_state_manager: Optional["StateManager"] = None
@@ -170,11 +176,17 @@ class StateManager:
 
         # Verify same session (prevents cross-tab interference)
         if vue_state.get("id") != self._state["id"]:
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[StateManager] Session mismatch: vue_id={vue_state.get('id')}, "
+                    f"python_id={self._state['id']}"
+                )
             return False
 
         # Extract metadata
         vue_counter = vue_state.pop("counter", 0)
         vue_state.pop("id", None)
+        old_counter = self._state["counter"]
 
         # Filter out internal keys (starting with _)
         vue_state = {k: v for k, v in vue_state.items() if not k.startswith("_")}
@@ -188,19 +200,35 @@ class StateManager:
                 if value is not None:
                     self._state["selections"][key] = value
                     modified = True
+                    if _DEBUG_STATE_SYNC:
+                        _logger.warning(
+                            f"[StateManager] NEW KEY: {key}={value} "
+                            f"(vue_counter={vue_counter}, python_counter={old_counter})"
+                        )
 
         # Only accept conflicting updates if Vue has newer state
         if vue_counter >= self._state["counter"]:
             for key, value in vue_state.items():
                 if key in self._state["selections"]:
-                    if self._state["selections"][key] != value:
+                    old_val = self._state["selections"][key]
+                    if old_val != value:
                         self._state["selections"][key] = value
                         modified = True
+                        if _DEBUG_STATE_SYNC:
+                            _logger.warning(
+                                f"[StateManager] UPDATE: {key}: {old_val} → {value} "
+                                f"(vue_counter={vue_counter} >= python_counter={old_counter})"
+                            )
 
         if modified:
             # Set counter to be at least vue_counter + 1 to reject future stale updates
             # from other Vue components that haven't received the latest state yet
             self._state["counter"] = max(self._state["counter"] + 1, vue_counter + 1)
+
+        if _DEBUG_STATE_SYNC:
+            _logger.warning(
+                f"[StateManager] modified={modified}, counter: {old_counter} → {self._state['counter']}"
+            )
 
         return modified
 
