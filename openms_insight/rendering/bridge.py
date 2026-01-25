@@ -540,6 +540,19 @@ def render_component(
 
         # Store in cache for next render
         cache[component_id] = (filter_state_hashable, converted_data, data_hash)
+
+        # If cache was invalid at Phase 1, we didn't send data to Vue (dataChanged=False).
+        # Trigger a rerun so the newly cached data gets sent on the next render.
+        # This handles cross-component filter changes where the affected component
+        # needs to receive updated data (e.g., new total_rows/total_pages).
+        if not cache_valid:
+            state_changed = True
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase5: Cache was invalid, "
+                    f"triggering rerun to send newly cached data"
+                )
+
         if _DEBUG_STATE_SYNC:
             # Log what we're caching for debugging
             pagination_key = next((k for k, v in filter_state_hashable if "page" in k.lower()), None)

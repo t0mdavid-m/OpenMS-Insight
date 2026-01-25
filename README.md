@@ -12,7 +12,7 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Memory-efficient preprocessing** via subprocess isolation
 - **Automatic disk caching** with config-based invalidation
 - **Cache reconstruction** - components can be restored from cache without re-specifying configuration
-- **Table component** (Tabulator.js) with filtering, sorting, go-to, pagination, CSV export
+- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV export
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
 - **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
 - **Volcano plot component** for differential expression visualization with significance thresholds
@@ -132,7 +132,7 @@ Table(
 - `index_field`: Column used as unique row identifier (default: 'id')
 - `go_to_fields`: Columns available in "Go to" navigation
 - `initial_sort`: Default sort configuration
-- `pagination`: Enable pagination for large tables (default: True)
+- `pagination`: Enable server-side pagination (default: True). Only the current page of data is sent to the browser, dramatically reducing memory usage for large datasets.
 - `page_size`: Rows per page (default: 100)
 
 **Custom formatters:**
