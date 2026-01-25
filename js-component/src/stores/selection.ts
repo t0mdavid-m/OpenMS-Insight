@@ -64,7 +64,9 @@ export const useSelectionStore = defineStore('selection', {
           state.selection_counter = (state.selection_counter || 0) + 1
         }
         // Update legacy counter for backwards compatibility
-        state.counter = Math.max(state.selection_counter || 0, state.pagination_counter || 0)
+        // IMPORTANT: Always increment counter so App.vue watcher sees every change
+        // Using Math.max() would miss selection changes when pagination_counter is higher
+        state.counter = (state.counter || 0) + 1
       })
       console.log('[SelectionStore] updateSelection DONE', {
         selectionCounter: this.$state.selection_counter,
