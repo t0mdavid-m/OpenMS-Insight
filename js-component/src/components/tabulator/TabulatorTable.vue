@@ -29,7 +29,6 @@
     <!-- Go To interface -->
     <div
       v-if="args.goToFields && args.goToFields.length > 0 && showGoTo"
-      ref="goToInterface"
       style="
         padding: 8px;
         margin-bottom: 8px;
@@ -100,7 +99,7 @@ import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { TableComponentArgs, PaginationState, ColumnMetadata } from '@/types/component'
-import { isCustomFormatter, getCustomFormatter, type CustomFormatterFunction } from './formatters'
+import { isCustomFormatter, getCustomFormatter } from './formatters'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -112,19 +111,14 @@ export default defineComponent({
       type: Object as PropType<TableComponentArgs>,
       required: true,
     },
-    index: {
-      type: Number,
-      required: true,
-    },
   },
   emits: ['rowSelected'],
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
     // Generate unique ID on setup
-    const instanceId = ++tableIdCounter
-    const uniqueId = `table-${Date.now()}-${instanceId}`
-    return { streamlitDataStore, selectionStore, uniqueId, instanceId }
+    const uniqueId = `table-${Date.now()}-${++tableIdCounter}`
+    return { streamlitDataStore, selectionStore, uniqueId }
   },
   data() {
     return {

@@ -24,30 +24,6 @@ export const useSelectionStore = defineStore('selection', {
     counter: undefined,
   }),
 
-  getters: {
-    /**
-     * Get selection value for an identifier.
-     */
-    getSelection:
-      (state) =>
-      (identifier: string): unknown => {
-        return state[identifier]
-      },
-
-    /**
-     * Get all current selections as a plain object.
-     */
-    getAllSelections: (state): Record<string, unknown> => {
-      const result: Record<string, unknown> = {}
-      for (const key in state) {
-        if (key !== 'id' && key !== 'counter') {
-          result[key] = state[key]
-        }
-      }
-      return result
-    },
-  },
-
   actions: {
     /**
      * Update a selection value.
@@ -69,30 +45,6 @@ export const useSelectionStore = defineStore('selection', {
         state.counter = (state.counter || 0) + 1
       })
       console.log('[SelectionStore] updateSelection DONE, newCounter:', this.$state.counter)
-    },
-
-    /**
-     * Clear a selection.
-     */
-    clearSelection(identifier: string) {
-      this.$patch((state) => {
-        state[identifier] = undefined
-        state.counter = (state.counter || 0) + 1
-      })
-    },
-
-    /**
-     * Clear all selections.
-     */
-    clearAllSelections() {
-      this.$patch((state) => {
-        for (const key in state) {
-          if (key !== 'id' && key !== 'counter') {
-            state[key] = undefined
-          }
-        }
-        state.counter = (state.counter || 0) + 1
-      })
     },
   },
 })

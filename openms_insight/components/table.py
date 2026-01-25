@@ -283,22 +283,6 @@ class Table(BaseComponent):
             # If anything fails, let Vue handle it normally
             return None
 
-    def _get_row_group_size(self) -> int:
-        """
-        Get optimal row group size for parquet writing.
-
-        Filtered tables use smaller row groups (10K) for better predicate
-        pushdown granularity - this allows Polars to skip row groups that
-        don't contain the filter value. Master tables (no filters) use
-        larger groups (50K) since we read all data anyway.
-
-        Returns:
-            Number of rows per row group
-        """
-        if self._filters:
-            return 10_000  # Smaller groups for better filter performance
-        return 50_000  # Larger groups for master tables
-
     def _preprocess(self) -> None:
         """
         Preprocess table data.
