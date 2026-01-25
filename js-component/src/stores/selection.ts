@@ -2,7 +2,8 @@
  * Generic selection store for cross-component state.
  *
  * Supports any identifier-based selection using dynamic keys.
- * The counter mechanism prevents stale updates from race conditions.
+ * Uses separate counters for selection and pagination state to prevent
+ * rapid pagination clicks from causing legitimate selection updates to be rejected.
  */
 
 import { defineStore } from 'pinia'
@@ -11,16 +12,29 @@ export interface SelectionState {
   // Session identifier for resetting on new session
   id?: number
 
-  // Counter for conflict resolution
+  // Separate counters for conflict resolution
+  selection_counter?: number
+  pagination_counter?: number
+
+  // Legacy counter for backwards compatibility
   counter?: number
 
   // Dynamic selection values keyed by identifier name
   [key: string]: unknown
 }
 
+/**
+ * Check if identifier is for pagination state (ends with '_page').
+ */
+function isPaginationIdentifier(identifier: string): boolean {
+  return identifier.endsWith('_page')
+}
+
 export const useSelectionStore = defineStore('selection', {
   state: (): SelectionState => ({
     id: undefined,
+    selection_counter: undefined,
+    pagination_counter: undefined,
     counter: undefined,
   }),
 
@@ -32,19 +46,30 @@ export const useSelectionStore = defineStore('selection', {
      * @param value - The selected value
      */
     updateSelection(identifier: string, value: unknown) {
+      const isPagination = isPaginationIdentifier(identifier)
       console.log('[SelectionStore] ===== updateSelection =====', {
         timestamp: Date.now(),
         identifier,
         value,
-        isPaginationRequest: typeof value === 'object' && value !== null && 'page' in (value as object),
-        currentCounter: this.$state.counter,
+        isPagination,
+        currentSelectionCounter: this.$state.selection_counter,
+        currentPaginationCounter: this.$state.pagination_counter,
       })
       this.$patch((state) => {
         state[identifier] = value
-        // Increment counter for change detection
-        state.counter = (state.counter || 0) + 1
+        // Increment appropriate counter based on identifier type
+        if (isPagination) {
+          state.pagination_counter = (state.pagination_counter || 0) + 1
+        } else {
+          state.selection_counter = (state.selection_counter || 0) + 1
+        }
+        // Update legacy counter for backwards compatibility
+        state.counter = Math.max(state.selection_counter || 0, state.pagination_counter || 0)
       })
-      console.log('[SelectionStore] updateSelection DONE, newCounter:', this.$state.counter)
+      console.log('[SelectionStore] updateSelection DONE', {
+        selectionCounter: this.$state.selection_counter,
+        paginationCounter: this.$state.pagination_counter,
+      })
     },
   },
 })

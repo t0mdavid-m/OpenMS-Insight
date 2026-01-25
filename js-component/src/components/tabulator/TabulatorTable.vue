@@ -162,9 +162,6 @@ export default defineComponent({
       isLoadingServerData: false as boolean,
       // Track current server-side filter state sent to Python
       currentColumnFilters: [] as Array<{ field: string; type: string; value: unknown }>,
-      // Track current server-side sort state sent to Python
-      currentSortColumn: '' as string,
-      currentSortDir: 'asc' as 'asc' | 'desc',
       // Track if table has fired tableBuilt event (DOM ready)
       isTableBuilt: false as boolean,
       // Track if we're in the middle of a user-initiated page navigation
@@ -178,6 +175,12 @@ export default defineComponent({
       initialLoadComplete: false as boolean,
       // Track what page Vue requested (for detecting when Python adjusted the page)
       lastRequestedPage: null as number | null,
+      // Track what sort the CLIENT requested (not server state)
+      // These are local state that persists during the request-response cycle
+      requestedSortColumn: '' as string,
+      requestedSortDir: 'asc' as 'asc' | 'desc',
+      // Track the counter value when AJAX request was made (for stale response detection)
+      pendingRequestCounter: null as number | null,
     }
   },
   computed: {
@@ -273,7 +276,13 @@ export default defineComponent({
     },
     // Server-side pagination state from Python
     paginationState(): PaginationState | null {
-      return this.streamlitDataStore.allDataForDrawing?._pagination as PaginationState | null
+      const state = this.streamlitDataStore.allDataForDrawing?._pagination as PaginationState | null
+      console.log(`[TabulatorTable ${this.args.title}] paginationState COMPUTED:`, {
+        page: state?.page,
+        totalRows: state?.total_rows,
+        hasState: !!state,
+      })
+      return state
     },
     // Navigation hint from Python (when selection is on different page)
     navigateToPage(): number | null {
@@ -288,6 +297,14 @@ export default defineComponent({
     // Check if server-side pagination is enabled
     isServerSidePagination(): boolean {
       return this.args.pagination !== false && !!this.args.paginationIdentifier
+    },
+    // Server's confirmed sort state (from last response)
+    serverSortColumn(): string {
+      return this.paginationState?.sort_column || ''
+    },
+    // Server's confirmed sort direction (from last response)
+    serverSortDir(): 'asc' | 'desc' {
+      return this.paginationState?.sort_dir || 'asc'
     },
     // Get column metadata from Python for filter dialogs
     serverColumnMetadata(): Record<string, ColumnMetadata> {
@@ -364,7 +381,19 @@ export default defineComponent({
         targetRowIndex: this.targetRowIndex,
         isServerSidePagination: this.isServerSidePagination,
         hasTabulator: !!this.tabulator,
+        isNavigatingPages: this.isNavigatingPages,
       })
+
+      // Skip if Vue is already navigating pages (Vue-initiated navigation)
+      // Python sends navigate hints even for Vue-initiated page changes, which
+      // causes a feedback loop if we process them
+      if (this.isNavigatingPages) {
+        console.log(
+          `[TabulatorTable ${this.args.title}] navigateToPage: SKIPPING (Vue-initiated navigation in progress)`,
+        )
+        return
+      }
+
       if (newPage && this.tabulator && this.isServerSidePagination) {
         // Store target row index for selection after data injection
         // Do NOT attempt selection here - data hasn't arrived yet
@@ -386,9 +415,11 @@ export default defineComponent({
           newTotalRows: newState?.total_rows,
           pendingTargetRowIndex: this.pendingTargetRowIndex,
           hasPendingDataRequest: !!this.pendingDataRequest,
+          pendingRequestCounter: this.pendingRequestCounter,
           isTableBuilt: this.isTableBuilt,
           isServerSidePagination: this.isServerSidePagination,
           preparedDataLength: this.preparedTableData.length,
+          storeDataForDrawingKeys: Object.keys(this.streamlitDataStore.allDataForDrawing || {}),
         })
 
         if (!newState || !this.isServerSidePagination || !this.tabulator) {
@@ -401,6 +432,15 @@ export default defineComponent({
         // (watchers receive new values before computed properties re-evaluate)
         this.injectServerSideData(newState)
 
+        // Sync client's requested state with server's confirmed state
+        // This ensures local state stays up-to-date after server response
+        if (newState.sort_column !== undefined) {
+          this.requestedSortColumn = newState.sort_column || ''
+        }
+        if (newState.sort_dir !== undefined) {
+          this.requestedSortDir = newState.sort_dir || 'asc'
+        }
+
         // After data injection, attempt pending row selection
         // This is the correct place to select because data is now available
         if (this.pendingTargetRowIndex !== null) {
@@ -411,8 +451,14 @@ export default defineComponent({
         }
 
         // Resolve any pending data request (if using ajaxRequestFunc)
+        console.log(`[TabulatorTable ${this.args.title}] paginationState watcher: checking pendingDataRequest`, {
+          hasPendingDataRequest: !!this.pendingDataRequest,
+          pendingRequestCounter: this.pendingRequestCounter,
+        })
         if (this.pendingDataRequest) {
           this.resolveDataRequest()
+        } else {
+          console.log(`[TabulatorTable ${this.args.title}] paginationState watcher: NO pendingDataRequest to resolve`)
         }
 
         // After successful data injection or AJAX resolution, mark initial load complete
@@ -614,9 +660,11 @@ export default defineComponent({
             to: { col: sortColumn, dir: sortDir },
           })
 
-          // Store current sort state
-          this.currentSortColumn = sortColumn
-          this.currentSortDir = sortDir
+          // Track what we're requesting (client state)
+          // This persists during the request-response cycle
+          this.requestedSortColumn = sortColumn
+          this.requestedSortDir = sortDir
+
           this.isLoadingServerData = true
 
           // Request sorted data from Python
@@ -654,8 +702,10 @@ export default defineComponent({
 
       // Track what page we requested (for detecting when Python adjusts for selection)
       this.lastRequestedPage = page
-      const sortColumn = params.sorters?.[0]?.field ?? (this.currentSortColumn || undefined)
-      const sortDir = (params.sorters?.[0]?.dir ?? this.currentSortDir ?? 'asc') as 'asc' | 'desc'
+      // Use requested state (client) for fallbacks, not server state
+      // This preserves sort during page navigation before server responds
+      const sortColumn = params.sorters?.[0]?.field ?? (this.requestedSortColumn || undefined)
+      const sortDir = (params.sorters?.[0]?.dir ?? this.requestedSortDir ?? 'asc') as 'asc' | 'desc'
 
       console.log(`[TabulatorTable ${this.args.title}] ===== handleRemoteRequest START =====`, {
         timestamp: Date.now(),
@@ -722,9 +772,6 @@ export default defineComponent({
         })
       }
 
-      // Store current state for tracking
-      this.currentSortColumn = sortColumn || ''
-      this.currentSortDir = sortDir
       this.isLoadingServerData = true
 
       // Mark that we're navigating pages (user-initiated, not filter change)
@@ -744,16 +791,25 @@ export default defineComponent({
       }
 
       // Return promise that will be resolved when Python returns data
+      // Track the counter value when request was made (for stale response detection)
+      this.pendingRequestCounter = this.selectionStore.$state.pagination_counter || 0
+      console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: STORED pendingRequestCounter`, {
+        pendingRequestCounter: this.pendingRequestCounter,
+        selectionStorePaginationCounter: this.selectionStore.$state.pagination_counter,
+      })
+
       return new Promise((resolve, reject) => {
         this.pendingDataRequest = { resolve, reject }
         console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: pendingDataRequest SET`, {
           timestamp: Date.now(),
+          requestCounter: this.pendingRequestCounter,
         })
         // Timeout after 30 seconds to prevent hanging
         setTimeout(() => {
           if (this.pendingDataRequest) {
             console.warn(`[TabulatorTable ${this.args.title}] Request timeout`)
             this.pendingDataRequest = null
+            this.pendingRequestCounter = null
             this.isLoadingServerData = false
             reject(new Error('Request timeout'))
           }
@@ -766,11 +822,15 @@ export default defineComponent({
      * Called by the paginationState watcher.
      */
     resolveDataRequest(): void {
+      const selectionStoreState = this.selectionStore.$state
       console.log(`[TabulatorTable ${this.args.title}] ===== resolveDataRequest CALLED =====`, {
         timestamp: Date.now(),
         hasPendingRequest: !!this.pendingDataRequest,
-        paginationState: this.paginationState,
+        pendingRequestCounter: this.pendingRequestCounter,
+        paginationStatePage: this.paginationState?.page,
         preparedDataLength: this.preparedTableData.length,
+        selectionStorePaginationCounter: selectionStoreState.pagination_counter,
+        selectionStoreCounter: selectionStoreState.counter,
       })
 
       if (!this.pendingDataRequest || !this.paginationState) {
@@ -778,6 +838,28 @@ export default defineComponent({
           hasPendingRequest: !!this.pendingDataRequest,
           hasPaginationState: !!this.paginationState,
         })
+        return
+      }
+
+      // Validate that this response matches what we requested
+      // If counter advanced since we made the request, data is stale
+      // (another page request was made while waiting for this response)
+      const currentCounter = this.selectionStore.$state.pagination_counter || 0
+      const isStale = this.pendingRequestCounter !== null && currentCounter > this.pendingRequestCounter + 1
+      console.log(`[TabulatorTable ${this.args.title}] resolveDataRequest: STALE CHECK`, {
+        pendingRequestCounter: this.pendingRequestCounter,
+        currentCounter,
+        threshold: this.pendingRequestCounter !== null ? this.pendingRequestCounter + 1 : 'N/A',
+        isStale,
+      })
+      if (isStale) {
+        console.log(`[TabulatorTable ${this.args.title}] resolveDataRequest: STALE RESPONSE DETECTED, rejecting promise`)
+        // FIX: REJECT the promise instead of orphaning it
+        // This allows Tabulator to clean up properly and not wait forever
+        this.pendingDataRequest.reject(new Error('Stale response - newer request pending'))
+        this.pendingDataRequest = null
+        this.pendingRequestCounter = null
+        this.isLoadingServerData = false
         return
       }
 
@@ -795,6 +877,7 @@ export default defineComponent({
       })
 
       this.pendingDataRequest = null
+      this.pendingRequestCounter = null
       this.isLoadingServerData = false
       console.log(`[TabulatorTable ${this.args.title}] resolveDataRequest: PROMISE RESOLVED`)
       // NOTE: Do NOT clear isNavigatingPages here - it must persist until
@@ -1458,8 +1541,8 @@ export default defineComponent({
           this.selectionStore.updateSelection(paginationIdentifier, {
             page: 1, // Reset to first page when filters change
             page_size: this.paginationState?.page_size || this.args.pageSize || 100,
-            sort_column: this.currentSortColumn || undefined,
-            sort_dir: this.currentSortDir,
+            sort_column: this.requestedSortColumn || undefined,
+            sort_dir: this.requestedSortDir,
             column_filters: serverFilters,
           })
         }
@@ -1996,8 +2079,8 @@ export default defineComponent({
           this.selectionStore.updateSelection(paginationIdentifier, {
             page: this.paginationState?.page || 1,
             page_size: this.paginationState?.page_size || this.args.pageSize || 100,
-            sort_column: this.currentSortColumn || undefined,
-            sort_dir: this.currentSortDir,
+            sort_column: this.requestedSortColumn || undefined,
+            sort_dir: this.requestedSortDir,
             column_filters: this.currentColumnFilters,
             go_to_request: {
               field: this.selectedGoToField,

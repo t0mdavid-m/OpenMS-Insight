@@ -59,16 +59,28 @@ class StateManager:
         self._session_key = session_key
         self._ensure_session_state()
 
+    def _is_pagination_identifier(self, identifier: str) -> bool:
+        """Check if identifier is for pagination state (ends with '_page')."""
+        return identifier.endswith("_page")
+
     def _ensure_session_state(self) -> None:
         """Ensure session state is initialized."""
         import streamlit as st
 
         if self._session_key not in st.session_state:
             st.session_state[self._session_key] = {
-                "counter": 0,
+                "selection_counter": 0,
+                "pagination_counter": 0,
                 "id": float(np.random.random()),
                 "selections": {},
             }
+        # Migration: add new counter keys if missing (backwards compat)
+        state = st.session_state[self._session_key]
+        if "selection_counter" not in state:
+            # Migrate from legacy single counter
+            legacy_counter = state.get("counter", 0)
+            state["selection_counter"] = legacy_counter
+            state["pagination_counter"] = legacy_counter
 
     @property
     def _state(self) -> Dict[str, Any]:
@@ -84,9 +96,19 @@ class StateManager:
         return self._state["id"]
 
     @property
+    def selection_counter(self) -> int:
+        """Get the current selection counter."""
+        return self._state["selection_counter"]
+
+    @property
+    def pagination_counter(self) -> int:
+        """Get the current pagination counter."""
+        return self._state["pagination_counter"]
+
+    @property
     def counter(self) -> int:
-        """Get the current state counter."""
-        return self._state["counter"]
+        """Get the current state counter (backwards compatibility)."""
+        return max(self._state["selection_counter"], self._state["pagination_counter"])
 
     def get_selection(self, identifier: str) -> Any:
         """
@@ -116,7 +138,10 @@ class StateManager:
             return False
 
         self._state["selections"][identifier] = value
-        self._state["counter"] += 1
+        if self._is_pagination_identifier(identifier):
+            self._state["pagination_counter"] += 1
+        else:
+            self._state["selection_counter"] += 1
         return True
 
     def clear_selection(self, identifier: str) -> bool:
@@ -131,7 +156,10 @@ class StateManager:
         """
         if identifier in self._state["selections"]:
             del self._state["selections"][identifier]
-            self._state["counter"] += 1
+            if self._is_pagination_identifier(identifier):
+                self._state["pagination_counter"] += 1
+            else:
+                self._state["selection_counter"] += 1
             return True
         return False
 
@@ -149,10 +177,15 @@ class StateManager:
         Get state dict formatted for sending to Vue component.
 
         Returns:
-            Dict with counter, id, and all selections as top-level keys
+            Dict with counters, id, and all selections as top-level keys
         """
         state = {
-            "counter": self._state["counter"],
+            "selection_counter": self._state["selection_counter"],
+            "pagination_counter": self._state["pagination_counter"],
+            # Backwards compatibility: include legacy counter as max of both
+            "counter": max(
+                self._state["selection_counter"], self._state["pagination_counter"]
+            ),
             "id": self._state["id"],
         }
         state.update(self._state["selections"])
@@ -162,8 +195,9 @@ class StateManager:
         """
         Update state from Vue component return value.
 
-        Uses counter-based conflict resolution: only accepts updates from
-        Vue if its counter is >= our counter (prevents stale updates).
+        Uses counter-based conflict resolution with separate counters for
+        selection and pagination state. This prevents rapid pagination clicks
+        from causing legitimate selection updates to be rejected.
 
         Args:
             vue_state: State dict returned by Vue component
@@ -183,27 +217,44 @@ class StateManager:
                 )
             return False
 
-        # Extract metadata
-        vue_counter = vue_state.pop("counter", 0)
+        # Extract metadata - support both new separate counters and legacy single counter
+        vue_selection_counter = vue_state.pop("selection_counter", None)
+        vue_pagination_counter = vue_state.pop("pagination_counter", None)
+        vue_legacy_counter = vue_state.pop("counter", 0)
         vue_state.pop("id", None)
-        old_counter = self._state["counter"]
+
+        # Backwards compat: if Vue doesn't send separate counters, use legacy
+        if vue_selection_counter is None:
+            vue_selection_counter = vue_legacy_counter
+        if vue_pagination_counter is None:
+            vue_pagination_counter = vue_legacy_counter
+
+        old_selection_counter = self._state["selection_counter"]
+        old_pagination_counter = self._state["pagination_counter"]
 
         # Debug: log pagination state updates
         if _DEBUG_STATE_SYNC:
-            pagination_keys = [k for k in vue_state.keys() if "page" in k.lower() and not k.startswith("_")]
+            pagination_keys = [
+                k
+                for k in vue_state.keys()
+                if "page" in k.lower() and not k.startswith("_")
+            ]
             for pk in pagination_keys:
                 old_val = self._state["selections"].get(pk)
                 new_val = vue_state.get(pk)
                 _logger.warning(
                     f"[StateManager] Pagination update: key={pk}, "
                     f"old={old_val}, new={new_val}, "
-                    f"vue_counter={vue_counter}, python_counter={old_counter}"
+                    f"vue_pagination_counter={vue_pagination_counter}, "
+                    f"python_pagination_counter={old_pagination_counter}"
                 )
 
         # Filter out internal keys (starting with _)
         vue_state = {k: v for k, v in vue_state.items() if not k.startswith("_")}
 
         modified = False
+        selection_modified = False
+        pagination_modified = False
 
         # Always accept previously undefined keys (but skip None/undefined values)
         for key, value in vue_state.items():
@@ -212,42 +263,69 @@ class StateManager:
                 if value is not None:
                     self._state["selections"][key] = value
                     modified = True
+                    if self._is_pagination_identifier(key):
+                        pagination_modified = True
+                    else:
+                        selection_modified = True
                     if _DEBUG_STATE_SYNC:
                         _logger.warning(
                             f"[StateManager] NEW KEY: {key}={value} "
-                            f"(vue_counter={vue_counter}, python_counter={old_counter})"
+                            f"(is_pagination={self._is_pagination_identifier(key)})"
                         )
 
-        # Only accept conflicting updates if Vue has newer state
-        if vue_counter >= self._state["counter"]:
-            for key, value in vue_state.items():
-                if key in self._state["selections"]:
-                    old_val = self._state["selections"][key]
-                    if old_val != value:
+        # For existing keys, check appropriate counter for conflict resolution
+        for key, value in vue_state.items():
+            if key in self._state["selections"]:
+                old_val = self._state["selections"][key]
+                if old_val != value:
+                    # Use appropriate counter based on key type
+                    is_pagination = self._is_pagination_identifier(key)
+                    if is_pagination:
+                        vue_counter = vue_pagination_counter
+                        python_counter = old_pagination_counter
+                    else:
+                        vue_counter = vue_selection_counter
+                        python_counter = old_selection_counter
+
+                    # Only accept update if Vue has newer state for this type
+                    if vue_counter >= python_counter:
                         self._state["selections"][key] = value
                         modified = True
+                        if is_pagination:
+                            pagination_modified = True
+                        else:
+                            selection_modified = True
                         if _DEBUG_STATE_SYNC:
                             _logger.warning(
                                 f"[StateManager] UPDATE: {key}: {old_val} → {value} "
-                                f"(vue_counter={vue_counter} >= python_counter={old_counter})"
+                                f"(vue_counter={vue_counter} >= python_counter={python_counter}, "
+                                f"is_pagination={is_pagination})"
                             )
 
-        if modified:
-            # Set counter to be at least vue_counter + 1 to reject future stale updates
-            # from other Vue components that haven't received the latest state yet
-            self._state["counter"] = max(self._state["counter"] + 1, vue_counter + 1)
+        # Update appropriate counter(s) if modified
+        if selection_modified:
+            self._state["selection_counter"] = max(
+                self._state["selection_counter"] + 1, vue_selection_counter + 1
+            )
+        if pagination_modified:
+            self._state["pagination_counter"] = max(
+                self._state["pagination_counter"] + 1, vue_pagination_counter + 1
+            )
 
         if _DEBUG_STATE_SYNC:
             _logger.warning(
-                f"[StateManager] modified={modified}, counter: {old_counter} → {self._state['counter']}"
+                f"[StateManager] modified={modified}, "
+                f"selection_counter: {old_selection_counter} → {self._state['selection_counter']}, "
+                f"pagination_counter: {old_pagination_counter} → {self._state['pagination_counter']}"
             )
 
         return modified
 
     def clear(self) -> None:
-        """Clear all selections and reset counter."""
+        """Clear all selections and reset counters."""
         self._state["selections"] = {}
-        self._state["counter"] = 0
+        self._state["selection_counter"] = 0
+        self._state["pagination_counter"] = 0
 
     def __repr__(self) -> str:
         return (

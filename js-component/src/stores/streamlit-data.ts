@@ -59,6 +59,9 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         paginationPage: ((newData.args as any)._pagination as any)?.page,
         hasTableData: !!(newData.args as any).tableData,
         pythonStateCounter: pythonState?.counter,
+        pythonSelectionCounter: pythonState?.selection_counter,
+        pythonPaginationCounter: pythonState?.pagination_counter,
+        pythonStateKeys: pythonState ? Object.keys(pythonState) : [],
       })
 
       // IMPORTANT: Update selection store FIRST, before hash update
@@ -66,8 +69,11 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       // all components see the correct counter value from Python. This prevents race conditions
       // where components with stale counters trigger spurious reruns that lose pagination state.
       if (pythonState) {
-        const pythonCounter = (pythonState.counter as number) || 0
-        const vueCounter = (selectionStore.$state.counter as number) || 0
+        // Support both new separate counters and legacy single counter
+        const pythonSelectionCounter = (pythonState.selection_counter as number) ?? (pythonState.counter as number) ?? 0
+        const pythonPaginationCounter = (pythonState.pagination_counter as number) ?? (pythonState.counter as number) ?? 0
+        const vueSelectionCounter = (selectionStore.$state.selection_counter as number) ?? (selectionStore.$state.counter as number) ?? 0
+        const vuePaginationCounter = (selectionStore.$state.pagination_counter as number) ?? (selectionStore.$state.counter as number) ?? 0
 
         selectionStore.$patch((state) => {
           // Clear state if different session
@@ -76,13 +82,36 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
               (state as Record<string, unknown>)[key] = undefined
             }
             Object.assign(state, pythonState)
-          } else if (pythonCounter >= vueCounter) {
-            // Only accept Python's state if it's at least as recent as ours
-            Object.assign(state, pythonState)
           } else {
-            // Vue has newer state, only accept new keys from Python
+            // Per-key conflict resolution using appropriate counter
             for (const key in pythonState) {
-              if (!(key in state) || state[key] === undefined) {
+              const isPagination = key.endsWith('_page')
+              const pythonCounter = isPagination ? pythonPaginationCounter : pythonSelectionCounter
+              const vueCounter = isPagination ? vuePaginationCounter : vueSelectionCounter
+
+              // Accept if:
+              // 1. New key or undefined value
+              // 2. Python has equal/newer counter for this type
+              // 3. FIX: For pagination keys, accept when Python sends new data (dataChanged)
+              //    Python's response is authoritative for what data was actually returned
+              const shouldAccept =
+                !(key in state) ||
+                state[key] === undefined ||
+                pythonCounter >= vueCounter ||
+                (isPagination && dataChanged)
+
+              console.log(`[StreamlitDataStore] State key "${key}":`, {
+                isPagination,
+                pythonCounter,
+                vueCounter,
+                dataChanged,
+                keyInState: key in state,
+                currentValue: state[key],
+                pythonValue: pythonState[key],
+                shouldAccept,
+              })
+
+              if (shouldAccept) {
                 (state as Record<string, unknown>)[key] = pythonState[key]
               }
             }
@@ -124,12 +153,19 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         // Explicitly copy pagination metadata for streaming tables
         // These are sent alongside tableData for server-side pagination
         if (data._pagination !== undefined) {
+          console.log('[StreamlitDataStore] Updating _pagination:', {
+            oldPage: (this.dataForDrawing._pagination as any)?.page,
+            newPage: (data._pagination as any)?.page,
+            newPagination: data._pagination,
+          })
           this.dataForDrawing._pagination = data._pagination
         }
         if (data._navigate_to_page !== undefined) {
+          console.log('[StreamlitDataStore] Updating _navigate_to_page:', data._navigate_to_page)
           this.dataForDrawing._navigate_to_page = data._navigate_to_page
         }
         if (data._target_row_index !== undefined) {
+          console.log('[StreamlitDataStore] Updating _target_row_index:', data._target_row_index)
           this.dataForDrawing._target_row_index = data._target_row_index
         }
 
