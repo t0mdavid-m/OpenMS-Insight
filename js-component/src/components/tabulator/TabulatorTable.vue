@@ -400,6 +400,9 @@ export default defineComponent({
         this.pendingTargetRowIndex = this.targetRowIndex
         // Mark that we're navigating programmatically (forces data injection even without AJAX request)
         this.pendingPageNavigation = true
+        // Mark that we're navigating pages so applyFilters() is skipped in updateTableData()
+        // This prevents applyFilters() from resetting page to 1 after Python-triggered navigation
+        this.isNavigatingPages = true
         console.log(`[TabulatorTable ${this.args.title}] Set pendingTargetRowIndex:`, this.pendingTargetRowIndex)
         // Navigate to the page - selection will happen in paginationState watcher
         ;(this.tabulator as any).setPage(newPage)
@@ -1287,16 +1290,44 @@ export default defineComponent({
      * This is much faster than destroying and recreating the table.
      */
     updateTableData(): void {
+      console.log('[TabulatorTable] updateTableData called', {
+        hasTabulator: !!this.tabulator,
+        isServerSidePagination: this.isServerSidePagination,
+        paginationState: this.paginationState,
+        isNavigatingPages: this.isNavigatingPages,
+        dataLength: this.preparedTableData?.length,
+      })
+
       if (!this.tabulator) {
         this.drawTable()
         return
       }
 
-      // Store target page BEFORE replaceData (which resets Tabulator's internal page)
+      // Store pagination state BEFORE replaceData (which resets Tabulator's internal page)
+      // We capture these values now because by the time the async .then() callback runs,
+      // the reactive paginationState may have changed to newer values
       const targetPage = this.paginationState?.page
+      const capturedTotalRows = this.paginationState?.total_rows
+      const capturedTotalPages = this.paginationState?.total_pages
+
+      const tab = this.tabulator as any
+      console.log('[TabulatorTable] Before replaceData - Tabulator internal state:', {
+        hasPageModule: !!tab.modules?.page,
+        maxPage: tab.modules?.page?.max,
+        lastPage: tab.modules?.page?.lastPage,
+        currentPage: tab.modules?.page?.page,
+        size: tab.modules?.page?.size,
+      })
 
       // replaceData silently replaces all data without updating scroll position, sort or filtering
       this.tabulator.replaceData(this.preparedTableData).then(() => {
+        console.log('[TabulatorTable] After replaceData - Tabulator internal state:', {
+          hasPageModule: !!tab.modules?.page,
+          maxPage: tab.modules?.page?.max,
+          lastPage: tab.modules?.page?.lastPage,
+          currentPage: tab.modules?.page?.page,
+        })
+
         // Clear loading overlay if we were navigating programmatically via navigate_to_page
         // setPage() shows loading, but replaceData() doesn't clear it
         if (this.pendingPageNavigation && (this.tabulator as any).clearAlert) {
@@ -1313,6 +1344,37 @@ export default defineComponent({
         // would incorrectly reset the page to 1 (server-side pagination always resets page)
         if (!this.isNavigatingPages) {
           this.applyFilters()
+        }
+
+        // Update pagination limits when data changes (filter applied, data refreshed)
+        // This ensures the page count shown matches the actual filtered data from Python
+        // Use captured values (from before replaceData) to avoid stale closure issues
+        if (
+          this.isServerSidePagination &&
+          capturedTotalRows !== undefined &&
+          capturedTotalPages !== undefined
+        ) {
+          if (tab.modules?.page) {
+            try {
+              // Use captured primitive values to avoid Vue Proxy and stale closure issues
+              const totalRows = Number(capturedTotalRows)
+              const totalPages = Number(capturedTotalPages)
+
+              console.log('[TabulatorTable] Calling setMaxRows and setMaxPage', {
+                totalRows,
+                totalPages,
+              })
+              tab.modules.page.setMaxRows(totalRows)
+              tab.modules.page.setMaxPage(totalPages)
+              console.log('[TabulatorTable] After setMaxRows/setMaxPage:', {
+                maxPage: tab.modules?.page?.max,
+              })
+              // Force redraw to update the pagination UI
+              tab.redraw(true)
+            } catch (error) {
+              console.error('[TabulatorTable] Error setting pagination limits:', error)
+            }
+          }
         }
 
         // CRITICAL FIX: Always set the page after replaceData() for server-side pagination
