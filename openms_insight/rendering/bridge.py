@@ -311,14 +311,17 @@ def render_component(
     """
     Render a component in Streamlit.
 
-    This function:
-    1. Gets current state from StateManager
-    2. Calls component._prepare_vue_data() to get filtered data (cached!)
-    3. Computes hash for change detection
-    4. Only sends data if hash changed from last render (optimization)
-    5. Calls the Vue component with data payload
-    6. Updates StateManager from Vue response
-    7. Triggers st.rerun() if state changed
+    This function uses a two-phase approach to handle state synchronization:
+
+    Phase 1: Call vue_func with CACHED data to get Vue's request
+    Phase 2: Apply Vue's request, then prepare UPDATED data for next render
+
+    This order is critical because Vue's request (e.g., page change, sort) is only
+    available after calling vue_func(). By calling it first with cached data, we:
+    1. Get Vue's request immediately
+    2. Apply it to state BEFORE preparing data
+    3. Prepare correct data for the next render
+    4. Rerun to send the correct data
 
     Args:
         component: The component to render
@@ -329,195 +332,101 @@ def render_component(
     Returns:
         The value returned by the Vue component
     """
-    # Get current state
-    state = state_manager.get_state_for_vue()
-
-    # Pre-compute initial selections BEFORE Vue renders
-    # This prevents race conditions when multiple tables render simultaneously
-    # All default selections are set in Python before any Vue component can trigger a rerun
-    initial_selection = None
-    if hasattr(component, "get_initial_selection"):
-        initial_selection = component.get_initial_selection(state)
-        if initial_selection:
-            selections_changed = False
-            for identifier, value in initial_selection.items():
-                if state_manager.set_selection(identifier, value):
-                    selections_changed = True
-            if selections_changed:
-                # Re-fetch state after setting initial selections
-                state = state_manager.get_state_for_vue()
-
-    # Batch resend: if any component requested data in previous run, clear ALL hashes
-    # This ensures all components get data in one rerun instead of O(N) reruns
-    if st.session_state.get(_BATCH_RESEND_KEY):
-        st.session_state[_VUE_ECHOED_HASH_KEY] = {}
-        st.session_state.pop(_BATCH_RESEND_KEY, None)
-
-    # Generate unique key if not provided (needed for cache)
-    # Use cache_id instead of id(component) since components are recreated each rerun
-    # Use JSON serialization for deterministic key generation (hash() can vary)
+    # === PHASE 0: Generate key and get component info ===
     if key is None:
         interactivity_str = json.dumps(component._interactivity or {}, sort_keys=True)
         key = f"svc_{component._cache_id}_{hashlib.md5(interactivity_str.encode()).hexdigest()[:8]}"
 
-    # Check if component has required filters without values
-    # Don't send potentially huge unfiltered datasets - wait for filter selection
-    filters = getattr(component, "_filters", None) or {}
-    filter_defaults = getattr(component, "_filter_defaults", None) or {}
-
-    awaiting_filter = False
-    if filters:
-        # Check each filter - if no value AND no default, we're waiting
-        for identifier in filters.keys():
-            filter_value = state.get(identifier)
-            has_default = identifier in filter_defaults
-            if filter_value is None and not has_default:
-                awaiting_filter = True
-                break
-
-    # Extract state keys that affect this component's data for cache key
-    # This includes filters and any additional dependencies (e.g., zoom for heatmaps)
-    # Uses get_state_dependencies() which can be overridden by subclasses
-    state_keys = set(component.get_state_dependencies())
-
-    # Build hashable version for cache key (converts dicts/lists to JSON strings)
-    filter_state_hashable = tuple(
-        sorted((k, _make_hashable(state.get(k))) for k in state_keys)
-    )
-
-    # Debug: log the actual cache key being used
-    if _DEBUG_HASH_TRACKING:
-        _logger.warning(
-            f"[CacheKey] {component._cache_id}: state_keys={list(state_keys)}"
-        )
-        for k in state_keys:
-            if "page" in k.lower():
-                _logger.warning(
-                    f"[CacheKey] {component._cache_id}: {k}={state.get(k)}"
-                )
-
-    # Build original state dict for passing to _prepare_vue_data
-    # (contains actual values, not JSON strings)
-    relevant_state = {k: state.get(k) for k in state_keys}
-
-    # Build component ID for cache (includes type to avoid collisions)
     component_type = component._get_vue_component_name()
     component_id = f"{component_type}:{key}"
-
-    # Skip data preparation if awaiting required filter selection
-    # This prevents sending huge unfiltered datasets
-    if awaiting_filter:
-        vue_data = {}
-        data_hash = "awaiting_filter"
-    else:
-        # Debug: log state keys and pagination state
-        if _DEBUG_HASH_TRACKING:
-            pagination_keys = [k for k in state_keys if "page" in k.lower()]
-            for pk in pagination_keys:
-                _logger.warning(
-                    f"[CacheDebug] {component._cache_id}: "
-                    f"pagination_key={pk}, value={relevant_state.get(pk)}"
-                )
-            _logger.warning(
-                f"[CacheDebug] {component._cache_id}: "
-                f"filter_state_hashable={filter_state_hashable[:3]}..."
-            )
-
-        # Get component data using per-component cache
-        # Each component stores exactly one entry (current filter state)
-        # - Filterless components: filter_state=() always → always cache hit
-        # - Filtered components: cache hit when filter values unchanged
-        vue_data, data_hash = _prepare_vue_data_cached(
-            component, component_id, filter_state_hashable, relevant_state
-        )
-
     component_args = component._get_component_args()
+    if height is not None:
+        component_args["height"] = height
+
+    # Batch resend: if any component requested data in previous run, clear ALL hashes
+    if st.session_state.get(_BATCH_RESEND_KEY):
+        st.session_state[_VUE_ECHOED_HASH_KEY] = {}
+        st.session_state.pop(_BATCH_RESEND_KEY, None)
 
     # Initialize hash cache in session state if needed
     if _VUE_ECHOED_HASH_KEY not in st.session_state:
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
 
-    # Hash tracking key is the component's Streamlit key
-    # Filter state changes are handled by data_hash comparison (different data = different hash)
-    hash_tracking_key = key
+    # === PHASE 1: Get CACHED data from previous render ===
+    cache = _get_component_cache()
+    cached_entry = cache.get(component_id)
 
-    # Get Vue's last-echoed hash for this component
-    # This is what Vue reported having in its last response
-    vue_echoed_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(hash_tracking_key)
+    # Get current state for initial render (may be stale until we apply Vue's request)
+    initial_state = state_manager.get_state_for_vue()
 
-    # Send data if Vue's hash doesn't match current hash
-    # This handles: first render, data change, browser refresh, Vue hot reload
-    # Vue echoes null/None if it has no data, so mismatch triggers send
-    # IMPORTANT: Also send data if vue_echoed_hash is None - this means Vue
-    # hasn't confirmed receipt yet (e.g., after page navigation destroys Vue component)
-    # NOTE: Hash now correctly reflects annotation state (annotations included in hash),
-    # so normal comparison works for all components including those with dynamic annotations
-    data_changed = (vue_echoed_hash is None) or (vue_echoed_hash != data_hash)
+    # Pre-compute initial selections BEFORE Vue renders (for first render only)
+    if hasattr(component, "get_initial_selection"):
+        initial_selection = component.get_initial_selection(initial_state)
+        if initial_selection:
+            for identifier, value in initial_selection.items():
+                state_manager.set_selection(identifier, value)
+            initial_state = state_manager.get_state_for_vue()
 
-    # Debug logging for hash tracking issues
-    if _DEBUG_HASH_TRACKING:
-        _logger.warning(
-            f"[HashTrack] {component._cache_id}: "
-            f"data_changed={data_changed}, "
-            f"vue_echoed={vue_echoed_hash[:8] if vue_echoed_hash else 'None'}, "
-            f"data_hash={data_hash[:8] if data_hash else 'None'}, "
-            f"key={hash_tracking_key[:50]}..."
-        )
+    # Compute current filter state for cache validity check
+    # This tells us what state the component SHOULD have data for
+    state_keys = set(component.get_state_dependencies())
+    current_filter_state = tuple(
+        sorted((k, _make_hashable(initial_state.get(k))) for k in state_keys)
+    )
 
-    # Log what we're about to send
-    import time
-    _logger.info(f"[bridge] ===== render_component ===== ts={time.time()}")
-    _logger.info(f"[bridge] component={component._cache_id}, dataChanged={data_changed}")
-    _logger.info(f"[bridge] hash={data_hash[:8] if data_hash else 'None'}")
-    _logger.info(f"[bridge] has_pagination={bool(vue_data.get('_pagination'))}")
-    if vue_data.get('_pagination'):
-        _logger.info(f"[bridge] pagination_page={vue_data.get('_pagination', {}).get('page')}")
+    # Check if cached data is VALID for current state
+    # KEY FIX: Only send data when cache matches current state
+    # - Before: Always sent cached data, even if stale (page 38 when Vue wants page 1)
+    # - Now: Only send if cache matches current state
+    cache_valid = False
+    if cached_entry is not None:
+        cached_state, cached_data, cached_hash = cached_entry
+        cache_valid = (cached_state == current_filter_state)
+        if _DEBUG_STATE_SYNC:
+            _logger.warning(
+                f"[Bridge:{component._cache_id}] Phase1: cache_valid={cache_valid}, "
+                f"cached_state={cached_state[:2] if cached_state else None}..., "
+                f"current_state={current_filter_state[:2] if current_filter_state else None}..."
+            )
 
-    # Only include full data if hash changed
-    if data_changed:
-        # Convert any non-pandas data to pandas for Arrow serialization
-        # pandas DataFrames are passed through (already optimal for Arrow)
-        # Filter out _hash (internal metadata) but keep _plotConfig (needed by Vue)
-        converted_data = {}
-        for data_key, value in vue_data.items():
-            if data_key == "_hash":
-                # Skip internal hash metadata
-                continue
-            if isinstance(value, pl.LazyFrame):
-                converted_data[data_key] = value.collect().to_pandas()
-            elif isinstance(value, pl.DataFrame):
-                converted_data[data_key] = value.to_pandas()
-            else:
-                converted_data[data_key] = value
-            # pandas DataFrames pass through unchanged (optimal for Arrow)
+    # Build payload - only send data if cache is valid for current state
+    if cache_valid:
+        # Cache HIT - send cached data (it's correct for current state)
         data_payload = {
-            **converted_data,
-            "selection_store": state,
-            "hash": data_hash,
+            **cached_data,
+            "selection_store": initial_state,
+            "hash": cached_hash,
             "dataChanged": True,
-            "awaitingFilter": awaiting_filter,
+            "awaitingFilter": False,
         }
-        _logger.info(f"[bridge] Sending data payload with {len(converted_data)} keys")
-        # Note: We don't pre-set the hash here anymore. We trust Vue's echo
-        # at the end of the render cycle. This ensures we detect when Vue
-        # loses its data (e.g., page navigation) and needs it resent.
+        if _DEBUG_STATE_SYNC:
+            # Log pagination state for debugging
+            pagination_key = next((k for k in state_keys if "page" in k.lower()), None)
+            if pagination_key:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase1: Cache HIT, "
+                    f"sending data with hash={cached_hash[:8]}, "
+                    f"pagination={initial_state.get(pagination_key)}"
+                )
     else:
-        # Data unchanged - only send hash and state, Vue will use cached data
+        # Cache MISS (no cache, or state mismatch) - don't send stale data
+        # Vue will show loading or use its local cache
         data_payload = {
-            "selection_store": state,
-            "hash": data_hash,
+            "selection_store": initial_state,
+            "hash": "",
             "dataChanged": False,
-            "awaitingFilter": awaiting_filter,
+            "awaitingFilter": False,
         }
-
-    # Add height to component args if specified
-    if height is not None:
-        component_args["height"] = height
+        if _DEBUG_STATE_SYNC:
+            _logger.warning(
+                f"[Bridge:{component._cache_id}] Phase1: Cache MISS, "
+                f"not sending data (cached_entry={cached_entry is not None})"
+            )
 
     # Component layout: [[{componentArgs: {...}}]]
     components = [[{"componentArgs": component_args}]]
 
-    # Call Vue component
+    # === PHASE 2: Call vue_func to get Vue's request ===
     vue_func = get_vue_component_function()
 
     kwargs = {
@@ -528,55 +437,128 @@ def render_component(
     if height is not None:
         kwargs["height"] = height
 
-    # Debug logging: what we're sending to Vue
     if _DEBUG_STATE_SYNC:
         _logger.warning(
-            f"[Bridge:{component._cache_id}] Sending counter={state.get('counter')}, "
-            f"dataChanged={data_changed}, hash={data_hash[:8] if data_hash else 'None'}"
+            f"[Bridge:{component._cache_id}] Phase2: Calling vue_func to get request"
         )
 
     result = vue_func(**kwargs)
 
-    # Update state from Vue response
+    # === PHASE 3: Apply Vue's request FIRST ===
+    state_changed = False
     if result is not None:
         # Debug logging: what we received from Vue
         if _DEBUG_STATE_SYNC:
             vue_counter = result.get("counter")
             vue_keys = [k for k in result.keys() if not k.startswith("_")]
             _logger.warning(
-                f"[Bridge:{component._cache_id}] Received counter={vue_counter}, "
+                f"[Bridge:{component._cache_id}] Phase3: Received counter={vue_counter}, "
                 f"keys={vue_keys}, _requestData={result.get('_requestData', False)}"
             )
 
-        # Store Vue's echoed hash for next render comparison
-        # Only store non-None hashes - Vue echoes None during initialization
-        # before receiving data, which would corrupt our tracking. Preserving
-        # the previous valid hash prevents unnecessary data resends.
+        # Store Vue's echoed hash
         vue_hash = result.get("_vueDataHash")
         if vue_hash is not None:
-            st.session_state[_VUE_ECHOED_HASH_KEY][hash_tracking_key] = vue_hash
+            st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
 
-        # Check if Vue is requesting data due to cache miss (e.g., after page navigation)
-        # Vue's cache was empty when it received dataChanged=false, so it needs data resent
-        request_data = result.get("_requestData", False)
-        if request_data and not data_changed:
-            # Vue needs data and we didn't just send it - batch for next run
-            # This triggers ONE rerun that clears ALL hashes, so all components
-            # get data together instead of O(N) separate reruns
+        # Apply Vue's state update FIRST - this is the key fix!
+        state_changed = state_manager.update_from_vue(result)
+
+        # Check if Vue is requesting data resend
+        if result.get("_requestData", False):
             st.session_state[_BATCH_RESEND_KEY] = True
-            # Note: if data_changed=True, we just sent data so requestData is stale
 
-        # Capture annotations from Vue (e.g., from SequenceView)
-        # Use hash-based change detection for robustness
+    # === PHASE 4: Get UPDATED state and prepare data ===
+    # Now state reflects Vue's request (e.g., new page number after click)
+    state = state_manager.get_state_for_vue()
+
+    # Check if component has required filters without values
+    filters = getattr(component, "_filters", None) or {}
+    filter_defaults = getattr(component, "_filter_defaults", None) or {}
+
+    awaiting_filter = False
+    for identifier in filters.keys():
+        if state.get(identifier) is None and identifier not in filter_defaults:
+            awaiting_filter = True
+            break
+
+    if not awaiting_filter:
+        # Extract state keys that affect this component's data
+        state_keys = set(component.get_state_dependencies())
+        relevant_state = {k: state.get(k) for k in state_keys}
+
+        # Build hashable version for cache key
+        filter_state_hashable = tuple(
+            sorted((k, _make_hashable(state.get(k))) for k in state_keys)
+        )
+
+        if _DEBUG_HASH_TRACKING:
+            _logger.warning(
+                f"[CacheKey] {component._cache_id}: state_keys={list(state_keys)}"
+            )
+            for k in state_keys:
+                if "page" in k.lower():
+                    _logger.warning(
+                        f"[CacheKey] {component._cache_id}: {k}={state.get(k)}"
+                    )
+
+        # Prepare data with UPDATED state (includes Vue's request)
+        # This may also call set_selection() to override (e.g., sort resets page)
+        vue_data, data_hash = _prepare_vue_data_cached(
+            component, component_id, filter_state_hashable, relevant_state
+        )
+
+        # Check if Python overrode state during _prepare_vue_data
+        # (e.g., table.py sets page to last page after sort)
+        final_state = state_manager.get_state_for_vue()
+        if final_state != state:
+            state_changed = True
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase4: Python overrode state"
+                )
+    else:
+        vue_data = {}
+        data_hash = "awaiting_filter"
+        filter_state_hashable = ()
+
+    _logger.info(f"[bridge] Phase4: {component._cache_id} prepared data, hash={data_hash[:8] if data_hash else 'None'}")
+
+    # === PHASE 5: Cache data for next render ===
+    if vue_data:
+        # Convert for caching (Arrow serialization requires pandas)
+        converted_data = {}
+        for data_key, value in vue_data.items():
+            if data_key == "_hash":
+                continue
+            if isinstance(value, pl.LazyFrame):
+                converted_data[data_key] = value.collect().to_pandas()
+            elif isinstance(value, pl.DataFrame):
+                converted_data[data_key] = value.to_pandas()
+            else:
+                converted_data[data_key] = value
+
+        # Store in cache for next render
+        cache[component_id] = (filter_state_hashable, converted_data, data_hash)
+        if _DEBUG_STATE_SYNC:
+            # Log what we're caching for debugging
+            pagination_key = next((k for k, v in filter_state_hashable if "page" in k.lower()), None)
+            if pagination_key:
+                pagination_val = next((v for k, v in filter_state_hashable if k == pagination_key), None)
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase5: Cached data with hash={data_hash[:8]}, "
+                    f"filter_state includes {pagination_key}={pagination_val}"
+                )
+
+    # Handle annotations from Vue (e.g., from SequenceView)
+    if result is not None:
         annotations = result.get("_annotations")
         annotations_changed = False
 
         if annotations is not None:
-            # Compute hash of new annotations
             peak_ids = annotations.get("peak_id", [])
             new_hash = hash(tuple(peak_ids)) if peak_ids else 0
 
-            # Compare with stored hash
             ann_hash_key = f"_svc_ann_hash_{key}"
             old_hash = st.session_state.get(ann_hash_key)
 
@@ -586,18 +568,27 @@ def render_component(
 
             _store_component_annotations(key, annotations)
         else:
-            # Annotations cleared - check if we had annotations before
             ann_hash_key = f"_svc_ann_hash_{key}"
             if st.session_state.get(ann_hash_key) is not None:
                 annotations_changed = True
                 st.session_state[ann_hash_key] = None
 
-        # Update state and rerun if state changed OR annotations changed OR batch resend needed
-        # Only rerun for requestData if we didn't already send data (to avoid stale triggers)
-        state_changed = state_manager.update_from_vue(result)
-        needs_batch_resend = request_data and not data_changed
-        if state_changed or annotations_changed or needs_batch_resend:
-            st.rerun()
+        if annotations_changed:
+            state_changed = True
+
+    # === PHASE 6: Rerun if state changed ===
+    # This will send the UPDATED data (now in cache) to Vue
+    if state_changed:
+        if _DEBUG_STATE_SYNC:
+            _logger.warning(
+                f"[Bridge:{component._cache_id}] Phase6: RERUN triggered, "
+                f"next render will have cache HIT"
+            )
+        st.rerun()
+    elif _DEBUG_STATE_SYNC:
+        _logger.warning(
+            f"[Bridge:{component._cache_id}] Phase6: No rerun needed, state_changed=False"
+        )
 
     return result
 

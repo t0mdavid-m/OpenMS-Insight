@@ -182,6 +182,8 @@ export default defineComponent({
       // Flag to prevent selectDefaultRow from updating selection during initial render
       // This prevents orphaned AJAX promises when Streamlit reruns before tableBuilt
       initialLoadComplete: false as boolean,
+      // Track what page Vue requested (for detecting when Python adjusted the page)
+      lastRequestedPage: null as number | null,
     }
   },
   computed: {
@@ -592,6 +594,50 @@ export default defineComponent({
       this.tabulator.on('rowClick', (e: Event, row: any) => {
         this.onRowClick(row)
       })
+
+      // Handle remote sorting - Tabulator doesn't pass sorters to ajaxRequestFunc on header click
+      // We need to manually trigger the remote request when sort changes
+      if (this.isServerSidePagination) {
+        this.tabulator.on('dataSorting', (sorters: Array<{ field: string; dir: string }>) => {
+          console.log(`[TabulatorTable ${this.args.title}] dataSorting event:`, sorters)
+
+          if (!sorters || sorters.length === 0) return
+
+          const sortColumn = sorters[0].field
+          const sortDir = sorters[0].dir as 'asc' | 'desc'
+
+          // Check if sort actually changed
+          const cachedSortCol = this.paginationState?.sort_column || ''
+          const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+
+          if (sortColumn === cachedSortCol && sortDir === cachedSortDir) {
+            console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort unchanged, skipping`)
+            return
+          }
+
+          console.log(`[TabulatorTable ${this.args.title}] dataSorting: requesting sorted data`, {
+            from: { col: cachedSortCol, dir: cachedSortDir },
+            to: { col: sortColumn, dir: sortDir },
+          })
+
+          // Store current sort state
+          this.currentSortColumn = sortColumn
+          this.currentSortDir = sortDir
+          this.isLoadingServerData = true
+
+          // Request sorted data from Python
+          const paginationIdentifier = this.args.paginationIdentifier
+          if (paginationIdentifier) {
+            this.selectionStore.updateSelection(paginationIdentifier, {
+              page: 1, // Reset to first page when sort changes
+              page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+              sort_column: sortColumn,
+              sort_dir: sortDir,
+              column_filters: this.currentColumnFilters,
+            })
+          }
+        })
+      }
     },
 
     /**
@@ -611,27 +657,65 @@ export default defineComponent({
       // Extract pagination parameters
       const page = params.page || 1
       const pageSize = params.size || this.args.pageSize || 100
-      const sortColumn = params.sorters?.[0]?.field
-      const sortDir = (params.sorters?.[0]?.dir || 'asc') as 'asc' | 'desc'
+
+      // Track what page we requested (for detecting when Python adjusts for selection)
+      this.lastRequestedPage = page
+      const sortColumn = params.sorters?.[0]?.field ?? (this.currentSortColumn || undefined)
+      const sortDir = (params.sorters?.[0]?.dir ?? this.currentSortDir ?? 'asc') as 'asc' | 'desc'
 
       console.log(`[TabulatorTable ${this.args.title}] ===== handleRemoteRequest START =====`, {
         timestamp: Date.now(),
         requestedPage: page,
         requestedSize: pageSize,
+        requestedSortColumn: sortColumn,
+        requestedSortDir: sortDir,
+        rawSorters: params.sorters,
         paginationIdentifier: this.args.paginationIdentifier,
         currentPaginationState: this.paginationState,
+        cachedSortColumn: this.paginationState?.sort_column,
+        cachedSortDir: this.paginationState?.sort_dir,
         hasPendingRequest: !!this.pendingDataRequest,
       })
 
-      // Check if we already have data for this request (initial load or same page)
+      // Check if we already have data for this request (initial load or same page/sort)
       // This happens when Python sends initial data before Tabulator calls ajaxRequestFunc
+      const cachedSortCol = this.paginationState?.sort_column || ''
+      const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+      const requestedSortCol = sortColumn || ''
+      const sortMatch = cachedSortCol === requestedSortCol && cachedSortDir === sortDir
+
+      console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: SORT CHECK v2`, {
+        cachedSortCol,
+        cachedSortDir,
+        requestedSortCol,
+        requestedSortDir: sortDir,
+        sortMatch,
+      })
+
       if (
         this.paginationState &&
         this.paginationState.page === page &&
         this.paginationState.page_size === pageSize &&
+        sortMatch &&
         this.tableData.length > 0
       ) {
-        console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: using cached data (already have page ${page})`)
+        console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: using cached data (page=${page}, sortCol=${cachedSortCol})`)
+
+        // FIX: Update selection store even when using cached data
+        // This keeps Vue's state in sync with what's displayed
+        // Without this, Vue's selection store would have stale page number
+        // (e.g., after Python navigates to page 38, Vue's store still had page 1)
+        const paginationIdentifier = this.args.paginationIdentifier
+        if (paginationIdentifier) {
+          this.selectionStore.updateSelection(paginationIdentifier, {
+            page,
+            page_size: pageSize,
+            sort_column: sortColumn,
+            sort_dir: sortDir,
+            column_filters: this.currentColumnFilters,
+          })
+        }
+
         // Use setTimeout(0) to delay resolution to next tick
         // This allows Tabulator's internal state machine to complete setup
         const responseData = {
@@ -933,10 +1017,16 @@ export default defineComponent({
         return
       }
 
-      // Skip auto-selection during page navigation for server-side pagination
-      // The user explicitly changed pages - don't override their navigation intent
+      // Skip auto-selection during user-initiated page navigation for server-side pagination
+      // UNLESS Python sent a different page (meaning Python adjusted for selection tracking)
       if (this.isServerSidePagination && this.isNavigatingPages) {
-        return
+        const pythonPage = this.paginationState?.page
+        const requestedPage = this.lastRequestedPage
+        // If Python sent the same page we requested, skip selection (user navigation)
+        // If Python sent a different page, allow selection (Python tracking)
+        if (pythonPage === requestedPage) {
+          return
+        }
       }
 
       const interactivity = this.args.interactivity || {}

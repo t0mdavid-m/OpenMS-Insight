@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Session state key for tracking last rendered selection per table component
 _LAST_SELECTION_KEY = "_svc_table_last_selection"
+# Session state key for tracking last sort/filter state per table component
+_LAST_SORT_FILTER_KEY = "_svc_table_last_sort_filter"
 
 
 @register_component("table")
@@ -621,48 +623,77 @@ class Table(BaseComponent):
                     target_row_index = row_num % page_size
                     page = target_page  # Jump to target page
 
-        # === Selection-based navigation ===
-        # Only navigate to selection's page if selection CHANGED since last render
-        # This prevents overriding user's manual page navigation
+        # === Selection and Sort/Filter based navigation ===
+        # PURPOSE: When user sorts/filters, find where the selected row ended up and navigate there
         if self._interactivity and self._pagination:
+            import json
+
             import streamlit as st
 
-            # Get/initialize last selection tracking
+            # Initialize tracking dicts (per-component storage)
             if _LAST_SELECTION_KEY not in st.session_state:
                 st.session_state[_LAST_SELECTION_KEY] = {}
+            if _LAST_SORT_FILTER_KEY not in st.session_state:
+                st.session_state[_LAST_SORT_FILTER_KEY] = {}
 
-            component_key = self._cache_id
+            component_key = self._cache_id  # Unique key for this table instance
+
+            # Get PREVIOUS states (from last render)
             last_selections = st.session_state[_LAST_SELECTION_KEY].get(
                 component_key, {}
             )
+            last_sort_filter = st.session_state[_LAST_SORT_FILTER_KEY].get(
+                component_key, {}
+            )
 
-            # Check if any interactivity selection changed
-            selection_changed = False
+            # Build CURRENT selection state
             current_selections = {}
-
             for identifier in self._interactivity.keys():
-                current_value = state.get(identifier)
-                current_selections[identifier] = current_value
+                current_selections[identifier] = state.get(identifier)
 
-                if current_value != last_selections.get(identifier):
-                    selection_changed = True
+            # Build CURRENT sort/filter state
+            # Use JSON for column_filters to enable deep comparison of nested dicts
+            current_sort_filter = {
+                "sort_column": sort_column,
+                "sort_dir": sort_dir,
+                "column_filters_json": json.dumps(column_filters, sort_keys=True),
+            }
 
-            # Update last selections AFTER checking for change
+            # DETECT what changed by comparing current vs previous
+            selection_changed = current_selections != last_selections
+            sort_filter_changed = current_sort_filter != last_sort_filter
+
+            # CRITICAL: Update tracking state AFTER detecting changes
+            # This prevents infinite loops: next render will see no change
             st.session_state[_LAST_SELECTION_KEY][component_key] = current_selections
+            st.session_state[_LAST_SORT_FILTER_KEY][component_key] = current_sort_filter
 
-            # Only navigate if selection changed (not on manual page navigation)
-            if selection_changed and navigate_to_page is None:
+            # DECIDE whether to navigate
+            # - Don't override go_to navigation (user explicitly requested a row)
+            # - Navigate if selection changed (find new selection's page)
+            # - Navigate if sort/filter changed AND we have a selection (find existing selection's new page)
+            should_navigate = False
+            if navigate_to_page is None:
+                if selection_changed:
+                    should_navigate = True
+                elif sort_filter_changed and any(
+                    v is not None for v in current_selections.values()
+                ):
+                    should_navigate = True
+
+            if should_navigate:
                 for identifier, column in self._interactivity.items():
                     selected_value = state.get(identifier)
                     if selected_value is not None:
-                        # Convert float to int if needed
+                        # Convert float to int if needed (JS numbers come as floats)
                         if (
                             isinstance(selected_value, float)
                             and selected_value.is_integer()
                         ):
                             selected_value = int(selected_value)
 
-                        # Find the row with this value
+                        # SEARCH for the selected row in the sorted/filtered data
+                        # with_row_index adds position so we know which page it's on
                         search_result = (
                             data.with_row_index("_row_num")
                             .filter(pl.col(column) == selected_value)
@@ -672,13 +703,56 @@ class Table(BaseComponent):
                         )
 
                         if len(search_result) > 0:
+                            # ROW FOUND - update page in pagination state if needed
                             row_num = search_result["_row_num"][0]
                             target_page = (row_num // page_size) + 1
-                            # Only navigate if selection is on a different page
                             if target_page != page:
+                                # Update pagination state directly (same as Vue would)
+                                from openms_insight.core.state import (
+                                    get_default_state_manager,
+                                )
+
+                                state_manager = get_default_state_manager()
+                                updated_pagination = {
+                                    **pagination_state,
+                                    "page": target_page,
+                                }
+                                state_manager.set_selection(
+                                    self._pagination_identifier, updated_pagination
+                                )
                                 navigate_to_page = target_page
                                 target_row_index = row_num % page_size
-                                page = target_page
+                                page = target_page  # Use new page for slicing
+                        else:
+                            # ROW NOT FOUND - it was filtered out
+                            # Update selection to first row's value AND set page to 1
+                            if sort_filter_changed and not selection_changed:
+                                first_row_result = (
+                                    data.select(pl.col(column)).head(1).collect()
+                                )
+                                if len(first_row_result) > 0:
+                                    first_value = first_row_result[column][0]
+                                    if hasattr(first_value, "item"):
+                                        first_value = first_value.item()
+
+                                    from openms_insight.core.state import (
+                                        get_default_state_manager,
+                                    )
+
+                                    state_manager = get_default_state_manager()
+
+                                    # Update selection to first row
+                                    state_manager.set_selection(identifier, first_value)
+
+                                    # Update pagination state to page 1
+                                    updated_pagination = {
+                                        **pagination_state,
+                                        "page": 1,
+                                    }
+                                    state_manager.set_selection(
+                                        self._pagination_identifier, updated_pagination
+                                    )
+                                    page = 1  # Use page 1 for slicing
                         break
 
         # Clamp page to valid range
