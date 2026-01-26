@@ -592,6 +592,123 @@ class TestInteractivityMapping:
         assert df["scan_id"].tolist() == [100, 200, 300]
 
 
+class TestTableAutoSelection:
+    """Tests for auto-selecting first row when filter data changes."""
+
+    def test_auto_selection_returns_first_row_value(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """Verify _auto_selection contains first row's interactivity column value."""
+        table = Table(
+            cache_id="test_autoselect",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            interactivity={"selected_id": "id"},
+        )
+
+        # Filter to scan_id=100 -> 2 rows (id=1, id=2), first row has id=1
+        result = table._prepare_vue_data({"spectrum": 100})
+
+        assert "_auto_selection" in result
+        assert result["_auto_selection"] == {"selected_id": 1}
+
+    def test_auto_selection_empty_when_no_data(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """Verify _auto_selection is empty when filtered data has no rows."""
+        table = Table(
+            cache_id="test_autoselect_empty",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            interactivity={"selected_id": "id"},
+        )
+
+        # Filter to scan_id=999 -> no matching rows
+        result = table._prepare_vue_data({"spectrum": 999})
+
+        assert "_auto_selection" in result
+        assert result["_auto_selection"] == {}
+
+    def test_auto_selection_empty_when_no_interactivity(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """Verify _auto_selection is empty when no interactivity defined."""
+        table = Table(
+            cache_id="test_autoselect_no_interact",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            # No interactivity
+        )
+
+        result = table._prepare_vue_data({})
+
+        assert "_auto_selection" in result
+        assert result["_auto_selection"] == {}
+
+    def test_auto_selection_multiple_interactivity_columns(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """Verify _auto_selection works with multiple interactivity mappings."""
+        table = Table(
+            cache_id="test_autoselect_multi",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            interactivity={"selected_id": "id", "selected_scan": "scan_id"},
+        )
+
+        result = table._prepare_vue_data({})
+
+        assert "_auto_selection" in result
+        # First row: id=1, scan_id=100
+        assert result["_auto_selection"] == {"selected_id": 1, "selected_scan": 100}
+
+    def test_auto_selection_with_state_manager(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """Test auto-selection integration with StateManager."""
+        reset_default_state_manager()
+        sm = StateManager()
+
+        table = Table(
+            cache_id="test_autoselect_sm",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            interactivity={"selected_id": "id"},
+        )
+
+        # Set filter
+        sm.set_selection("spectrum", 100)
+        state = sm.get_state_for_vue()
+
+        vue_data = table._prepare_vue_data(state)
+
+        # Auto-selection should be first row of filtered data
+        assert vue_data["_auto_selection"] == {"selected_id": 1}
+
+    def test_auto_selection_respects_sort(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """Verify _auto_selection respects sort order (uses first row after sort)."""
+        table = Table(
+            cache_id="test_autoselect_sort",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            interactivity={"selected_id": "id"},
+            pagination_identifier="test_page",
+        )
+
+        # Sort by mass descending - row with id=5 (mass=900.9) should be first
+        result = table._prepare_vue_data({
+            "test_page": {"sort_column": "mass", "sort_dir": "desc"}
+        })
+
+        assert "_auto_selection" in result
+        assert result["_auto_selection"] == {"selected_id": 5}
+
+
 class TestComponentVueArgsKeys:
     """Tests verifying Vue component args have required keys."""
 

@@ -16,6 +16,13 @@ _DEBUG_HASH_TRACKING = os.environ.get("SVC_DEBUG_HASH", "").lower() == "true"
 _DEBUG_STATE_SYNC = os.environ.get("SVC_DEBUG_STATE", "").lower() == "true"
 _logger = logging.getLogger(__name__)
 
+# Numeric data types for type conversion during selection validation
+NUMERIC_DTYPES = (
+    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+    pl.Float32, pl.Float64,
+)
+
 
 def _make_hashable(value: Any) -> Any:
     """
@@ -330,6 +337,104 @@ def get_vue_component_function():
     return _vue_component_func
 
 
+def _validate_interactivity_selections(
+    component: "BaseComponent",
+    state_manager: "StateManager",
+    state: Dict[str, Any],
+) -> bool:
+    """
+    Validate that interactivity selections still exist in filtered data.
+
+    When an external filter changes, the currently selected value may no longer
+    exist in the filtered dataset. This function checks each interactivity
+    selection and clears it if invalid.
+
+    Args:
+        component: The component to validate selections for
+        state_manager: StateManager to clear invalid selections
+        state: Current state dict (already has filter values)
+
+    Returns:
+        True if any selection was cleared (state changed), False otherwise
+    """
+    interactivity = getattr(component, "_interactivity", None)
+    if not interactivity:
+        return False
+
+    filters = getattr(component, "_filters", None) or {}
+    filter_defaults = getattr(component, "_filter_defaults", None) or {}
+
+    # Get the preprocessed data
+    preprocessed = getattr(component, "_preprocessed_data", None)
+    if preprocessed is not None:
+        data = preprocessed.get("data")
+    else:
+        data = None
+    if data is None:
+        data = getattr(component, "_raw_data", None)
+    if data is None:
+        # Component doesn't have data we can validate against
+        return False
+
+    # Ensure LazyFrame
+    if isinstance(data, pl.DataFrame):
+        data = data.lazy()
+
+    # Apply filters to get the filtered dataset
+    for identifier, column in filters.items():
+        selected_value = state.get(identifier)
+        if selected_value is None and identifier in filter_defaults:
+            selected_value = filter_defaults[identifier]
+
+        if selected_value is None:
+            # Awaiting filter - no data to validate against
+            return False
+
+        # Convert float to int for integer columns (type mismatch handling)
+        if isinstance(selected_value, float) and selected_value.is_integer():
+            selected_value = int(selected_value)
+
+        data = data.filter(pl.col(column) == selected_value)
+
+    # Validate each interactivity selection against filtered data
+    state_changed = False
+    schema = data.collect_schema()
+
+    for identifier, column in interactivity.items():
+        selected_value = state.get(identifier)
+        if selected_value is None:
+            continue  # No selection to validate
+
+        if column not in schema.names():
+            continue  # Column doesn't exist
+
+        # Type conversion for numeric columns
+        col_dtype = schema[column]
+        if col_dtype in NUMERIC_DTYPES:
+            if isinstance(selected_value, float) and selected_value.is_integer():
+                selected_value = int(selected_value)
+
+        # Check if value exists in filtered data (efficient: only fetch 1 row)
+        exists = (
+            data.filter(pl.col(column) == selected_value)
+            .head(1)
+            .collect()
+            .height > 0
+        )
+
+        if not exists:
+            # Selection is invalid - clear it
+            state_manager.set_selection(identifier, None)
+            state_changed = True
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Cleared invalid selection: "
+                    f"{identifier}={selected_value} not in filtered data"
+                )
+
+    return state_changed
+
+
 def render_component(
     component: "BaseComponent",
     state_manager: "StateManager",
@@ -522,6 +627,15 @@ def render_component(
             awaiting_filter = True
             break
 
+    # === Validate interactivity selections BEFORE preparing data ===
+    # When filter changes, the current selection may no longer exist
+    # in the filtered data. Clear it so auto-selection can kick in.
+    if not awaiting_filter:
+        if _validate_interactivity_selections(component, state_manager, state):
+            state_changed = True
+            # Refresh state after clearing invalid selections
+            state = state_manager.get_state_for_vue()
+
     if not awaiting_filter:
         # Extract state keys that affect this component's data
         state_keys = set(component.get_state_dependencies())
@@ -547,6 +661,14 @@ def render_component(
         vue_data, data_hash = _prepare_vue_data_cached(
             component, component_id, filter_state_hashable, relevant_state
         )
+
+        # Apply auto-selection from first row (for tables with interactivity)
+        # This ensures downstream components receive data when a filter changes
+        auto_selection = vue_data.pop("_auto_selection", {})
+        for identifier, value in auto_selection.items():
+            if state_manager.get_selection(identifier) is None:
+                state_manager.set_selection(identifier, value)
+                state_changed = True
 
         # Check if Python overrode state during _prepare_vue_data
         # (e.g., table.py sets page to last page after sort)

@@ -510,6 +510,65 @@ class TestSequenceViewCacheReconstruction:
                 cache_path=str(temp_cache_dir),
             )
 
+    def test_sequenceview_filter_defaults_auto_populated_creation(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Test that _filter_defaults is auto-populated from _filters in creation mode."""
+        cache_id = "test_sv_filter_defaults_creation"
+
+        sv = SequenceView(
+            cache_id=cache_id,
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id", "sequence": "sequence_id"},
+        )
+
+        # _filter_defaults should exist and contain all filter identifiers
+        assert hasattr(sv, "_filter_defaults"), (
+            "SequenceView should have _filter_defaults attribute"
+        )
+        assert "spectrum" in sv._filter_defaults, "spectrum should be in filter_defaults"
+        assert "sequence" in sv._filter_defaults, "sequence should be in filter_defaults"
+        assert sv._filter_defaults["spectrum"] is None
+        assert sv._filter_defaults["sequence"] is None
+
+    def test_sequenceview_filter_defaults_auto_populated_reconstruction(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Test that _filter_defaults is auto-populated from _filters after cache reconstruction."""
+        cache_id = "test_sv_filter_defaults_reconstruction"
+
+        # Create component with filters
+        SequenceView(
+            cache_id=cache_id,
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+        )
+
+        # Reconstruct from cache only
+        reconstructed = SequenceView(
+            cache_id=cache_id,
+            cache_path=str(temp_cache_dir),
+        )
+
+        # _filter_defaults should be auto-populated even after reconstruction
+        assert hasattr(reconstructed, "_filter_defaults"), (
+            "Reconstructed should have _filter_defaults"
+        )
+        assert "spectrum" in reconstructed._filter_defaults, (
+            "spectrum should be in filter_defaults"
+        )
+        assert reconstructed._filter_defaults["spectrum"] is None
+
 
 class TestDataRequiredForConfiguration:
     """Tests verifying that configuration arguments require data."""

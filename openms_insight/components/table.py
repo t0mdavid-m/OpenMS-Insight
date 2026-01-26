@@ -603,6 +603,7 @@ class Table(BaseComponent):
                         "total_rows": 0,
                         "total_pages": 0,
                     },
+                    "_auto_selection": {},  # No data = no auto-selection
                 }
 
             # Convert float to int for integer columns (JS numbers come as floats)
@@ -849,6 +850,22 @@ class Table(BaseComponent):
         # Clamp page to valid range
         page = max(1, min(page, total_pages))
 
+        # Compute auto-selection from first row (before pagination)
+        # This provides the first row's values for interactivity columns
+        # so downstream components can receive initial data when filters change
+        auto_selection: Dict[str, Any] = {}
+        if self._interactivity and total_rows > 0:
+            # Get the first row of sorted/filtered data
+            first_row = data.head(1).collect()
+            if first_row.height > 0:
+                for identifier, column in self._interactivity.items():
+                    if column in first_row.columns:
+                        value = first_row[column][0]
+                        # Convert numpy/polars types to Python types for JSON
+                        if hasattr(value, "item"):
+                            value = value.item()
+                        auto_selection[identifier] = value
+
         # Slice to current page
         offset = (page - 1) * page_size
         df_polars = data.slice(offset, page_size).collect()
@@ -868,6 +885,7 @@ class Table(BaseComponent):
                 "sort_column": sort_column,
                 "sort_dir": sort_dir,
             },
+            "_auto_selection": auto_selection,
         }
 
         if navigate_to_page is not None:
