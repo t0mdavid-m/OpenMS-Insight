@@ -1,6 +1,7 @@
 """Table component using Tabulator.js."""
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import polars as pl
@@ -563,8 +564,13 @@ class Table(BaseComponent):
             elif filter_type == "<=":
                 data = data.filter(pl.col(field) <= value)
             elif filter_type == "regex":
-                # Text search with regex
-                data = data.filter(pl.col(field).str.contains(value, literal=False))
+                # Text search with regex - invalid patterns match nothing
+                try:
+                    re.compile(value)
+                    data = data.filter(pl.col(field).str.contains(value, literal=False))
+                except re.error:
+                    # Invalid regex pattern - filter to empty result
+                    data = data.filter(pl.lit(False))
 
         # Apply server-side sort
         if sort_column:

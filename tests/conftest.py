@@ -152,13 +152,15 @@ def sample_categorical_heatmap_data() -> pl.LazyFrame:
 @pytest.fixture
 def pagination_test_data() -> pl.LazyFrame:
     """
-    Create 500-row synthetic dataset for pagination tests.
+    Create 500-row synthetic dataset for pagination and filtering tests.
 
     Schema:
         - id: Row identifier (0-499)
         - value: String values (item_0, item_1, ...)
         - score: Float values (0.0, 1.5, 3.0, ...)
         - category: Categorical column (A/B/C/D/E cycling)
+        - description: Text column for regex testing
+        - priority: Numeric column with few unique values (1-5, becomes categorical)
     """
     return pl.LazyFrame(
         {
@@ -166,5 +168,10 @@ def pagination_test_data() -> pl.LazyFrame:
             "value": [f"item_{i}" for i in range(500)],
             "score": [i * 1.5 for i in range(500)],
             "category": ["A", "B", "C", "D", "E"] * 100,
+            "description": [
+                f"Description for row {i} with {'even' if i % 2 == 0 else 'odd'} index"
+                for i in range(500)
+            ],
+            "priority": [i % 5 + 1 for i in range(500)],
         }
     )
