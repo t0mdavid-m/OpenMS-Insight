@@ -12,6 +12,20 @@ from ..preprocessing.filtering import compute_dataframe_hash
 
 logger = logging.getLogger(__name__)
 
+# Numeric data types for dtype checking
+NUMERIC_DTYPES = (
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.Int64,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    pl.UInt64,
+    pl.Float32,
+    pl.Float64,
+)
+
 # Session state key for tracking last rendered selection per table component
 _LAST_SELECTION_KEY = "_svc_table_last_selection"
 # Session state key for tracking last sort/filter state per table component
@@ -651,32 +665,38 @@ class Table(BaseComponent):
             go_to_field = go_to_request.get("field")
             go_to_value = go_to_request.get("value")
             if go_to_field and go_to_value is not None:
-                # Try to convert to number if applicable
-                try:
-                    go_to_value = float(go_to_value)
-                    if go_to_value.is_integer():
-                        go_to_value = int(go_to_value)
-                except (ValueError, TypeError):
-                    pass
+                # Only convert to numeric if the target column is numeric
+                schema = data.collect_schema()
+                if go_to_field in schema and schema[go_to_field] in NUMERIC_DTYPES:
+                    try:
+                        go_to_value = float(go_to_value)
+                        if go_to_value.is_integer():
+                            go_to_value = int(go_to_value)
+                    except (ValueError, TypeError):
+                        # Non-numeric string for numeric column - mark as not found
+                        go_to_not_found = True
+                # If column is string (Utf8), keep go_to_value as-is
 
-                # Find the row with row_number
-                search_result = (
-                    data.with_row_index("_row_num")
-                    .filter(pl.col(go_to_field) == go_to_value)
-                    .select("_row_num")
-                    .head(1)
-                    .collect()
-                )
+                # Only search if we have a valid value (not already marked as not found)
+                if not go_to_not_found:
+                    # Find the row with row_number
+                    search_result = (
+                        data.with_row_index("_row_num")
+                        .filter(pl.col(go_to_field) == go_to_value)
+                        .select("_row_num")
+                        .head(1)
+                        .collect()
+                    )
 
-                if len(search_result) > 0:
-                    row_num = search_result["_row_num"][0]
-                    target_page = (row_num // page_size) + 1
-                    navigate_to_page = target_page
-                    target_row_index = row_num % page_size
-                    page = target_page  # Jump to target page
-                else:
-                    # Row not found - set flag for Vue to show "not found" feedback
-                    go_to_not_found = True
+                    if len(search_result) > 0:
+                        row_num = search_result["_row_num"][0]
+                        target_page = (row_num // page_size) + 1
+                        navigate_to_page = target_page
+                        target_row_index = row_num % page_size
+                        page = target_page  # Jump to target page
+                    else:
+                        # Row not found - set flag for Vue to show "not found" feedback
+                        go_to_not_found = True
 
         # === Selection and Sort/Filter based navigation ===
         # PURPOSE: When user sorts/filters, find where the selected row ended up and navigate there
@@ -740,12 +760,28 @@ class Table(BaseComponent):
                 for identifier, column in self._interactivity.items():
                     selected_value = state.get(identifier)
                     if selected_value is not None:
-                        # Convert float to int if needed (JS numbers come as floats)
-                        if (
-                            isinstance(selected_value, float)
-                            and selected_value.is_integer()
-                        ):
-                            selected_value = int(selected_value)
+                        # Type conversion based on column dtype (same logic as go-to)
+                        schema = data.collect_schema()
+                        if column in schema:
+                            col_dtype = schema[column]
+                            if col_dtype in NUMERIC_DTYPES:
+                                # Column is numeric - convert value to numeric if possible
+                                if isinstance(selected_value, str):
+                                    try:
+                                        selected_value = float(selected_value)
+                                        if selected_value.is_integer():
+                                            selected_value = int(selected_value)
+                                    except (ValueError, TypeError):
+                                        pass
+                                elif (
+                                    isinstance(selected_value, float)
+                                    and selected_value.is_integer()
+                                ):
+                                    selected_value = int(selected_value)
+                            else:
+                                # Column is string - convert value to string
+                                if not isinstance(selected_value, str):
+                                    selected_value = str(selected_value)
 
                         # SEARCH for the selected row in the sorted/filtered data
                         # with_row_index adds position so we know which page it's on
