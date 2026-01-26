@@ -21,7 +21,7 @@ Test Categories:
 """
 
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import polars as pl
@@ -30,12 +30,9 @@ import pytest
 from openms_insight import Table
 from openms_insight.core.state import StateManager
 from openms_insight.rendering.bridge import (
-    _COMPONENT_DATA_CACHE_KEY,
-    _VUE_ECHOED_HASH_KEY,
     _get_component_cache,
     render_component,
 )
-
 
 # =============================================================================
 # Mock Infrastructure
@@ -592,7 +589,7 @@ class TestTabulatorCacheBehavior:
 
         # Check cache structure
         cache = _get_component_cache()
-        component_id = f"TabulatorTable:svc_test_table_{hash('{}')}"[:50]
+        _component_id = f"TabulatorTable:svc_test_table_{hash('{}')}"[:50]  # noqa: F841
 
         # Find the cache entry (key includes hash)
         cache_keys = [k for k in cache.keys() if "test_table" in k]
@@ -674,7 +671,7 @@ class TestTabulatorCounterLogic:
 
         # Python updates to page 3
         state_manager.set_selection("test_page", {"page": 3, "page_size": 100})
-        new_counter = state_manager.pagination_counter
+        _new_counter = state_manager.pagination_counter  # noqa: F841
 
         # Vue sends stale update (page 2) with old counter
         stale_vue_state = {
@@ -684,7 +681,7 @@ class TestTabulatorCounterLogic:
             "test_page": {"page": 2, "page_size": 100},
         }
 
-        modified = state_manager.update_from_vue(stale_vue_state)
+        _modified = state_manager.update_from_vue(stale_vue_state)  # noqa: F841
 
         # Stale update should be rejected
         assert state_manager.get_selection("test_page")["page"] == 3
