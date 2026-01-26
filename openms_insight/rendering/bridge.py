@@ -130,10 +130,27 @@ def clear_component_annotations() -> None:
         st.session_state[_COMPONENT_ANNOTATIONS_KEY].clear()
 
 
+def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
+    """
+    Compute hash of component's dynamic annotations, if any.
+
+    Args:
+        component: The component to check for annotations
+
+    Returns:
+        Short hash string if annotations exist, None otherwise
+    """
+    annotations = getattr(component, "_dynamic_annotations", None)
+    if annotations is None:
+        return None
+    # Hash the sorted keys (sufficient for change detection)
+    return hashlib.md5(str(sorted(annotations.keys())).encode()).hexdigest()[:8]
+
+
 def _get_cached_vue_data(
     component_id: str,
     filter_state_hashable: Tuple[Tuple[str, Any], ...],
-) -> Optional[Tuple[Dict[str, Any], str]]:
+) -> Optional[Tuple[Dict[str, Any], str, Optional[str]]]:
     """
     Get cached Vue data for component if filter state matches.
 
@@ -145,13 +162,19 @@ def _get_cached_vue_data(
         filter_state_hashable: Current filter state (for cache validation)
 
     Returns:
-        Tuple of (vue_data, data_hash) if cache hit, None otherwise
+        Tuple of (vue_data, data_hash, annotation_hash) if cache hit, None otherwise
     """
     cache = _get_component_cache()
     if component_id in cache:
-        cached_state, vue_data, data_hash = cache[component_id]
+        entry = cache[component_id]
+        # Support both old (3-tuple) and new (4-tuple) format
+        if len(entry) == 4:
+            cached_state, vue_data, data_hash, ann_hash = entry
+        else:
+            cached_state, vue_data, data_hash = entry
+            ann_hash = None
         if cached_state == filter_state_hashable:
-            return (vue_data, data_hash)
+            return (vue_data, data_hash, ann_hash)
     return None
 
 
@@ -160,6 +183,7 @@ def _set_cached_vue_data(
     filter_state_hashable: Tuple[Tuple[str, Any], ...],
     vue_data: Dict[str, Any],
     data_hash: str,
+    ann_hash: Optional[str] = None,
 ) -> None:
     """
     Cache Vue data for component, replacing any previous entry.
@@ -171,9 +195,10 @@ def _set_cached_vue_data(
         filter_state_hashable: Current filter state
         vue_data: Data to cache
         data_hash: Hash of the data
+        ann_hash: Hash of dynamic annotations (if any)
     """
     cache = _get_component_cache()
-    cache[component_id] = (filter_state_hashable, vue_data, data_hash)
+    cache[component_id] = (filter_state_hashable, vue_data, data_hash, ann_hash)
 
 
 def _prepare_vue_data_cached(
@@ -217,7 +242,7 @@ def _prepare_vue_data_cached(
         )
 
     if cached is not None:
-        cached_data, cached_hash = cached
+        cached_data, cached_hash, _ = cached  # Ignore cached annotation hash here
 
         if has_dynamic_annotations:
             # Cache hit but need to re-apply annotations (they may have changed)
@@ -240,6 +265,9 @@ def _prepare_vue_data_cached(
     # Cache miss - compute data
     vue_data = component._prepare_vue_data(state_dict)
 
+    # Compute annotation hash for cache storage
+    ann_hash = _compute_annotation_hash(component)
+
     if has_dynamic_annotations:
         # Store BASE data (without dynamic annotation columns) in cache
         if hasattr(component, "_strip_dynamic_columns"):
@@ -248,7 +276,7 @@ def _prepare_vue_data_cached(
             # Fallback: store without _plotConfig (may have stale column refs)
             base_data = {k: v for k, v in vue_data.items() if k != "_plotConfig"}
         base_hash = _hash_data(base_data)
-        _set_cached_vue_data(component_id, filter_state_hashable, base_data, base_hash)
+        _set_cached_vue_data(component_id, filter_state_hashable, base_data, base_hash, ann_hash)
 
         # Return full data with annotations
         data_hash = _hash_data(vue_data)
@@ -256,7 +284,7 @@ def _prepare_vue_data_cached(
     else:
         # Store complete data in cache
         data_hash = _hash_data(vue_data)
-        _set_cached_vue_data(component_id, filter_state_hashable, vue_data, data_hash)
+        _set_cached_vue_data(component_id, filter_state_hashable, vue_data, data_hash, ann_hash)
         return vue_data, data_hash
 
 
@@ -377,16 +405,28 @@ def render_component(
     # Check if cached data is VALID for current state
     # KEY FIX: Only send data when cache matches current state
     # - Before: Always sent cached data, even if stale (page 38 when Vue wants page 1)
-    # - Now: Only send if cache matches current state
+    # - Now: Only send if cache matches current state AND annotation state matches
     cache_valid = False
+    current_ann_hash = _compute_annotation_hash(component)
+
     if cached_entry is not None:
-        cached_state, cached_data, cached_hash = cached_entry
-        cache_valid = (cached_state == current_filter_state)
+        # Support both old (3-tuple) and new (4-tuple) cache format
+        if len(cached_entry) == 4:
+            cached_state, cached_data, cached_hash, cached_ann_hash = cached_entry
+        else:
+            cached_state, cached_data, cached_hash = cached_entry
+            cached_ann_hash = None
+
+        # Cache valid only if BOTH filter state AND annotation state match
+        filter_state_matches = (cached_state == current_filter_state)
+        ann_state_matches = (cached_ann_hash == current_ann_hash)
+        cache_valid = filter_state_matches and ann_state_matches
+
         if _DEBUG_STATE_SYNC:
             _logger.warning(
                 f"[Bridge:{component._cache_id}] Phase1: cache_valid={cache_valid}, "
-                f"cached_state={cached_state[:2] if cached_state else None}..., "
-                f"current_state={current_filter_state[:2] if current_filter_state else None}..."
+                f"filter_match={filter_state_matches}, ann_match={ann_state_matches}, "
+                f"cached_ann={cached_ann_hash}, current_ann={current_ann_hash}"
             )
 
     # Build payload - only send data if cache is valid for current state
@@ -538,8 +578,8 @@ def render_component(
             else:
                 converted_data[data_key] = value
 
-        # Store in cache for next render
-        cache[component_id] = (filter_state_hashable, converted_data, data_hash)
+        # Store in cache for next render (include annotation hash for validity check)
+        cache[component_id] = (filter_state_hashable, converted_data, data_hash, current_ann_hash)
 
         # If cache was invalid at Phase 1, we didn't send data to Vue (dataChanged=False).
         # Trigger a rerun so the newly cached data gets sent on the next render.
