@@ -1598,7 +1598,10 @@ class TestLinePlotSelectionClearing:
         state_manager.set_selection("spectrum", 1)
         state_manager.set_selection("selected_peak", 10)  # scan_id=1 peak
 
-        mock_streamlit_bridge["vue_func"].return_value = {"id": session_id, "counter": 0}
+        mock_streamlit_bridge["vue_func"].return_value = {
+            "id": session_id,
+            "counter": 0,
+        }
         render_component(lineplot_with_interactivity, state_manager)
 
         # Verify initial selection is set
@@ -1628,7 +1631,10 @@ class TestLinePlotSelectionClearing:
         state_manager.set_selection("spectrum", 1)
         state_manager.set_selection("selected_peak", 10)  # scan_id=1 peak
 
-        mock_streamlit_bridge["vue_func"].return_value = {"id": session_id, "counter": 0}
+        mock_streamlit_bridge["vue_func"].return_value = {
+            "id": session_id,
+            "counter": 0,
+        }
         render_component(lineplot_with_interactivity, state_manager)
 
         # Re-render with same filter
@@ -1653,7 +1659,10 @@ class TestLinePlotSelectionClearing:
         state_manager.set_selection("spectrum", 1)
         state_manager.set_selection("selected_peak", 10)
 
-        mock_streamlit_bridge["vue_func"].return_value = {"id": session_id, "counter": 0}
+        mock_streamlit_bridge["vue_func"].return_value = {
+            "id": session_id,
+            "counter": 0,
+        }
         render_component(lineplot_with_interactivity, state_manager)
 
         mock_streamlit_bridge["rerun"].reset_mock()

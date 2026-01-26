@@ -65,9 +65,7 @@ class TestStreamingTablePagination:
         assert pagination["total_rows"] == 1000
         assert pagination["total_pages"] == 10
 
-    def test_page_navigation(
-        self, mock_streamlit, temp_cache_dir, large_table_data
-    ):
+    def test_page_navigation(self, mock_streamlit, temp_cache_dir, large_table_data):
         """Verify correct data is returned for different pages."""
         table = Table(
             cache_id="test_streaming_navigation",
@@ -88,9 +86,7 @@ class TestStreamingTablePagination:
         assert result["tableData"]["id"].iloc[-1] == 299
         assert result["_pagination"]["page"] == 3
 
-    def test_last_page_partial_rows(
-        self, mock_streamlit, temp_cache_dir
-    ):
+    def test_last_page_partial_rows(self, mock_streamlit, temp_cache_dir):
         """Verify last page returns correct number of rows when not full."""
         # 150 rows with page_size=100 means page 2 has only 50 rows
         data = pl.LazyFrame(
@@ -217,7 +213,9 @@ class TestStreamingTableFilters:
 
         # Categories A and B = 2/3 of data = ~667 rows
         # With rounding: (1000 // 3) * 2 + (1000 % 3) if remainder covers A or B
-        expected_rows = sum(1 for i in range(1000) if ["A", "B", "C"][i % 3] in ["A", "B"])
+        expected_rows = sum(
+            1 for i in range(1000) if ["A", "B", "C"][i % 3] in ["A", "B"]
+        )
         assert result["_pagination"]["total_rows"] == expected_rows
 
     def test_column_filter_numeric_range(

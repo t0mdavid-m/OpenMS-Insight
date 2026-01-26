@@ -701,9 +701,9 @@ class TestTableAutoSelection:
         )
 
         # Sort by mass descending - row with id=5 (mass=900.9) should be first
-        result = table._prepare_vue_data({
-            "test_page": {"sort_column": "mass", "sort_dir": "desc"}
-        })
+        result = table._prepare_vue_data(
+            {"test_page": {"sort_column": "mass", "sort_dir": "desc"}}
+        )
 
         assert "_auto_selection" in result
         assert result["_auto_selection"] == {"selected_id": 5}

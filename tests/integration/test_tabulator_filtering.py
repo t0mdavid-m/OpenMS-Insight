@@ -175,9 +175,7 @@ class TestColumnFilterCategorical:
         table_data = result["tableData"]
         assert all(table_data["category"].isin(["A", "B"]))
 
-    def test_categorical_all_values(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_categorical_all_values(self, filter_table_component, state_manager_filter):
         """
         Filter including all categories returns all data.
 
@@ -189,7 +187,11 @@ class TestColumnFilterCategorical:
             create_filter_state(
                 page=1,
                 column_filters=[
-                    {"field": "category", "type": "in", "value": ["A", "B", "C", "D", "E"]}
+                    {
+                        "field": "category",
+                        "type": "in",
+                        "value": ["A", "B", "C", "D", "E"],
+                    }
                 ],
             )
         )
@@ -198,9 +200,7 @@ class TestColumnFilterCategorical:
 
         assert result["_pagination"]["total_rows"] == 500
 
-    def test_categorical_no_match(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_categorical_no_match(self, filter_table_component, state_manager_filter):
         """
         Filter by non-existent value returns empty result.
 
@@ -261,9 +261,7 @@ class TestColumnFilterNumeric:
     and correct row filtering for numeric columns.
     """
 
-    def test_numeric_min_bound_only(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_numeric_min_bound_only(self, filter_table_component, state_manager_filter):
         """
         Filter with >= only applies lower bound.
 
@@ -287,9 +285,7 @@ class TestColumnFilterNumeric:
         table_data = result["tableData"]
         assert all(table_data["score"] >= 600.0)
 
-    def test_numeric_max_bound_only(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_numeric_max_bound_only(self, filter_table_component, state_manager_filter):
         """
         Filter with <= only applies upper bound.
 
@@ -341,9 +337,7 @@ class TestColumnFilterNumeric:
         table_data = result["tableData"]
         assert all((table_data["score"] >= 150.0) & (table_data["score"] <= 300.0))
 
-    def test_numeric_range_no_match(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_numeric_range_no_match(self, filter_table_component, state_manager_filter):
         """
         Range that excludes all rows returns empty result.
 
@@ -366,9 +360,7 @@ class TestColumnFilterNumeric:
         assert result["_pagination"]["total_rows"] == 0
         assert len(result["tableData"]) == 0
 
-    def test_numeric_at_boundary(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_numeric_at_boundary(self, filter_table_component, state_manager_filter):
         """
         Values exactly at boundaries are included (inclusive).
 
@@ -436,9 +428,7 @@ class TestColumnFilterText:
     for text column filtering.
     """
 
-    def test_text_simple_pattern(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_text_simple_pattern(self, filter_table_component, state_manager_filter):
         """
         Simple substring pattern matches correctly.
 
@@ -450,7 +440,9 @@ class TestColumnFilterText:
         state.update(
             create_filter_state(
                 page=1,
-                column_filters=[{"field": "description", "type": "regex", "value": "even"}],
+                column_filters=[
+                    {"field": "description", "type": "regex", "value": "even"}
+                ],
             )
         )
 
@@ -461,9 +453,7 @@ class TestColumnFilterText:
         table_data = result["tableData"]
         assert all(table_data["id"] % 2 == 0)
 
-    def test_text_regex_pattern(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_text_regex_pattern(self, filter_table_component, state_manager_filter):
         """
         Regex with special characters works correctly.
 
@@ -488,9 +478,7 @@ class TestColumnFilterText:
         table_data = result["tableData"]
         assert all(table_data["id"] < 10)
 
-    def test_text_case_sensitive(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_text_case_sensitive(self, filter_table_component, state_manager_filter):
         """
         Text search is case-sensitive by default.
 
@@ -501,7 +489,9 @@ class TestColumnFilterText:
         state.update(
             create_filter_state(
                 page=1,
-                column_filters=[{"field": "description", "type": "regex", "value": "EVEN"}],
+                column_filters=[
+                    {"field": "description", "type": "regex", "value": "EVEN"}
+                ],
             )
         )
 
@@ -510,9 +500,7 @@ class TestColumnFilterText:
         # No matches - "EVEN" not in description (only "even")
         assert result["_pagination"]["total_rows"] == 0
 
-    def test_text_no_match(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_text_no_match(self, filter_table_component, state_manager_filter):
         """
         Pattern that matches nothing returns empty result.
 
@@ -525,7 +513,11 @@ class TestColumnFilterText:
             create_filter_state(
                 page=1,
                 column_filters=[
-                    {"field": "description", "type": "regex", "value": "nonexistent_pattern_xyz"}
+                    {
+                        "field": "description",
+                        "type": "regex",
+                        "value": "nonexistent_pattern_xyz",
+                    }
                 ],
             )
         )
@@ -550,7 +542,9 @@ class TestColumnFilterText:
             create_filter_state(
                 page=1,
                 page_size=50,
-                column_filters=[{"field": "description", "type": "regex", "value": "odd"}],
+                column_filters=[
+                    {"field": "description", "type": "regex", "value": "odd"}
+                ],
             )
         )
 
@@ -698,9 +692,7 @@ class TestColumnFilterMultiple:
         assert all(table_data["score"] <= 150.0)
         assert all(table_data["id"] % 2 == 0)
 
-    def test_progressive_filtering(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_progressive_filtering(self, filter_table_component, state_manager_filter):
         """
         Adding filters progressively reduces rows.
 
@@ -719,7 +711,9 @@ class TestColumnFilterMultiple:
         state.update(
             create_filter_state(
                 page=1,
-                column_filters=[{"field": "category", "type": "in", "value": ["A", "B"]}],
+                column_filters=[
+                    {"field": "category", "type": "in", "value": ["A", "B"]}
+                ],
             )
         )
         result1 = filter_table_component._prepare_vue_data(state)
@@ -847,9 +841,7 @@ class TestColumnFilterWithPagination:
         # Different data than page 1
         assert result1["tableData"]["id"].iloc[0] != result2["tableData"]["id"].iloc[0]
 
-    def test_filter_with_sort(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_filter_with_sort(self, filter_table_component, state_manager_filter):
         """
         Filter and sort work together.
 
@@ -1051,9 +1043,7 @@ class TestColumnFilterClear:
     and pagination metadata.
     """
 
-    def test_clear_all_filters(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_clear_all_filters(self, filter_table_component, state_manager_filter):
         """
         Removing all column_filters returns all rows.
 
@@ -1078,9 +1068,7 @@ class TestColumnFilterClear:
 
         assert result_cleared["_pagination"]["total_rows"] == 500
 
-    def test_clear_single_filter(
-        self, filter_table_component, state_manager_filter
-    ):
+    def test_clear_single_filter(self, filter_table_component, state_manager_filter):
         """
         Removing one of multiple filters keeps other filters active.
 

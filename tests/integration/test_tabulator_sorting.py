@@ -121,9 +121,7 @@ class TestSortBasic:
     in both ascending and descending directions.
     """
 
-    def test_sort_numeric_ascending(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_numeric_ascending(self, sort_table_component, state_manager_sort):
         """
         Sort numeric column (score) in ascending order.
 
@@ -132,9 +130,7 @@ class TestSortBasic:
             - sort_column and sort_dir metadata are correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="score", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=1, sort_column="score", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -146,9 +142,7 @@ class TestSortBasic:
         assert result["_pagination"]["sort_column"] == "score"
         assert result["_pagination"]["sort_dir"] == "asc"
 
-    def test_sort_numeric_descending(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_numeric_descending(self, sort_table_component, state_manager_sort):
         """
         Sort numeric column (score) in descending order.
 
@@ -157,9 +151,7 @@ class TestSortBasic:
             - sort_column and sort_dir metadata are correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="score", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="score", sort_dir="desc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -171,9 +163,7 @@ class TestSortBasic:
         assert result["_pagination"]["sort_column"] == "score"
         assert result["_pagination"]["sort_dir"] == "desc"
 
-    def test_sort_text_ascending(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_text_ascending(self, sort_table_component, state_manager_sort):
         """
         Sort text column (value) in ascending order.
 
@@ -182,9 +172,7 @@ class TestSortBasic:
             - sort_column and sort_dir metadata are correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="value", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=1, sort_column="value", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -196,9 +184,7 @@ class TestSortBasic:
         assert result["_pagination"]["sort_column"] == "value"
         assert result["_pagination"]["sort_dir"] == "asc"
 
-    def test_sort_text_descending(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_text_descending(self, sort_table_component, state_manager_sort):
         """
         Sort text column (value) in descending order.
 
@@ -207,9 +193,7 @@ class TestSortBasic:
             - sort_column and sort_dir metadata are correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="value", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="value", sort_dir="desc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -221,9 +205,7 @@ class TestSortBasic:
         assert result["_pagination"]["sort_column"] == "value"
         assert result["_pagination"]["sort_dir"] == "desc"
 
-    def test_sort_categorical_ascending(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_categorical_ascending(self, sort_table_component, state_manager_sort):
         """
         Sort categorical column (category) in ascending order.
 
@@ -232,9 +214,7 @@ class TestSortBasic:
             - sort_column and sort_dir metadata are correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="category", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=1, sort_column="category", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -257,9 +237,7 @@ class TestSortBasic:
             - sort_column and sort_dir metadata are correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="category", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="category", sort_dir="desc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -335,9 +313,7 @@ class TestSortNoSort:
         ids = result["tableData"]["id"].tolist()
         assert ids == list(range(100))
 
-    def test_none_sort_column_no_effect(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_none_sort_column_no_effect(self, sort_table_component, state_manager_sort):
         """
         None sort_column explicitly has no effect on order.
 
@@ -387,9 +363,7 @@ class TestSortMetadata:
             - sort_dir is "asc"
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="id", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=1, sort_column="id", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -407,18 +381,14 @@ class TestSortMetadata:
             - sort_dir is "desc"
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="priority", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="priority", sort_dir="desc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
         assert result["_pagination"]["sort_column"] == "priority"
         assert result["_pagination"]["sort_dir"] == "desc"
 
-    def test_sort_metadata_no_sort(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_metadata_no_sort(self, sort_table_component, state_manager_sort):
         """
         Sort metadata shows None/default when no sort applied.
 
@@ -448,9 +418,7 @@ class TestSortWithPagination:
     when navigating, and pagination metadata remains accurate.
     """
 
-    def test_sort_persists_across_pages(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_persists_across_pages(self, sort_table_component, state_manager_sort):
         """
         Sort order persists when navigating between pages.
 
@@ -461,15 +429,11 @@ class TestSortWithPagination:
         state = state_manager_sort.get_state_for_vue()
 
         # Page 1 sorted descending by score
-        state.update(
-            create_sort_state(page=1, sort_column="score", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="score", sort_dir="desc"))
         result1 = sort_table_component._prepare_vue_data(state)
 
         # Page 2 with same sort
-        state.update(
-            create_sort_state(page=2, sort_column="score", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=2, sort_column="score", sort_dir="desc"))
         result2 = sort_table_component._prepare_vue_data(state)
 
         # Last score on page 1 should be >= first score on page 2 (descending)
@@ -491,9 +455,7 @@ class TestSortWithPagination:
             - Page 3 data is sorted within itself
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=3, sort_column="score", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=3, sort_column="score", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -522,16 +484,12 @@ class TestSortWithPagination:
         state = state_manager_sort.get_state_for_vue()
 
         # Start with ascending sort on page 1
-        state.update(
-            create_sort_state(page=1, sort_column="score", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=1, sort_column="score", sort_dir="asc"))
         result1 = sort_table_component._prepare_vue_data(state)
         assert result1["tableData"]["score"].iloc[0] == 0.0  # Min score
 
         # Change to descending sort (simulating user changing sort)
-        state.update(
-            create_sort_state(page=1, sort_column="score", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="score", sort_dir="desc"))
         result2 = sort_table_component._prepare_vue_data(state)
 
         # First row should now have max score
@@ -553,9 +511,7 @@ class TestSortWithPagination:
         state = state_manager_sort.get_state_for_vue()
 
         # Sort by score ascending, request page 3
-        state.update(
-            create_sort_state(page=3, sort_column="score", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=3, sort_column="score", sort_dir="asc"))
         result = sort_table_component._prepare_vue_data(state)
 
         # Verify we're on page 3 with correct sort
@@ -563,9 +519,7 @@ class TestSortWithPagination:
         scores = result["tableData"]["score"].tolist()
         assert scores == sorted(scores)
 
-    def test_sort_total_pages_unchanged(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_total_pages_unchanged(self, sort_table_component, state_manager_sort):
         """
         Sorting does not change total page count.
 
@@ -579,18 +533,14 @@ class TestSortWithPagination:
         result_unsorted = sort_table_component._prepare_vue_data(state)
 
         # With sort
-        state.update(
-            create_sort_state(page=1, sort_column="score", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="score", sort_dir="desc"))
         result_sorted = sort_table_component._prepare_vue_data(state)
 
         # Total pages should be the same (500 rows / 100 page_size = 5 pages)
         assert result_unsorted["_pagination"]["total_pages"] == 5
         assert result_sorted["_pagination"]["total_pages"] == 5
 
-    def test_sort_page_size_unchanged(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_page_size_unchanged(self, sort_table_component, state_manager_sort):
         """
         Sorting does not affect page size.
 
@@ -621,9 +571,7 @@ class TestSortWithPagination:
             - sort_column and sort_dir metadata are correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=5, sort_column="score", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=5, sort_column="score", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -688,9 +636,7 @@ class TestSortWithFilters:
         assert result["_pagination"]["sort_dir"] == "desc"
         assert result["_pagination"]["total_rows"] == 100  # 100 category A rows
 
-    def test_sort_after_numeric_filter(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_after_numeric_filter(self, sort_table_component, state_manager_sort):
         """
         Sort applies correctly after numeric range filter.
 
@@ -726,9 +672,7 @@ class TestSortWithFilters:
         assert result["_pagination"]["sort_column"] == "id"
         assert result["_pagination"]["sort_dir"] == "desc"
 
-    def test_sort_after_text_filter(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_after_text_filter(self, sort_table_component, state_manager_sort):
         """
         Sort applies correctly after text/regex filter.
 
@@ -861,9 +805,7 @@ class TestSortEdgeCases:
     duplicate values, and invalid sort columns.
     """
 
-    def test_sort_empty_result_no_error(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_empty_result_no_error(self, sort_table_component, state_manager_sort):
         """
         Sort on empty filtered result doesn't raise error.
 
@@ -890,9 +832,7 @@ class TestSortEdgeCases:
         assert result["_pagination"]["sort_column"] == "score"
         assert result["_pagination"]["sort_dir"] == "asc"
 
-    def test_sort_single_row_result(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_single_row_result(self, sort_table_component, state_manager_sort):
         """
         Sort on single-row result works correctly.
 
@@ -922,9 +862,7 @@ class TestSortEdgeCases:
         assert result["_pagination"]["sort_column"] == "id"
         assert result["_pagination"]["sort_dir"] == "desc"
 
-    def test_sort_all_same_values(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_all_same_values(self, sort_table_component, state_manager_sort):
         """
         Sort on column where all filtered values are the same.
 
@@ -988,9 +926,7 @@ class TestSortColumnTypes:
     integer-based categorical columns.
     """
 
-    def test_sort_float_column_score(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_float_column_score(self, sort_table_component, state_manager_sort):
         """
         Sort float column (score) correctly.
 
@@ -999,9 +935,7 @@ class TestSortColumnTypes:
             - sort_column and sort_dir metadata correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="score", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=1, sort_column="score", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -1014,9 +948,7 @@ class TestSortColumnTypes:
         assert result["_pagination"]["sort_column"] == "score"
         assert result["_pagination"]["sort_dir"] == "asc"
 
-    def test_sort_integer_column_id(
-        self, sort_table_component, state_manager_sort
-    ):
+    def test_sort_integer_column_id(self, sort_table_component, state_manager_sort):
         """
         Sort integer column (id) correctly.
 
@@ -1025,9 +957,7 @@ class TestSortColumnTypes:
             - sort_column and sort_dir metadata correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="id", sort_dir="desc")
-        )
+        state.update(create_sort_state(page=1, sort_column="id", sort_dir="desc"))
 
         result = sort_table_component._prepare_vue_data(state)
 
@@ -1053,9 +983,7 @@ class TestSortColumnTypes:
             - sort_column and sort_dir metadata correct
         """
         state = state_manager_sort.get_state_for_vue()
-        state.update(
-            create_sort_state(page=1, sort_column="priority", sort_dir="asc")
-        )
+        state.update(create_sort_state(page=1, sort_column="priority", sort_dir="asc"))
 
         result = sort_table_component._prepare_vue_data(state)
 

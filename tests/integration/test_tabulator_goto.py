@@ -486,9 +486,7 @@ class TestGoToBasicNavigation:
         # id=350 is at position 50 within its page (350 % 100 = 50)
         assert result.get("_target_row_index") == 50
 
-    def test_go_to_with_string_value(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_with_string_value(self, goto_table_component, state_manager_goto):
         """
         Go-to works with string field values.
 
@@ -531,9 +529,7 @@ class TestGoToBasicNavigation:
         assert result.get("_navigate_to_page") == 4
         assert result.get("_target_row_index") == 50
 
-    def test_go_to_first_row(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_first_row(self, goto_table_component, state_manager_goto):
         """
         Go-to navigates correctly to the first row.
 
@@ -566,9 +562,7 @@ class TestGoToNotFound:
     the target value cannot be found in the data.
     """
 
-    def test_go_to_not_found_flag_set(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_not_found_flag_set(self, goto_table_component, state_manager_goto):
         """
         Not found flag is set when target value doesn't exist.
 
@@ -666,9 +660,7 @@ class TestGoToWithSorting:
     the current sort order.
     """
 
-    def test_go_to_with_ascending_sort(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_with_ascending_sort(self, goto_table_component, state_manager_goto):
         """
         Go-to works correctly with ascending sort.
 
@@ -690,9 +682,7 @@ class TestGoToWithSorting:
         assert "_navigate_to_page" in result
         assert "_target_row_index" in result
 
-    def test_go_to_with_descending_sort(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_with_descending_sort(self, goto_table_component, state_manager_goto):
         """
         Go-to works correctly with descending sort.
 
@@ -831,9 +821,7 @@ class TestGoToWithFilters:
         assert "_navigate_to_page" in result
         assert result.get("_go_to_not_found") is not True
 
-    def test_go_to_after_numeric_filter(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_after_numeric_filter(self, goto_table_component, state_manager_goto):
         """
         Go-to works within numerically filtered data.
 
@@ -881,9 +869,7 @@ class TestGoToWithFilters:
         assert result.get("_go_to_not_found") is True
         assert "_navigate_to_page" not in result
 
-    def test_go_to_with_filter_and_sort(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_with_filter_and_sort(self, goto_table_component, state_manager_goto):
         """
         Go-to works with both filter and sort active.
 
@@ -960,9 +946,7 @@ class TestGoToEdgeCases:
     Verifies handling of boundary conditions and special scenarios.
     """
 
-    def test_go_to_last_row(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_last_row(self, goto_table_component, state_manager_goto):
         """
         Go-to navigates to the last row correctly.
 
@@ -1004,9 +988,7 @@ class TestGoToEdgeCases:
         # Empty string won't match any "item_X" value
         assert result.get("_go_to_not_found") is True
 
-    def test_go_to_single_row_result(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_single_row_result(self, goto_table_component, state_manager_goto):
         """
         Go-to works when filter leaves only one row.
 
@@ -1030,9 +1012,7 @@ class TestGoToEdgeCases:
         assert result.get("_target_row_index") == 0
         assert result["_pagination"]["total_rows"] == 1
 
-    def test_go_to_clears_after_request(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_clears_after_request(self, goto_table_component, state_manager_goto):
         """
         Go-to navigation hints are only set when go_to_request is present.
 
@@ -1061,9 +1041,7 @@ class TestGoToEdgeCases:
         assert "_target_row_index" not in result2
         assert "_go_to_not_found" not in result2
 
-    def test_go_to_page_boundary(
-        self, goto_table_component, state_manager_goto
-    ):
+    def test_go_to_page_boundary(self, goto_table_component, state_manager_goto):
         """
         Go-to handles rows at page boundaries correctly.
 
@@ -1092,9 +1070,7 @@ class TestGoToEdgeCases:
         assert result2.get("_navigate_to_page") == 2
         assert result2.get("_target_row_index") == 0
 
-    def test_go_to_with_no_go_to_fields_configured(
-        self, tmp_path, mock_streamlit_goto
-    ):
+    def test_go_to_with_no_go_to_fields_configured(self, tmp_path, mock_streamlit_goto):
         """
         Go-to request still works even without go_to_fields in component args.
 
@@ -1144,13 +1120,19 @@ class TestGoToEdgeCases:
 @pytest.fixture
 def type_mismatch_data() -> pl.LazyFrame:
     """Data with string columns containing numeric-looking values."""
-    return pl.LazyFrame({
-        "id": list(range(100)),                         # Integer column
-        "string_id": [f"{i:03d}" for i in range(100)],  # "000", "001", ... (strings with leading zeros)
-        "name": [f"item_{i}" for i in range(100)],      # Regular strings
-        "numeric_string": [str(i) for i in range(100)], # "0", "1", ... (strings that look like ints)
-        "score": [i * 0.5 for i in range(100)],         # Float column
-    })
+    return pl.LazyFrame(
+        {
+            "id": list(range(100)),  # Integer column
+            "string_id": [
+                f"{i:03d}" for i in range(100)
+            ],  # "000", "001", ... (strings with leading zeros)
+            "name": [f"item_{i}" for i in range(100)],  # Regular strings
+            "numeric_string": [
+                str(i) for i in range(100)
+            ],  # "0", "1", ... (strings that look like ints)
+            "score": [i * 0.5 for i in range(100)],  # Float column
+        }
+    )
 
 
 class TestGoToTypeMismatch:
@@ -1271,7 +1253,10 @@ class TestGoToTypeMismatch:
             "type_mismatch_page": {
                 "page": 1,
                 "page_size": 10,
-                "go_to_request": {"field": "id", "value": "42"},  # String value for int column
+                "go_to_request": {
+                    "field": "id",
+                    "value": "42",
+                },  # String value for int column
             }
         }
 
@@ -1350,7 +1335,10 @@ class TestGoToTypeMismatch:
             "type_mismatch_page": {
                 "page": 1,
                 "page_size": 10,
-                "go_to_request": {"field": "score", "value": "21.0"},  # String value for float column
+                "go_to_request": {
+                    "field": "score",
+                    "value": "21.0",
+                },  # String value for float column
             }
         }
 
@@ -1418,9 +1406,13 @@ def selection_type_mismatch_data() -> pl.LazyFrame:
     return pl.LazyFrame(
         {
             "id": list(range(100)),  # Integer column
-            "string_id": [f"{i:03d}" for i in range(100)],  # "000", "001", ... (strings with leading zeros)
+            "string_id": [
+                f"{i:03d}" for i in range(100)
+            ],  # "000", "001", ... (strings with leading zeros)
             "name": [f"item_{i}" for i in range(100)],  # Regular strings
-            "numeric_string": [str(i) for i in range(100)],  # "0", "1", ... (strings that look like ints)
+            "numeric_string": [
+                str(i) for i in range(100)
+            ],  # "0", "1", ... (strings that look like ints)
             "score": [i * 0.5 for i in range(100)],  # Float column
             "category": ["A", "B"] * 50,  # For filtering
         }
@@ -1472,7 +1464,9 @@ class TestSelectionNavigationTypeMismatch:
             page_size=10,
             pagination_identifier="selection_nav_page",
             index_field="id",
-            interactivity={"selected_numeric_string": "numeric_string"},  # String column (without leading zeros)
+            interactivity={
+                "selected_numeric_string": "numeric_string"
+            },  # String column (without leading zeros)
         )
 
         # Simulate selection state with numeric value (as might come from external source)

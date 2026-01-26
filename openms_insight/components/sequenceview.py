@@ -656,7 +656,10 @@ class SequenceView:
                 filter_value = state.get(identifier)
                 if filter_value is not None:
                     filtered = filtered.filter(pl.col(column) == filter_value)
-                elif identifier in self._filter_defaults and self._filter_defaults[identifier] is None:
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
                     # Filter has None default and state is None - return empty intentionally
                     return "", 1
 
@@ -690,9 +693,14 @@ class SequenceView:
                 filter_value = state.get(identifier)
                 if filter_value is not None:
                     filtered = filtered.filter(pl.col(column) == filter_value)
-                elif identifier in self._filter_defaults and self._filter_defaults[identifier] is None:
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
                     # Filter has None default and state is None - return empty intentionally
-                    return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64})
+                    return pl.DataFrame(
+                        schema={"peak_id": pl.Int64, "mass": pl.Float64}
+                    )
 
         # Select available columns
         cols = ["peak_id", "mass"]

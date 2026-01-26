@@ -531,8 +531,12 @@ class TestSequenceViewCacheReconstruction:
         assert hasattr(sv, "_filter_defaults"), (
             "SequenceView should have _filter_defaults attribute"
         )
-        assert "spectrum" in sv._filter_defaults, "spectrum should be in filter_defaults"
-        assert "sequence" in sv._filter_defaults, "sequence should be in filter_defaults"
+        assert "spectrum" in sv._filter_defaults, (
+            "spectrum should be in filter_defaults"
+        )
+        assert "sequence" in sv._filter_defaults, (
+            "sequence should be in filter_defaults"
+        )
         assert sv._filter_defaults["spectrum"] is None
         assert sv._filter_defaults["sequence"] is None
 

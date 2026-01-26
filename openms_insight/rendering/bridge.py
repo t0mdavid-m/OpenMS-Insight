@@ -18,9 +18,16 @@ _logger = logging.getLogger(__name__)
 
 # Numeric data types for type conversion during selection validation
 NUMERIC_DTYPES = (
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Float32, pl.Float64,
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.Int64,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    pl.UInt64,
+    pl.Float32,
+    pl.Float64,
 )
 
 
@@ -244,9 +251,7 @@ def _prepare_vue_data_cached(
 
     if _DEBUG_HASH_TRACKING:
         cache_hit = cached is not None
-        _logger.warning(
-            f"[CacheDebug] {component._cache_id}: cache_hit={cache_hit}"
-        )
+        _logger.warning(f"[CacheDebug] {component._cache_id}: cache_hit={cache_hit}")
 
     if cached is not None:
         cached_data, cached_hash, _ = cached  # Ignore cached annotation hash here
@@ -283,7 +288,9 @@ def _prepare_vue_data_cached(
             # Fallback: store without _plotConfig (may have stale column refs)
             base_data = {k: v for k, v in vue_data.items() if k != "_plotConfig"}
         base_hash = _hash_data(base_data)
-        _set_cached_vue_data(component_id, filter_state_hashable, base_data, base_hash, ann_hash)
+        _set_cached_vue_data(
+            component_id, filter_state_hashable, base_data, base_hash, ann_hash
+        )
 
         # Return full data with annotations
         data_hash = _hash_data(vue_data)
@@ -291,7 +298,9 @@ def _prepare_vue_data_cached(
     else:
         # Store complete data in cache
         data_hash = _hash_data(vue_data)
-        _set_cached_vue_data(component_id, filter_state_hashable, vue_data, data_hash, ann_hash)
+        _set_cached_vue_data(
+            component_id, filter_state_hashable, vue_data, data_hash, ann_hash
+        )
         return vue_data, data_hash
 
 
@@ -416,10 +425,7 @@ def _validate_interactivity_selections(
 
         # Check if value exists in filtered data (efficient: only fetch 1 row)
         exists = (
-            data.filter(pl.col(column) == selected_value)
-            .head(1)
-            .collect()
-            .height > 0
+            data.filter(pl.col(column) == selected_value).head(1).collect().height > 0
         )
 
         if not exists:
@@ -523,8 +529,8 @@ def render_component(
             cached_ann_hash = None
 
         # Cache valid only if BOTH filter state AND annotation state match
-        filter_state_matches = (cached_state == current_filter_state)
-        ann_state_matches = (cached_ann_hash == current_ann_hash)
+        filter_state_matches = cached_state == current_filter_state
+        ann_state_matches = cached_ann_hash == current_ann_hash
         cache_valid = filter_state_matches and ann_state_matches
 
         if _DEBUG_STATE_SYNC:
@@ -684,7 +690,9 @@ def render_component(
         data_hash = "awaiting_filter"
         filter_state_hashable = ()
 
-    _logger.info(f"[bridge] Phase4: {component._cache_id} prepared data, hash={data_hash[:8] if data_hash else 'None'}")
+    _logger.info(
+        f"[bridge] Phase4: {component._cache_id} prepared data, hash={data_hash[:8] if data_hash else 'None'}"
+    )
 
     # === PHASE 5: Cache data for next render ===
     if vue_data:
@@ -701,7 +709,12 @@ def render_component(
                 converted_data[data_key] = value
 
         # Store in cache for next render (include annotation hash for validity check)
-        cache[component_id] = (filter_state_hashable, converted_data, data_hash, current_ann_hash)
+        cache[component_id] = (
+            filter_state_hashable,
+            converted_data,
+            data_hash,
+            current_ann_hash,
+        )
 
         # If cache was invalid at Phase 1, we didn't send data to Vue (dataChanged=False).
         # Trigger a rerun so the newly cached data gets sent on the next render.
@@ -717,9 +730,13 @@ def render_component(
 
         if _DEBUG_STATE_SYNC:
             # Log what we're caching for debugging
-            pagination_key = next((k for k, v in filter_state_hashable if "page" in k.lower()), None)
+            pagination_key = next(
+                (k for k, v in filter_state_hashable if "page" in k.lower()), None
+            )
             if pagination_key:
-                pagination_val = next((v for k, v in filter_state_hashable if k == pagination_key), None)
+                pagination_val = next(
+                    (v for k, v in filter_state_hashable if k == pagination_key), None
+                )
                 _logger.warning(
                     f"[Bridge:{component._cache_id}] Phase5: Cached data with hash={data_hash[:8]}, "
                     f"filter_state includes {pagination_key}={pagination_val}"
@@ -786,7 +803,11 @@ def _hash_data(data: Dict[str, Any]) -> str:
     hash_parts = []
     for key, value in sorted(data.items()):
         # Skip internal metadata but NOT dynamic annotation columns or pagination
-        if key.startswith("_") and not key.startswith("_dynamic") and not key.startswith("_pagination"):
+        if (
+            key.startswith("_")
+            and not key.startswith("_dynamic")
+            and not key.startswith("_pagination")
+        ):
             continue
         if isinstance(value, pd.DataFrame):
             # Efficient hash for DataFrames

@@ -155,9 +155,7 @@ class TestSequenceViewEmptyState:
         from openms_insight.components.sequenceview import SequenceView
 
         # Add sequence_id to data
-        seq_data = sample_sequence_data.with_columns(
-            pl.lit(1).alias("sequence_id")
-        )
+        seq_data = sample_sequence_data.with_columns(pl.lit(1).alias("sequence_id"))
 
         cache_id = "test_sv_multi_filter"
         sv = SequenceView(
@@ -173,4 +171,6 @@ class TestSequenceViewEmptyState:
         sequence, charge = sv._get_sequence_for_state(state)
 
         # Should return empty because one filter with None default is None
-        assert sequence == "", "Should return empty when any filter with None default is None"
+        assert sequence == "", (
+            "Should return empty when any filter with None default is None"
+        )
