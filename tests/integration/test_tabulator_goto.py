@@ -1135,3 +1135,460 @@ class TestGoToEdgeCases:
         # Should still find the row
         assert result.get("_navigate_to_page") == 6  # 55 / 10 + 1 = 6
         assert result.get("_target_row_index") == 5  # 55 % 10 = 5
+
+
+# =============================================================================
+# TestGoToTypeMismatch
+# =============================================================================
+
+
+@pytest.fixture
+def type_mismatch_data() -> pl.LazyFrame:
+    """Data with string columns containing numeric-looking values."""
+    return pl.LazyFrame({
+        "id": list(range(100)),                         # Integer column
+        "string_id": [f"{i:03d}" for i in range(100)],  # "000", "001", ... (strings with leading zeros)
+        "name": [f"item_{i}" for i in range(100)],      # Regular strings
+        "numeric_string": [str(i) for i in range(100)], # "0", "1", ... (strings that look like ints)
+        "score": [i * 0.5 for i in range(100)],         # Float column
+    })
+
+
+class TestGoToTypeMismatch:
+    """
+    Tests for go-to type mismatch bug.
+
+    These tests replicate the bug where go-to navigation fails when the
+    target column is a string type but the search value can be parsed as
+    a number.
+
+    Bug: polars.exceptions.ComputeError: cannot compare string with numeric type (i32)
+    Root cause: openms_insight/components/table.py lines 654-665 aggressively
+    converts go-to values to numeric types without checking the column's actual type.
+    """
+
+    def test_go_to_string_column_with_numeric_value(
+        self, type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to on string column with value that looks like a number.
+
+        Bug reproduction: When searching for "42" in a string column,
+        the code converts "42" to integer 42, causing type mismatch error.
+
+        Verifies:
+            - Should find row where numeric_string == "42" (string comparison)
+            - Currently FAILS with: ComputeError: cannot compare string with numeric type
+        """
+        table = Table(
+            cache_id="type_mismatch_numeric_string",
+            data=type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="type_mismatch_page",
+            go_to_fields=["numeric_string"],
+        )
+
+        state = {
+            "type_mismatch_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "numeric_string", "value": "42"},
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        # Should find row at position 42
+        assert "_navigate_to_page" in result
+        assert result.get("_navigate_to_page") == 5  # 42 / 10 + 1 = 5
+        assert result.get("_target_row_index") == 2  # 42 % 10 = 2
+        assert result.get("_go_to_not_found") is not True
+
+    def test_go_to_string_column_numeric_looking_id(
+        self, type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to on string column with leading zeros (e.g., "007").
+
+        Bug reproduction: When searching for "007" in a string column,
+        the code converts "007" to integer 7, causing type mismatch error.
+
+        Verifies:
+            - Should find row where string_id == "007" (exact string match)
+            - Currently FAILS with: ComputeError: cannot compare string with numeric type
+        """
+        table = Table(
+            cache_id="type_mismatch_leading_zeros",
+            data=type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="type_mismatch_page",
+            go_to_fields=["string_id"],
+        )
+
+        state = {
+            "type_mismatch_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "string_id", "value": "007"},
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        # Should find row at position 7 (string_id "007")
+        assert "_navigate_to_page" in result
+        assert result.get("_navigate_to_page") == 1  # 7 / 10 + 1 = 1
+        assert result.get("_target_row_index") == 7  # 7 % 10 = 7
+        assert result.get("_go_to_not_found") is not True
+
+    def test_go_to_integer_column_with_string_value(
+        self, type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to on integer column with string value (should work).
+
+        This tests the valid use case where numeric conversion is appropriate:
+        searching an integer column with a string representation of a number.
+
+        Verifies:
+            - String "42" is correctly converted to int for integer column
+            - Navigation works correctly
+        """
+        table = Table(
+            cache_id="type_mismatch_int_column",
+            data=type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="type_mismatch_page",
+            go_to_fields=["id"],
+        )
+
+        state = {
+            "type_mismatch_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "id", "value": "42"},  # String value for int column
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        # Should work - integer column accepts numeric conversion
+        assert "_navigate_to_page" in result
+        assert result.get("_navigate_to_page") == 5  # 42 / 10 + 1 = 5
+        assert result.get("_target_row_index") == 2  # 42 % 10 = 2
+
+    def test_go_to_numeric_column_with_non_numeric_string(
+        self, type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to on numeric column with non-convertible string value.
+
+        Bug reproduction: When searching for "abc" (non-numeric string) in an integer
+        column (id), the type conversion fails silently, leaving go_to_value as a string.
+        The filter then tries to compare string "abc" with numeric column, causing:
+            ComputeError: cannot compare string with numeric type (i32)
+
+        Expected behavior:
+            - Should NOT crash
+            - Should set _go_to_not_found = True
+            - No navigation should occur
+        """
+        table = Table(
+            cache_id="type_mismatch_numeric_col",
+            data=type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="type_mismatch_page",
+            go_to_fields=["id"],  # Numeric (integer) column
+        )
+
+        state = {
+            "type_mismatch_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "id", "value": "abc"},  # Non-numeric string
+            }
+        }
+
+        # This should NOT raise ComputeError - should gracefully handle invalid input
+        result = table._prepare_vue_data(state)
+
+        # Should indicate not found (invalid input cannot match any row)
+        assert result.get("_go_to_not_found") is True
+        assert result.get("_navigate_to_page") is None
+
+    def test_go_to_float_column_with_string_value(
+        self, type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to on float column with string value (should work).
+
+        This tests the valid use case where numeric conversion is appropriate:
+        searching a float column with a string representation of a number.
+
+        Verifies:
+            - String "21.0" is correctly converted to float for float column
+            - Navigation works correctly (row 42 has score 21.0)
+        """
+        table = Table(
+            cache_id="type_mismatch_float_column",
+            data=type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="type_mismatch_page",
+            go_to_fields=["score"],
+        )
+
+        state = {
+            "type_mismatch_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "score", "value": "21.0"},  # String value for float column
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        # Should work - float column accepts numeric conversion
+        # score = 21.0 corresponds to id = 42 (42 * 0.5 = 21.0)
+        assert "_navigate_to_page" in result
+        assert result.get("_navigate_to_page") == 5  # 42 / 10 + 1 = 5
+        assert result.get("_target_row_index") == 2  # 42 % 10 = 2
+
+    def test_go_to_string_column_preserves_leading_zeros(
+        self, type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to on string column preserves leading zeros in search.
+
+        Bug reproduction: When searching for "007", the value should match
+        exactly "007", not be converted to 7. The current code converts
+        "007" to integer 7, which then fails type comparison with string column.
+
+        Verifies:
+            - Search for "007" matches string "007" exactly
+            - Search does NOT match row with id=7 (different column)
+            - Currently FAILS with: ComputeError: cannot compare string with numeric type
+        """
+        table = Table(
+            cache_id="type_mismatch_preserve_zeros",
+            data=type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="type_mismatch_page",
+            go_to_fields=["string_id"],
+        )
+
+        state = {
+            "type_mismatch_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "string_id", "value": "007"},
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        # Verify the search found the correct row
+        assert "_navigate_to_page" in result
+        assert result.get("_go_to_not_found") is not True
+
+        # Verify the actual data at the target location has string_id="007"
+        target_idx = result.get("_target_row_index")
+        page_data = result["tableData"]
+        assert page_data.iloc[target_idx]["string_id"] == "007"
+
+
+# =============================================================================
+# TestSelectionNavigationTypeMismatch
+# =============================================================================
+
+
+@pytest.fixture
+def selection_type_mismatch_data() -> pl.LazyFrame:
+    """Data for testing selection navigation type mismatch bug."""
+    return pl.LazyFrame(
+        {
+            "id": list(range(100)),  # Integer column
+            "string_id": [f"{i:03d}" for i in range(100)],  # "000", "001", ... (strings with leading zeros)
+            "name": [f"item_{i}" for i in range(100)],  # Regular strings
+            "numeric_string": [str(i) for i in range(100)],  # "0", "1", ... (strings that look like ints)
+            "score": [i * 0.5 for i in range(100)],  # Float column
+            "category": ["A", "B"] * 50,  # For filtering
+        }
+    )
+
+
+class TestSelectionNavigationTypeMismatch:
+    """
+    Tests for selection navigation type mismatch bug.
+
+    These tests capture the bug where selection-based navigation fails when
+    the interactivity column is a string type but the selection state value
+    is numeric (or vice versa).
+
+    Bug: polars.exceptions.ComputeError: cannot compare string with numeric type (i32)
+    Location: openms_insight/components/table.py line 771
+
+    Root cause: Selection navigation code at line 771:
+        .filter(pl.col(column) == selected_value)
+    doesn't check column dtype before comparing values.
+
+    This is different from go-to navigation (tested in TestGoToTypeMismatch):
+    - Go-to: User explicitly searches for a value via the go-to dialog
+    - Selection: Auto-navigation when interactivity selection changes
+    """
+
+    def test_selection_navigation_string_column_with_numeric_value(
+        self, selection_type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Selection navigation with string interactivity column and numeric selection value.
+
+        Bug reproduction: When interactivity column is string type (numeric_string)
+        but selection state contains numeric value (int 42), the code attempts
+        to compare string column with integer, causing type mismatch.
+
+        Expected behavior: Should find row where numeric_string == "42"
+        Current behavior: FAILS with ComputeError: cannot compare string with numeric type
+
+        Verifies:
+            - Table with string interactivity column handles numeric selection values
+            - Navigation finds the correct page
+        """
+        table = Table(
+            cache_id="selection_nav_string_col_numeric_val",
+            data=selection_type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="selection_nav_page",
+            index_field="id",
+            interactivity={"selected_numeric_string": "numeric_string"},  # String column (without leading zeros)
+        )
+
+        # Simulate selection state with numeric value (as might come from external source)
+        # Use row 42 which is on page 5 (not page 1) to trigger navigation
+        state = {
+            "selected_numeric_string": 42,  # Numeric value, but column is string type
+            "selection_nav_page": {
+                "page": 1,
+                "page_size": 10,
+            },
+        }
+
+        # This should NOT raise ComputeError
+        result = table._prepare_vue_data(state)
+
+        # Should navigate to page containing numeric_string "42" (row 42)
+        # Row 42 / page_size 10 = page 5, index 2
+        assert "_navigate_to_page" in result
+        assert result.get("_navigate_to_page") == 5
+        assert result.get("_target_row_index") == 2
+
+    def test_selection_navigation_numeric_column_with_string_value(
+        self, selection_type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Selection navigation with numeric interactivity column and string selection value.
+
+        Bug reproduction: When interactivity column is integer type (id)
+        but selection state contains string value "42", the code should
+        convert the string to integer before comparison.
+
+        Expected behavior: Should find row where id == 42
+        Current behavior: FAILS with ComputeError: cannot compare i32 with string type
+
+        Verifies:
+            - Table with integer interactivity column handles string selection values
+            - Navigation finds the correct page
+        """
+        table = Table(
+            cache_id="selection_nav_numeric_col_string_val",
+            data=selection_type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="selection_nav_page",
+            index_field="id",
+            interactivity={"selected_id": "id"},  # Integer column
+        )
+
+        # Simulate selection state with string value
+        state = {
+            "selected_id": "42",  # String value, but column is integer type
+            "selection_nav_page": {
+                "page": 1,
+                "page_size": 10,
+            },
+        }
+
+        # This should NOT raise ComputeError
+        result = table._prepare_vue_data(state)
+
+        # Should navigate to page containing id 42
+        # Row 42 / page_size 10 = page 5, index 2
+        assert "_navigate_to_page" in result
+        assert result.get("_navigate_to_page") == 5
+        assert result.get("_target_row_index") == 2
+
+    def test_selection_navigation_string_column_preserves_leading_zeros(
+        self, selection_type_mismatch_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Selection navigation with string column preserves leading zeros.
+
+        This test verifies that when the interactivity column is a string
+        and the selection value is also a string, the exact string match
+        is used (preserving leading zeros like "042").
+
+        Expected behavior: Should find row where string_id == "042"
+        Current behavior: Should PASS (no type conversion needed)
+
+        Verifies:
+            - String-to-string comparison preserves exact value
+            - Leading zeros are not stripped
+        """
+        table = Table(
+            cache_id="selection_nav_preserve_zeros",
+            data=selection_type_mismatch_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="selection_nav_page",
+            index_field="id",
+            interactivity={"selected_string_id": "string_id"},  # String column
+        )
+
+        # Selection state with string value matching column type
+        # Use row 42 which is on page 5 (not page 1) to trigger navigation
+        state = {
+            "selected_string_id": "042",  # String value for string column
+            "selection_nav_page": {
+                "page": 1,
+                "page_size": 10,
+            },
+        }
+
+        # This should work without error
+        result = table._prepare_vue_data(state)
+
+        # Should navigate to page containing string_id "042" (row 42)
+        # Row 42 / page_size 10 = page 5, index 2
+        assert "_navigate_to_page" in result
+        assert result.get("_navigate_to_page") == 5
+        assert result.get("_target_row_index") == 2
+
+        # Verify the actual data matches
+        page_data = result["tableData"]
+        target_idx = result.get("_target_row_index")
+        assert page_data.iloc[target_idx]["string_id"] == "042"
