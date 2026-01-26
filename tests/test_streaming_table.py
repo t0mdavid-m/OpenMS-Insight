@@ -4,8 +4,8 @@ These tests verify that the Table component correctly implements server-side
 pagination where only the current page of data is sent to the frontend.
 """
 
-import pytest
 import polars as pl
+import pytest
 
 from openms_insight import Table
 

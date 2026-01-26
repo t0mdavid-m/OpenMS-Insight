@@ -23,15 +23,12 @@ Test Categories:
 """
 
 from typing import Any, Dict, List, Optional
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-import pandas as pd
-import polars as pl
 import pytest
 
 from openms_insight import Table
 from openms_insight.core.state import StateManager
-
 
 # =============================================================================
 # Mock Infrastructure (reused from test_tabulator.py)

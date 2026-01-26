@@ -32,7 +32,6 @@ import pytest
 from openms_insight import Table
 from openms_insight.core.state import StateManager
 
-
 # =============================================================================
 # Mock Infrastructure
 # =============================================================================
