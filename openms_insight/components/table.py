@@ -420,9 +420,70 @@ class Table(BaseComponent):
 
         self._preprocessed_data["column_metadata"] = column_metadata
 
+        # Auto-detect go-to fields if not explicitly provided
+        if self._go_to_fields is None:
+            self._go_to_fields = self._auto_detect_go_to_fields(data)
+        elif self._go_to_fields == []:
+            # Explicitly disabled - keep empty list
+            pass
+        # else: use user-provided list as-is
+
         # Store LazyFrame for streaming to disk (filter happens at render time)
         # Base class will use sink_parquet() to stream without full materialization
         self._preprocessed_data["data"] = data  # Keep lazy
+
+    def _auto_detect_go_to_fields(self, data: pl.LazyFrame) -> List[str]:
+        """
+        Auto-detect columns suitable for go-to navigation.
+
+        Criteria:
+        - Integer or String (Utf8) type only (excludes Float)
+        - 100% unique values (no duplicates)
+        - Samples first 10,000 rows for performance
+
+        Args:
+            data: LazyFrame to analyze for unique columns
+
+        Returns:
+            List of column names in original schema order
+        """
+        schema = data.collect_schema()
+        sample = data.head(10000)
+
+        candidates = []
+        for col_name in schema.names():
+            dtype = schema[col_name]
+
+            # Only Integer and String types (exclude Float)
+            if dtype not in (
+                pl.Int8,
+                pl.Int16,
+                pl.Int32,
+                pl.Int64,
+                pl.UInt8,
+                pl.UInt16,
+                pl.UInt32,
+                pl.UInt64,
+                pl.Utf8,
+            ):
+                continue
+
+            # Check 100% uniqueness in sample
+            stats = sample.select(
+                [
+                    pl.col(col_name).len().alias("count"),
+                    pl.col(col_name).n_unique().alias("n_unique"),
+                ]
+            ).collect()
+
+            count = stats["count"][0]
+            n_unique = stats["n_unique"][0]
+
+            # Must be 100% unique (count == n_unique)
+            if count > 0 and count == n_unique:
+                candidates.append(col_name)
+
+        return candidates
 
     def _get_columns_to_select(self) -> Optional[List[str]]:
         """Get list of columns needed for this table."""
@@ -584,6 +645,7 @@ class Table(BaseComponent):
         # Handle go-to request (server-side search for row by field value)
         navigate_to_page = None
         target_row_index = None
+        go_to_not_found = False
 
         if go_to_request:
             go_to_field = go_to_request.get("field")
@@ -612,6 +674,9 @@ class Table(BaseComponent):
                     navigate_to_page = target_page
                     target_row_index = row_num % page_size
                     page = target_page  # Jump to target page
+                else:
+                    # Row not found - set flag for Vue to show "not found" feedback
+                    go_to_not_found = True
 
         # === Selection and Sort/Filter based navigation ===
         # PURPOSE: When user sorts/filters, find where the selected row ended up and navigate there
@@ -773,6 +838,8 @@ class Table(BaseComponent):
             result["_navigate_to_page"] = navigate_to_page
         if target_row_index is not None:
             result["_target_row_index"] = target_row_index
+        if go_to_not_found:
+            result["_go_to_not_found"] = True
 
         logger.info(
             f"[Table._prepare_vue_data] Returning: page={page}, total_rows={total_rows}, data_rows={len(df_polars)}"
