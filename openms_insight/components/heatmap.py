@@ -1,5 +1,6 @@
 """Heatmap component using Plotly scattergl."""
 
+import gc
 from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
@@ -297,6 +298,7 @@ class Heatmap(BaseComponent):
         y_range: tuple,
         cache_dir,
         prefix: str = "level",
+        release_memory: bool = True,
     ) -> dict:
         """
         Build cascading compression levels from source data.
@@ -307,6 +309,9 @@ class Heatmap(BaseComponent):
         per bin - points surviving at larger levels will also be selected at
         smaller levels.
 
+        Memory optimization: After each level is saved to disk, references are
+        released and garbage collection is triggered to minimize peak memory.
+
         Args:
             source_data: LazyFrame with raw/filtered data
             level_sizes: List of target sizes for compressed levels (smallest first)
@@ -314,6 +319,7 @@ class Heatmap(BaseComponent):
             y_range: (y_min, y_max) for consistent bin boundaries
             cache_dir: Path to save parquet files
             prefix: Filename prefix (e.g., "level" or "cat_level_im_0")
+            release_memory: If True, explicitly release memory after each level
 
         Returns:
             Dict with level LazyFrames keyed by "{prefix}_{idx}" and "num_levels"
@@ -323,19 +329,26 @@ class Heatmap(BaseComponent):
         result = {}
         num_compressed = len(level_sizes)
 
-        # Get total count
-        total = source_data.select(pl.len()).collect().item()
-
         # First: save full resolution as the largest level
+        # Use sink_parquet which streams data without full materialization
         full_res_path = cache_dir / f"{prefix}_{num_compressed}.parquet"
         full_res = source_data.sort([self._x_column, self._y_column])
         full_res.sink_parquet(full_res_path, compression="zstd")
+
+        # Get count from saved parquet metadata (avoids re-scanning source)
+        total = pl.scan_parquet(full_res_path).select(pl.len()).collect().item()
+
         print(
             f"[HEATMAP] Saved {prefix}_{num_compressed} ({total:,} pts)",
             file=sys.stderr,
         )
 
-        # Start cascading from full resolution
+        # Release reference to source data after saving
+        if release_memory:
+            del full_res
+            gc.collect()
+
+        # Start cascading from full resolution (lazy scan, no memory)
         current_source = pl.scan_parquet(full_res_path)
         current_size = total
 
@@ -366,7 +379,7 @@ class Heatmap(BaseComponent):
                     y_range=y_range,
                 )
 
-            # Sort and save immediately
+            # Sort and save immediately using streaming sink
             level = level.sort([self._x_column, self._y_column])
             level.sink_parquet(level_path, compression="zstd")
 
@@ -375,11 +388,16 @@ class Heatmap(BaseComponent):
                 file=sys.stderr,
             )
 
-            # Next iteration uses this level as source (cascading)
+            # Release level reference and trigger GC to free memory
+            if release_memory:
+                del level
+                gc.collect()
+
+            # Next iteration uses this level as source (lazy scan, no memory)
             current_source = pl.scan_parquet(level_path)
             current_size = target_size
 
-        # Load all levels back as LazyFrames
+        # Load all levels back as LazyFrames (no memory - just references)
         for i in range(num_compressed + 1):
             level_path = cache_dir / f"{prefix}_{i}.parquet"
             result[f"{prefix}_{i}"] = pl.scan_parquet(level_path)
@@ -399,6 +417,9 @@ class Heatmap(BaseComponent):
 
         Uses cascading downsampling for efficiency - each level is built from
         the previous larger level rather than from raw data.
+
+        Memory optimization: After processing each categorical value, memory is
+        explicitly released to minimize peak usage.
 
         Data is sorted by x, y columns for efficient range query predicate pushdown.
 
@@ -436,10 +457,6 @@ class Heatmap(BaseComponent):
                 file=sys.stderr,
             )
 
-        # Get total count
-        total = self._raw_data.select(pl.len()).collect().item()
-        self._preprocessed_data["total"] = total
-
         # Create cache directory for immediate level saving
         cache_dir = self._cache_dir / "preprocessed"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -459,17 +476,19 @@ class Heatmap(BaseComponent):
 
             column_name = self._filters[filter_id]
 
-            # Get unique values for this filter
-            unique_values = (
+            # Get unique values for this filter (minimal collection - just one column)
+            unique_values_df = (
                 self._raw_data.select(pl.col(column_name))
                 .unique()
                 .collect()
-                .to_series()
-                .to_list()
             )
+            unique_values = unique_values_df.to_series().to_list()
             unique_values = sorted(
                 [v for v in unique_values if v is not None and v >= 0]
             )
+            # Release the small DataFrame
+            del unique_values_df
+            gc.collect()
 
             print(
                 f"[HEATMAP] Categorical filter '{filter_id}' ({column_name}): {len(unique_values)} unique values",
@@ -482,11 +501,20 @@ class Heatmap(BaseComponent):
 
             # Create compression levels for each filter value using cascading
             for filter_value in unique_values:
-                # Filter data to this value
+                # Filter data to this value (stays lazy)
                 filtered_data = self._raw_data.filter(
                     pl.col(column_name) == filter_value
                 )
-                filtered_total = filtered_data.select(pl.len()).collect().item()
+
+                # Build cascading levels using helper - count is obtained after
+                # saving full resolution to avoid separate scan
+                prefix = f"cat_level_{filter_id}_{filter_value}"
+
+                # Compute level sizes - we need count, get it after first save
+                # Use a temporary save to get count from parquet metadata
+                temp_path = cache_dir / f"{prefix}_temp.parquet"
+                filtered_data.sink_parquet(temp_path, compression="zstd")
+                filtered_total = pl.scan_parquet(temp_path).select(pl.len()).collect().item()
 
                 # Compute level sizes for this filtered subset (2× for cache buffer)
                 level_sizes = compute_compression_levels(cache_target, filtered_total)
@@ -501,16 +529,19 @@ class Heatmap(BaseComponent):
                     f"cat_level_sizes_{filter_id}_{filter_value}"
                 ] = level_sizes
 
-                # Build cascading levels using helper
-                prefix = f"cat_level_{filter_id}_{filter_value}"
+                # Build cascading levels from the temp file
                 levels_result = self._build_cascading_levels(
-                    source_data=filtered_data,
+                    source_data=pl.scan_parquet(temp_path),
                     level_sizes=level_sizes,
                     x_range=x_range,
                     y_range=y_range,
                     cache_dir=cache_dir,
                     prefix=prefix,
+                    release_memory=True,
                 )
+
+                # Remove temp file (full resolution is saved by _build_cascading_levels)
+                temp_path.unlink(missing_ok=True)
 
                 # Copy results to preprocessed_data
                 for key, value in levels_result.items():
@@ -521,20 +552,39 @@ class Heatmap(BaseComponent):
                     else:
                         self._preprocessed_data[key] = value
 
+                # Release memory after each categorical value
+                del levels_result
+                gc.collect()
+
+                print(
+                    f"[HEATMAP]   Memory released after filter value {filter_value}",
+                    file=sys.stderr,
+                )
+
         # Also create global levels for when no categorical filter is selected
         # (fallback to standard behavior) - using cascading with 2× cache buffer
+        # Get total count from a quick scan after saving
+        global_temp_path = cache_dir / "global_temp.parquet"
+        self._raw_data.sink_parquet(global_temp_path, compression="zstd")
+        total = pl.scan_parquet(global_temp_path).select(pl.len()).collect().item()
+        self._preprocessed_data["total"] = total
+
         level_sizes = compute_compression_levels(cache_target, total)
         self._preprocessed_data["level_sizes"] = level_sizes
 
         # Build global cascading levels using helper
         levels_result = self._build_cascading_levels(
-            source_data=self._raw_data,
+            source_data=pl.scan_parquet(global_temp_path),
             level_sizes=level_sizes,
             x_range=x_range,
             y_range=y_range,
             cache_dir=cache_dir,
             prefix="level",
+            release_memory=True,
         )
+
+        # Remove temp file
+        global_temp_path.unlink(missing_ok=True)
 
         # Copy results to preprocessed_data
         for key, value in levels_result.items():
@@ -546,6 +596,9 @@ class Heatmap(BaseComponent):
         # Mark that files are already saved
         self._preprocessed_data["_files_already_saved"] = True
 
+        # Final memory cleanup
+        gc.collect()
+
     def _preprocess_streaming(self) -> None:
         """
         Streaming preprocessing with cascading - builds smaller levels from larger.
@@ -555,6 +608,10 @@ class Heatmap(BaseComponent):
         and produces identical results because the downsampling algorithm keeps
         the TOP N highest-intensity points per bin - points that survive at a larger
         level will also be selected at smaller levels.
+
+        Memory optimization: Data is saved to disk via streaming sink_parquet,
+        then count is read from parquet metadata instead of collecting the full
+        dataset. Memory is explicitly released after heavy operations.
 
         Levels are saved to disk immediately after creation, then read back as the
         source for the next smaller level. This keeps memory low while enabling
@@ -592,27 +649,41 @@ class Heatmap(BaseComponent):
                 file=sys.stderr,
             )
 
-        # Get total count
-        total = self._raw_data.select(pl.len()).collect().item()
+        # Create cache directory for immediate level saving
+        cache_dir = self._cache_dir / "preprocessed"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Memory optimization: Save raw data to disk first, then get count from
+        # parquet metadata instead of collecting the full LazyFrame
+        temp_raw_path = cache_dir / "_temp_raw.parquet"
+        self._raw_data.sink_parquet(temp_raw_path, compression="zstd")
+
+        # Get total count from saved parquet (cheap metadata read)
+        total = pl.scan_parquet(temp_raw_path).select(pl.len()).collect().item()
         self._preprocessed_data["total"] = total
+
+        print(
+            f"[HEATMAP] Total points: {total:,} (saved to temp file for streaming)",
+            file=sys.stderr,
+        )
 
         # Compute target sizes for levels (use 2×min_points for smallest cache level)
         level_sizes = compute_compression_levels(cache_target, total)
         self._preprocessed_data["level_sizes"] = level_sizes
 
-        # Create cache directory for immediate level saving
-        cache_dir = self._cache_dir / "preprocessed"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build cascading levels using helper
+        # Build cascading levels using helper, reading from temp file
         levels_result = self._build_cascading_levels(
-            source_data=self._raw_data,
+            source_data=pl.scan_parquet(temp_raw_path),
             level_sizes=level_sizes,
             x_range=x_range,
             y_range=y_range,
             cache_dir=cache_dir,
             prefix="level",
+            release_memory=True,
         )
+
+        # Remove temp file (full resolution is saved by _build_cascading_levels)
+        temp_raw_path.unlink(missing_ok=True)
 
         # Copy results to preprocessed_data
         for key, value in levels_result.items():
@@ -624,12 +695,19 @@ class Heatmap(BaseComponent):
         # Mark that files are already saved (base class should skip saving)
         self._preprocessed_data["_files_already_saved"] = True
 
+        # Final memory cleanup
+        gc.collect()
+
     def _preprocess_eager(self) -> None:
         """
         Eager preprocessing - levels are computed upfront.
 
         Uses more memory at init but faster rendering. Uses scipy-based
         downsampling for better spatial distribution.
+
+        Note: For memory-constrained environments, prefer use_streaming=True
+        (the default) which keeps data lazy until render time.
+
         Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
         import sys
@@ -708,6 +786,10 @@ class Heatmap(BaseComponent):
                     self._preprocessed_data[f"level_{level_idx}"] = downsampled.lazy()
                 current = downsampled
 
+                # Release intermediate data to reduce peak memory
+                if i > 0:
+                    gc.collect()
+
         # Add full resolution as final level (for zoom fallback)
         # Also sorted for consistent predicate pushdown behavior
         num_compressed = len(level_sizes)
@@ -717,6 +799,9 @@ class Heatmap(BaseComponent):
 
         # Store number of levels for reconstruction (includes full resolution)
         self._preprocessed_data["num_levels"] = num_compressed + 1
+
+        # Memory cleanup
+        gc.collect()
 
     def _get_levels(self) -> list:
         """

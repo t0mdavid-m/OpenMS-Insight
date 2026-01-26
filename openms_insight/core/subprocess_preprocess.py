@@ -19,14 +19,25 @@ def _preprocess_worker(
 ) -> None:
     """Worker function that runs in subprocess to do preprocessing."""
     try:
+        import gc
+
         import polars as pl
 
         # Set mimalloc to release memory aggressively (in case not inherited)
         os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
 
+        # Limit Polars thread pool to reduce memory overhead
+        # Each thread maintains its own memory pool
+        os.environ.setdefault("POLARS_MAX_THREADS", "4")
+
         # Create component with data - this triggers preprocessing and cache save
         data = pl.scan_parquet(data_path)
         component_class(data=data, **kwargs)
+
+        # Explicit cleanup before subprocess exits
+        del data
+        gc.collect()
+
         # Subprocess exits here, releasing all memory
         error_queue.put(None)
     except Exception as e:

@@ -4,8 +4,14 @@ This module provides functions for multi-resolution downsampling of 2D scatter
 data, enabling efficient visualization of datasets with millions of points.
 
 Supports both streaming (lazy) and eager downsampling approaches.
+
+Memory optimizations:
+- Streaming mode (default) stays fully lazy - no collection until render
+- Explicit gc.collect() after scipy operations to release numpy arrays
+- Type downcasting (Float64→Float32) reduces memory by 50%
 """
 
+import gc
 import math
 from typing import List, Optional, Tuple, Union
 
@@ -141,6 +147,10 @@ def downsample_2d(
     highest-intensity points per bin. This preserves visually important
     features (peaks) while reducing total point count.
 
+    Note: This function requires full data materialization for scipy.
+    For memory-constrained environments, prefer downsample_2d_streaming()
+    which stays fully lazy.
+
     Args:
         data: Input data as Polars LazyFrame or DataFrame
         max_points: Maximum number of points to keep
@@ -187,10 +197,10 @@ def downsample_2d(
         # No downsampling needed
         return collected.drop("_rank").lazy()
 
-    # Extract arrays for scipy
-    x_array = collected[x_column].to_numpy()
-    y_array = collected[y_column].to_numpy()
-    intensity_array = collected[intensity_column].to_numpy()
+    # Extract arrays for scipy - use float32 to reduce memory
+    x_array = collected[x_column].to_numpy().astype(np.float32)
+    y_array = collected[y_column].to_numpy().astype(np.float32)
+    intensity_array = collected[intensity_column].to_numpy().astype(np.float32)
 
     # Compute 2D bins
     count, _, _, mapping = binned_statistic_2d(
@@ -202,6 +212,10 @@ def downsample_2d(
         expand_binnumbers=True,
     )
 
+    # Release numpy arrays immediately after binning to free memory
+    del x_array, y_array, intensity_array
+    gc.collect()
+
     # Add bin indices to dataframe
     binned_data = collected.lazy().with_columns(
         [
@@ -210,7 +224,15 @@ def downsample_2d(
         ]
     )
 
+    # Release mapping arrays
+    del mapping
+    gc.collect()
+
     # Compute max peaks per bin to stay under limit
+    count_flat = count.flatten()
+    del count  # Release count array
+    gc.collect()
+
     counted_peaks = 0
     max_peaks_per_bin = -1
     new_count = 0
@@ -218,10 +240,13 @@ def downsample_2d(
     while (counted_peaks + new_count) < max_points:
         max_peaks_per_bin += 1
         counted_peaks += new_count
-        new_count = np.sum(count.flatten() >= (max_peaks_per_bin + 1))
+        new_count = np.sum(count_flat >= (max_peaks_per_bin + 1))
 
         if counted_peaks >= total_count:
             break
+
+    del count_flat
+    gc.collect()
 
     # Keep top N peaks per bin
     result = (
@@ -230,6 +255,10 @@ def downsample_2d(
         .sort(intensity_column)
         .drop(["_rank", "_x_bin", "_y_bin"])
     )
+
+    # Release collected DataFrame
+    del collected, binned_data
+    gc.collect()
 
     return result
 
