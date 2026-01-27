@@ -708,6 +708,56 @@ class TestTableAutoSelection:
         assert "_auto_selection" in result
         assert result["_auto_selection"] == {"selected_id": 5}
 
+    def test_auto_selection_respects_initial_sort(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """
+        Verify get_initial_selection() returns the first row AFTER applying initial_sort.
+
+        Bug: Currently returns first row of UNSORTED data.
+        Expected: Should return first row AFTER initial_sort is applied.
+
+        With sample_table_data:
+        - Original order: id 1,2,3,4,5 with mass 500.5, 600.6, 700.7, 800.8, 900.9
+        - After sort by mass DESC: id 5 (mass=900.9) should be first
+        """
+        table = Table(
+            cache_id="test_autoselect_initial_sort",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            interactivity={"selected_id": "id"},
+            initial_sort=[{"column": "mass", "dir": "desc"}],  # Sort mass descending
+        )
+
+        # Call get_initial_selection with empty state (simulates initial page load)
+        initial_selection = table.get_initial_selection({})
+
+        # After sorting by mass DESC, id=5 (mass=900.9) should be first
+        # BUG: Currently returns {"selected_id": 1} (first unsorted row)
+        assert initial_selection == {"selected_id": 5}
+
+    def test_prepare_vue_data_auto_selection_with_initial_sort(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """
+        Verify _auto_selection in _prepare_vue_data() respects initial_sort when no pagination state.
+
+        This tests the same bug via _prepare_vue_data() directly.
+        """
+        table = Table(
+            cache_id="test_vue_data_initial_sort",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            interactivity={"selected_id": "id"},
+            initial_sort=[{"column": "mass", "dir": "desc"}],
+        )
+
+        # Empty state = initial page load
+        result = table._prepare_vue_data({})
+
+        # BUG: _auto_selection currently returns id=1 (unsorted first row)
+        assert result["_auto_selection"] == {"selected_id": 5}
+
 
 class TestComponentVueArgsKeys:
     """Tests verifying Vue component args have required keys."""
