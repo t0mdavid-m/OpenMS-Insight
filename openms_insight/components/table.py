@@ -650,8 +650,15 @@ class Table(BaseComponent):
 
         # Apply server-side sort
         if sort_column:
+            # User-applied sort from pagination state takes precedence
             descending = sort_dir == "desc"
             data = data.sort(sort_column, descending=descending)
+        elif self._initial_sort:
+            # Fall back to initial_sort configuration on initial load
+            # initial_sort is a list of dicts: [{"column": "mass", "dir": "desc"}, ...]
+            sort_columns = [s["column"] for s in self._initial_sort]
+            sort_descending = [s.get("dir", "asc") == "desc" for s in self._initial_sort]
+            data = data.sort(sort_columns, descending=sort_descending)
 
         # Get total row count (after filters, before pagination)
         total_rows = data.select(pl.len()).collect().item()
