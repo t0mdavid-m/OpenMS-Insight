@@ -405,9 +405,10 @@ def _validate_interactivity_selections(
 
         data = data.filter(pl.col(column) == selected_value)
 
-    # Validate each interactivity selection against filtered data
+    # Collect all checks to validate
     state_changed = False
     schema = data.collect_schema()
+    checks_to_validate: list[tuple[str, str, Any]] = []
 
     for identifier, column in interactivity.items():
         selected_value = state.get(identifier)
@@ -423,19 +424,30 @@ def _validate_interactivity_selections(
             if isinstance(selected_value, float) and selected_value.is_integer():
                 selected_value = int(selected_value)
 
-        # Check if value exists in filtered data (efficient: only fetch 1 row)
-        exists = (
-            data.filter(pl.col(column) == selected_value).head(1).collect().height > 0
-        )
+        checks_to_validate.append((identifier, column, selected_value))
 
-        if not exists:
-            # Selection is invalid - clear it
+    # Early return if nothing to validate
+    if not checks_to_validate:
+        return False
+
+    # Build single query with all existence checks
+    existence_exprs = [
+        (pl.col(column) == value).any().alias(identifier)
+        for identifier, column, value in checks_to_validate
+    ]
+
+    # Execute ONE query instead of N
+    results = data.select(existence_exprs).collect().row(0, named=True)
+
+    # Process results and clear invalid selections
+    for identifier, _column, value in checks_to_validate:
+        if not results[identifier]:
             state_manager.set_selection(identifier, None)
             state_changed = True
             if _DEBUG_STATE_SYNC:
                 _logger.warning(
                     f"[Bridge:{component._cache_id}] Cleared invalid selection: "
-                    f"{identifier}={selected_value} not in filtered data"
+                    f"{identifier}={value} not in filtered data"
                 )
 
     return state_changed
