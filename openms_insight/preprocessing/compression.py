@@ -238,9 +238,10 @@ def downsample_2d_simple(
     data: Union[pl.LazyFrame, pl.DataFrame],
     max_points: int = 20000,
     intensity_column: str = "intensity",
+    descending: bool = True,
 ) -> pl.LazyFrame:
     """
-    Simple downsampling by keeping highest-intensity points.
+    Simple downsampling by keeping top-priority points.
 
     A simpler alternative to downsample_2d that doesn't require scipy.
     Less spatially aware but still preserves important peaks.
@@ -249,6 +250,7 @@ def downsample_2d_simple(
         data: Input data as Polars LazyFrame or DataFrame
         max_points: Maximum number of points to keep
         intensity_column: Name of intensity column for ranking
+        descending: If True (default), keep highest values. If False, keep lowest.
 
     Returns:
         Downsampled data as Polars LazyFrame
@@ -256,7 +258,7 @@ def downsample_2d_simple(
     if isinstance(data, pl.DataFrame):
         data = data.lazy()
 
-    return data.sort(intensity_column, descending=True).head(max_points)
+    return data.sort(intensity_column, descending=descending).head(max_points)
 
 
 def downsample_2d_streaming(
@@ -269,6 +271,7 @@ def downsample_2d_streaming(
     y_bins: int = 50,
     x_range: Optional[tuple] = None,
     y_range: Optional[tuple] = None,
+    descending: bool = True,
 ) -> pl.LazyFrame:
     """
     Streaming 2D downsampling using pure Polars operations.
@@ -287,6 +290,8 @@ def downsample_2d_streaming(
         y_bins: Number of bins along y-axis
         x_range: Optional (min, max) tuple for x-axis. If None, computed from data.
         y_range: Optional (min, max) tuple for y-axis. If None, computed from data.
+        descending: If True (default), keep highest intensity per bin.
+            If False, keep lowest intensity per bin.
 
     Returns:
         Downsampled data as Polars LazyFrame (fully lazy, no collection)
@@ -319,7 +324,7 @@ def downsample_2d_streaming(
 
         result = (
             data.with_columns([x_bin_expr, y_bin_expr])
-            .sort(intensity_column, descending=True)
+            .sort(intensity_column, descending=descending)
             .group_by(["_x_bin", "_y_bin"])
             .head(points_per_bin)
             .drop(["_x_bin", "_y_bin"])
@@ -349,7 +354,7 @@ def downsample_2d_streaming(
                     .alias("_y_bin"),
                 ]
             )
-            .sort(intensity_column, descending=True)
+            .sort(intensity_column, descending=descending)
             .group_by(["_x_bin", "_y_bin"])
             .head(points_per_bin)
             .drop(["_x_bin", "_y_bin"])
