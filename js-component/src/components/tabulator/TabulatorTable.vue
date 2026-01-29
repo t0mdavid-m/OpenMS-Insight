@@ -456,6 +456,9 @@ export default defineComponent({
           tab.modules.page.setMaxRows(newState.total_rows)
           tab.modules.page.setMaxPage(newState.total_pages)
           tab.redraw(true)
+          // Trigger setPage to refresh pagination counter (Showing X of Y rows)
+          // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
+          tab.setPage(newState.page || 1)
         }
 
         // Sync client's requested state with server's confirmed state
@@ -1394,6 +1397,9 @@ export default defineComponent({
               })
               // Force redraw to update the pagination UI
               tab.redraw(true)
+              // Trigger setPage to refresh pagination counter (Showing X of Y rows)
+              // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
+              tab.setPage(targetPage || tab.getPage() || 1)
             } catch (error) {
               console.error('[TabulatorTable] Error setting pagination limits:', error)
             }
@@ -1411,6 +1417,15 @@ export default defineComponent({
         // Only sync selection if not navigating pages
         if (!this.isNavigatingPages) {
           this.selectDefaultRow()
+          // Always scroll to selected row after data update (e.g., after sort changes row position)
+          // selectDefaultRow() uses setPageToRow().then() which may not reliably scroll
+          // for server-side pagination, so we explicitly scroll here
+          this.$nextTick(() => {
+            const selectedRows = this.tabulator?.getSelectedRows() || []
+            if (selectedRows.length > 0) {
+              selectedRows[0].scrollTo('center', false)
+            }
+          })
         }
         // Clear navigation flag after data update cycle completes
         this.isNavigatingPages = false
