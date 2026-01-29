@@ -664,6 +664,17 @@ export default defineComponent({
         this.onRowClick(row)
       })
 
+      // CRITICAL: Ensure visual selection matches selection state after EVERY render.
+      // This is the most reliable way to keep selection in sync because it fires
+      // after Tabulator has fully rendered the data, regardless of how the render
+      // was triggered (replaceData, setPage, filter, sort, etc.)
+      this.tabulator.on('renderComplete', () => {
+        // Skip during user-initiated row clicks (skipNextSync is set)
+        if (!this.skipNextSync) {
+          this.syncSelectionFromStore()
+        }
+      })
+
       // Handle remote sorting - Tabulator doesn't pass sorters to ajaxRequestFunc on header click
       // We need to manually trigger the remote request when sort changes
       if (this.isServerSidePagination) {
@@ -1417,15 +1428,6 @@ export default defineComponent({
         // Only sync selection if not navigating pages
         if (!this.isNavigatingPages) {
           this.selectDefaultRow()
-          // Always scroll to selected row after data update (e.g., after sort changes row position)
-          // selectDefaultRow() uses setPageToRow().then() which may not reliably scroll
-          // for server-side pagination, so we explicitly scroll here
-          this.$nextTick(() => {
-            const selectedRows = this.tabulator?.getSelectedRows() || []
-            if (selectedRows.length > 0) {
-              selectedRows[0].scrollTo('center', false)
-            }
-          })
         }
         // Clear navigation flag after data update cycle completes
         this.isNavigatingPages = false
