@@ -208,7 +208,9 @@ Heatmap(
 - `min_points`: Target size for downsampling (default: 20000)
 - `x_bins`, `y_bins`: Grid resolution for spatial binning
 - `colorscale`: Plotly colorscale name (default: 'Portland')
+- `reversescale`: Invert colorscale direction (default: False)
 - `log_scale`: Use log10 color mapping (default: True). Set to False for linear.
+- `low_values_on_top`: Prioritize low values during downsampling and display them on top (default: False). Use for scores where lower = better (e.g., e-values, PEP, q-values).
 - `intensity_label`: Custom colorbar label (default: 'Intensity')
 
 **Linear scale example:**
@@ -222,6 +224,24 @@ Heatmap(
     log_scale=False,              # Linear color mapping
     intensity_label='Score',      # Custom colorbar label
     colorscale='Blues',
+)
+```
+
+**Low values on top (PSM scores):**
+For identification results where lower scores indicate better matches (e.g., e-values, PEP, q-values), use `low_values_on_top=True` to preserve low-scoring points during downsampling and display them on top of high-scoring points:
+
+```python
+Heatmap(
+    cache_id="psm_evalue",
+    data_path="psm_data.parquet",
+    x_column='rt',
+    y_column='mz',
+    intensity_column='e_value',
+    log_scale=True,               # Log scale for e-values
+    low_values_on_top=True,       # Keep/show low e-values (best hits)
+    reversescale=True,            # Bright color = low value = best
+    intensity_label='E-value',
+    colorscale='Portland',
 )
 ```
 
