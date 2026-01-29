@@ -93,6 +93,7 @@ class Heatmap(BaseComponent):
         category_column: Optional[str] = None,
         category_colors: Optional[Dict[str, str]] = None,
         log_scale: bool = True,
+        low_values_on_top: bool = False,
         intensity_label: Optional[str] = None,
         **kwargs,
     ):
@@ -148,6 +149,11 @@ class Heatmap(BaseComponent):
                 If not provided, default Plotly colors will be used.
             log_scale: If True (default), apply log10 transformation to intensity
                 values for color mapping. Set to False for linear color mapping.
+            low_values_on_top: If True, invert the intensity priority for both downsampling
+                and display order. Default False keeps high-intensity points during
+                downsampling and draws them on top. Set to True when lower values are
+                "better" (e.g., e-values, PEP scores, q-values) so that low values are
+                preserved during downsampling and appear on top of high values.
             intensity_label: Custom label for the colorbar. Default is "Intensity".
                 Useful when displaying non-intensity values like scores or counts.
             **kwargs: Additional configuration options
@@ -169,6 +175,7 @@ class Heatmap(BaseComponent):
         self._category_column = category_column
         self._category_colors = category_colors or {}
         self._log_scale = log_scale
+        self._low_values_on_top = low_values_on_top
         self._intensity_label = intensity_label
         self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
@@ -228,6 +235,7 @@ class Heatmap(BaseComponent):
             "colorscale": self._colorscale,
             "category_column": self._category_column,
             "log_scale": self._log_scale,
+            "low_values_on_top": self._low_values_on_top,
             "intensity_label": self._intensity_label,
             # Note: category_colors is render-time styling, doesn't affect cache
         }
@@ -253,6 +261,7 @@ class Heatmap(BaseComponent):
         self._colorscale = config.get("colorscale", "Portland")
         self._category_column = config.get("category_column")
         self._log_scale = config.get("log_scale", True)
+        self._low_values_on_top = config.get("low_values_on_top", False)
         self._intensity_label = config.get("intensity_label")
         # category_colors is not stored in cache (render-time styling)
 
@@ -352,6 +361,7 @@ class Heatmap(BaseComponent):
                     current_source,
                     max_points=target_size,
                     intensity_column=self._intensity_column,
+                    descending=not self._low_values_on_top,
                 )
             else:
                 level = downsample_2d_streaming(
@@ -364,6 +374,7 @@ class Heatmap(BaseComponent):
                     y_bins=self._y_bins,
                     x_range=x_range,
                     y_range=y_range,
+                    descending=not self._low_values_on_top,
                 )
 
             # Sort and save immediately
@@ -1028,25 +1039,29 @@ class Heatmap(BaseComponent):
                     columns=columns_to_select,
                     filter_defaults=self._filter_defaults,
                 )
-                # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
+                # Sort for render order (last drawn = on top in scattergl)
+                # Default: ascending (high on top). low_values_on_top: descending (low on top)
                 if (
                     self._intensity_column
                     and self._intensity_column in df_pandas.columns
                 ):
                     df_pandas = df_pandas.sort_values(
-                        self._intensity_column, ascending=True
+                        self._intensity_column, ascending=not self._low_values_on_top
                     ).reset_index(drop=True)
             else:
                 # No filters to apply - levels already filtered by categorical filter
                 schema_names = data.collect_schema().names()
                 available_cols = [c for c in columns_to_select if c in schema_names]
                 df_polars = data.select(available_cols).collect()
-                # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
+                # Sort for render order (last drawn = on top in scattergl)
+                # Default: ascending (high on top). low_values_on_top: descending (low on top)
                 if (
                     self._intensity_column
                     and self._intensity_column in df_polars.columns
                 ):
-                    df_polars = df_polars.sort(self._intensity_column)
+                    df_polars = df_polars.sort(
+                        self._intensity_column, descending=self._low_values_on_top
+                    )
                 data_hash = compute_dataframe_hash(df_polars)
                 df_pandas = df_polars.to_pandas()
         else:
@@ -1058,9 +1073,12 @@ class Heatmap(BaseComponent):
             # Select only needed columns
             available_cols = [c for c in columns_to_select if c in df_polars.columns]
             df_polars = df_polars.select(available_cols)
-            # Sort by intensity ascending so high-intensity points are drawn on top (scattergl)
+            # Sort for render order (last drawn = on top in scattergl)
+            # Default: ascending (high on top). low_values_on_top: descending (low on top)
             if self._intensity_column and self._intensity_column in df_polars.columns:
-                df_polars = df_polars.sort(self._intensity_column)
+                df_polars = df_polars.sort(
+                    self._intensity_column, descending=self._low_values_on_top
+                )
             print(
                 f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}",
                 file=sys.stderr,
