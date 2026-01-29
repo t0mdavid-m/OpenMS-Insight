@@ -435,6 +435,29 @@ export default defineComponent({
         // (watchers receive new values before computed properties re-evaluate)
         this.injectServerSideData(newState)
 
+        // ALWAYS update pagination limits when they change (not just on data injection)
+        // This fixes the bug where filter changes update data but not the pagination UI
+        // because injectServerSideData() returns early when table already has data
+        const tab = this.tabulator as any
+        if (
+          tab.modules?.page &&
+          (oldState?.total_rows !== newState.total_rows ||
+            oldState?.total_pages !== newState.total_pages)
+        ) {
+          console.log(
+            `[TabulatorTable ${this.args.title}] paginationState watcher: updating pagination limits`,
+            {
+              oldTotalRows: oldState?.total_rows,
+              newTotalRows: newState.total_rows,
+              oldTotalPages: oldState?.total_pages,
+              newTotalPages: newState.total_pages,
+            }
+          )
+          tab.modules.page.setMaxRows(newState.total_rows)
+          tab.modules.page.setMaxPage(newState.total_pages)
+          tab.redraw(true)
+        }
+
         // Sync client's requested state with server's confirmed state
         // This ensures local state stays up-to-date after server response
         if (newState.sort_column !== undefined) {
