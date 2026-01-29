@@ -1273,6 +1273,177 @@ class TestTableInitialSelection:
         assert state_manager.get_selection("selected_id") == 0
         assert state_manager.get_selection("selected_scan") == 1
 
+    def test_initial_selection_with_initial_sort_duplicates(
+        self, tmp_path, state_manager, mock_streamlit_bridge
+    ):
+        """
+        Initial selection should pick first row AFTER initial_sort is applied.
+
+        Scenario:
+        - 200 rows with scan_id having 20 duplicates each (values 0-9)
+        - initial_sort descending on scan_id
+        - After sort: scan_id=9 rows first (id=180-199), then scan_id=8 (id=160-179), etc.
+
+        Expected: get_initial_selection() returns {"selected_id": 180}
+        (first row after descending sort on scan_id)
+        """
+        data = pl.LazyFrame(
+            {
+                "id": list(range(200)),
+                "scan_id": [i // 20 for i in range(200)],  # 0-9, 20 duplicates each
+                "value": [f"item_{i}" for i in range(200)],
+            }
+        )
+
+        table = Table(
+            cache_id="initial_sort_dup_test",
+            data=data,
+            cache_path=str(tmp_path),
+            interactivity={"selected_id": "id"},
+            initial_sort=[{"column": "scan_id", "dir": "desc"}],
+            pagination=True,
+            page_size=50,
+            pagination_identifier="initial_sort_dup_test_page",
+        )
+
+        state = state_manager.get_state_for_vue()
+        result = table.get_initial_selection(state)
+
+        # After sorting by scan_id DESC:
+        # scan_id=9: id=180,181,...,199 (first 20 rows)
+        # First row = id=180
+        assert result is not None
+        assert result["selected_id"] == 180
+
+    def test_initial_selection_matches_displayed_data_with_sort_duplicates(
+        self, tmp_path, state_manager, mock_streamlit_bridge
+    ):
+        """
+        Full render cycle: initial selection value should match first row in tableData.
+
+        This tests that the selection from get_initial_selection() matches
+        the actual first row displayed to the user when initial_sort has duplicates.
+
+        Bug scenario: Selection is computed but doesn't match the sorted display order.
+        """
+        session_id = state_manager.session_id
+
+        data = pl.LazyFrame(
+            {
+                "id": list(range(200)),
+                "scan_id": [i // 20 for i in range(200)],  # 0-9, 20 duplicates each
+                "value": [f"item_{i}" for i in range(200)],
+            }
+        )
+
+        table = Table(
+            cache_id="sort_dup_match_test",
+            data=data,
+            cache_path=str(tmp_path),
+            interactivity={"selected_id": "id"},
+            initial_sort=[{"column": "scan_id", "dir": "desc"}],
+            pagination=True,
+            page_size=50,
+            pagination_identifier="sort_dup_match_test_page",
+        )
+
+        # Capture what selection is set during render
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=1,
+            page_size=50,
+            session_id=session_id,
+            pagination_identifier="sort_dup_match_test_page",
+        )
+
+        render_component(table, state_manager)
+
+        # Get the selection that was set
+        selected_id = state_manager.get_selection("selected_id")
+
+        # Now get the actual displayed data
+        state = state_manager.get_state_for_vue()
+        state["sort_dup_match_test_page"] = {"page": 1, "page_size": 50}
+        vue_data = table._prepare_vue_data(state)
+
+        # BUG TEST: The selected_id MUST match the first row in tableData
+        first_displayed_id = vue_data["tableData"]["id"].iloc[0]
+
+        assert selected_id == first_displayed_id, (
+            f"Selection mismatch: selected_id={selected_id} but "
+            f"first displayed row has id={first_displayed_id}"
+        )
+
+    def test_rerun_shows_selected_row_after_initial_sort_duplicates(
+        self, tmp_path, state_manager, mock_streamlit_bridge
+    ):
+        """
+        After initial render with initial_sort on duplicates, rerun should
+        show the selected row at the correct position.
+
+        Scenario:
+        - Initial render sets selection to first sorted row
+        - Rerun should display data with selected row visible
+
+        This tests the full round-trip behavior.
+        """
+        session_id = state_manager.session_id
+
+        data = pl.LazyFrame(
+            {
+                "id": list(range(200)),
+                "scan_id": [i // 20 for i in range(200)],
+                "value": [f"item_{i}" for i in range(200)],
+            }
+        )
+
+        table = Table(
+            cache_id="sort_dup_rerun_test",
+            data=data,
+            cache_path=str(tmp_path),
+            interactivity={"selected_id": "id"},
+            initial_sort=[{"column": "scan_id", "dir": "desc"}],
+            pagination=True,
+            page_size=50,
+            pagination_identifier="sort_dup_rerun_test_page",
+        )
+
+        # First render
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=1,
+            page_size=50,
+            session_id=session_id,
+            pagination_identifier="sort_dup_rerun_test_page",
+        )
+        render_component(table, state_manager)
+
+        selected_id = state_manager.get_selection("selected_id")
+
+        # Simulate rerun - Vue returns same page
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=1,
+            page_size=50,
+            session_id=session_id,
+            pagination_identifier="sort_dup_rerun_test_page",
+        )
+        render_component(table, state_manager)
+
+        # Get displayed data after rerun
+        state = state_manager.get_state_for_vue()
+        state["sort_dup_rerun_test_page"] = {"page": 1, "page_size": 50}
+        vue_data = table._prepare_vue_data(state)
+
+        # Selected row should be in the displayed data
+        displayed_ids = vue_data["tableData"]["id"].tolist()
+        assert selected_id in displayed_ids, (
+            f"Selected id={selected_id} not found in displayed data: {displayed_ids[:10]}..."
+        )
+
+        # And it should be the first row (since it was auto-selected as first)
+        assert displayed_ids[0] == selected_id, (
+            f"Selected id={selected_id} should be first row, "
+            f"but first row is id={displayed_ids[0]}"
+        )
+
 
 # =============================================================================
 # TestTableSelectionClearingOnInvalidFilter
