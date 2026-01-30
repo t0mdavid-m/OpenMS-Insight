@@ -240,6 +240,9 @@ export default defineComponent({
       } as Record<ExtraFragmentType, boolean>,
       fragmentMassTolerance: 10,
       toleranceIsPpm: true,
+      // Track if settings have been initialized from Python defaults.
+      // Once initialized, user adjustments persist across filter changes.
+      settingsInitialized: false,
       useExternalAnnotations: true,
       sequenceObjects: [] as SequenceObject[],
       fragmentTableData: [] as FragmentTableRow[],
@@ -365,21 +368,23 @@ export default defineComponent({
         // Apply auto-zoom for short sequences
         this.applyAutoZoom()
 
-        // Initialize tolerance from search params if available
-        if (this.sequenceData?.fragment_tolerance !== undefined) {
-          this.fragmentMassTolerance = this.sequenceData.fragment_tolerance
-        }
-        if (this.sequenceData?.fragment_tolerance_ppm !== undefined) {
-          this.toleranceIsPpm = this.sequenceData.fragment_tolerance_ppm
-        }
-        // Initialize neutral losses setting
-        if (this.sequenceData?.neutral_losses !== undefined) {
-          this.ionTypesExtra['water loss'] = this.sequenceData.neutral_losses
-          this.ionTypesExtra['ammonium loss'] = this.sequenceData.neutral_losses
-        }
-        // Initialize proton loss/addition setting
-        if (this.sequenceData?.proton_loss_addition !== undefined) {
-          this.ionTypesExtra['proton loss/addition'] = this.sequenceData.proton_loss_addition
+        // Initialize settings from Python defaults ONLY on first load.
+        // Once initialized, user adjustments persist across filter changes.
+        if (!this.settingsInitialized) {
+          if (this.sequenceData?.fragment_tolerance !== undefined) {
+            this.fragmentMassTolerance = this.sequenceData.fragment_tolerance
+          }
+          if (this.sequenceData?.fragment_tolerance_ppm !== undefined) {
+            this.toleranceIsPpm = this.sequenceData.fragment_tolerance_ppm
+          }
+          if (this.sequenceData?.neutral_losses !== undefined) {
+            this.ionTypesExtra['water loss'] = this.sequenceData.neutral_losses
+            this.ionTypesExtra['ammonium loss'] = this.sequenceData.neutral_losses
+          }
+          if (this.sequenceData?.proton_loss_addition !== undefined) {
+            this.ionTypesExtra['proton loss/addition'] = this.sequenceData.proton_loss_addition
+          }
+          this.settingsInitialized = true
         }
         this.matchFragments()
       },
