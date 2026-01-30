@@ -664,13 +664,12 @@ export default defineComponent({
         this.onRowClick(row)
       })
 
-      // CRITICAL: Ensure visual selection matches selection state after EVERY render.
-      // This is the most reliable way to keep selection in sync because it fires
-      // after Tabulator has fully rendered the data, regardless of how the render
-      // was triggered (replaceData, setPage, filter, sort, etc.)
+      // Ensure visual selection matches selection state after render.
+      // Only sync if no row is currently selected to avoid infinite loops
+      // (selecting a row triggers render, which would trigger sync again).
       this.tabulator.on('renderComplete', () => {
-        // Skip during user-initiated row clicks (skipNextSync is set)
-        if (!this.skipNextSync) {
+        const selectedRows = this.tabulator?.getSelectedRows() || []
+        if (selectedRows.length === 0 && !this.skipNextSync) {
           this.syncSelectionFromStore()
         }
       })
