@@ -271,7 +271,16 @@ def _prepare_vue_data_cached(
                 data_hash = _hash_data(vue_data)
                 return vue_data, data_hash
         else:
-            # No dynamic annotations - return cached as-is
+            # No dynamic annotations - ensure _plotConfig is present
+            # When annotations are cleared, Vue needs _plotConfig with null columns
+            # to stop showing stale annotations (Vue merge only updates keys present)
+            if hasattr(component, "_build_plot_config"):
+                vue_data = dict(cached_data)
+                vue_data["_plotConfig"] = component._build_plot_config(
+                    getattr(component, "_highlight_column", None),
+                    getattr(component, "_annotation_column", None),
+                )
+                return vue_data, cached_hash
             return cached_data, cached_hash
 
     # Cache miss - compute data
@@ -776,6 +785,7 @@ def render_component(
             if st.session_state.get(ann_hash_key) is not None:
                 annotations_changed = True
                 st.session_state[ann_hash_key] = None
+            _store_component_annotations(key, None)
 
         if annotations_changed:
             state_changed = True

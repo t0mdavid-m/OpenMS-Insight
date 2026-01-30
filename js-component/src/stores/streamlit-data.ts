@@ -193,6 +193,12 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
               this.renderData.args.components = newData.args.components
             }
           }
+          // Update _plotConfig if sent (for dynamic annotation column changes)
+          // This ensures LinePlot clears annotations when SequenceView tolerance changes
+          // result in no matching fragment ions
+          if ((newData.args as any)._plotConfig !== undefined) {
+            this.dataForDrawing._plotConfig = (newData.args as any)._plotConfig
+          }
         } else {
           // Cache is empty (e.g., after page navigation) - request data from Python
           console.warn('[StreamlitDataStore] Cache miss - requesting data from Python')
