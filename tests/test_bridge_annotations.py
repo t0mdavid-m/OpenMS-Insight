@@ -1,12 +1,10 @@
 """Tests for annotation handling in bridge.py - specifically the clearing bug."""
 
-import pytest
 from unittest.mock import patch
 
 from openms_insight.rendering.bridge import (
     _store_component_annotations,
     get_component_annotations,
-    _COMPONENT_ANNOTATIONS_KEY,
 )
 
 
@@ -78,7 +76,7 @@ def test_render_component_clears_annotations_when_vue_returns_none(mock_streamli
     with patch("openms_insight.rendering.bridge.st.session_state", mock_streamlit):
         # Simulate previous render that stored annotations
         _store_component_annotations("sequence_view_key", annotations)
-        mock_streamlit["_svc_ann_hash_sequence_view_key"] = hash(tuple([1, 2, 3]))
+        mock_streamlit["_svc_ann_hash_sequence_view_key"] = hash((1, 2, 3))
 
         # Verify annotations are stored
         assert get_component_annotations("sequence_view_key") is not None
@@ -120,13 +118,14 @@ def test_prepare_vue_data_cached_includes_plot_config_when_annotations_cleared()
     cleared, the cache returned base data WITHOUT _plotConfig, so Vue's merge
     logic kept the old _plotConfig with stale annotationColumn reference.
     """
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+
     from openms_insight.rendering.bridge import (
         _prepare_vue_data_cached,
         _set_cached_vue_data,
-        _get_component_cache,
     )
-    from unittest.mock import MagicMock
-    import pandas as pd
 
     # Create mock component that has _build_plot_config method
     mock_component = MagicMock()

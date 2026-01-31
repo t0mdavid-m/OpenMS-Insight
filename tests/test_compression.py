@@ -3,7 +3,7 @@ Tests for compression.py downsampling functions.
 """
 
 import polars as pl
-import pytest
+
 from openms_insight.preprocessing.compression import (
     downsample_2d_simple,
     downsample_2d_streaming,

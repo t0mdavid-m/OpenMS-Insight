@@ -6,8 +6,10 @@ prioritized during downsampling and displayed on top.
 """
 
 from unittest.mock import patch
+
 import polars as pl
 import pytest
+
 from openms_insight import Heatmap
 from openms_insight.core.state import StateManager
 

@@ -27,7 +27,6 @@ from openms_insight import Table
 from openms_insight.core.state import StateManager
 from openms_insight.rendering.bridge import render_component
 
-
 # =============================================================================
 # Mock Infrastructure
 # =============================================================================
