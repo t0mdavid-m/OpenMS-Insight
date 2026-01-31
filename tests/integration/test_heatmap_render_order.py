@@ -33,12 +33,14 @@ def state_manager(mock_streamlit):
 @pytest.fixture
 def heatmap_data_with_scores() -> pl.LazyFrame:
     """Heatmap data with known intensity values for ordering tests."""
-    return pl.LazyFrame({
-        "rt": [1.0, 2.0, 3.0, 4.0, 5.0],
-        "mz": [100.0, 200.0, 300.0, 400.0, 500.0],
-        "intensity": [1000.0, 500.0, 2000.0, 100.0, 1500.0],
-        "scan_id": [1, 1, 1, 1, 1],
-    })
+    return pl.LazyFrame(
+        {
+            "rt": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "mz": [100.0, 200.0, 300.0, 400.0, 500.0],
+            "intensity": [1000.0, 500.0, 2000.0, 100.0, 1500.0],
+            "scan_id": [1, 1, 1, 1, 1],
+        }
+    )
 
 
 class TestLowValuesOnTopDefault:
@@ -158,8 +160,10 @@ class TestLowValuesOnTopCacheInvalidation:
         result2 = heatmap2._prepare_vue_data(state_manager.get_state_for_vue())
 
         # Different orderings
-        assert result1["heatmapData"]["intensity"].tolist() != \
-               result2["heatmapData"]["intensity"].tolist()
+        assert (
+            result1["heatmapData"]["intensity"].tolist()
+            != result2["heatmapData"]["intensity"].tolist()
+        )
 
 
 class TestLowValuesOnTopCacheReconstruction:
@@ -189,8 +193,10 @@ class TestLowValuesOnTopCacheReconstruction:
         result2 = heatmap2._prepare_vue_data(state_manager.get_state_for_vue())
 
         # Same ordering (descending)
-        assert result1["heatmapData"]["intensity"].tolist() == \
-               result2["heatmapData"]["intensity"].tolist()
+        assert (
+            result1["heatmapData"]["intensity"].tolist()
+            == result2["heatmapData"]["intensity"].tolist()
+        )
         # Verify it's descending (low on top)
         intensities = result2["heatmapData"]["intensity"].tolist()
         assert intensities == sorted(intensities, reverse=True)

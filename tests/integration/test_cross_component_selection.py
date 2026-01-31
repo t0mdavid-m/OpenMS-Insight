@@ -619,7 +619,10 @@ class TestCrossComponentSelectionWithFilters:
         assert result["_pagination"]["total_rows"] == 250
 
     def test_filter_change_invalidates_external_selection(
-        self, filtered_table_with_interactivity, state_manager_cross, mock_streamlit_bridge_cross
+        self,
+        filtered_table_with_interactivity,
+        state_manager_cross,
+        mock_streamlit_bridge_cross,
     ):
         """
         Filter change that invalidates selection triggers auto-selection.
@@ -1206,5 +1209,7 @@ class TestCrossComponentSelectionWithSort:
 
         result_desc = table._prepare_vue_data(state)
         # id=250 with score=250.0 is at position 249 in descending (500-250-1=249)
-        assert result_desc.get("_navigate_to_page") == 3  # Still page 3 but different index
+        assert (
+            result_desc.get("_navigate_to_page") == 3
+        )  # Still page 3 but different index
         assert result_desc.get("_target_row_index") == 49  # 249 % 100 = 49

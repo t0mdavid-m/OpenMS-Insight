@@ -15,10 +15,12 @@ class TestDownsampleDescendingParameter:
 
     def test_simple_descending_true_keeps_high(self):
         """descending=True keeps highest values."""
-        data = pl.LazyFrame({
-            "x": [1, 2, 3, 4, 5],
-            "intensity": [100, 500, 200, 400, 300],
-        })
+        data = pl.LazyFrame(
+            {
+                "x": [1, 2, 3, 4, 5],
+                "intensity": [100, 500, 200, 400, 300],
+            }
+        )
         result = downsample_2d_simple(
             data, max_points=3, intensity_column="intensity", descending=True
         ).collect()
@@ -30,10 +32,12 @@ class TestDownsampleDescendingParameter:
 
     def test_simple_descending_false_keeps_low(self):
         """descending=False keeps lowest values."""
-        data = pl.LazyFrame({
-            "x": [1, 2, 3, 4, 5],
-            "intensity": [100, 500, 200, 400, 300],
-        })
+        data = pl.LazyFrame(
+            {
+                "x": [1, 2, 3, 4, 5],
+                "intensity": [100, 500, 200, 400, 300],
+            }
+        )
         result = downsample_2d_simple(
             data, max_points=3, intensity_column="intensity", descending=False
         ).collect()
@@ -45,10 +49,12 @@ class TestDownsampleDescendingParameter:
 
     def test_simple_default_is_descending_true(self):
         """Default behavior (no descending arg) keeps highest values."""
-        data = pl.LazyFrame({
-            "x": [1, 2, 3, 4, 5],
-            "intensity": [100, 500, 200, 400, 300],
-        })
+        data = pl.LazyFrame(
+            {
+                "x": [1, 2, 3, 4, 5],
+                "intensity": [100, 500, 200, 400, 300],
+            }
+        )
         result = downsample_2d_simple(
             data, max_points=3, intensity_column="intensity"
         ).collect()
@@ -61,11 +67,13 @@ class TestDownsampleDescendingParameter:
 
     def test_streaming_descending_true_keeps_high(self):
         """descending=True keeps highest values in streaming mode."""
-        data = pl.LazyFrame({
-            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
-            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
-            "intensity": [100.0, 500.0, 200.0, 400.0, 300.0],
-        })
+        data = pl.LazyFrame(
+            {
+                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+                "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+                "intensity": [100.0, 500.0, 200.0, 400.0, 300.0],
+            }
+        )
         result = downsample_2d_streaming(
             data,
             max_points=3,
@@ -85,11 +93,13 @@ class TestDownsampleDescendingParameter:
 
     def test_streaming_descending_false_keeps_low(self):
         """descending=False keeps lowest values in streaming mode."""
-        data = pl.LazyFrame({
-            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
-            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
-            "intensity": [100.0, 500.0, 200.0, 400.0, 300.0],
-        })
+        data = pl.LazyFrame(
+            {
+                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+                "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+                "intensity": [100.0, 500.0, 200.0, 400.0, 300.0],
+            }
+        )
         result = downsample_2d_streaming(
             data,
             max_points=3,
@@ -109,11 +119,13 @@ class TestDownsampleDescendingParameter:
 
     def test_streaming_default_is_descending_true(self):
         """Default behavior (no descending arg) keeps highest values in streaming."""
-        data = pl.LazyFrame({
-            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
-            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
-            "intensity": [100.0, 500.0, 200.0, 400.0, 300.0],
-        })
+        data = pl.LazyFrame(
+            {
+                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+                "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+                "intensity": [100.0, 500.0, 200.0, 400.0, 300.0],
+            }
+        )
         result = downsample_2d_streaming(
             data,
             max_points=3,

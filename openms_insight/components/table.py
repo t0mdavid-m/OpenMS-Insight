@@ -657,8 +657,12 @@ class Table(BaseComponent):
             # Fall back to initial_sort configuration on initial load
             # initial_sort is a list of dicts: [{"column": "mass", "dir": "desc"}, ...]
             sort_columns = [s["column"] for s in self._initial_sort]
-            sort_descending = [s.get("dir", "asc") == "desc" for s in self._initial_sort]
-            data = data.sort(sort_columns, descending=sort_descending, maintain_order=True)
+            sort_descending = [
+                s.get("dir", "asc") == "desc" for s in self._initial_sort
+            ]
+            data = data.sort(
+                sort_columns, descending=sort_descending, maintain_order=True
+            )
 
         # Get total row count (after filters, before pagination)
         total_rows = data.select(pl.len()).collect().item()
