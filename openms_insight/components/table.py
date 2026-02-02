@@ -769,13 +769,33 @@ class Table(BaseComponent):
                     should_navigate = True
 
             if should_navigate:
-                for identifier, column in self._interactivity.items():
-                    selected_value = state.get(identifier)
+                # PRIORITY: Use index_field for navigation if available
+                # index_field is guaranteed unique, so we get the correct row position
+                # Find the interactivity identifier that maps to index_field column
+                nav_identifier = None
+                nav_column = None
+                if self._index_field:
+                    for ident, col in self._interactivity.items():
+                        if col == self._index_field:
+                            nav_identifier = ident
+                            nav_column = col
+                            break
+
+                # Fall back to first interactivity identifier if no index_field match
+                if nav_identifier is None:
+                    for ident, col in self._interactivity.items():
+                        if state.get(ident) is not None:
+                            nav_identifier = ident
+                            nav_column = col
+                            break
+
+                if nav_identifier is not None and nav_column is not None:
+                    selected_value = state.get(nav_identifier)
                     if selected_value is not None:
                         # Type conversion based on column dtype (same logic as go-to)
                         schema = data.collect_schema()
-                        if column in schema:
-                            col_dtype = schema[column]
+                        if nav_column in schema:
+                            col_dtype = schema[nav_column]
                             if col_dtype in NUMERIC_DTYPES:
                                 # Column is numeric - convert value to numeric if possible
                                 if isinstance(selected_value, str):
@@ -799,7 +819,7 @@ class Table(BaseComponent):
                         # with_row_index adds position so we know which page it's on
                         search_result = (
                             data.with_row_index("_row_num")
-                            .filter(pl.col(column) == selected_value)
+                            .filter(pl.col(nav_column) == selected_value)
                             .select("_row_num")
                             .head(1)
                             .collect()
@@ -831,10 +851,10 @@ class Table(BaseComponent):
                             # Update selection to first row's value AND set page to 1
                             if sort_filter_changed and not selection_changed:
                                 first_row_result = (
-                                    data.select(pl.col(column)).head(1).collect()
+                                    data.select(pl.col(nav_column)).head(1).collect()
                                 )
                                 if len(first_row_result) > 0:
-                                    first_value = first_row_result[column][0]
+                                    first_value = first_row_result[nav_column][0]
                                     if hasattr(first_value, "item"):
                                         first_value = first_value.item()
 
@@ -845,7 +865,9 @@ class Table(BaseComponent):
                                     state_manager = get_default_state_manager()
 
                                     # Update selection to first row
-                                    state_manager.set_selection(identifier, first_value)
+                                    state_manager.set_selection(
+                                        nav_identifier, first_value
+                                    )
 
                                     # Update pagination state to page 1
                                     updated_pagination = {
@@ -856,7 +878,6 @@ class Table(BaseComponent):
                                         self._pagination_identifier, updated_pagination
                                     )
                                     page = 1  # Use page 1 for slicing
-                        break
 
         # Clamp page to valid range
         page = max(1, min(page, total_pages))

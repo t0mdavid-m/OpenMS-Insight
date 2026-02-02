@@ -1213,3 +1213,238 @@ class TestCrossComponentSelectionWithSort:
             result_desc.get("_navigate_to_page") == 3
         )  # Still page 3 but different index
         assert result_desc.get("_target_row_index") == 49  # 249 % 100 = 49
+
+
+# =============================================================================
+# TestPaginationPreservationOnSelection
+# =============================================================================
+
+
+class TestPaginationPreservationOnSelection:
+    """
+    Test that page number is preserved when user clicks a row on that page.
+
+    This tests the bug: user on page 10, clicks row on page 10, page should stay 10.
+    """
+
+    def test_selection_on_page_5_keeps_page_5(
+        self, cross_component_data, tmp_path, state_manager_cross, mock_streamlit_cross
+    ):
+        """
+        User on page 5, clicks row 450 (on page 5), page should stay 5.
+
+        Scenario:
+        1. User navigates to page 5 (rows 400-499)
+        2. User clicks row with id=450
+        3. Table should stay on page 5, not reset to page 1
+
+        This is the exact bug reported.
+        """
+        table = Table(
+            cache_id="page_preserve_5",
+            data=cross_component_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="page_preserve_5_page",
+            interactivity={"selected_id": "id"},
+            index_field="id",
+        )
+
+        # User clicks row 450 (on page 5: rows 400-499)
+        state_manager_cross.set_selection("selected_id", 450)
+
+        state = state_manager_cross.get_state_for_vue()
+        state["page_preserve_5_page"] = {
+            "page": 5,
+            "page_size": 100,
+        }  # User is on page 5
+
+        result = table._prepare_vue_data(state)
+
+        # CRITICAL: Page should stay 5, not reset to 1
+        assert result["_pagination"]["page"] == 5, (
+            f"Page jumped to {result['_pagination']['page']} instead of staying on 5"
+        )
+
+    def test_selection_on_page_3_keeps_page_3(
+        self, cross_component_data, tmp_path, state_manager_cross, mock_streamlit_cross
+    ):
+        """Same test with page 3."""
+        table = Table(
+            cache_id="page_preserve_3",
+            data=cross_component_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="page_preserve_3_page",
+            interactivity={"selected_id": "id"},
+            index_field="id",
+        )
+
+        # User clicks row 250 (on page 3: rows 200-299)
+        state_manager_cross.set_selection("selected_id", 250)
+
+        state = state_manager_cross.get_state_for_vue()
+        state["page_preserve_3_page"] = {"page": 3, "page_size": 100}
+
+        result = table._prepare_vue_data(state)
+
+        assert result["_pagination"]["page"] == 3
+
+    def test_selection_change_on_same_page_no_navigation_hint(
+        self, cross_component_data, tmp_path, state_manager_cross, mock_streamlit_cross
+    ):
+        """
+        Selection change within same page should not produce navigation hints.
+
+        User on page 3, clicks row 250 (also on page 3).
+        No _navigate_to_page should be returned since already on correct page.
+        """
+        table = Table(
+            cache_id="no_nav_hint",
+            data=cross_component_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="no_nav_hint_page",
+            interactivity={"selected_id": "id"},
+            index_field="id",
+        )
+
+        state_manager_cross.set_selection("selected_id", 250)
+
+        state = state_manager_cross.get_state_for_vue()
+        state["no_nav_hint_page"] = {"page": 3, "page_size": 100}
+
+        result = table._prepare_vue_data(state)
+
+        # Should NOT have navigation hint since already on correct page
+        assert "_navigate_to_page" not in result or result.get("_navigate_to_page") == 3
+        assert result["_pagination"]["page"] == 3
+
+    def test_selection_on_page_with_initial_sort_preserves_page(
+        self, cross_component_data, tmp_path, state_manager_cross, mock_streamlit_cross
+    ):
+        """
+        Test pagination preservation with initial_sort configured (MHCquant scenario).
+
+        This mirrors the exact setup from MHCquant's Workflow.py:
+        - Table with initial_sort=[{'column': 'score', 'dir': 'asc'}]
+        - Multiple interactivity identifiers
+        - User navigates to a page, clicks a row on that page
+
+        Bug: Page jumps to 1 instead of staying on current page.
+        """
+        table = Table(
+            cache_id="mhcquant_like_table",
+            data=cross_component_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="mhcquant_like_table_page",
+            interactivity={"identification": "id"},
+            index_field="id",
+            initial_sort=[{"column": "score", "dir": "asc"}],
+        )
+
+        # With ascending sort by score (which equals id in test data),
+        # id=250 is at position 250, which is page 3 (rows 200-299)
+        state_manager_cross.set_selection("identification", 250)
+
+        state = state_manager_cross.get_state_for_vue()
+        # User is already on page 3
+        state["mhcquant_like_table_page"] = {"page": 3, "page_size": 100}
+
+        result = table._prepare_vue_data(state)
+
+        # CRITICAL: Page should stay 3, not reset to 1
+        assert result["_pagination"]["page"] == 3, (
+            f"Page jumped to {result['_pagination']['page']} instead of staying on 3"
+        )
+
+    def test_selection_on_page_with_initial_sort_and_multiple_identifiers(
+        self, cross_component_data, tmp_path, state_manager_cross, mock_streamlit_cross
+    ):
+        """
+        Test with multiple interactivity identifiers (exact MHCquant setup).
+
+        MHCquant uses: interactivity={"file": "file_index", "spectrum": "scan_id", "identification": "id_idx"}
+        This test simulates that with our test data structure.
+        """
+        table = Table(
+            cache_id="multi_id_sort_table",
+            data=cross_component_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="multi_id_sort_table_page",
+            # Multiple identifiers like MHCquant
+            interactivity={
+                "category_sel": "category",
+                "scan_sel": "scan_id",
+                "identification": "id",
+            },
+            index_field="id",
+            initial_sort=[{"column": "score", "dir": "asc"}],
+        )
+
+        # Set multiple selections (simulating linked components)
+        state_manager_cross.set_selection("category_sel", "A")
+        state_manager_cross.set_selection("scan_sel", 1)
+        state_manager_cross.set_selection("identification", 300)
+
+        state = state_manager_cross.get_state_for_vue()
+        # User is on page 4 (row 300 with asc sort is at position 300 = page 4)
+        state["multi_id_sort_table_page"] = {"page": 4, "page_size": 100}
+
+        result = table._prepare_vue_data(state)
+
+        # Page should stay 4
+        assert result["_pagination"]["page"] == 4, (
+            f"Page jumped to {result['_pagination']['page']} instead of staying on 4"
+        )
+
+    def test_row_click_on_current_page_with_sort_state_in_pagination(
+        self, cross_component_data, tmp_path, state_manager_cross, mock_streamlit_cross
+    ):
+        """
+        Test when pagination state includes sort info (user-applied sort via Vue).
+
+        This tests the scenario where:
+        1. User applies sort via Vue (sort info in pagination state)
+        2. User navigates to page N
+        3. User clicks a row on page N
+        4. Page should stay N
+        """
+        table = Table(
+            cache_id="sort_in_pagination_table",
+            data=cross_component_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="sort_in_pagination_table_page",
+            interactivity={"identification": "id"},
+            index_field="id",
+        )
+
+        # User clicked row with id=450
+        state_manager_cross.set_selection("identification", 450)
+
+        state = state_manager_cross.get_state_for_vue()
+        # Pagination state includes user-applied sort AND current page
+        # With desc sort, id=450 (score=450) is at position 49 (500-450-1=49), page 1
+        # With asc sort, id=450 is at position 450, page 5
+        state["sort_in_pagination_table_page"] = {
+            "page": 5,
+            "page_size": 100,
+            "sort_column": "score",
+            "sort_dir": "asc",
+        }
+
+        result = table._prepare_vue_data(state)
+
+        # With asc sort, id=450 is on page 5 - should stay there
+        assert result["_pagination"]["page"] == 5, (
+            f"Page jumped to {result['_pagination']['page']} instead of staying on 5"
+        )
