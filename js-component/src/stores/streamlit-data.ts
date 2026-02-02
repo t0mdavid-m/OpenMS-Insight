@@ -92,13 +92,12 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
               // Accept if:
               // 1. New key or undefined value
               // 2. Python has equal/newer counter for this type
-              // 3. FIX: For pagination keys, accept when Python sends new data (dataChanged)
-              //    Python's response is authoritative for what data was actually returned
+              // Counter-based resolution ensures Vue's rapid page clicks aren't overwritten
+              // by stale Python state that hasn't caught up yet.
               const shouldAccept =
                 !(key in state) ||
                 state[key] === undefined ||
-                pythonCounter >= vueCounter ||
-                (isPagination && dataChanged)
+                pythonCounter >= vueCounter
 
               console.log(`[StreamlitDataStore] State key "${key}":`, {
                 isPagination,

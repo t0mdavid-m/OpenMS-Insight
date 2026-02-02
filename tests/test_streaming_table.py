@@ -434,3 +434,116 @@ class TestStreamingTableStateDependencies:
 
         assert table._pagination_identifier == "my_custom_page_state"
         assert "my_custom_page_state" in table.get_state_dependencies()
+
+
+class TestPaginationCounterConflict:
+    """Tests for counter-based conflict resolution protecting Vue pagination state."""
+
+    def test_vue_pagination_not_overwritten_by_stale_python(self, mock_streamlit):
+        """Vue's page state should be preserved when Python's counter is behind.
+
+        This tests the scenario where:
+        1. User navigates to page 10, Vue increments pagination_counter to 14
+        2. User clicks a row, triggering a rerun
+        3. Python processes the selection but its counter is still at 12
+        4. Python sends response with stale page=1
+
+        The StateManager should reject the stale pagination state because
+        Vue's counter (14) > Python's counter (12).
+        """
+        from openms_insight.core.state import StateManager
+
+        state_manager = StateManager("test_state")
+        pagination_id = "test_table_page"
+
+        # Simulate initial state: user navigated to page 10
+        state_manager._state["pagination_counter"] = 14
+        state_manager._state["selections"][pagination_id] = {
+            "page": 10,
+            "page_size": 100,
+        }
+
+        # Simulate stale Vue state coming back with counter 12 and page 1
+        # (This represents what Python would echo back before catching up)
+        vue_state = {
+            "pagination_counter": 12,
+            "selection_counter": 0,
+            "id": state_manager.session_id,
+            pagination_id: {"page": 1, "page_size": 100},
+        }
+
+        # This should NOT update the pagination state
+        state_manager.update_from_vue(vue_state)
+
+        # Page should still be 10 because Python's counter (12) < Vue's counter (14)
+        assert state_manager._state["selections"][pagination_id]["page"] == 10
+
+    def test_python_pagination_accepted_when_counter_higher(self, mock_streamlit):
+        """Python's page state should be accepted when its counter is higher.
+
+        This tests legitimate updates like sort/filter changes where Python
+        resets to page 1 intentionally.
+        """
+        from openms_insight.core.state import StateManager
+
+        state_manager = StateManager("test_state")
+        pagination_id = "test_table_page"
+
+        # Initial state: user on page 5
+        state_manager._state["pagination_counter"] = 10
+        state_manager._state["selections"][pagination_id] = {
+            "page": 5,
+            "page_size": 100,
+        }
+
+        # Vue state with higher counter (e.g., after Python processed a filter change)
+        vue_state = {
+            "pagination_counter": 11,  # Higher than Python's 10
+            "selection_counter": 0,
+            "id": state_manager.session_id,
+            pagination_id: {"page": 1, "page_size": 100},
+        }
+
+        # This SHOULD update the pagination state
+        state_manager.update_from_vue(vue_state)
+
+        # Page should be updated to 1
+        assert state_manager._state["selections"][pagination_id]["page"] == 1
+
+    def test_selection_and_pagination_counters_independent(self, mock_streamlit):
+        """Selection updates shouldn't affect pagination counter checks.
+
+        This ensures the two counters are truly independent - a selection
+        update with high selection_counter shouldn't allow pagination updates
+        with low pagination_counter.
+        """
+        from openms_insight.core.state import StateManager
+
+        state_manager = StateManager("test_state")
+        pagination_id = "test_table_page"
+        selection_id = "spectrum"
+
+        # Initial state: high pagination counter, low selection counter
+        state_manager._state["pagination_counter"] = 20
+        state_manager._state["selection_counter"] = 5
+        state_manager._state["selections"][pagination_id] = {
+            "page": 10,
+            "page_size": 100,
+        }
+        state_manager._state["selections"][selection_id] = 42
+
+        # Vue state: high selection counter but low pagination counter
+        vue_state = {
+            "pagination_counter": 15,  # Lower than Python's 20
+            "selection_counter": 10,  # Higher than Python's 5
+            "id": state_manager.session_id,
+            pagination_id: {"page": 1, "page_size": 100},
+            selection_id: 99,
+        }
+
+        state_manager.update_from_vue(vue_state)
+
+        # Selection should update (10 >= 5)
+        assert state_manager._state["selections"][selection_id] == 99
+        # Pagination should NOT update (15 < 20)
+        assert state_manager._state["selections"][pagination_id]["page"] == 10
