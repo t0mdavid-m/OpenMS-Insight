@@ -42,6 +42,17 @@ export interface SequenceData {
   theoretical_mass: number
   /** List of amino acids with fixed modifications (e.g., ['C', 'M']) */
   fixed_modifications: string[]
+  /**
+   * Per-residue sequence-tag coverage, normalized to [0, 1] against maxCoverage
+   * (FLASHApp TnT path). One entry per residue in `sequence`. Optional: when
+   * absent, no coverage shading is applied. (EXTEND)
+   */
+  coverage?: number[]
+  /**
+   * Raw maximum coverage (number of tags) used to normalize `coverage`. Drives
+   * the coverage scale legend ("{maxCoverage}x" .. "1x"). Optional. (EXTEND)
+   */
+  maxCoverage?: number
   /** External peak annotations from search engine (optional) */
   external_annotations?: ExternalAnnotation[]
   /** Fragment tolerance value from search parameters (optional) */
@@ -52,6 +63,17 @@ export interface SequenceData {
   neutral_losses?: boolean
   /** Whether to enable proton loss/addition matching by default */
   proton_loss_addition?: boolean
+}
+
+/**
+ * FLASHApp-style settings (TnT path) used to initialize fragment matching
+ * defaults: deconvolution tolerance (ppm) and default fragment ion types.
+ */
+export interface SequenceViewSettings {
+  /** Fragment mass tolerance in ppm */
+  tolerance?: number
+  /** Default fragment ion types to select (e.g., ['b', 'y']) */
+  ion_types?: string[]
 }
 
 /**
@@ -72,6 +94,11 @@ export interface ObservedSpectrumData {
 export interface SequenceObject {
   /** Single-letter amino acid code */
   aminoAcid: string
+  /**
+   * Per-residue normalized coverage in [0, 1], or undefined when no coverage
+   * data is available for this residue. Drives coverage coloring. (EXTEND)
+   */
+  coverage?: number
   /** Whether this position has a matched a ion */
   aIon: boolean
   /** Whether this position has a matched b ion */

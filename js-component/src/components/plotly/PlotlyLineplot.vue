@@ -17,6 +17,10 @@ const DEFAULT_STYLING = {
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
   annotationBackground: '#f8f8f8',
+  // Tagger extension defaults (used only when the corresponding feature is enabled)
+  secondSeriesColor: '#9ad1f0',
+  signalPeakColor: '#2E86AB',
+  tagHighlightColor: '#E4572E',
 }
 
 // Default config for annotation scaling
@@ -131,6 +135,45 @@ export default defineComponent({
         result.annotations = rawData[annotationCol] as string[]
       }
 
+      // --- Tagger extension: second overlaid series ---
+      const hasSecond =
+        (config?.hasSecondSeries as boolean) ?? this.args.hasSecondSeries ?? false
+      const x2Col = (config?.x2Column as string) || this.args.x2Column
+      const y2Col = (config?.y2Column as string) || this.args.y2Column
+      if (hasSecond && x2Col && y2Col && rawData[x2Col] && rawData[y2Col]) {
+        result.x2_values = (rawData[x2Col] as number[]) || []
+        result.y2_values = (rawData[y2Col] as number[]) || []
+        const highlight2Col =
+          (config?.highlight2Column as string) || this.args.highlight2Column
+        if (highlight2Col && rawData[highlight2Col]) {
+          result.highlight2_mask = rawData[highlight2Col] as boolean[]
+        }
+        const annotation2Col =
+          (config?.annotation2Column as string) || this.args.annotation2Column
+        if (annotation2Col && rawData[annotation2Col]) {
+          result.annotations2 = rawData[annotation2Col] as string[]
+        }
+      }
+
+      // --- Tagger extension: signal-peak membership flags ---
+      const signalCol =
+        (config?.signalPeakColumn as string) || this.args.signalPeakColumn
+      if (signalCol && rawData[signalCol]) {
+        result.signal_mask = rawData[signalCol] as boolean[]
+      }
+
+      // --- Tagger extension: tag-overlay highlight + labels ---
+      const tagHighlightCol =
+        (config?.tagHighlightColumn as string) || this.args.tagHighlightColumn
+      if (tagHighlightCol && rawData[tagHighlightCol]) {
+        result.tag_mask = rawData[tagHighlightCol] as boolean[]
+      }
+      const tagAnnotationCol =
+        (config?.tagAnnotationColumn as string) || this.args.tagAnnotationColumn
+      if (tagAnnotationCol && rawData[tagAnnotationCol]) {
+        result.tag_annotations = rawData[tagAnnotationCol] as string[]
+      }
+
       // Add interactivity column data for click handling
       // Columns are stored with their original names in rawData
       if (this.args.interactivity) {
@@ -151,6 +194,48 @@ export default defineComponent({
      */
     interactivity(): Record<string, string> {
       return this.args.interactivity || {}
+    },
+
+    /**
+     * Tagger extension: effective per-peak highlight mask for the FIRST series.
+     * Merges the static/dynamic highlight_mask with the tag-overlay tag_mask so
+     * tag-matched peaks (abs(Δ)<1e-5, computed in Python) are highlighted exactly
+     * like annotated peaks. When neither tag overlay nor a highlight column is
+     * present this returns the original highlight_mask unchanged (no regression).
+     */
+    effectiveHighlightMask(): boolean[] | undefined {
+      const pd = this.plotData
+      if (!pd) return undefined
+      const base = pd.highlight_mask
+      const tag = pd.tag_mask
+      if (!tag) return base
+      const n = pd.x_values.length
+      const out: boolean[] = new Array(n)
+      for (let i = 0; i < n; i++) {
+        out[i] = (base ? !!base[i] : false) || !!tag[i]
+      }
+      return out
+    },
+
+    /**
+     * Tagger extension: effective per-peak annotation labels for the FIRST series.
+     * Tag labels take precedence where present; otherwise falls back to the
+     * existing annotations. Returns the original annotations untouched when no
+     * tag labels exist.
+     */
+    effectiveAnnotations(): string[] | undefined {
+      const pd = this.plotData
+      if (!pd) return undefined
+      const base = pd.annotations
+      const tag = pd.tag_annotations
+      if (!tag) return base
+      const n = pd.x_values.length
+      const out: string[] = new Array(n)
+      for (let i = 0; i < n; i++) {
+        const t = tag[i]
+        out[i] = t && t.length > 0 ? t : base ? base[i] || '' : ''
+      }
+      return out
     },
 
     /**
@@ -244,7 +329,12 @@ export default defineComponent({
 
       if (!this.isDataReady || !this.plotData) return [0, 1]
 
-      const xValues = this.plotData.x_values
+      // Include the second overlaid series (if any) so it is not clipped.
+      let xValues = this.plotData.x_values
+      const x2 = this.plotData.x2_values
+      if (x2 && x2.length > 0) {
+        xValues = xValues.concat(x2)
+      }
       const minX = Math.min(...xValues)
       const maxX = Math.max(...xValues)
       const padding = (maxX - minX) * 0.02
@@ -269,6 +359,17 @@ export default defineComponent({
         const y = y_values[i]
         if (x >= xRange[0] && x <= xRange[1] && y > maxY) {
           maxY = y
+        }
+      }
+
+      // Include the second overlaid series in the y-range computation.
+      const x2 = this.plotData.x2_values
+      const y2 = this.plotData.y2_values
+      if (x2 && y2) {
+        for (let i = 0; i < x2.length; i++) {
+          if (x2[i] >= xRange[0] && x2[i] <= xRange[1] && y2[i] > maxY) {
+            maxY = y2[i]
+          }
         }
       }
 
@@ -300,7 +401,10 @@ export default defineComponent({
     }> {
       if (!this.isDataReady || !this.plotData) return []
 
-      const { x_values, y_values, annotations, highlight_mask } = this.plotData
+      const { x_values, y_values } = this.plotData
+      // Use tag-merged labels/mask so tag-overlay peaks get annotation boxes too.
+      const annotations = this.effectiveAnnotations
+      const highlight_mask = this.effectiveHighlightMask
       if (!annotations) return []
 
       const peaks: Array<{ x: number; y: number; label: string; index: number }> = []
@@ -525,7 +629,8 @@ export default defineComponent({
       }
 
       const traces: Plotly.Data[] = []
-      const { highlight_mask } = this.plotData
+      // Tag-merged highlight mask (falls back to plain highlight_mask when no tags)
+      const highlight_mask = this.effectiveHighlightMask
       const selectedIndex = this.selectedPeakIndex
       const baseline = -10000000
 
@@ -557,6 +662,55 @@ export default defineComponent({
           // Normal unhighlighted peaks
           unhighlighted_x.push(x, x, x)
           unhighlighted_y.push(baseline, y, baseline)
+        }
+      }
+
+      // --- Tagger extension: SECOND overlaid series (drawn first, underneath) ---
+      // Renders raw/annotated peaks as a second set of sticks in the same figure.
+      // Highlighted points of the 2nd series use highlightColor; the rest use
+      // secondSeriesColor. Guarded so single-series plots are unaffected.
+      const pd = this.plotData
+      if (pd.x2_values && pd.y2_values && pd.x2_values.length > 0) {
+        const x2 = pd.x2_values
+        const y2 = pd.y2_values
+        const h2 = pd.highlight2_mask
+        const s2_x: number[] = []
+        const s2_y: number[] = []
+        const s2h_x: number[] = []
+        const s2h_y: number[] = []
+        const n2 = x2.length
+        for (let i = 0; i < n2; i++) {
+          const x = x2[i]
+          const y = y2[i]
+          if (h2 && h2[i]) {
+            s2h_x.push(x, x, x)
+            s2h_y.push(baseline, y, baseline)
+          } else {
+            s2_x.push(x, x, x)
+            s2_y.push(baseline, y, baseline)
+          }
+        }
+        if (s2_x.length > 0) {
+          traces.push({
+            x: s2_x,
+            y: s2_y,
+            mode: 'lines',
+            type: 'scatter',
+            connectgaps: false,
+            marker: { color: this.styling.secondSeriesColor },
+            hoverinfo: 'x+y',
+          })
+        }
+        if (s2h_x.length > 0) {
+          traces.push({
+            x: s2h_x,
+            y: s2h_y,
+            mode: 'lines',
+            type: 'scatter',
+            connectgaps: false,
+            marker: { color: this.styling.highlightColor },
+            hoverinfo: 'x+y',
+          })
         }
       }
 
@@ -598,6 +752,36 @@ export default defineComponent({
           line: { width: 3 }, // Make selected peak slightly thicker
           hoverinfo: 'x+y',
         })
+      }
+
+      // --- Tagger extension: signal-peak markers (drawn on top of sticks) ---
+      // Marks peaks flagged as SignalPeaks members with a distinct dot at the tip.
+      // Guarded by presence of signal_mask → no effect on plots without it.
+      if (pd.signal_mask) {
+        const sm = pd.signal_mask
+        const marker_x: number[] = []
+        const marker_y: number[] = []
+        const np = pd.x_values.length
+        for (let i = 0; i < np; i++) {
+          if (sm[i]) {
+            marker_x.push(pd.x_values[i])
+            marker_y.push(pd.y_values[i])
+          }
+        }
+        if (marker_x.length > 0) {
+          traces.push({
+            x: marker_x,
+            y: marker_y,
+            mode: 'markers',
+            type: 'scatter',
+            marker: {
+              color: this.styling.signalPeakColor,
+              size: 7,
+              symbol: 'circle',
+            },
+            hoverinfo: 'x+y',
+          })
+        }
       }
 
       // If no data was added (no highlight mask and no selection), show all as default

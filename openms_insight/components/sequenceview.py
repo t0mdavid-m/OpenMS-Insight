@@ -15,7 +15,18 @@ from ..preprocessing.filtering import optimize_for_transfer
 PROTON_MASS = 1.007276
 
 # Cache version - increment when cache format changes
-CACHE_VERSION = 1
+# v2: added optional coverage / maxCoverage / fixed_modifications round-trip + settings.
+CACHE_VERSION = 2
+
+# Optional per-sequence columns carried through the cache when present in the
+# source data (TnT proteoform coverage path). All are backward-compatible: when
+# absent the Vue side falls back to no coverage shading and empty fixed mods.
+OPTIONAL_SEQUENCE_COLUMNS = ["coverage", "maxCoverage", "fixed_modifications"]
+
+# Amino acids that carry FLASHDeconv fixed modifications (Carbamidomethyl on C,
+# oxidation on M). Mirrors src/render/sequence.py::setFixedModification, which
+# returns a subset of ['C', 'M'].
+FIXED_MOD_RESIDUES = ["C", "M"]
 
 
 def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
@@ -254,6 +265,30 @@ def _calculate_fragment_masses_simple(
     return result
 
 
+def compute_fixed_modifications(
+    residues: List[str],
+    fixed_mod_residues: Optional[List[str]] = None,
+) -> List[str]:
+    """Determine which residue types carry FLASHDeconv fixed modifications.
+
+    Parity with FLASHApp ``src/render/sequence.py::setFixedModification``, which
+    applies Carbamidomethyl (etc.) on every ``C`` and oxidation (etc.) on every
+    ``M`` and returns the subset of ``['C', 'M']`` that actually occur.
+
+    Args:
+        residues: list of single-letter amino-acid codes for the sequence.
+        fixed_mod_residues: residue types eligible for a fixed mod. Defaults to
+            ``['C', 'M']``.
+
+    Returns:
+        Ordered list (``['C']``, ``['M']``, both, or empty) of residue types that
+        appear in the sequence and are eligible for a fixed modification.
+    """
+    eligible = fixed_mod_residues if fixed_mod_residues is not None else FIXED_MOD_RESIDUES
+    present = set(residues)
+    return [aa for aa in eligible if aa in present]
+
+
 def get_theoretical_mass(sequence_str: str) -> float:
     """Calculate monoisotopic mass of a peptide sequence."""
     try:
@@ -366,6 +401,8 @@ class SequenceView:
         interactivity: Optional[Dict[str, str]] = None,
         deconvolved: bool = False,
         annotation_config: Optional[Dict[str, Any]] = None,
+        settings: Optional[Dict[str, Any]] = None,
+        compute_fixed_mods: bool = False,
         cache_path: str = ".",
         title: Optional[str] = None,
         height: int = 400,
@@ -395,6 +432,15 @@ class SequenceView:
                 - tolerance: Mass tolerance value (default: 20.0)
                 - tolerance_ppm: True for ppm, False for Da (default: True)
                 - colors: Dict mapping ion types to hex colors
+            settings: Optional FLASHApp-style settings dict ``{'tolerance': float,
+                'ion_types': list[str]}`` (TnT path). When provided, ``tolerance``
+                overrides the annotation tolerance (interpreted as ppm) and
+                ``ion_types`` drives the default selected fragment ion types in Vue.
+                Optional and backward-compatible.
+            compute_fixed_mods: If True, compute FLASHDeconv C/M fixed modifications
+                from the sequence (Deconv path parity with ``setFixedModification``)
+                when the source data does not already carry ``fixed_modifications``.
+                Default False (no regression).
             cache_path: Base path for cache storage.
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
@@ -415,6 +461,8 @@ class SequenceView:
             or interactivity is not None
             or deconvolved is not False
             or annotation_config is not None
+            or settings is not None
+            or compute_fixed_mods is not False
             or title is not None
             or height != 400
             or bool(kwargs)
@@ -445,10 +493,25 @@ class SequenceView:
                 self._filter_defaults[identifier] = None
             self._interactivity = interactivity or {}
 
+            self._compute_fixed_mods = compute_fixed_mods
+
             # Store annotation config with defaults
             self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
             if annotation_config:
                 self._annotation_config.update(annotation_config)
+
+            # FLASHApp-style settings (TnT). When present, tolerance/ion_types
+            # take precedence over the annotation_config defaults so the Vue
+            # component initializes to the deconvolution tolerance / ion types.
+            self._settings: Dict[str, Any] = dict(settings) if settings else {}
+            if self._settings.get("tolerance") is not None:
+                # FLASHApp settings.tolerance is a ppm deconvolution tolerance.
+                self._annotation_config["tolerance"] = self._settings["tolerance"]
+                self._annotation_config["tolerance_ppm"] = True
+            if self._settings.get("ion_types"):
+                self._annotation_config["ion_types"] = list(
+                    self._settings["ion_types"]
+                )
 
             # Parse sequence data input
             if sequence_data is not None and sequence_data_path is not None:
@@ -510,6 +573,8 @@ class SequenceView:
             "height": self._height,
             "deconvolved": self._deconvolved,
             "annotation_config": self._annotation_config,
+            "settings": self._settings,
+            "compute_fixed_mods": self._compute_fixed_mods,
         }
 
     def _cache_exists(self) -> bool:
@@ -547,6 +612,8 @@ class SequenceView:
         self._annotation_config = config.get(
             "annotation_config", {**DEFAULT_ANNOTATION_CONFIG}
         )
+        self._settings = config.get("settings", {})
+        self._compute_fixed_mods = config.get("compute_fixed_mods", False)
         self._config = {}
 
         # Load cached LazyFrames
@@ -579,11 +646,17 @@ class SequenceView:
             schema = self._source_sequence_data.collect_schema()
             filter_cols = [c for c in self._filters.values() if c in schema.names()]
 
-            # Build column list: filter columns + required columns
+            # Build column list: filter columns + required columns + optional
+            # per-sequence columns (coverage / maxCoverage / fixed_modifications)
+            # when the source carries them. All optional columns are
+            # backward-compatible: absent ones are simply not selected.
             required = ["sequence", "precursor_charge"]
+            optional = [c for c in OPTIONAL_SEQUENCE_COLUMNS if c in schema.names()]
             cols = list(
                 dict.fromkeys(
-                    filter_cols + [c for c in required if c in schema.names()]
+                    filter_cols
+                    + [c for c in required if c in schema.names()]
+                    + optional
                 )
             )
 
@@ -647,6 +720,25 @@ class SequenceView:
         Returns:
             Tuple of (sequence_string, precursor_charge)
         """
+        entry = self._get_sequence_entry_for_state(state)
+        return entry["sequence"], entry["precursor_charge"]
+
+    def _get_sequence_entry_for_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the full sequence entry (sequence, charge + optional coverage,
+        maxCoverage, fixed_modifications) for the current state.
+
+        Reads from cached sequences.parquet with predicate pushdown (e.g.
+        ``filters={'proteinIndex': 'proteoform_index'}`` for TnT). The optional
+        coverage columns are returned only when they exist in the cache.
+
+        Returns:
+            Dict with keys ``sequence`` (str), ``precursor_charge`` (int), and,
+            when available, ``coverage`` (list[float]), ``maxCoverage`` (float),
+            ``fixed_modifications`` (list[str]). Empty sequence ("") signals the
+            empty/no-selection state.
+        """
+        empty: Dict[str, Any] = {"sequence": "", "precursor_charge": 1}
+
         filtered = self._cached_sequences
 
         # Apply filters for columns that exist in cached data
@@ -660,18 +752,31 @@ class SequenceView:
                     identifier in self._filter_defaults
                     and self._filter_defaults[identifier] is None
                 ):
-                    # Filter has None default and state is None - return empty intentionally
-                    return "", 1
+                    # Filter has None default and state is None - empty intentionally
+                    return empty
 
-        # Collect and get first row
+        available = set(schema.names())
+        select_cols = ["sequence", "precursor_charge"] + [
+            c for c in OPTIONAL_SEQUENCE_COLUMNS if c in available
+        ]
+
         try:
-            df = filtered.select(["sequence", "precursor_charge"]).head(1).collect()
+            df = filtered.select(select_cols).head(1).collect()
             if df.height > 0:
-                return df["sequence"][0], df["precursor_charge"][0]
+                entry: Dict[str, Any] = {
+                    "sequence": df["sequence"][0],
+                    "precursor_charge": df["precursor_charge"][0],
+                }
+                for col in OPTIONAL_SEQUENCE_COLUMNS:
+                    if col in df.columns:
+                        value = df[col][0]
+                        if value is not None:
+                            entry[col] = value
+                return entry
         except Exception:
             pass
 
-        return "", 1
+        return empty
 
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
@@ -722,8 +827,10 @@ class SequenceView:
         Returns:
             Dict with sequenceData, peaksData, annotationConfig, etc.
         """
-        # Get sequence for current state
-        sequence_str, precursor_charge = self._get_sequence_for_state(state)
+        # Get sequence entry for current state (incl. optional coverage cols)
+        entry = self._get_sequence_entry_for_state(state)
+        sequence_str = entry["sequence"]
+        precursor_charge = entry["precursor_charge"]
 
         # Parse sequence
         residues, modifications = parse_openms_sequence(sequence_str)
@@ -734,12 +841,22 @@ class SequenceView:
         # Calculate theoretical mass
         theoretical_mass = get_theoretical_mass(sequence_str)
 
+        # Resolve fixed modifications: prefer source-provided value, otherwise
+        # compute C/M for the Deconv path when requested (parity with
+        # setFixedModification). Absent + not requested -> [] (no regression).
+        if "fixed_modifications" in entry and entry["fixed_modifications"] is not None:
+            fixed_modifications = list(entry["fixed_modifications"])
+        elif self._compute_fixed_mods and residues:
+            fixed_modifications = compute_fixed_modifications(residues)
+        else:
+            fixed_modifications = []
+
         # Build sequence data structure
-        sequence_data = {
+        sequence_data: Dict[str, Any] = {
             "sequence": residues,
             "modifications": modifications,
             "theoretical_mass": theoretical_mass,
-            "fixed_modifications": [],
+            "fixed_modifications": fixed_modifications,
             # Include settings for Vue initialization
             "fragment_tolerance": self._annotation_config.get("tolerance"),
             "fragment_tolerance_ppm": self._annotation_config.get("tolerance_ppm"),
@@ -747,6 +864,13 @@ class SequenceView:
             "proton_loss_addition": self._annotation_config.get("proton_loss_addition"),
             **fragment_masses,
         }
+
+        # Per-residue coverage coloring (EXTEND). Only attached when provided so
+        # the Vue side falls back to no shading otherwise.
+        if "coverage" in entry and entry["coverage"] is not None:
+            sequence_data["coverage"] = list(entry["coverage"])
+        if "maxCoverage" in entry and entry["maxCoverage"] is not None:
+            sequence_data["maxCoverage"] = entry["maxCoverage"]
 
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
@@ -761,8 +885,14 @@ class SequenceView:
             observed_masses = peaks_df["mass"].to_list()
             peak_ids = peaks_df["peak_id"].to_list()
 
-        # Create hash for change detection
-        hash_input = f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
+        # Create hash for change detection. Include coverage/maxCoverage and
+        # fixed mods so a change in those re-renders the Vue side even when the
+        # raw sequence string is unchanged across proteoform selections.
+        cov_sig = sequence_data.get("maxCoverage", "")
+        fixed_sig = ",".join(fixed_modifications)
+        hash_input = (
+            f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}:{fixed_sig}"
+        )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         result = {
@@ -774,6 +904,11 @@ class SequenceView:
             "precursorCharge": precursor_charge,
             "_hash": data_hash,
         }
+
+        # FLASHApp-style settings (tolerance / ion_types) for Vue initialization.
+        # Only sent when configured to keep payload minimal and backward-compatible.
+        if self._settings:
+            result["settings"] = self._settings
 
         return result
 

@@ -118,6 +118,15 @@ export default defineComponent({
       type: Number as PropType<number | null>,
       default: null,
     },
+    /**
+     * Whether coverage coloring is active for the grid. When false, no coverage
+     * shading is applied (the residue uses the plain theme background), matching
+     * FLASHApp's behavior of only shading when sequence tags are shown. (EXTEND)
+     */
+    showCoverage: {
+      type: Boolean,
+      default: false,
+    },
   },
   emits: ['selected'],
   setup() {
@@ -159,11 +168,40 @@ export default defineComponent({
         'sequence-amino-acid-highlighted': this.fixedModification,
       }
     },
+    /**
+     * Normalized per-residue coverage in [0, 1], or -1 when no coverage data is
+     * present for this residue (mirrors FLASHApp's AminoAcidCell.coverage). (EXTEND)
+     */
+    coverage(): number {
+      return this.sequenceObject.coverage !== undefined ? this.sequenceObject.coverage : -1
+    },
+    /**
+     * Coverage-driven background color, computed exactly like FLASHApp's
+     * AminoAcidCell.aminoAcidCellStyles:
+     *   - coverage < 0           -> no shading (use theme secondaryBackgroundColor)
+     *   - showCoverage === false -> alpha 0 (transparent overlay over theme bg)
+     *   - alpha !== 0            -> remap [eps,1] -> [0.1,1] via alpha*0.9 + 0.1
+     * Result is rgba(228, 87, 46, alpha) — the FLASHApp coverage scale color.
+     */
+    coverageBgColor(): string | undefined {
+      let alpha = this.coverage
+      if (alpha < 0) {
+        return undefined
+      }
+      if (!this.showCoverage) {
+        alpha = 0
+      } else if (alpha !== 0) {
+        alpha = alpha * 0.9 + 0.1
+      }
+      return `rgba(228, 87, 46, ${alpha})`
+    },
     cellStyles(): Record<string, string> {
       const isDark = this.theme?.base === 'dark'
+      const bgColor =
+        this.coverageBgColor ?? (this.theme?.secondaryBackgroundColor ?? '#f0f0f0')
       return {
         '--amino-acid-cell-color': this.theme?.textColor ?? '#000',
-        '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
+        '--amino-acid-cell-bg-color': bgColor,
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#000',
         '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#fff',
         '--amino-acid-font-size': `${this.fontSize}px`,

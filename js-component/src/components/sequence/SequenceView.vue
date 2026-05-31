@@ -106,8 +106,9 @@
         </v-menu>
       </div>
 
-      <!-- Sequence grid -->
-      <div class="px-2 pb-4" :class="gridClasses" style="width: 100%; max-width: 100%">
+      <!-- Sequence grid (+ coverage scale legend) -->
+      <div class="sequence-and-scale">
+      <div class="px-2 pb-4 sequence-grid-area" :class="gridClasses" style="width: 100%; max-width: 100%">
         <template v-for="(aaObj, aaIndex) in sequenceObjects" :key="aaIndex">
           <!-- Row number (left) -->
           <div
@@ -127,6 +128,7 @@
             :sequence-length="sequence.length"
             :fixed-modification="isFixedModification(aaObj.aminoAcid)"
             :show-fragments="showFragments"
+            :show-coverage="showCoverage"
             :font-size="fontSize"
             :is-highlighted="selectedAAIndex === aaIndex"
             :modification="modifications[aaIndex] ?? null"
@@ -149,6 +151,14 @@
             C
           </div>
         </template>
+      </div>
+
+      <!-- Coverage scale legend (EXTEND): shown when coverage data is present -->
+      <div v-if="showCoverageScale" class="scale-container" title="Sequence Tag Coverage">
+        <div class="scale-text">{{ maxCoverage + 'x' }}</div>
+        <div class="scale"></div>
+        <div class="scale-text">1x</div>
+      </div>
       </div>
 
       <!-- Fragment table -->
@@ -182,7 +192,7 @@ import { defineComponent } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { Theme } from 'streamlit-component-lib'
-import type { SequenceData, SequenceObject, FragmentTableRow, ExternalAnnotation } from '@/types/sequence-data'
+import type { SequenceData, SequenceObject, FragmentTableRow, ExternalAnnotation, SequenceViewSettings } from '@/types/sequence-data'
 import AminoAcidCell from './AminoAcidCell.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from './modification'
 
@@ -299,6 +309,28 @@ export default defineComponent({
     fixedModificationSites(): string[] {
       return this.sequenceData?.fixed_modifications ?? []
     },
+    /** Per-residue normalized coverage (EXTEND). Empty when unavailable. */
+    coverage(): number[] {
+      return this.sequenceData?.coverage ?? []
+    },
+    /** Raw maximum coverage (EXTEND). -1 when unavailable. */
+    maxCoverage(): number {
+      return this.sequenceData?.maxCoverage ?? -1
+    },
+    /** Whether per-residue coverage coloring data is available (EXTEND). */
+    showCoverage(): boolean {
+      return this.coverage.length > 0
+    },
+    /** Whether to show the coverage scale legend (EXTEND). */
+    showCoverageScale(): boolean {
+      return this.showCoverage && this.maxCoverage > 0
+    },
+    /** FLASHApp-style settings (tolerance / ion_types), if provided (EXTEND). */
+    settings(): SequenceViewSettings | undefined {
+      return this.streamlitDataStore.allDataForDrawing.settings as
+        | SequenceViewSettings
+        | undefined
+    },
     /** External annotations from search engine if available */
     externalAnnotations(): ExternalAnnotation[] {
       return this.sequenceData?.external_annotations ?? []
@@ -377,6 +409,18 @@ export default defineComponent({
           if (this.sequenceData?.fragment_tolerance_ppm !== undefined) {
             this.toleranceIsPpm = this.sequenceData.fragment_tolerance_ppm
           }
+          // FLASHApp-style settings (TnT) take precedence when present:
+          // ion_types drive the default selected fragment ion types, and
+          // tolerance (ppm) overrides the fragment mass tolerance. (EXTEND)
+          if (this.settings?.ion_types !== undefined) {
+            for (const ion of this.ionTypes) {
+              ion.selected = this.settings.ion_types.includes(ion.text)
+            }
+          }
+          if (this.settings?.tolerance !== undefined) {
+            this.fragmentMassTolerance = this.settings.tolerance
+            this.toleranceIsPpm = true
+          }
           if (this.sequenceData?.neutral_losses !== undefined) {
             this.ionTypesExtra['water loss'] = this.sequenceData.neutral_losses
             this.ionTypesExtra['ammonium loss'] = this.sequenceData.neutral_losses
@@ -427,9 +471,13 @@ export default defineComponent({
   methods: {
     initializeSequenceObjects(): void {
       this.sequenceObjects = []
-      for (const aa of this.sequence) {
+      const coverage = this.coverage
+      this.sequence.forEach((aa, index) => {
         this.sequenceObjects.push({
           aminoAcid: aa,
+          // Per-residue coverage for coverage coloring (EXTEND). undefined when
+          // no coverage data is present -> AminoAcidCell renders no shading.
+          coverage: coverage[index],
           aIon: false,
           bIon: false,
           cIon: false,
@@ -438,7 +486,7 @@ export default defineComponent({
           zIon: false,
           extraTypes: [],
         })
-      }
+      })
     },
     /**
      * Apply auto-zoom for short sequences.
@@ -802,6 +850,43 @@ export default defineComponent({
 .row-number {
   font-size: 10px;
   opacity: 0.6;
+}
+
+/* Coverage scale legend layout (EXTEND), mirrors FLASHApp SequenceView. */
+.sequence-and-scale {
+  display: flex;
+  align-items: center;
+}
+
+.sequence-grid-area {
+  flex-grow: 1;
+}
+
+.scale-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.scale {
+  width: 60px;
+  height: 100px;
+  background: linear-gradient(
+    to top,
+    rgba(228, 87, 46, 0.1),
+    rgba(228, 87, 46, 0.2) 10%,
+    rgba(228, 87, 46, 0.4) 20%,
+    rgba(228, 87, 46, 0.6) 40%,
+    rgba(228, 87, 46, 0.8) 70%,
+    rgba(228, 87, 46, 1) 100%
+  );
+}
+
+.scale-text {
+  text-align: center;
+  font-size: 14pt;
+  font-weight: bold;
 }
 
 .terminal-cell {

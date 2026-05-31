@@ -66,6 +66,34 @@ def sample_lineplot_data() -> pl.LazyFrame:
 
 
 @pytest.fixture
+def sample_combined_spectrum_data() -> pl.LazyFrame:
+    """
+    Long-format combined/augmented spectrum for LinePlot tagger extension tests.
+
+    One row per deconvolved peak (post array-explosion per STRATEGY §2):
+      - index: scan id (filter column, replaces iloc[scanIndex])
+      - peak_id: stable per-peak interactivity id
+      - MonoMass / SumIntensity: deconvolved series (series 1)
+      - MonoMass_Anno / SumIntensity_Anno: annotated/raw series (series 2)
+      - is_signal: SignalPeaks membership flag (bool)
+
+    Scan 1 has 4 peaks; scan 2 has 2 peaks. Tag masses 200.0 and 400.0 (scan 1)
+    are present exactly so abs(Δ)<1e-5 matching can be exercised.
+    """
+    return pl.LazyFrame(
+        {
+            "index": [1, 1, 1, 1, 2, 2],
+            "peak_id": [10, 11, 12, 13, 20, 21],
+            "MonoMass": [100.0, 200.0, 300.0, 400.0, 150.0, 250.0],
+            "SumIntensity": [1000.0, 2000.0, 1500.0, 3000.0, 800.0, 1200.0],
+            "MonoMass_Anno": [101.0, 201.0, 301.0, 401.0, 151.0, 251.0],
+            "SumIntensity_Anno": [500.0, 900.0, 700.0, 1100.0, 400.0, 600.0],
+            "is_signal": [True, False, True, True, False, True],
+        }
+    )
+
+
+@pytest.fixture
 def sample_heatmap_data() -> pl.LazyFrame:
     """Create sample data for Heatmap component."""
     import random
