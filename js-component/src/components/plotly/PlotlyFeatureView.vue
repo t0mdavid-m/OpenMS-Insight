@@ -171,11 +171,17 @@ export default defineComponent({
       this.tabulator = new Tabulator(`#${this.tableId}`, options)
       this.tabulator.on('tableBuilt', () => {
         this.tabulator?.on('rowSelected', (row) => {
-          // Use the positional row index within the table data (mirrors the
-          // original .vue, where the selected *row index* drives the plot).
-          const position = row.getPosition(true) // 1-based visible position
-          if (typeof position === 'number' && position >= 1) {
-            this.updateSelectedFeatureGroupRow(position - 1)
+          // Map the clicked row to its position in the UNSORTED underlying data
+          // (featureGroupTableData), which is what drives the 3D plot. Using the
+          // visible position (row.getPosition) would mis-index after the user
+          // sorts the table, selecting the wrong feature group.
+          const indexField = this.args.tableIndexField || 'FeatureGroupIndex'
+          const rowData = row.getData()
+          const arrayPos = this.featureGroupTableData.findIndex(
+            (r) => r[indexField] === rowData[indexField],
+          )
+          if (arrayPos >= 0) {
+            this.updateSelectedFeatureGroupRow(arrayPos)
           }
         })
 
