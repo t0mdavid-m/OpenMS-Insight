@@ -228,6 +228,40 @@ export interface MirrorPlotStyling {
 }
 
 /**
+ * DensityPlot per-series presentation entry.
+ */
+export interface DensitySeries {
+  /** Series key (matches the `series` column value in densityData). */
+  name: string
+  /** Legend label. */
+  label: string
+  /** Line/marker color (CSS color string). */
+  color: string
+}
+
+/**
+ * DensityPlot component arguments.
+ */
+export interface DensityPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyDensity'
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  /** Draw "lines+markers" when true, else "lines". */
+  showMarkers?: boolean
+  /** Ordered per-series presentation (name, label, color). */
+  series: DensitySeries[]
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * DensityPlot data format: long format, one row per (series, grid point).
+ * Columns: series (string), x (number), y (number).
+ */
+export type DensityData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -237,6 +271,7 @@ export type ComponentArgs =
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
+  | DensityPlotComponentArgs
 
 /**
  * Component layout entry.

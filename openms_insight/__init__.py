@@ -5,6 +5,7 @@ This package provides reusable, interactive Streamlit components backed by Vue.j
 visualizations with cross-component selection state management.
 """
 
+from .components.densityplot import DensityPlot
 from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
@@ -34,6 +35,7 @@ __all__ = [
     "SequenceView",
     "SequenceViewResult",
     "MirrorPlot",
+    "DensityPlot",
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",
