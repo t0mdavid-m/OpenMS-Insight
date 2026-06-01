@@ -232,3 +232,78 @@ class TestDensityPlotCacheReconstruction:
         d1 = dp1._prepare_vue_data({})["densityData"]
         d2 = dp2._prepare_vue_data({})["densityData"]
         assert len(d1) == len(d2)
+
+
+class TestDensityPlotPrecomputed:
+    """Pass-through of already-computed density curves (FLASHApp cache shape)."""
+
+    def test_precomputed_passthrough(self, mock_streamlit, temp_cache_dir):
+        # Two series of pre-computed {x, y} curve points
+        data = pl.DataFrame(
+            {
+                "series": ["Target"] * 3 + ["Decoy"] * 2,
+                "x": [0.1, 0.2, 0.3, 0.4, 0.5],
+                "y": [1.0, 2.0, 1.5, 0.8, 0.9],
+            }
+        ).lazy()
+        dp = DensityPlot(
+            cache_id="dp_precomp",
+            data=data,
+            precomputed=True,
+            series_column="series",
+            cache_path=str(temp_cache_dir),
+        )
+        out = dp._prepare_vue_data({})["densityData"]
+        # No KDE run: rows pass through verbatim (3 + 2)
+        assert len(out) == 5
+        target = out[out["series"] == "Target"].sort_values("x")
+        assert list(target["x"]) == pytest.approx([0.1, 0.2, 0.3])
+        assert list(target["y"]) == pytest.approx([1.0, 2.0, 1.5])
+
+    def test_precomputed_empty_decoy(self, mock_streamlit, temp_cache_dir):
+        # Only Target rows present; Decoy declared in config but absent
+        data = pl.DataFrame(
+            {"series": ["Target", "Target"], "x": [0.1, 0.2], "y": [1.0, 2.0]}
+        ).lazy()
+        dp = DensityPlot(
+            cache_id="dp_precomp_empty",
+            data=data,
+            precomputed=True,
+            series_column="series",
+            series_config={
+                "Target": {"color": "green"},
+                "Decoy": {"color": "red"},
+            },
+            cache_path=str(temp_cache_dir),
+        )
+        out = dp._prepare_vue_data({})["densityData"]
+        assert set(out["series"]) == {"Target"}
+        # Series presentation keeps only the non-empty series
+        names = [s["name"] for s in dp._get_component_args()["series"]]
+        assert names == ["Target"]
+
+    def test_precomputed_missing_curve_columns(self, mock_streamlit, temp_cache_dir):
+        data = pl.DataFrame({"series": ["Target"], "value": [0.5]}).lazy()
+        with pytest.raises(ValueError, match="not found in data"):
+            DensityPlot(
+                cache_id="dp_precomp_bad",
+                data=data,
+                precomputed=True,
+                series_column="series",
+                cache_path=str(temp_cache_dir),
+            )
+
+    def test_precomputed_survives_reconstruction(self, mock_streamlit, temp_cache_dir):
+        data = pl.DataFrame(
+            {"series": ["Target", "Decoy"], "x": [0.1, 0.4], "y": [1.0, 0.5]}
+        ).lazy()
+        DensityPlot(
+            cache_id="dp_precomp_recon",
+            data=data,
+            precomputed=True,
+            series_column="series",
+            cache_path=str(temp_cache_dir),
+        )
+        dp2 = DensityPlot(cache_id="dp_precomp_recon", cache_path=str(temp_cache_dir))
+        assert dp2._precomputed is True
+        assert len(dp2._prepare_vue_data({})["densityData"]) == 2

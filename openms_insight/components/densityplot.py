@@ -67,6 +67,9 @@ class DensityPlot(BaseComponent):
         series_column: Optional[str] = None,
         series_config: Optional[Dict[str, Dict[str, Any]]] = None,
         grid_points: int = 200,
+        precomputed: bool = False,
+        x_curve_column: str = "x",
+        y_curve_column: str = "y",
         default_series_name: str = "Density",
         title: Optional[str] = None,
         x_label: Optional[str] = None,
@@ -99,6 +102,14 @@ class DensityPlot(BaseComponent):
                 in the data but absent here are appended afterwards (sorted).
             grid_points: Number of evenly spaced points to evaluate the KDE on
                 (default: 200, matching the FLASHApp FDR plot).
+            precomputed: If True, the input already holds density CURVE points
+                (``x_curve_column``/``y_curve_column``) per series — no KDE is
+                run; the curves are passed through verbatim. Use this for caches
+                that already store computed ``{x, y}`` densities (e.g. FLASHApp's
+                ``density_target``/``density_decoy``). When True, ``series_column``
+                identifies the series and ``value_column`` is ignored.
+            x_curve_column: With ``precomputed``, the x (grid) column. Default "x".
+            y_curve_column: With ``precomputed``, the y (density) column. Default "y".
             default_series_name: Series name used when ``series_column`` is None.
             title: Plot title displayed above the figure.
             x_label: X-axis label (defaults to ``value_column``).
@@ -111,6 +122,9 @@ class DensityPlot(BaseComponent):
         self._series_column = series_column
         self._series_config = series_config or {}
         self._grid_points = grid_points
+        self._precomputed = precomputed
+        self._x_curve_column = x_curve_column
+        self._y_curve_column = y_curve_column
         self._default_series_name = default_series_name
         self._title = title
         self._x_label = x_label or value_column
@@ -131,6 +145,9 @@ class DensityPlot(BaseComponent):
             series_column=series_column,
             series_config=series_config,
             grid_points=grid_points,
+            precomputed=precomputed,
+            x_curve_column=x_curve_column,
+            y_curve_column=y_curve_column,
             default_series_name=default_series_name,
             title=title,
             x_label=x_label,
@@ -147,6 +164,9 @@ class DensityPlot(BaseComponent):
             "series_column": self._series_column,
             "series_config": self._series_config,
             "grid_points": self._grid_points,
+            "precomputed": self._precomputed,
+            "x_curve_column": self._x_curve_column,
+            "y_curve_column": self._y_curve_column,
             "default_series_name": self._default_series_name,
             "title": self._title,
             "x_label": self._x_label,
@@ -161,6 +181,9 @@ class DensityPlot(BaseComponent):
         self._series_column = config.get("series_column")
         self._series_config = config.get("series_config") or {}
         self._grid_points = config.get("grid_points", 200)
+        self._precomputed = config.get("precomputed", False)
+        self._x_curve_column = config.get("x_curve_column", "x")
+        self._y_curve_column = config.get("y_curve_column", "y")
         self._default_series_name = config.get("default_series_name", "Density")
         self._title = config.get("title")
         self._x_label = config.get("x_label", self._value_column)
@@ -175,7 +198,18 @@ class DensityPlot(BaseComponent):
             return
 
         column_names = self._raw_data.collect_schema().names()
-        if self._value_column not in column_names:
+        if self._precomputed:
+            # Curve-passthrough mode: need the x/y curve columns, not value_column.
+            for col, label in [
+                (self._x_curve_column, "x_curve_column"),
+                (self._y_curve_column, "y_curve_column"),
+            ]:
+                if col not in column_names:
+                    raise ValueError(
+                        f"{label} '{col}' not found in data. "
+                        f"Available columns: {column_names}"
+                    )
+        elif self._value_column not in column_names:
             raise ValueError(
                 f"value_column '{self._value_column}' not found in data. "
                 f"Available columns: {column_names}"
@@ -236,6 +270,50 @@ class DensityPlot(BaseComponent):
         density = kde(grid)
         return {"x": grid.tolist(), "y": density.tolist()}
 
+    def _preprocess_precomputed(self, df: "pl.DataFrame") -> None:
+        """Pass through already-computed density curves (no KDE).
+
+        Input rows are curve points: ``x_curve_column`` / ``y_curve_column``
+        (and ``series_column`` to split). Produces the same {series, x, y}
+        long-format output as the KDE path so the Vue side is identical.
+        Empty series simply contribute no rows.
+        """
+        if self._series_column is not None and self._series_column in df.columns:
+            present = df.select(pl.col(self._series_column)).to_series().to_list()
+            order = self._series_order(present)
+        else:
+            order = [self._default_series_name]
+
+        series_names: List[str] = []
+        xs: List[float] = []
+        ys: List[float] = []
+        for key in order:
+            if self._series_column is not None and self._series_column in df.columns:
+                group = df.filter(pl.col(self._series_column) == key)
+            else:
+                group = df
+            if group.height == 0:
+                continue
+            gx = group.select(pl.col(self._x_curve_column)).to_series().to_list()
+            gy = group.select(pl.col(self._y_curve_column)).to_series().to_list()
+            label = str(key)
+            for x_val, y_val in zip(gx, gy):
+                if x_val is None or y_val is None:
+                    continue
+                series_names.append(label)
+                xs.append(float(x_val))
+                ys.append(float(y_val))
+
+        density_df = pl.DataFrame(
+            {"series": series_names, "x": xs, "y": ys},
+            schema={"series": pl.Utf8, "x": pl.Float64, "y": pl.Float64},
+        )
+        non_empty_order = [
+            str(key) for key in order if str(key) in set(series_names)
+        ]
+        self._preprocessed_data["densityData"] = density_df
+        self._preprocessed_data["series_order"] = non_empty_order
+
     def _preprocess(self) -> None:
         """Compute per-series KDE curves and store as a long-format frame.
 
@@ -245,6 +323,10 @@ class DensityPlot(BaseComponent):
             - y: Float64    (estimated density)
         """
         df = self._raw_data.collect()
+
+        if self._precomputed:
+            self._preprocess_precomputed(df)
+            return
 
         # Partition rows into series
         if self._series_column is not None:
