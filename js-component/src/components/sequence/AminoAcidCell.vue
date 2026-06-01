@@ -118,6 +118,11 @@ export default defineComponent({
       type: Number as PropType<number | null>,
       default: null,
     },
+    /** Normalized [0,1] per-residue coverage; 0 disables coverage shading. */
+    coverageFraction: {
+      type: Number,
+      default: 0,
+    },
   },
   emits: ['selected'],
   setup() {
@@ -159,9 +164,17 @@ export default defineComponent({
         'sequence-amino-acid-highlighted': this.fixedModification,
       }
     },
+    /** Background tint for per-residue coverage (FLASHTnT). Empty when none. */
+    coverageBg(): string {
+      if (!(this.coverageFraction > 0)) return ''
+      // Green shade scaled by coverage fraction, mirroring FLASHApp coverage
+      // coloring. Alpha floors at ~0.15 so even low coverage is visible.
+      const alpha = 0.15 + 0.65 * Math.max(0, Math.min(1, this.coverageFraction))
+      return `rgba(18, 135, 29, ${alpha.toFixed(3)})`
+    },
     cellStyles(): Record<string, string> {
       const isDark = this.theme?.base === 'dark'
-      return {
+      const styles: Record<string, string> = {
         '--amino-acid-cell-color': this.theme?.textColor ?? '#000',
         '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#000',
@@ -175,6 +188,12 @@ export default defineComponent({
         '--extra-frag-stroke': isDark ? 'rgba(255, 255, 255, 0.5)' : 'black',
         position: 'relative',
       }
+      // Apply coverage shading via the cell bg variable (skipped for fixed-mod
+      // / highlighted cells, which keep their own dedicated styling).
+      if (this.coverageBg && !this.fixedModification && !this.isHighlighted) {
+        styles['--amino-acid-cell-bg-color'] = this.coverageBg
+      }
+      return styles
     },
     modificationDisplay(): string {
       if (this.modification === null) return ''

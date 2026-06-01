@@ -174,3 +174,100 @@ class TestSequenceViewEmptyState:
         assert sequence == "", (
             "Should return empty when any filter with None default is None"
         )
+
+
+class TestSequenceViewExtensions:
+    """Tests for coverage coloring, fixed mods, and ion_types (FLASHApp parity)."""
+
+    def _seq_df_with_coverage(self):
+        import polars as pl
+
+        return pl.LazyFrame(
+            {
+                "proteoform_index": [0, 1],
+                "sequence": ["PEPTIDER", "ACDEFGHK"],
+                "precursor_charge": [2, 3],
+                "coverage": [[0.0, 1.0, 2.0, 2.0, 1.0, 0.0, 0.0, 0.0], [0.0] * 8],
+                "max_coverage": [2.0, 0.0],
+            }
+        )
+
+    def test_fixed_modifications_emitted(self, temp_cache_dir, sample_sequence_data):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_fixedmod",
+            sequence_data=sample_sequence_data,
+            filters={"spectrum": "scan_id"},
+            fixed_modifications=["C", "M"],
+            cache_path=str(temp_cache_dir),
+        )
+        df = sample_sequence_data.collect()
+        state = {"spectrum": df["scan_id"][0]}
+        out = sv._prepare_vue_data(state)
+        assert out["sequenceData"]["fixed_modifications"] == ["C", "M"]
+
+    def test_ion_types_emitted(self, temp_cache_dir, sample_sequence_data):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_iontypes",
+            sequence_data=sample_sequence_data,
+            filters={"spectrum": "scan_id"},
+            annotation_config={"ion_types": ["c", "z"]},
+            cache_path=str(temp_cache_dir),
+        )
+        df = sample_sequence_data.collect()
+        out = sv._prepare_vue_data({"spectrum": df["scan_id"][0]})
+        assert out["sequenceData"]["ion_types"] == ["c", "z"]
+
+    def test_coverage_emitted_when_selected(self, temp_cache_dir):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_cov",
+            sequence_data=self._seq_df_with_coverage(),
+            filters={"proteinIndex": "proteoform_index"},
+            coverage_column="coverage",
+            max_coverage_column="max_coverage",
+            cache_path=str(temp_cache_dir),
+        )
+        out = sv._prepare_vue_data({"proteinIndex": 0})
+        sd = out["sequenceData"]
+        assert "coverage" in sd
+        assert len(sd["coverage"]) == 8
+        assert sd["maxCoverage"] == 2.0
+
+    def test_coverage_absent_when_not_configured(
+        self, temp_cache_dir, sample_sequence_data
+    ):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_nocov",
+            sequence_data=sample_sequence_data,
+            filters={"spectrum": "scan_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        df = sample_sequence_data.collect()
+        out = sv._prepare_vue_data({"spectrum": df["scan_id"][0]})
+        assert "coverage" not in out["sequenceData"]
+
+    def test_coverage_survives_cache_reconstruction(self, temp_cache_dir):
+        from openms_insight.components.sequenceview import SequenceView
+
+        SequenceView(
+            cache_id="sv_cov_recon",
+            sequence_data=self._seq_df_with_coverage(),
+            filters={"proteinIndex": "proteoform_index"},
+            coverage_column="coverage",
+            max_coverage_column="max_coverage",
+            fixed_modifications=["C"],
+            cache_path=str(temp_cache_dir),
+        )
+        sv2 = SequenceView(cache_id="sv_cov_recon", cache_path=str(temp_cache_dir))
+        assert sv2._coverage_column == "coverage"
+        assert sv2._fixed_modifications == ["C"]
+        out = sv2._prepare_vue_data({"proteinIndex": 0})
+        assert out["sequenceData"]["coverage"][2] == 2.0
+        assert out["sequenceData"]["fixed_modifications"] == ["C"]

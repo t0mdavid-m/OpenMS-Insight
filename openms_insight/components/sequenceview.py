@@ -369,6 +369,9 @@ class SequenceView:
         cache_path: str = ".",
         title: Optional[str] = None,
         height: int = 400,
+        fixed_modifications: Optional[List[str]] = None,
+        coverage_column: Optional[str] = None,
+        max_coverage_column: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -398,6 +401,16 @@ class SequenceView:
             cache_path: Base path for cache storage.
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
+            fixed_modifications: List of amino acids carrying a fixed modification
+                (e.g. ["C", "M"]). Rendered with the fixed-mod styling in the
+                frontend, matching FLASHApp's fixed_mod_cysteine/methionine. When
+                a LazyFrame sequence source carries a per-row fixed-mods list
+                column, that takes precedence (see kwargs note below).
+            coverage_column: Optional column in a LazyFrame sequence source holding
+                a per-residue coverage array (floats), used to shade residues by
+                tag/fragment coverage (FLASHTnT). Requires max_coverage_column.
+            max_coverage_column: Optional column holding the scalar maximum
+                coverage used to normalize ``coverage_column``.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -417,6 +430,9 @@ class SequenceView:
             or annotation_config is not None
             or title is not None
             or height != 400
+            or fixed_modifications is not None
+            or coverage_column is not None
+            or max_coverage_column is not None
             or bool(kwargs)
         )
 
@@ -439,6 +455,9 @@ class SequenceView:
             self._height = height
             self._deconvolved = deconvolved
             self._config = kwargs
+            self._fixed_modifications = fixed_modifications or []
+            self._coverage_column = coverage_column
+            self._max_coverage_column = max_coverage_column
             self._filters = filters or {}
             self._filter_defaults = {}
             for identifier in self._filters.keys():
@@ -510,6 +529,9 @@ class SequenceView:
             "height": self._height,
             "deconvolved": self._deconvolved,
             "annotation_config": self._annotation_config,
+            "fixed_modifications": self._fixed_modifications,
+            "coverage_column": self._coverage_column,
+            "max_coverage_column": self._max_coverage_column,
         }
 
     def _cache_exists(self) -> bool:
@@ -547,6 +569,9 @@ class SequenceView:
         self._annotation_config = config.get(
             "annotation_config", {**DEFAULT_ANNOTATION_CONFIG}
         )
+        self._fixed_modifications = config.get("fixed_modifications", [])
+        self._coverage_column = config.get("coverage_column")
+        self._max_coverage_column = config.get("max_coverage_column")
         self._config = {}
 
         # Load cached LazyFrames
@@ -579,11 +604,19 @@ class SequenceView:
             schema = self._source_sequence_data.collect_schema()
             filter_cols = [c for c in self._filters.values() if c in schema.names()]
 
-            # Build column list: filter columns + required columns
+            # Build column list: filter columns + required columns + optional
+            # coverage columns (kept verbatim so per-residue shading survives).
             required = ["sequence", "precursor_charge"]
+            optional = [
+                c
+                for c in (self._coverage_column, self._max_coverage_column)
+                if c is not None
+            ]
             cols = list(
                 dict.fromkeys(
-                    filter_cols + [c for c in required if c in schema.names()]
+                    filter_cols
+                    + [c for c in required if c in schema.names()]
+                    + [c for c in optional if c in schema.names()]
                 )
             )
 
@@ -673,6 +706,52 @@ class SequenceView:
 
         return "", 1
 
+    def _get_coverage_for_state(
+        self, state: Dict[str, Any]
+    ) -> Tuple[Optional[List[float]], Optional[float]]:
+        """Get the per-residue coverage array and its max for the current state.
+
+        Returns (coverage_list, max_coverage) when both coverage columns are
+        configured and present in the cached sequences; otherwise (None, None).
+        Applies the same None-default filter semantics as the sequence getter.
+        """
+        if self._coverage_column is None or self._cached_sequences is None:
+            return None, None
+
+        filtered = self._cached_sequences
+        schema = filtered.collect_schema().names()
+        if self._coverage_column not in schema:
+            return None, None
+
+        for identifier, column in self._filters.items():
+            if column in schema:
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    return None, None
+
+        cols = [self._coverage_column]
+        if self._max_coverage_column and self._max_coverage_column in schema:
+            cols.append(self._max_coverage_column)
+        try:
+            df = filtered.select(cols).head(1).collect()
+            if df.height == 0:
+                return None, None
+            coverage = df[self._coverage_column][0]
+            coverage = list(coverage) if coverage is not None else None
+            max_cov = None
+            if self._max_coverage_column and self._max_coverage_column in df.columns:
+                max_cov = df[self._max_coverage_column][0]
+            elif coverage:
+                max_cov = max(coverage)
+            return coverage, max_cov
+        except Exception:
+            return None, None
+
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
 
@@ -734,19 +813,26 @@ class SequenceView:
         # Calculate theoretical mass
         theoretical_mass = get_theoretical_mass(sequence_str)
 
+        # Per-residue coverage (FLASHTnT): shade residues by tag/fragment coverage
+        coverage, max_coverage = self._get_coverage_for_state(state)
+
         # Build sequence data structure
         sequence_data = {
             "sequence": residues,
             "modifications": modifications,
             "theoretical_mass": theoretical_mass,
-            "fixed_modifications": [],
+            "fixed_modifications": list(self._fixed_modifications),
             # Include settings for Vue initialization
             "fragment_tolerance": self._annotation_config.get("tolerance"),
             "fragment_tolerance_ppm": self._annotation_config.get("tolerance_ppm"),
             "neutral_losses": self._annotation_config.get("neutral_losses"),
             "proton_loss_addition": self._annotation_config.get("proton_loss_addition"),
+            "ion_types": self._annotation_config.get("ion_types"),
             **fragment_masses,
         }
+        if coverage is not None:
+            sequence_data["coverage"] = coverage
+            sequence_data["maxCoverage"] = max_coverage
 
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
@@ -761,8 +847,14 @@ class SequenceView:
             observed_masses = peaks_df["mass"].to_list()
             peak_ids = peaks_df["peak_id"].to_list()
 
-        # Create hash for change detection
-        hash_input = f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
+        # Create hash for change detection (include coverage so the bridge
+        # re-sends when only the per-residue coverage changes).
+        cov_sig = ""
+        if coverage is not None:
+            cov_sig = f"{len(coverage)}:{max_coverage}"
+        hash_input = (
+            f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}"
+        )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         result = {

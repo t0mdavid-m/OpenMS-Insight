@@ -52,6 +52,12 @@ export interface SequenceData {
   neutral_losses?: boolean
   /** Whether to enable proton loss/addition matching by default */
   proton_loss_addition?: boolean
+  /** Default selected ion types (e.g. ['b','y'] or ['c','z']) from search params */
+  ion_types?: string[]
+  /** Per-residue coverage values (FLASHTnT tag/fragment coverage), one per residue */
+  coverage?: number[]
+  /** Maximum coverage value, used to normalize `coverage` for shading */
+  maxCoverage?: number
 }
 
 /**

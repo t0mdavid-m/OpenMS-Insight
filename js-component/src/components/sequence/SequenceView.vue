@@ -130,6 +130,7 @@
             :font-size="fontSize"
             :is-highlighted="selectedAAIndex === aaIndex"
             :modification="modifications[aaIndex] ?? null"
+            :coverage-fraction="coverageFraction(aaIndex)"
             @selected="onAminoAcidSelected"
           />
 
@@ -299,6 +300,21 @@ export default defineComponent({
     fixedModificationSites(): string[] {
       return this.sequenceData?.fixed_modifications ?? []
     },
+    /** Per-residue coverage values (FLASHTnT), empty when not provided. */
+    coverage(): number[] {
+      return this.sequenceData?.coverage ?? []
+    },
+    /** Maximum coverage used to normalize per-residue shading. */
+    maxCoverage(): number {
+      const m = this.sequenceData?.maxCoverage
+      if (typeof m === 'number' && m > 0) return m
+      // Fall back to the array max so shading still works if max omitted.
+      return this.coverage.length > 0 ? Math.max(...this.coverage, 0) : 0
+    },
+    /** Whether per-residue coverage shading is active. */
+    hasCoverage(): boolean {
+      return this.coverage.length > 0 && this.maxCoverage > 0
+    },
     /** External annotations from search engine if available */
     externalAnnotations(): ExternalAnnotation[] {
       return this.sequenceData?.external_annotations ?? []
@@ -383,6 +399,14 @@ export default defineComponent({
           }
           if (this.sequenceData?.proton_loss_addition !== undefined) {
             this.ionTypesExtra['proton loss/addition'] = this.sequenceData.proton_loss_addition
+          }
+          // Default selected ion types from search params (e.g. FLASHTnT ion_type).
+          // Only override the defaults when an explicit, non-empty list is given.
+          if (Array.isArray(this.sequenceData?.ion_types) && this.sequenceData.ion_types.length > 0) {
+            const enabled = new Set(this.sequenceData.ion_types.map((t) => t.toLowerCase()))
+            for (const ion of this.ionTypes) {
+              ion.selected = enabled.has(ion.text)
+            }
           }
           this.settingsInitialized = true
         }
@@ -704,6 +728,13 @@ export default defineComponent({
     },
     isFixedModification(aminoAcid: string): boolean {
       return this.fixedModificationSites.includes(aminoAcid)
+    },
+    /** Normalized [0,1] coverage for a residue, or 0 when shading is inactive. */
+    coverageFraction(aaIndex: number): number {
+      if (!this.hasCoverage) return 0
+      const v = this.coverage[aaIndex]
+      if (typeof v !== 'number' || v <= 0) return 0
+      return Math.max(0, Math.min(1, v / this.maxCoverage))
     },
     onAminoAcidSelected(aaIndex: number): void {
       this.selectedAAIndex = aaIndex
