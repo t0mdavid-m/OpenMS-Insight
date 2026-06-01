@@ -81,6 +81,12 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
+  // Optional overlay (second) series drawn beneath the primary spectrum.
+  hasOverlay?: boolean
+  overlayXColumn?: string
+  overlayYColumn?: string
+  overlayColor?: string
+  overlayName?: string
 }
 
 export interface LinePlotStyling {

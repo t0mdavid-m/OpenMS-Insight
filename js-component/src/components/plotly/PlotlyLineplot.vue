@@ -519,12 +519,62 @@ export default defineComponent({
      * Uses stick format triplets generated from raw data.
      * Includes a separate gold trace for the selected peak.
      */
+    /**
+     * Optional overlay (second) series sent by Python as `plotDataOverlay`.
+     * Parsed to column arrays (key starts with 'plotData'). Returns null when
+     * no overlay is configured.
+     */
+    overlayData(): { x: number[]; y: number[] } | null {
+      if (!this.args.hasOverlay) return null
+      const raw = this.streamlitDataStore.allDataForDrawing?.plotDataOverlay as
+        | Record<string, unknown[]>
+        | undefined
+      if (!raw) return null
+      const xCol = this.args.overlayXColumn || this.args.xColumn || 'x'
+      const yCol = this.args.overlayYColumn || this.args.yColumn || 'y'
+      const x = (raw[xCol] as number[]) || []
+      const y = (raw[yCol] as number[]) || []
+      if (x.length === 0) return null
+      return { x, y }
+    },
+
+    /**
+     * Build the overlay stick trace (drawn beneath the primary spectrum).
+     */
+    overlayTrace(): Plotly.Data | null {
+      const data = this.overlayData
+      if (!data) return null
+      const baseline = -10000000
+      const xs: number[] = []
+      const ys: number[] = []
+      for (let i = 0; i < data.x.length; i++) {
+        xs.push(data.x[i], data.x[i], data.x[i])
+        ys.push(baseline, data.y[i], baseline)
+      }
+      return {
+        x: xs,
+        y: ys,
+        mode: 'lines',
+        type: 'scatter',
+        connectgaps: false,
+        name: this.args.overlayName || 'Overlay',
+        marker: { color: this.args.overlayColor || '#9467bd' },
+        line: { color: this.args.overlayColor || '#9467bd' },
+        hoverinfo: 'x+y',
+      }
+    },
+
     traces(): Plotly.Data[] {
       if (!this.isDataReady || !this.plotData) {
         return this.getFallbackData()
       }
 
       const traces: Plotly.Data[] = []
+      // Overlay series first so it renders beneath the primary spectrum.
+      const overlayTrace = this.overlayTrace
+      if (overlayTrace) {
+        traces.push(overlayTrace)
+      }
       const { highlight_mask } = this.plotData
       const selectedIndex = this.selectedPeakIndex
       const baseline = -10000000
@@ -600,8 +650,11 @@ export default defineComponent({
         })
       }
 
-      // If no data was added (no highlight mask and no selection), show all as default
-      if (traces.length === 0) {
+      // If no PRIMARY trace was added (no highlight mask and no selection),
+      // show all primary peaks as default. Count excludes the overlay trace so
+      // an overlay-only state still renders the primary spectrum.
+      const primaryTraceCount = traces.length - (overlayTrace ? 1 : 0)
+      if (primaryTraceCount === 0) {
         traces.push({
           x: this.xValuesStick,
           y: this.yValuesStick,
@@ -699,6 +752,16 @@ export default defineComponent({
 
     // Re-render when plot config changes (e.g., dynamic annotations)
     'streamlitDataStore.allDataForDrawing._plotConfig': {
+      handler() {
+        if (this.isInitialized) {
+          this.renderPlot()
+        }
+      },
+      deep: true,
+    },
+
+    // Re-render when the overlay (second) series changes
+    'streamlitDataStore.allDataForDrawing.plotDataOverlay': {
       handler() {
         if (this.isInitialized) {
           this.renderPlot()
