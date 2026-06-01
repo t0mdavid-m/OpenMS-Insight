@@ -34,6 +34,7 @@ import PlotlyDensity from './components/plotly/PlotlyDensity.vue'
 import Plotly3DScatter from './components/plotly/Plotly3DScatter.vue'
 import PlotlyFeatureView from './components/plotly/PlotlyFeatureView.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
+import InternalFragmentMap from './components/sequence/InternalFragmentMap.vue'
 
 export default defineComponent({
   name: 'App',
@@ -47,6 +48,7 @@ export default defineComponent({
     Plotly3DScatter,
     PlotlyFeatureView,
     SequenceView,
+    InternalFragmentMap,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -218,6 +220,8 @@ export default defineComponent({
           return PlotlyFeatureView
         case 'SequenceView':
           return SequenceView
+        case 'InternalFragmentMap':
+          return InternalFragmentMap
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null

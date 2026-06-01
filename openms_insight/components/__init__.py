@@ -3,6 +3,7 @@
 from .densityplot import DensityPlot
 from .featureview import FeatureView
 from .heatmap import Heatmap
+from .internalfragmentmap import InternalFragmentMap
 from .lineplot import LinePlot
 from .mirrorplot import MirrorPlot
 from .scatter3d import Scatter3D
@@ -18,4 +19,5 @@ __all__ = [
     "DensityPlot",
     "Scatter3D",
     "FeatureView",
+    "InternalFragmentMap",
 ]

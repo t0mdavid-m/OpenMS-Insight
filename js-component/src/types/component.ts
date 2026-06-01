@@ -318,6 +318,26 @@ export interface FeatureViewComponentArgs extends BaseComponentArgs {
 export type FeatureData = Record<string, unknown>
 
 /**
+ * InternalFragmentMap component arguments.
+ */
+export interface InternalFragmentMapComponentArgs extends BaseComponentArgs {
+  componentType: 'InternalFragmentMap'
+  title?: string
+  height?: number
+  /** ppm tolerance for matching observed vs theoretical fragment masses. */
+  tolerancePpm?: number
+  /** Per-type block colors (by, cy, bz). */
+  colors?: Record<string, string>
+}
+
+/**
+ * InternalFragmentMap data payload (self-contained, not Arrow):
+ *   sequence, observedMasses, tolerancePpm, colors,
+ *   fragment_masses_{by,cy,bz}, start_indices_{by,cy,bz}, end_indices_{by,cy,bz}.
+ */
+export type InternalFragmentData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -330,6 +350,7 @@ export type ComponentArgs =
   | DensityPlotComponentArgs
   | Scatter3DComponentArgs
   | FeatureViewComponentArgs
+  | InternalFragmentMapComponentArgs
 
 /**
  * Component layout entry.
