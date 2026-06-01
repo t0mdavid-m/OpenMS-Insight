@@ -1,6 +1,7 @@
 """Visualization components."""
 
 from .densityplot import DensityPlot
+from .featureview import FeatureView
 from .heatmap import Heatmap
 from .lineplot import LinePlot
 from .mirrorplot import MirrorPlot
@@ -16,4 +17,5 @@ __all__ = [
     "MirrorPlot",
     "DensityPlot",
     "Scatter3D",
+    "FeatureView",
 ]

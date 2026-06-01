@@ -268,5 +268,10 @@ class Scatter3D(BaseComponent):
             "interactivity": self._interactivity,
             "config": self._plot_config,
         }
-        args.update(self._config)
+        # Only inject forwarded kwargs not already set, so self._config (which
+        # includes title/columns passed to super().__init__) can't clobber an
+        # explicit arg with a None passthrough.
+        for key, val in self._config.items():
+            if key not in args:
+                args[key] = val
         return args

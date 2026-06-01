@@ -32,6 +32,7 @@ import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
 import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
 import PlotlyDensity from './components/plotly/PlotlyDensity.vue'
 import Plotly3DScatter from './components/plotly/Plotly3DScatter.vue'
+import PlotlyFeatureView from './components/plotly/PlotlyFeatureView.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
 
 export default defineComponent({
@@ -44,6 +45,7 @@ export default defineComponent({
     PlotlyVolcano,
     PlotlyDensity,
     Plotly3DScatter,
+    PlotlyFeatureView,
     SequenceView,
   },
   setup() {
@@ -212,6 +214,8 @@ export default defineComponent({
           return PlotlyDensity
         case 'Plotly3DScatter':
           return Plotly3DScatter
+        case 'PlotlyFeatureView':
+          return PlotlyFeatureView
         case 'SequenceView':
           return SequenceView
         default:

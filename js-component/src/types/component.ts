@@ -292,6 +292,32 @@ export interface Scatter3DComponentArgs extends BaseComponentArgs {
 export type Scatter3DData = Record<string, unknown>
 
 /**
+ * FeatureView component arguments (FLASHQuant feature-group 3D trace view).
+ */
+export interface FeatureViewComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyFeatureView'
+  title?: string
+  chargeColumn?: string
+  mzColumn?: string
+  rtColumn?: string
+  intensityColumn?: string
+  isotopeColumn?: string | null
+  traceColor?: string
+  xLabel?: string
+  yLabel?: string
+  zLabel?: string
+  interactivity?: InteractivityMapping
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * FeatureView data format: long format, one row per trace point.
+ * Columns: feature_group, charge, mz, rt, intensity, isotope?.
+ */
+export type FeatureData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -303,6 +329,7 @@ export type ComponentArgs =
   | MirrorPlotComponentArgs
   | DensityPlotComponentArgs
   | Scatter3DComponentArgs
+  | FeatureViewComponentArgs
 
 /**
  * Component layout entry.

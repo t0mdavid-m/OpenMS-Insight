@@ -6,6 +6,7 @@ visualizations with cross-component selection state management.
 """
 
 from .components.densityplot import DensityPlot
+from .components.featureview import FeatureView
 from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
@@ -38,6 +39,7 @@ __all__ = [
     "MirrorPlot",
     "DensityPlot",
     "Scatter3D",
+    "FeatureView",
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",
