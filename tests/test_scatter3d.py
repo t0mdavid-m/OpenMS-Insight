@@ -159,3 +159,75 @@ class TestScatter3DCacheReconstruction:
         assert plot2._filters == {"scanIndex": "scan_id", "massIndex": "mass_id"}
         df = plot2._prepare_vue_data({"scanIndex": 2, "massIndex": 0})["scatter3dData"]
         assert len(df) == 2
+
+
+class TestScatter3DOptionalFilters:
+    """Optional massIndex: show all masses for a scan, isolate one when set."""
+
+    def test_optional_filter_skipped_when_absent(
+        self, mock_streamlit, temp_cache_dir, sample_scatter3d_data
+    ):
+        plot = Scatter3D(
+            cache_id="s3d_opt_absent",
+            data=sample_scatter3d_data,
+            filters={"scanIndex": "scan_id"},
+            optional_filters={"massIndex": "mass_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        # scan 1 has 4 peaks across masses 0 and 1; no massIndex -> all 4
+        out = plot._prepare_vue_data({"scanIndex": 1})
+        assert len(out["scatter3dData"]) == 4
+
+    def test_optional_filter_applied_when_present(
+        self, mock_streamlit, temp_cache_dir, sample_scatter3d_data
+    ):
+        plot = Scatter3D(
+            cache_id="s3d_opt_present",
+            data=sample_scatter3d_data,
+            filters={"scanIndex": "scan_id"},
+            optional_filters={"massIndex": "mass_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        # scan 1, mass 0 -> 3 peaks (2 signal + 1 noise)
+        out = plot._prepare_vue_data({"scanIndex": 1, "massIndex": 0})
+        assert len(out["scatter3dData"]) == 3
+        assert set(out["scatter3dData"]["mass_id"]) == {0}
+
+    def test_required_filter_still_empties(
+        self, mock_streamlit, temp_cache_dir, sample_scatter3d_data
+    ):
+        """A missing REQUIRED filter still yields empty (await-selection)."""
+        plot = Scatter3D(
+            cache_id="s3d_opt_req",
+            data=sample_scatter3d_data,
+            filters={"scanIndex": "scan_id"},
+            optional_filters={"massIndex": "mass_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert len(plot._prepare_vue_data({})["scatter3dData"]) == 0
+
+    def test_optional_filter_in_state_deps(
+        self, mock_streamlit, temp_cache_dir, sample_scatter3d_data
+    ):
+        plot = Scatter3D(
+            cache_id="s3d_opt_deps",
+            data=sample_scatter3d_data,
+            filters={"scanIndex": "scan_id"},
+            optional_filters={"massIndex": "mass_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert set(plot.get_state_dependencies()) == {"scanIndex", "massIndex"}
+
+    def test_optional_filter_survives_reconstruction(
+        self, mock_streamlit, temp_cache_dir, sample_scatter3d_data
+    ):
+        Scatter3D(
+            cache_id="s3d_opt_recon",
+            data=sample_scatter3d_data,
+            filters={"scanIndex": "scan_id"},
+            optional_filters={"massIndex": "mass_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        p2 = Scatter3D(cache_id="s3d_opt_recon", cache_path=str(temp_cache_dir))
+        assert p2._optional_filters == {"massIndex": "mass_id"}
+        assert len(p2._prepare_vue_data({"scanIndex": 1, "massIndex": 0})["scatter3dData"]) == 3

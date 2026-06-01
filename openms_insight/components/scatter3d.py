@@ -64,6 +64,7 @@ class Scatter3D(BaseComponent):
         data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
+        optional_filters: Optional[Dict[str, str]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
@@ -90,13 +91,16 @@ class Scatter3D(BaseComponent):
             data: Polars LazyFrame in long format (one row per peak). Optional
                 if cache exists.
             data_path: Path to parquet file (preferred for large datasets).
-            filters: Mapping of identifier names to column names for filtering.
-                Typically {"scanIndex": "scan_id", "massIndex": "mass_id"}.
+            filters: Mapping of identifier names to column names for *required*
+                filtering. Typically {"scanIndex": "scan_id"}. A required filter
+                with no selection yields an empty result (await-selection).
             filter_defaults: Default values for filters when state is None.
-                Use {"massIndex": -1} together with a ``mass_id`` of -1 stamped
-                on "all-mass" rows if you want to show every mass when no mass
-                is selected; otherwise omit massIndex from filters to always
-                show all peaks for the scan.
+            optional_filters: Mapping of identifier names to column names that are
+                applied ONLY when their state value is present; when absent they
+                are skipped (the result is NOT emptied). Use this for the 3D
+                plot's "optional massIndex" — show every mass for the selected
+                scan, and isolate one mass only when massIndex is also selected.
+                Typically {"massIndex": "mass_id"}.
             interactivity: Optional click mapping (usually unused for 3D nav).
             cache_path: Base path for cache storage. Default "." (current dir).
             regenerate_cache: If True, regenerate cache even if valid cache exists.
@@ -115,6 +119,7 @@ class Scatter3D(BaseComponent):
             config: Additional Plotly config options.
             **kwargs: Additional configuration options forwarded to Vue args.
         """
+        self._optional_filters = optional_filters or {}
         self._mz_column = mz_column
         self._charge_column = charge_column
         self._intensity_column = intensity_column
@@ -151,11 +156,13 @@ class Scatter3D(BaseComponent):
             y_label=y_label,
             z_label=z_label,
             config=config,
+            optional_filters=optional_filters,
             **kwargs,
         )
 
     def _get_cache_config(self) -> Dict[str, Any]:
         return {
+            "optional_filters": self._optional_filters,
             "mz_column": self._mz_column,
             "charge_column": self._charge_column,
             "intensity_column": self._intensity_column,
@@ -172,6 +179,7 @@ class Scatter3D(BaseComponent):
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+        self._optional_filters = config.get("optional_filters", {})
         self._mz_column = config.get("mz_column", "mz")
         self._charge_column = config.get("charge_column", "charge")
         self._intensity_column = config.get("intensity_column", "intensity")
@@ -206,12 +214,27 @@ class Scatter3D(BaseComponent):
                     f"{label} '{col}' not found in data. "
                     f"Available columns: {column_names}"
                 )
+        for identifier, col in self._optional_filters.items():
+            if col not in column_names:
+                raise ValueError(
+                    f"optional_filters column '{col}' for identifier "
+                    f"'{identifier}' not found in data. "
+                    f"Available columns: {column_names}"
+                )
+
+    def get_state_dependencies(self) -> List[str]:
+        """Required + optional filter identifiers all affect this plot's data."""
+        deps = list(self._filters.keys())
+        deps.extend(self._optional_filters.keys())
+        return deps
 
     def _preprocess(self) -> None:
         """Sort by filter columns for predicate pushdown; keep lazy for streaming."""
         data = self._raw_data
-        if self._filters:
-            sort_columns = list(self._filters.values())
+        sort_columns = list(self._filters.values()) + list(
+            self._optional_filters.values()
+        )
+        if sort_columns:
             data = data.sort(sort_columns)
         self._preprocessed_data["data"] = data
 
@@ -233,12 +256,25 @@ class Scatter3D(BaseComponent):
             for col in self._filters.values():
                 if col not in columns:
                     columns.append(col)
+        for col in self._optional_filters.values():
+            if col not in columns:
+                columns.append(col)
 
         data = self._preprocessed_data.get("data")
         if data is None:
             data = self._raw_data
         if isinstance(data, pl.DataFrame):
             data = data.lazy()
+
+        # Apply optional filters first: only when a value is present. Unlike
+        # required filters, a missing optional value is skipped (not emptied),
+        # so the 3D plot shows every mass for the scan until massIndex is set.
+        for identifier, column in self._optional_filters.items():
+            value = state.get(identifier)
+            if value is not None:
+                if isinstance(value, float) and value.is_integer():
+                    value = int(value)
+                data = data.filter(pl.col(column) == value)
 
         df_pandas, data_hash = filter_and_collect_cached(
             data,
