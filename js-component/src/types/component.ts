@@ -262,6 +262,36 @@ export interface DensityPlotComponentArgs extends BaseComponentArgs {
 export type DensityData = Record<string, unknown>
 
 /**
+ * Scatter3D component arguments (3D signal/noise stick plot).
+ */
+export interface Scatter3DComponentArgs extends BaseComponentArgs {
+  componentType: 'Plotly3DScatter'
+  title?: string
+  /** Long-format column names. */
+  mzColumn?: string
+  chargeColumn?: string
+  intensityColumn?: string
+  kindColumn?: string
+  /** kind_column values marking signal / noise peaks. */
+  signalValue?: string
+  noiseValue?: string
+  signalColor?: string
+  noiseColor?: string
+  xLabel?: string
+  yLabel?: string
+  zLabel?: string
+  interactivity?: InteractivityMapping
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * Scatter3D data format: long format, one row per peak.
+ * Columns: mz, charge, intensity, kind, plus filter columns (scan_id, mass_id).
+ */
+export type Scatter3DData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -272,6 +302,7 @@ export type ComponentArgs =
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
   | DensityPlotComponentArgs
+  | Scatter3DComponentArgs
 
 /**
  * Component layout entry.

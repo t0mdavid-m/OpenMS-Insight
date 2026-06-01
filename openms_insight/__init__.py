@@ -9,6 +9,7 @@ from .components.densityplot import DensityPlot
 from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
+from .components.scatter3d import Scatter3D
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.table import Table
 from .components.volcanoplot import VolcanoPlot
@@ -36,6 +37,7 @@ __all__ = [
     "SequenceViewResult",
     "MirrorPlot",
     "DensityPlot",
+    "Scatter3D",
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",
