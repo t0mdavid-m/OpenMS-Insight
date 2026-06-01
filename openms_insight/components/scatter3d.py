@@ -120,7 +120,9 @@ class Scatter3D(BaseComponent):
         # BaseComponent rejects any config args and restores them from the manifest.
         has_data = data is not None or data_path is not None
         scan_filters = (
-            {self.SCAN_STATE_KEY: scan_filter} if (has_data or regenerate_cache) else None
+            {self.SCAN_STATE_KEY: scan_filter}
+            if (has_data or regenerate_cache)
+            else None
         )
         super().__init__(
             cache_id=cache_id,

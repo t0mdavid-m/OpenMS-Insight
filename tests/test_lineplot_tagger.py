@@ -17,7 +17,6 @@ import pytest
 
 from openms_insight import LinePlot
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -234,7 +233,9 @@ def test_no_tag_selected_no_highlight(
 def test_empty_tag_list_no_highlight(
     mock_streamlit, temp_cache_dir, sample_combined_spectrum_data
 ):
-    plot = _tag_plot("tagger_tag_emptylist", sample_combined_spectrum_data, temp_cache_dir)
+    plot = _tag_plot(
+        "tagger_tag_emptylist", sample_combined_spectrum_data, temp_cache_dir
+    )
     result = _vue(plot, {"scanIndex": 1, "tag": []})
     assert "_tag_highlight" not in result["plotData"].columns
 
@@ -269,13 +270,13 @@ def test_backward_compat_identical_output_when_unused(
 
     The new args carry None/False and the tagger columns must be absent.
     """
-    common = dict(
-        data=sample_lineplot_data,
-        cache_path=str(temp_cache_dir),
-        x_column="mass",
-        y_column="intensity",
-        filters={"scanIndex": "scan_id"},
-    )
+    common = {
+        "data": sample_lineplot_data,
+        "cache_path": str(temp_cache_dir),
+        "x_column": "mass",
+        "y_column": "intensity",
+        "filters": {"scanIndex": "scan_id"},
+    }
     plot = _make(cache_id="bc_plot", **common)
     result = _vue(plot, {"scanIndex": 1})
     df = result["plotData"]
@@ -306,13 +307,13 @@ def test_backward_compat_hash_stable_across_versions(
     mock_streamlit, temp_cache_dir, sample_lineplot_data
 ):
     """Two identical plain plots produce the same hash (deterministic, no tag salt)."""
-    common = dict(
-        data=sample_lineplot_data,
-        cache_path=str(temp_cache_dir),
-        x_column="mass",
-        y_column="intensity",
-        filters={"scanIndex": "scan_id"},
-    )
+    common = {
+        "data": sample_lineplot_data,
+        "cache_path": str(temp_cache_dir),
+        "x_column": "mass",
+        "y_column": "intensity",
+        "filters": {"scanIndex": "scan_id"},
+    }
     h1 = _vue(_make(cache_id="bc_h1", **common), {"scanIndex": 1})["_hash"]
     h2 = _vue(_make(cache_id="bc_h2", **common), {"scanIndex": 1})["_hash"]
     assert h1 == h2
@@ -362,8 +363,15 @@ def test_all_extensions_together(
     cfg = result["_plotConfig"]
 
     # Series 1 + series 2 + signal + tag all present
-    assert {"MonoMass", "SumIntensity", "MonoMass_Anno", "SumIntensity_Anno",
-            "is_signal", "_tag_highlight", "_tag_annotation"}.issubset(set(df.columns))
+    assert {
+        "MonoMass",
+        "SumIntensity",
+        "MonoMass_Anno",
+        "SumIntensity_Anno",
+        "is_signal",
+        "_tag_highlight",
+        "_tag_annotation",
+    }.issubset(set(df.columns))
     assert cfg["hasSecondSeries"] is True
     assert cfg["signalPeakColumn"] == "is_signal"
     assert cfg["tagHighlightColumn"] == "_tag_highlight"

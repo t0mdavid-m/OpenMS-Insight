@@ -176,9 +176,7 @@ class DensityPlot(BaseComponent):
         # Precomputed-mode inputs (held until _preprocess).
         self._precomputed_target = density_target
         self._precomputed_decoy = density_decoy
-        self._is_precomputed = (
-            density_target is not None or density_decoy is not None
-        )
+        self._is_precomputed = density_target is not None or density_decoy is not None
 
         if self._is_precomputed and (data is not None or data_path is not None):
             raise ValueError(
@@ -292,12 +290,8 @@ class DensityPlot(BaseComponent):
             # Pre-filter ProteoformLevelQvalue > 0 (the actual score column).
             df = df.filter(pl.col(score_col) > 0)
             is_decoy = pl.col(acc_col).str.starts_with("DECOY_")
-            target = (
-                df.filter(~is_decoy).get_column(score_col).drop_nulls().to_numpy()
-            )
-            decoy = (
-                df.filter(is_decoy).get_column(score_col).drop_nulls().to_numpy()
-            )
+            target = df.filter(~is_decoy).get_column(score_col).drop_nulls().to_numpy()
+            decoy = df.filter(is_decoy).get_column(score_col).drop_nulls().to_numpy()
             return target, decoy
 
         raise ValueError(
@@ -306,7 +300,9 @@ class DensityPlot(BaseComponent):
         )
 
     @staticmethod
-    def _normalize_xy(frame: Optional[pl.LazyFrame], x_col: str, y_col: str) -> pl.DataFrame:
+    def _normalize_xy(
+        frame: Optional[pl.LazyFrame], x_col: str, y_col: str
+    ) -> pl.DataFrame:
         """Collect a precomputed frame and project/rename to canonical x,y columns."""
         if frame is None:
             return pl.DataFrame(
@@ -356,9 +352,7 @@ class DensityPlot(BaseComponent):
                 self._accession_column,
             ]
         else:
-            raise ValueError(
-                f"Unknown mode '{self._mode}'. Use 'deconv' or 'tnt'."
-            )
+            raise ValueError(f"Unknown mode '{self._mode}'. Use 'deconv' or 'tnt'.")
         missing = [c for c in required if c not in names]
         if missing:
             raise ValueError(
@@ -459,9 +453,7 @@ class DensityPlot(BaseComponent):
                 {"x": [], "y": []}, schema={"x": pl.Float64, "y": pl.Float64}
             )
 
-        data_hash = (
-            f"{compute_dataframe_hash(target)}_{compute_dataframe_hash(decoy)}"
-        )
+        data_hash = f"{compute_dataframe_hash(target)}_{compute_dataframe_hash(decoy)}"
 
         return {
             "densityTarget": target.to_pandas(),

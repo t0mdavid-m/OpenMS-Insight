@@ -19,9 +19,9 @@ from openms_insight.components.internalfragmentmap import (
     H2O,
     NH3,
     InternalFragmentMap,
+    _terminal_fragment_masses_simple,
     get_internal_fragment_data_from_seq,
     get_internal_fragment_masses_with_seq,
-    _terminal_fragment_masses_simple,
 )
 
 
@@ -329,9 +329,10 @@ class TestCacheReconstruction:
         args = ifm2._get_component_args()
         assert args["toleranceUnit"] == "Da"
         second = ifm2._prepare_vue_data({})
-        assert second["internalFragmentData"]["sequence"] == first["internalFragmentData"][
-            "sequence"
-        ]
+        assert (
+            second["internalFragmentData"]["sequence"]
+            == first["internalFragmentData"]["sequence"]
+        )
         assert second["internalFragmentData"]["fragment_masses_by"] == pytest.approx(
             first["internalFragmentData"]["fragment_masses_by"]
         )

@@ -284,7 +284,9 @@ def compute_fixed_modifications(
         Ordered list (``['C']``, ``['M']``, both, or empty) of residue types that
         appear in the sequence and are eligible for a fixed modification.
     """
-    eligible = fixed_mod_residues if fixed_mod_residues is not None else FIXED_MOD_RESIDUES
+    eligible = (
+        fixed_mod_residues if fixed_mod_residues is not None else FIXED_MOD_RESIDUES
+    )
     present = set(residues)
     return [aa for aa in eligible if aa in present]
 
@@ -509,9 +511,7 @@ class SequenceView:
                 self._annotation_config["tolerance"] = self._settings["tolerance"]
                 self._annotation_config["tolerance_ppm"] = True
             if self._settings.get("ion_types"):
-                self._annotation_config["ion_types"] = list(
-                    self._settings["ion_types"]
-                )
+                self._annotation_config["ion_types"] = list(self._settings["ion_types"])
 
             # Parse sequence data input
             if sequence_data is not None and sequence_data_path is not None:

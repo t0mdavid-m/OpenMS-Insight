@@ -15,7 +15,6 @@ empty map.
 
 import hashlib
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
@@ -71,7 +70,9 @@ PROTON_MASS = 1.007276
 CACHE_VERSION = 1
 
 
-def _is_match_with_tolerance(sorted_values: List[float], target: float, ppm: float) -> bool:
+def _is_match_with_tolerance(
+    sorted_values: List[float], target: float, ppm: float
+) -> bool:
     """Return True iff some value in ``sorted_values`` matches ``target`` within ``ppm``.
 
     Binary search over the ascending-sorted list. Faithful port of
@@ -404,9 +405,7 @@ class InternalFragmentMap(BaseComponent):
         # filter_defaults: every filter defaults to None (clearing selection -> empty).
         # Pass None (not {}) when there are no filters so reconstruction mode (no data,
         # no config) is not misdetected as "config provided" by BaseComponent.
-        filter_defaults = (
-            {ident: None for ident in filters.keys()} if filters else None
-        )
+        filter_defaults = dict.fromkeys(filters.keys()) if filters else None
 
         super().__init__(
             cache_id=cache_id,
@@ -448,7 +447,7 @@ class InternalFragmentMap(BaseComponent):
     def _preprocess(self) -> None:
         """Cache the sequence frame (sorted by filter columns) and optional peaks frame."""
         data = self._raw_data
-        filter_cols = [c for c in self._filters.values()]
+        filter_cols = list(self._filters.values())
 
         # Keep only useful columns, preserving the filter + sequence + optional metadata.
         schema = data.collect_schema()
@@ -497,9 +496,7 @@ class InternalFragmentMap(BaseComponent):
         self._height = config.get("height", 400)
         mods = config.get("modifications")
         # JSON round-trips tuples to lists — normalize back to tuples.
-        self._modifications = (
-            [tuple(m) for m in mods] if mods is not None else None
-        )
+        self._modifications = [tuple(m) for m in mods] if mods is not None else None
         self._tolerance = config.get("tolerance", 10.0)
         self._tolerance_ppm = config.get("tolerance_ppm", True)
         self._ion_colors = config.get("ion_colors", {**DEFAULT_ION_COLORS})
@@ -644,8 +641,7 @@ class InternalFragmentMap(BaseComponent):
 
     def __repr__(self) -> str:
         return (
-            f"InternalFragmentMap(cache_id='{self._cache_id}', "
-            f"filters={self._filters})"
+            f"InternalFragmentMap(cache_id='{self._cache_id}', filters={self._filters})"
         )
 
 

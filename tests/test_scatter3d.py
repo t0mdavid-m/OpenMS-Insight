@@ -92,9 +92,7 @@ def test_prepare_vue_data_returns_dict_with_hash(
     assert "scatter3dData" in result
 
 
-def test_empty_scan_index_blank(
-    mock_streamlit, temp_cache_dir, sample_scatter3d_data
-):
+def test_empty_scan_index_blank(mock_streamlit, temp_cache_dir, sample_scatter3d_data):
     comp = _make(sample_scatter3d_data, temp_cache_dir, "blank")
     # No scanIndex at all
     result = comp._prepare_vue_data({})
@@ -130,9 +128,7 @@ def test_scan_index_selects_correct_row(
     assert len(payload["noisyPeaks"][1]) == 0
 
 
-def test_scan_index_other_row(
-    mock_streamlit, temp_cache_dir, sample_scatter3d_data
-):
+def test_scan_index_other_row(mock_streamlit, temp_cache_dir, sample_scatter3d_data):
     comp = _make(sample_scatter3d_data, temp_cache_dir, "scan20")
     result = comp._prepare_vue_data({"scanIndex": 20})
     payload = result["scatter3dData"]
@@ -141,9 +137,7 @@ def test_scan_index_other_row(
     assert payload["signalPeaks"][0][0][1] == pytest.approx(400.0)
 
 
-def test_scan_index_not_found(
-    mock_streamlit, temp_cache_dir, sample_scatter3d_data
-):
+def test_scan_index_not_found(mock_streamlit, temp_cache_dir, sample_scatter3d_data):
     comp = _make(sample_scatter3d_data, temp_cache_dir, "missing")
     result = comp._prepare_vue_data({"scanIndex": 999})
     payload = result["scatter3dData"]
@@ -153,9 +147,7 @@ def test_scan_index_not_found(
     assert payload["noisyPeaks"] is None
 
 
-def test_mass_index_subscript(
-    mock_streamlit, temp_cache_dir, sample_scatter3d_data
-):
+def test_mass_index_subscript(mock_streamlit, temp_cache_dir, sample_scatter3d_data):
     comp = _make(sample_scatter3d_data, temp_cache_dir, "mass")
     # scan 10, mass 0 -> isolate first mass's peak set
     result = comp._prepare_vue_data({"scanIndex": 10, "massIndex": 0})
@@ -177,9 +169,7 @@ def test_mass_index_subscript(
     assert p1["noisyPeaks"] == []
 
 
-def test_mass_index_out_of_range(
-    mock_streamlit, temp_cache_dir, sample_scatter3d_data
-):
+def test_mass_index_out_of_range(mock_streamlit, temp_cache_dir, sample_scatter3d_data):
     comp = _make(sample_scatter3d_data, temp_cache_dir, "oor")
     # scan 10 has 2 masses; massIndex 5 is out of range -> None (mirror update.py)
     result = comp._prepare_vue_data({"scanIndex": 10, "massIndex": 5})
@@ -208,11 +198,10 @@ def test_component_args(mock_streamlit, temp_cache_dir, sample_scatter3d_data):
     assert args["height"] == 800
 
 
-def test_cache_reconstruction(
-    mock_streamlit, temp_cache_dir, sample_scatter3d_data
-):
+def test_cache_reconstruction(mock_streamlit, temp_cache_dir, sample_scatter3d_data):
     cache_id = "recon"
-    comp = _make(sample_scatter3d_data, temp_cache_dir, cache_id)
+    # Build once to populate the on-disk cache, then reconstruct from it.
+    _make(sample_scatter3d_data, temp_cache_dir, cache_id)
     # Reconstruct from cache (no data)
     comp2 = Scatter3D(cache_id=cache_id, cache_path=str(temp_cache_dir))
     assert comp2._get_vue_component_name() == "Plotly3DScatter"

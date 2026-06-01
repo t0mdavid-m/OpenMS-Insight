@@ -82,9 +82,7 @@ def deconv_fdr_data() -> pl.LazyFrame:
 def deconv_no_decoy_data() -> pl.LazyFrame:
     rng = np.random.default_rng(7)
     targets = rng.normal(0.8, 0.1, 200)
-    return pl.LazyFrame(
-        {"TargetDecoyType": [0] * len(targets), "Qscore": targets}
-    )
+    return pl.LazyFrame({"TargetDecoyType": [0] * len(targets), "Qscore": targets})
 
 
 @pytest.fixture
@@ -101,9 +99,7 @@ def tnt_protein_data() -> pl.LazyFrame:
         + [f"PROT_z{i}" for i in range(zero_rows)]
     )
     qvals = list(target_q) + list(decoy_q) + [0.0] * zero_rows
-    return pl.LazyFrame(
-        {"accession": accessions, "ProteoformLevelQvalue": qvals}
-    )
+    return pl.LazyFrame({"accession": accessions, "ProteoformLevelQvalue": qvals})
 
 
 def _collect(comp: DensityPlot, key: str) -> pl.DataFrame:
@@ -133,10 +129,18 @@ class TestDeconvKDE:
         assert decoy.height == 200
         assert set(target.columns) == {"x", "y"}
 
-        np.testing.assert_allclose(target["x"].to_numpy(), ref_t["x"].to_numpy(), rtol=1e-6)
-        np.testing.assert_allclose(target["y"].to_numpy(), ref_t["y"].to_numpy(), rtol=1e-6)
-        np.testing.assert_allclose(decoy["x"].to_numpy(), ref_d["x"].to_numpy(), rtol=1e-6)
-        np.testing.assert_allclose(decoy["y"].to_numpy(), ref_d["y"].to_numpy(), rtol=1e-6)
+        np.testing.assert_allclose(
+            target["x"].to_numpy(), ref_t["x"].to_numpy(), rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            target["y"].to_numpy(), ref_t["y"].to_numpy(), rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            decoy["x"].to_numpy(), ref_d["x"].to_numpy(), rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            decoy["y"].to_numpy(), ref_d["y"].to_numpy(), rtol=1e-6
+        )
 
     def test_x_is_linspace_of_min_max(
         self, mock_streamlit, temp_cache_dir, deconv_fdr_data
@@ -190,10 +194,18 @@ class TestTnTKDE:
 
         assert target.height == 200
         assert decoy.height == 200
-        np.testing.assert_allclose(target["x"].to_numpy(), ref_t["x"].to_numpy(), rtol=1e-6)
-        np.testing.assert_allclose(target["y"].to_numpy(), ref_t["y"].to_numpy(), rtol=1e-6)
-        np.testing.assert_allclose(decoy["x"].to_numpy(), ref_d["x"].to_numpy(), rtol=1e-6)
-        np.testing.assert_allclose(decoy["y"].to_numpy(), ref_d["y"].to_numpy(), rtol=1e-6)
+        np.testing.assert_allclose(
+            target["x"].to_numpy(), ref_t["x"].to_numpy(), rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            target["y"].to_numpy(), ref_t["y"].to_numpy(), rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            decoy["x"].to_numpy(), ref_d["x"].to_numpy(), rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            decoy["y"].to_numpy(), ref_d["y"].to_numpy(), rtol=1e-6
+        )
 
     def test_prefilter_qvalue_positive(
         self, mock_streamlit, temp_cache_dir, tnt_protein_data
@@ -234,7 +246,9 @@ class TestTnTKDE:
 class TestPrecomputedMode:
     def test_precomputed_xy(self, mock_streamlit, temp_cache_dir):
         target_xy = pl.LazyFrame({"x": [1.0, 2.0, 3.0], "y": [0.1, 0.5, 0.2]})
-        decoy_xy = pl.LazyFrame({"x": [], "y": []}, schema={"x": pl.Float64, "y": pl.Float64})
+        decoy_xy = pl.LazyFrame(
+            {"x": [], "y": []}, schema={"x": pl.Float64, "y": pl.Float64}
+        )
         comp = DensityPlot(
             cache_id="dp_precomp",
             density_target=target_xy,
@@ -246,9 +260,7 @@ class TestPrecomputedMode:
         assert t.height == 3
         assert d.height == 0
         # Cached frames are downcast Float64->Float32 for transfer efficiency.
-        np.testing.assert_allclose(
-            t["y"].to_numpy(), [0.1, 0.5, 0.2], rtol=1e-5
-        )
+        np.testing.assert_allclose(t["y"].to_numpy(), [0.1, 0.5, 0.2], rtol=1e-5)
 
 
 # --------------------------------------------------------------------------- #
@@ -338,9 +350,7 @@ class TestCacheReconstruction:
         t1 = _collect(comp1, "densityTarget")
         t2 = _collect(comp2, "densityTarget")
         assert t1.height == t2.height == 200
-        np.testing.assert_allclose(
-            t1["y"].to_numpy(), t2["y"].to_numpy(), rtol=1e-4
-        )
+        np.testing.assert_allclose(t1["y"].to_numpy(), t2["y"].to_numpy(), rtol=1e-4)
         # Config restored
         assert comp2._target_name == "Target QScores"
         assert comp2.get_state_dependencies() == []
