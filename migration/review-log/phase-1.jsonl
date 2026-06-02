@@ -44,3 +44,26 @@
 {"ts": "2026-06-02T20:46:20", "phase": 1, "round": 2, "kind": "review", "unit": "lineplot:annotation", "status": "finding", "findings": [{"id": "P1-R2-LP-ANN-001", "severity": "minor", "desc": "charge badge text forces color:white; oracle sets size:15 only (theme dark text)", "status": "open"}], "msg": ""}
 {"ts": "2026-06-02T20:46:20", "phase": 1, "round": 2, "kind": "review", "unit": "lineplot:tagger", "status": "finding", "findings": [{"id": "P1-R2-LP-TAG-001", "severity": "minor", "desc": "level-0 mass badges lost oracle invisible hover (hovertext=String(mass))", "status": "open"}], "msg": ""}
 {"ts": "2026-06-02T20:46:20", "phase": 1, "round": 2, "kind": "review", "unit": "sequenceview:internal-frags", "status": "finding", "findings": [{"id": "P1-R2-SV-INT-001", "severity": "minor", "desc": "terminal-collision families b,c,x,y vs oracle b,y,c,z (x substituted for z, ~42 Da)", "status": "open"}], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "heatmap:log", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "heatmap:multi-res", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "heatmap:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "heatmap:categorical", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "heatmap:interactivity", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "table:formatters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "table:pagination", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "table:row-select", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "table:go-to", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "table:filters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:stick", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:highlight", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:annotation", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:svg", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:click", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:11", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:density", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:12", "phase": 1, "round": 3, "kind": "review", "unit": "sequenceview:coverage", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:12", "phase": 1, "round": 3, "kind": "review", "unit": "sequenceview:terminal-frags", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:12", "phase": 1, "round": 3, "kind": "review", "unit": "sequenceview:internal-frags", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:12", "phase": 1, "round": 3, "kind": "review", "unit": "plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:12", "phase": 1, "round": 3, "kind": "review", "unit": "quant-recipe", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:22:12", "phase": 1, "round": 3, "kind": "review", "unit": "lineplot:tagger", "status": "finding", "findings": [{"id": "P1-R3-LP-TAG-001", "severity": "major", "desc": "tagger Level-0 x-range does not zoom to highlighted tag masses (missing oracle 593-609 maxAnnotationRange centroid-fit behind mode=tagger); full spectrum shown, mass buttons/arrows overlap-suppressed", "status": "open"}], "msg": ""}
