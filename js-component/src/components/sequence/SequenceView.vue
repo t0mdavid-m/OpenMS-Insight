@@ -6,6 +6,16 @@
         <h4>Sequence View</h4>
       </div>
 
+      <!-- Theoretical / Observed / Δ proteoform mass header (FLASHTnT parity).
+           Only shown when Python supplies both theoretical and observed mass. -->
+      <div v-if="hasMassHeader" class="d-flex justify-center mb-2 text-body-2 mass-header">
+        <span>Theoretical proteoform mass: {{ formatMass(theoreticalMass) }}</span>
+        <span class="mx-2">|</span>
+        <span>Observed proteoform mass: {{ formatMass(observedMass ?? 0) }}</span>
+        <span class="mx-2">|</span>
+        <span>Δ Mass (Da): {{ formatMass(massHeaderDelta) }}</span>
+      </div>
+
       <!-- Toolbar -->
       <div class="d-flex justify-end px-4 mb-4">
         <v-btn variant="text" icon size="small" :disabled="sequence.length === 0" @click="copySequence">
@@ -297,6 +307,32 @@ export default defineComponent({
     theoreticalMass(): number {
       return this.sequenceData?.theoretical_mass ?? 0
     },
+    /** Observed proteoform mass for the header, or undefined when not provided. */
+    observedMass(): number | undefined {
+      const m = this.sequenceData?.observed_mass
+      return typeof m === 'number' ? m : undefined
+    },
+    /**
+     * Whether the Theoretical | Observed | Δ mass header should be shown.
+     * Requires both masses to be present (FLASHTnT parity); otherwise hidden.
+     */
+    hasMassHeader(): boolean {
+      return (
+        typeof this.sequenceData?.theoretical_mass === 'number' &&
+        typeof this.sequenceData?.observed_mass === 'number'
+      )
+    },
+    /** |theoretical - observed| mass difference (Da) for the header. */
+    massHeaderDelta(): number {
+      return Math.abs(this.theoreticalMass - (this.observedMass ?? 0))
+    },
+    /**
+     * Precomputed per-residue fragment masses keyed by ion type, when supplied
+     * by Python. When present, these override the `fragment_masses_*` recompute.
+     */
+    precomputedFragmentMasses(): Partial<Record<string, number[][]>> | undefined {
+      return this.sequenceData?.precomputed_fragment_masses
+    },
     fixedModificationSites(): string[] {
       return this.sequenceData?.fixed_modifications ?? []
     },
@@ -498,6 +534,13 @@ export default defineComponent({
     },
     getFragmentMasses(ionType: string): number[][] {
       if (!this.sequenceData) return []
+      // Prefer Python-supplied precomputed masses (e.g. modified proteoforms
+      // whose fragments cannot be recomputed from the bare sequence). Fall back
+      // to the pyOpenMS-from-sequence `fragment_masses_*` values otherwise.
+      const precomputed = this.precomputedFragmentMasses
+      if (precomputed && precomputed[ionType] !== undefined) {
+        return precomputed[ionType] as number[][]
+      }
       const key = `fragment_masses_${ionType}` as keyof SequenceData
       return (this.sequenceData[key] as number[][]) ?? []
     },
@@ -783,6 +826,10 @@ export default defineComponent({
         class: index === this.selectedFragmentRowIndex ? 'bg-amber-lighten-4' : '',
       }
     },
+    /** Format a mass value for the header to ~2 decimal places. */
+    formatMass(value: number): string {
+      return Number.isFinite(value) ? value.toFixed(2) : '—'
+    },
     async copySequence(): Promise<void> {
       try {
         const sequenceStr = this.sequence.join('')
@@ -828,6 +875,11 @@ export default defineComponent({
 
 .grid-width-40 {
   grid-template-columns: repeat(42, 1fr);
+}
+
+.mass-header {
+  flex-wrap: wrap;
+  opacity: 0.85;
 }
 
 .row-number {

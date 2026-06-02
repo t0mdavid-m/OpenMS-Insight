@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 
 class TestSequenceViewEmptyState:
@@ -271,3 +272,206 @@ class TestSequenceViewExtensions:
         out = sv2._prepare_vue_data({"proteinIndex": 0})
         assert out["sequenceData"]["coverage"][2] == 2.0
         assert out["sequenceData"]["fixed_modifications"] == ["C"]
+
+
+class TestSequenceViewMassHeaderAndFragments:
+    """Mass header + precomputed fragment masses (FLASHTnT visual parity)."""
+
+    def _proteoform_df(self):
+        """Two proteoforms with header masses and per-residue fragment masses.
+
+        Fragment mass columns use the legacy ``list[list[float]]`` shape
+        (outer = residue, inner = modification-ambiguity variants, length 1).
+        """
+        return pl.LazyFrame(
+            {
+                "proteoform_index": [0, 1],
+                "sequence": ["PEPTIDER", "ACDEFGHK"],
+                "precursor_charge": [2, 3],
+                "theo_mass": [955.46, 879.36],
+                "obs_mass": [955.50, 879.40],
+                # 8 residues each; one variant per residue.
+                "frag_b": [
+                    [
+                        [97.05],
+                        [226.09],
+                        [323.14],
+                        [424.19],
+                        [537.27],
+                        [652.30],
+                        [781.34],
+                        [896.37],
+                    ],
+                    [
+                        [71.04],
+                        [174.05],
+                        [289.07],
+                        [418.12],
+                        [565.18],
+                        [622.20],
+                        [759.26],
+                        [887.36],
+                    ],
+                ],
+                "frag_y": [
+                    [
+                        [175.12],
+                        [290.14],
+                        [403.23],
+                        [504.27],
+                        [605.32],
+                        [702.37],
+                        [831.41],
+                        [928.47],
+                    ],
+                    [
+                        [147.11],
+                        [275.17],
+                        [332.19],
+                        [469.25],
+                        [598.29],
+                        [713.32],
+                        [816.33],
+                        [919.34],
+                    ],
+                ],
+            }
+        )
+
+    def test_header_masses_emitted_when_configured(self, temp_cache_dir):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_header",
+            sequence_data=self._proteoform_df(),
+            filters={"proteinIndex": "proteoform_index"},
+            theoretical_mass_column="theo_mass",
+            observed_mass_column="obs_mass",
+            cache_path=str(temp_cache_dir),
+        )
+        out = sv._prepare_vue_data({"proteinIndex": 0})
+        sd = out["sequenceData"]
+        # Scalar mass columns are downcast to Float32 by optimize_for_transfer
+        # (display rounds to 2 decimals), so compare with tolerance.
+        assert sd["theoretical_mass"] == pytest.approx(955.46, abs=1e-2)
+        assert sd["observed_mass"] == pytest.approx(955.50, abs=1e-2)
+        # Precursor mass is now populated from the observed proteoform mass.
+        assert out["precursorMass"] == pytest.approx(955.50, abs=1e-2)
+
+    def test_header_masses_absent_when_not_configured(
+        self, temp_cache_dir, sample_sequence_data
+    ):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_noheader",
+            sequence_data=sample_sequence_data,
+            filters={"spectrum": "scan_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        df = sample_sequence_data.collect()
+        out = sv._prepare_vue_data({"spectrum": df["scan_id"][0]})
+        sd = out["sequenceData"]
+        # No observed_mass key, and precursor mass keeps legacy 0.0 default.
+        assert "observed_mass" not in sd
+        assert out["precursorMass"] == 0.0
+
+    def test_precomputed_fragment_masses_emitted(self, temp_cache_dir):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_precomp",
+            sequence_data=self._proteoform_df(),
+            filters={"proteinIndex": "proteoform_index"},
+            fragment_mass_columns={"b": "frag_b", "y": "frag_y"},
+            cache_path=str(temp_cache_dir),
+        )
+        out = sv._prepare_vue_data({"proteinIndex": 0})
+        sd = out["sequenceData"]
+        assert "precomputed_fragment_masses" in sd
+        pf = sd["precomputed_fragment_masses"]
+        assert set(pf.keys()) == {"b", "y"}
+        # Normalized to list[list[float]] (outer=residue, inner=variants).
+        assert pf["b"][0] == [97.05]
+        assert pf["y"][2] == [403.23]
+        assert len(pf["b"]) == 8
+
+    def test_precomputed_fragments_absent_when_not_configured(
+        self, temp_cache_dir, sample_sequence_data
+    ):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_noprecomp",
+            sequence_data=sample_sequence_data,
+            filters={"spectrum": "scan_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        df = sample_sequence_data.collect()
+        out = sv._prepare_vue_data({"spectrum": df["scan_id"][0]})
+        assert "precomputed_fragment_masses" not in out["sequenceData"]
+
+    def test_flat_fragment_masses_are_wrapped(self, temp_cache_dir):
+        from openms_insight.components.sequenceview import SequenceView
+
+        # Flat list[float] (one mass per residue) must be wrapped per residue.
+        flat_df = pl.LazyFrame(
+            {
+                "proteoform_index": [0],
+                "sequence": ["PEP"],
+                "precursor_charge": [1],
+                "frag_b": [[97.05, 226.09, 323.14]],
+            }
+        )
+        sv = SequenceView(
+            cache_id="sv_flatfrag",
+            sequence_data=flat_df,
+            filters={"proteinIndex": "proteoform_index"},
+            fragment_mass_columns={"b": "frag_b"},
+            cache_path=str(temp_cache_dir),
+        )
+        out = sv._prepare_vue_data({"proteinIndex": 0})
+        pf = out["sequenceData"]["precomputed_fragment_masses"]
+        assert pf["b"] == [[97.05], [226.09], [323.14]]
+
+    def test_existing_recompute_unchanged_when_params_none(
+        self, temp_cache_dir, sample_sequence_data
+    ):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="sv_recompute",
+            sequence_data=sample_sequence_data,
+            filters={"spectrum": "scan_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        df = sample_sequence_data.collect()
+        out = sv._prepare_vue_data({"spectrum": df["scan_id"][0]})
+        sd = out["sequenceData"]
+        # Recompute path still populates the pyOpenMS-derived fragment arrays.
+        assert "fragment_masses_b" in sd
+        assert "fragment_masses_y" in sd
+        assert "precomputed_fragment_masses" not in sd
+
+    def test_header_and_fragments_survive_cache_reconstruction(self, temp_cache_dir):
+        from openms_insight.components.sequenceview import SequenceView
+
+        SequenceView(
+            cache_id="sv_header_recon",
+            sequence_data=self._proteoform_df(),
+            filters={"proteinIndex": "proteoform_index"},
+            theoretical_mass_column="theo_mass",
+            observed_mass_column="obs_mass",
+            fragment_mass_columns={"b": "frag_b", "y": "frag_y"},
+            cache_path=str(temp_cache_dir),
+        )
+        sv2 = SequenceView(cache_id="sv_header_recon", cache_path=str(temp_cache_dir))
+        assert sv2._theoretical_mass_column == "theo_mass"
+        assert sv2._observed_mass_column == "obs_mass"
+        assert sv2._fragment_mass_columns == {"b": "frag_b", "y": "frag_y"}
+        out = sv2._prepare_vue_data({"proteinIndex": 1})
+        sd = out["sequenceData"]
+        assert sd["theoretical_mass"] == pytest.approx(879.36, abs=1e-2)
+        assert sd["observed_mass"] == pytest.approx(879.40, abs=1e-2)
+        # Nested-list fragment masses keep full Float64 precision (not downcast).
+        assert sd["precomputed_fragment_masses"]["y"][0] == [147.11]

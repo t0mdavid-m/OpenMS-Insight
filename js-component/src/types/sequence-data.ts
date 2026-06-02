@@ -40,6 +40,20 @@ export interface SequenceData {
   fragment_masses_z: number[][]
   /** Calculated monoisotopic mass of the full sequence */
   theoretical_mass: number
+  /**
+   * Observed proteoform mass (optional). When both `theoretical_mass` and
+   * `observed_mass` are present, the mass header (Theoretical | Observed | Δ)
+   * is rendered above the sequence grid (FLASHTnT parity).
+   */
+  observed_mass?: number
+  /**
+   * Precomputed per-residue theoretical fragment masses, keyed by ion type
+   * ('a'|'b'|'c'|'x'|'y'|'z'). Each value mirrors the `fragment_masses_*`
+   * shape (`number[][]`: outer index = residue, inner = mass variants). When
+   * present, fragment matching uses THESE masses instead of the
+   * `fragment_masses_*` recomputed-from-sequence values.
+   */
+  precomputed_fragment_masses?: Partial<Record<string, number[][]>>
   /** List of amino acids with fixed modifications (e.g., ['C', 'M']) */
   fixed_modifications: string[]
   /** External peak annotations from search engine (optional) */

@@ -296,6 +296,32 @@ def get_theoretical_mass(sequence_str: str) -> float:
         return 0.0
 
 
+def _normalize_fragment_masses(raw: Any) -> List[List[float]]:
+    """Normalize a precomputed fragment-mass column value to list[list[float]].
+
+    Accepts the legacy per-residue ``list[list[float]]`` shape (outer index =
+    residue, inner list = modification-ambiguity variants) and returns it as a
+    plain nested list of floats. A flat ``list[float]`` (one mass per residue)
+    is wrapped so each residue carries a single-element variant list. ``None``
+    entries are dropped from inner lists; missing inner values become ``[]``.
+    """
+    if raw is None:
+        return []
+    outer = list(raw)
+    normalized: List[List[float]] = []
+    for entry in outer:
+        if entry is None:
+            normalized.append([])
+        elif isinstance(entry, (list, tuple)) or (
+            hasattr(entry, "__iter__") and not isinstance(entry, (str, bytes))
+        ):
+            normalized.append([float(v) for v in entry if v is not None])
+        else:
+            # Flat list[float]: one mass per residue -> single-variant list.
+            normalized.append([float(entry)])
+    return normalized
+
+
 # Default annotation configuration
 DEFAULT_ANNOTATION_CONFIG = {
     "ion_types": ["b", "y"],
@@ -372,6 +398,9 @@ class SequenceView:
         fixed_modifications: Optional[List[str]] = None,
         coverage_column: Optional[str] = None,
         max_coverage_column: Optional[str] = None,
+        theoretical_mass_column: Optional[str] = None,
+        observed_mass_column: Optional[str] = None,
+        fragment_mass_columns: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         """
@@ -411,6 +440,24 @@ class SequenceView:
                 tag/fragment coverage (FLASHTnT). Requires max_coverage_column.
             max_coverage_column: Optional column holding the scalar maximum
                 coverage used to normalize ``coverage_column``.
+            theoretical_mass_column: Optional column in a LazyFrame sequence
+                source holding the scalar theoretical proteoform mass (float).
+                When set (together with ``observed_mass_column`` for the Δ), the
+                frontend renders a "Theoretical mass | Observed mass | Δ" header
+                above the sequence grid (FLASHTnT parity). Carried through cache.
+            observed_mass_column: Optional column holding the scalar observed
+                proteoform mass (float). Also used to populate the precursor mass
+                emitted to the frontend when available.
+            fragment_mass_columns: Optional mapping of ion type
+                ("a"/"b"/"c"/"x"/"y"/"z") to a column in a LazyFrame sequence
+                source holding PRECOMPUTED per-residue theoretical fragment
+                masses. Each column value is the legacy ``list[list[float]]``
+                shape (outer index = residue, inner list = modification-ambiguity
+                variants, usually length 1); a flat ``list[float]`` is also
+                accepted and wrapped per residue. When provided, these masses
+                override the pyOpenMS-from-sequence recomputation for both the
+                b/y annotation flags and the "Matching Fragments" table. Carried
+                through cache. When None, the recompute path is used unchanged.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -433,6 +480,9 @@ class SequenceView:
             or fixed_modifications is not None
             or coverage_column is not None
             or max_coverage_column is not None
+            or theoretical_mass_column is not None
+            or observed_mass_column is not None
+            or fragment_mass_columns is not None
             or bool(kwargs)
         )
 
@@ -458,6 +508,9 @@ class SequenceView:
             self._fixed_modifications = fixed_modifications or []
             self._coverage_column = coverage_column
             self._max_coverage_column = max_coverage_column
+            self._theoretical_mass_column = theoretical_mass_column
+            self._observed_mass_column = observed_mass_column
+            self._fragment_mass_columns = dict(fragment_mass_columns or {})
             self._filters = filters or {}
             self._filter_defaults = {}
             for identifier in self._filters.keys():
@@ -532,6 +585,9 @@ class SequenceView:
             "fixed_modifications": self._fixed_modifications,
             "coverage_column": self._coverage_column,
             "max_coverage_column": self._max_coverage_column,
+            "theoretical_mass_column": self._theoretical_mass_column,
+            "observed_mass_column": self._observed_mass_column,
+            "fragment_mass_columns": self._fragment_mass_columns,
         }
 
     def _cache_exists(self) -> bool:
@@ -572,6 +628,9 @@ class SequenceView:
         self._fixed_modifications = config.get("fixed_modifications", [])
         self._coverage_column = config.get("coverage_column")
         self._max_coverage_column = config.get("max_coverage_column")
+        self._theoretical_mass_column = config.get("theoretical_mass_column")
+        self._observed_mass_column = config.get("observed_mass_column")
+        self._fragment_mass_columns = config.get("fragment_mass_columns") or {}
         self._config = {}
 
         # Load cached LazyFrames
@@ -605,11 +664,18 @@ class SequenceView:
             filter_cols = [c for c in self._filters.values() if c in schema.names()]
 
             # Build column list: filter columns + required columns + optional
-            # coverage columns (kept verbatim so per-residue shading survives).
+            # columns kept verbatim so per-residue shading, the mass header and
+            # precomputed fragment masses survive into the cache.
             required = ["sequence", "precursor_charge"]
             optional = [
                 c
-                for c in (self._coverage_column, self._max_coverage_column)
+                for c in (
+                    self._coverage_column,
+                    self._max_coverage_column,
+                    self._theoretical_mass_column,
+                    self._observed_mass_column,
+                    *self._fragment_mass_columns.values(),
+                )
                 if c is not None
             ]
             cols = list(
@@ -752,6 +818,87 @@ class SequenceView:
         except Exception:
             return None, None
 
+    def _select_row_for_state(
+        self, state: Dict[str, Any], cols: List[str]
+    ) -> Optional[pl.DataFrame]:
+        """Fetch the first cached-sequence row for ``state`` limited to ``cols``.
+
+        Applies the same None-default filter semantics as the sequence getter.
+        Returns a 1-row DataFrame, or None when no row matches / a required
+        column is missing / a None-default filter blocks the selection.
+        """
+        if self._cached_sequences is None:
+            return None
+        schema = self._cached_sequences.collect_schema().names()
+        if any(c not in schema for c in cols):
+            return None
+
+        filtered = self._cached_sequences
+        for identifier, column in self._filters.items():
+            if column in schema:
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    return None
+        try:
+            df = filtered.select(cols).head(1).collect()
+        except Exception:
+            return None
+        return df if df.height > 0 else None
+
+    def _get_header_masses_for_state(
+        self, state: Dict[str, Any]
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """Return (theoretical_mass, observed_mass) for the mass header.
+
+        Each is None when its column is not configured/present or no row matches.
+        """
+        theo: Optional[float] = None
+        obs: Optional[float] = None
+        if self._theoretical_mass_column is not None:
+            df = self._select_row_for_state(state, [self._theoretical_mass_column])
+            if df is not None:
+                val = df[self._theoretical_mass_column][0]
+                theo = float(val) if val is not None else None
+        if self._observed_mass_column is not None:
+            df = self._select_row_for_state(state, [self._observed_mass_column])
+            if df is not None:
+                val = df[self._observed_mass_column][0]
+                obs = float(val) if val is not None else None
+        return theo, obs
+
+    def _get_precomputed_fragments_for_state(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, List[List[float]]]]:
+        """Return precomputed per-residue fragment masses keyed by ion type.
+
+        Reads each configured ``fragment_mass_columns`` column for the selected
+        row and normalizes its value to ``list[list[float]]`` (wrapping a flat
+        ``list[float]`` as one variant per residue). Returns None when no
+        columns are configured or no row matches; skips ion types whose value
+        is missing/null.
+        """
+        if not self._fragment_mass_columns:
+            return None
+        cols = list(dict.fromkeys(self._fragment_mass_columns.values()))
+        df = self._select_row_for_state(state, cols)
+        if df is None:
+            return None
+
+        result: Dict[str, List[List[float]]] = {}
+        for ion_type, column in self._fragment_mass_columns.items():
+            if column not in df.columns:
+                continue
+            raw = df[column][0]
+            if raw is None:
+                continue
+            result[ion_type] = _normalize_fragment_masses(raw)
+        return result or None
+
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
 
@@ -816,6 +963,12 @@ class SequenceView:
         # Per-residue coverage (FLASHTnT): shade residues by tag/fragment coverage
         coverage, max_coverage = self._get_coverage_for_state(state)
 
+        # Precomputed theoretical/observed proteoform masses for the header.
+        header_theoretical, header_observed = self._get_header_masses_for_state(state)
+
+        # Precomputed per-residue fragment masses (override pyOpenMS recompute).
+        precomputed_fragments = self._get_precomputed_fragments_for_state(state)
+
         # Build sequence data structure
         sequence_data = {
             "sequence": residues,
@@ -833,6 +986,15 @@ class SequenceView:
         if coverage is not None:
             sequence_data["coverage"] = coverage
             sequence_data["maxCoverage"] = max_coverage
+        # Mass header (FLASHTnT parity): only present when configured + available.
+        if header_theoretical is not None:
+            sequence_data["theoretical_mass"] = header_theoretical
+        if header_observed is not None:
+            sequence_data["observed_mass"] = header_observed
+        # Precomputed fragment masses: the Vue side matches THESE against the
+        # observed peaks instead of recomputing from the bare sequence.
+        if precomputed_fragments is not None:
+            sequence_data["precomputed_fragment_masses"] = precomputed_fragments
 
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
@@ -841,18 +1003,30 @@ class SequenceView:
         # Vue expects observedMasses and peakIds as separate arrays
         observed_masses: List[float] = []
         peak_ids: List[int] = []
-        precursor_mass: float = 0.0
+        # Use the configured observed proteoform mass as the precursor mass when
+        # available; otherwise keep the legacy 0.0 default.
+        precursor_mass: float = header_observed if header_observed is not None else 0.0
 
         if peaks_df.height > 0:
             observed_masses = peaks_df["mass"].to_list()
             peak_ids = peaks_df["peak_id"].to_list()
 
-        # Create hash for change detection (include coverage so the bridge
-        # re-sends when only the per-residue coverage changes).
+        # Create hash for change detection (include coverage, header masses and a
+        # precomputed-fragments signature so the bridge re-sends when only those
+        # change).
         cov_sig = ""
         if coverage is not None:
             cov_sig = f"{len(coverage)}:{max_coverage}"
-        hash_input = f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}"
+        frag_sig = ""
+        if precomputed_fragments is not None:
+            frag_sig = ":".join(
+                f"{ion}={len(vals)}"
+                for ion, vals in sorted(precomputed_fragments.items())
+            )
+        hash_input = (
+            f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}"
+            f":{header_theoretical}:{header_observed}:{frag_sig}"
+        )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         result = {
