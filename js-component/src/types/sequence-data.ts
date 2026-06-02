@@ -19,6 +19,27 @@ export interface ExternalAnnotation {
 }
 
 /**
+ * Theoretical internal-fragment arrays (enumerated in Python).
+ *
+ * Distinct from the per-position terminal `fragment_masses_a..z` (number[][]):
+ * these are FLAT number[] (one entry per enumerated internal fragment). Only the
+ * three families the oracle draws are present: by (label "by/cz"), bz, cy.
+ * `start` is 0-based, `end` is 1-based (matches the fill predicate
+ * `aaIndex > start && aaIndex <= end`).
+ */
+export interface InternalFragmentData {
+  fragment_masses_by: number[]
+  start_indices_by: number[]
+  end_indices_by: number[]
+  fragment_masses_bz: number[]
+  start_indices_bz: number[]
+  end_indices_bz: number[]
+  fragment_masses_cy: number[]
+  start_indices_cy: number[]
+  end_indices_cy: number[]
+}
+
+/**
  * Sequence data structure containing peptide sequence and fragment information.
  */
 export interface SequenceData {
@@ -52,6 +73,24 @@ export interface SequenceData {
   neutral_losses?: boolean
   /** Whether to enable proton loss/addition matching by default */
   proton_loss_addition?: boolean
+  /** True when the internal-fragment arrays below are populated. */
+  internal_fragments?: boolean
+  /** Default tolerance value for the internal-fragment matcher. */
+  internal_fragment_tolerance?: number
+  /** Whether the internal-fragment tolerance is ppm (true) or Da (false). */
+  internal_fragment_tolerance_ppm?: boolean
+  /** Flat theoretical internal-fragment masses for the by/cz family. */
+  fragment_masses_by?: number[]
+  start_indices_by?: number[]
+  end_indices_by?: number[]
+  /** Flat theoretical internal-fragment masses for the bz family. */
+  fragment_masses_bz?: number[]
+  start_indices_bz?: number[]
+  end_indices_bz?: number[]
+  /** Flat theoretical internal-fragment masses for the cy family. */
+  fragment_masses_cy?: number[]
+  start_indices_cy?: number[]
+  end_indices_cy?: number[]
 }
 
 /**

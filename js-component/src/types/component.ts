@@ -263,6 +263,10 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
   precursorCharge?: number
   /** Interactivity mapping: identifier name -> column name for click handling. */
   interactivity?: InteractivityMapping
+  /** When true, render the internal-fragment map below the terminal sequence map. */
+  internalFragments?: boolean
+  /** Default tolerance/unit for the internal-fragment matcher. */
+  internalFragmentConfig?: { tolerance?: number; tolerancePpm?: boolean }
 }
 
 /**

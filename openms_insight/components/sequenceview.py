@@ -690,6 +690,12 @@ class SequenceView:
             self._height = height
             self._deconvolved = deconvolved
             self._config = kwargs
+
+            # Internal-fragment config (parity defaults; merge any overrides).
+            self._internal_fragments = internal_fragments
+            self._internal_fragment_config = {**DEFAULT_INTERNAL_FRAGMENT_CONFIG}
+            if internal_fragment_config:
+                self._internal_fragment_config.update(internal_fragment_config)
             self._filters = filters or {}
             self._filter_defaults = {}
             for identifier in self._filters.keys():
@@ -761,6 +767,8 @@ class SequenceView:
             "height": self._height,
             "deconvolved": self._deconvolved,
             "annotation_config": self._annotation_config,
+            "internal_fragments": self._internal_fragments,
+            "internal_fragment_config": self._internal_fragment_config,
         }
 
     def _cache_exists(self) -> bool:
@@ -797,6 +805,11 @@ class SequenceView:
         self._deconvolved = config.get("deconvolved", False)
         self._annotation_config = config.get(
             "annotation_config", {**DEFAULT_ANNOTATION_CONFIG}
+        )
+        self._internal_fragments = config.get("internal_fragments", False)
+        self._internal_fragment_config = {**DEFAULT_INTERNAL_FRAGMENT_CONFIG}
+        self._internal_fragment_config.update(
+            config.get("internal_fragment_config", {})
         )
         self._config = {}
 
@@ -999,6 +1012,33 @@ class SequenceView:
             **fragment_masses,
         }
 
+        # Internal-fragment payload (enumerated in Python; matched in Vue).
+        if self._internal_fragments:
+            terminal_masses = _terminal_collision_masses(fragment_masses)
+            internal = compute_internal_fragment_data(
+                residues,
+                ion_types=tuple(self._internal_fragment_config["ion_types"]),
+                min_length=self._internal_fragment_config["min_length"],
+                modifications=None,  # Phase-1 plain path; wire proteoform mods later
+                terminal_masses=terminal_masses,
+                remove_terminal_collisions=self._internal_fragment_config[
+                    "remove_terminal_collisions"
+                ],
+                terminal_collision_ppm=self._internal_fragment_config[
+                    "terminal_collision_ppm"
+                ],
+            )
+            # Adds the nine flat number[] arrays
+            # (fragment_masses_{by,bz,cy} + start_indices_* + end_indices_*).
+            sequence_data.update(internal)
+            sequence_data["internal_fragments"] = True
+            sequence_data["internal_fragment_tolerance"] = (
+                self._internal_fragment_config["tolerance"]
+            )
+            sequence_data["internal_fragment_tolerance_ppm"] = (
+                self._internal_fragment_config["tolerance_ppm"]
+            )
+
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
 
@@ -1012,8 +1052,12 @@ class SequenceView:
             observed_masses = peaks_df["mass"].to_list()
             peak_ids = peaks_df["peak_id"].to_list()
 
-        # Create hash for change detection
-        hash_input = f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
+        # Create hash for change detection. Fold the internal-fragments flag in so
+        # flipping config re-renders (the internal arrays ride sequenceData).
+        hash_input = (
+            f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
+            f":{int(self._internal_fragments)}"
+        )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         result = {
@@ -1049,6 +1093,14 @@ class SequenceView:
 
         if self._interactivity:
             args["interactivity"] = self._interactivity
+
+        # Internal-fragment args only when on, so existing callers are unaffected.
+        if self._internal_fragments:
+            args["internalFragments"] = True
+            args["internalFragmentConfig"] = {
+                "tolerance": self._internal_fragment_config["tolerance"],
+                "tolerancePpm": self._internal_fragment_config["tolerance_ppm"],
+            }
 
         args.update(self._config)
         return args

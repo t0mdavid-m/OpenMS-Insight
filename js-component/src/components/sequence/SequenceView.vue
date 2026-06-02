@@ -168,6 +168,17 @@
           @click:row="onFragmentTableRowClick"
         ></v-data-table>
       </div>
+
+      <!-- Internal fragment map (display-only, gated by Python args) -->
+      <InternalFragmentMap
+        v-if="internalFragments && internalData"
+        class="mt-4"
+        :sequence="sequence"
+        :internal-data="internalData"
+        :observed-masses="observedMasses"
+        :tolerance="sequenceData?.internal_fragment_tolerance ?? 10"
+        :tolerance-is-ppm="sequenceData?.internal_fragment_tolerance_ppm ?? true"
+      />
     </v-sheet>
 
     <!-- Copy snackbar -->
@@ -182,8 +193,15 @@ import { defineComponent } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { Theme } from 'streamlit-component-lib'
-import type { SequenceData, SequenceObject, FragmentTableRow, ExternalAnnotation } from '@/types/sequence-data'
+import type {
+  SequenceData,
+  SequenceObject,
+  FragmentTableRow,
+  ExternalAnnotation,
+  InternalFragmentData,
+} from '@/types/sequence-data'
 import AminoAcidCell from './AminoAcidCell.vue'
+import InternalFragmentMap from './InternalFragmentMap.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from './modification'
 
 // Proton mass for m/z calculations
@@ -203,6 +221,7 @@ export default defineComponent({
   name: 'SequenceView',
   components: {
     AminoAcidCell,
+    InternalFragmentMap,
   },
   props: {
     args: {
@@ -282,6 +301,29 @@ export default defineComponent({
     /** Whether data is deconvolved (neutral masses) or not (m/z values) */
     deconvolved(): boolean {
       return (this.args.deconvolved as boolean) ?? true
+    },
+    /** Whether to render the internal-fragment map below the terminal map. */
+    internalFragments(): boolean {
+      return this.args.internalFragments === true
+    },
+    /**
+     * Internal-fragment payload assembled from the sequenceData arrays.
+     * Returns undefined unless Python attached the internal arrays.
+     */
+    internalData(): InternalFragmentData | undefined {
+      const data = this.sequenceData
+      if (!data?.internal_fragments) return undefined
+      return {
+        fragment_masses_by: data.fragment_masses_by ?? [],
+        start_indices_by: data.start_indices_by ?? [],
+        end_indices_by: data.end_indices_by ?? [],
+        fragment_masses_bz: data.fragment_masses_bz ?? [],
+        start_indices_bz: data.start_indices_bz ?? [],
+        end_indices_bz: data.end_indices_bz ?? [],
+        fragment_masses_cy: data.fragment_masses_cy ?? [],
+        start_indices_cy: data.start_indices_cy ?? [],
+        end_indices_cy: data.end_indices_cy ?? [],
+      }
     },
     /** Maximum charge state to consider for fragment matching */
     maxCharge(): number {
