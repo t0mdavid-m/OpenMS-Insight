@@ -679,7 +679,14 @@ class Table(BaseComponent):
             if go_to_field and go_to_value is not None:
                 # Only convert to numeric if the target column is numeric
                 schema = data.collect_schema()
-                if go_to_field in schema and schema[go_to_field] in NUMERIC_DTYPES:
+                if go_to_field not in schema:
+                    # Column absent from the projection (e.g. an auto-detected
+                    # go-to field that isn't in the explicit column_definitions).
+                    # Searching pl.col(go_to_field) would raise ColumnNotFoundError,
+                    # so degrade to "not found" -- matching the oracle, whose
+                    # client-side findRowByValue() returns -1 for an absent field.
+                    go_to_not_found = True
+                elif schema[go_to_field] in NUMERIC_DTYPES:
                     try:
                         go_to_value = float(go_to_value)
                         if go_to_value.is_integer():

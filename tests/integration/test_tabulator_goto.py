@@ -1868,3 +1868,152 @@ class TestGoToSelectionPropagation:
         sm = get_default_state_manager()
         assert sm.get_selection("sel_a") == 120
         assert sm.get_selection("sel_b") == 120
+
+
+# =============================================================================
+# TestGoToUnprojectedColumn
+# =============================================================================
+
+
+class TestGoToUnprojectedColumn:
+    """
+    Tests for finding P1-R6-TBL-GOTO-001.
+
+    go_to_fields are NOT included in the column projection
+    (_get_columns_to_select). When go-to targets an auto-detected unique column
+    that is ABSENT from the explicit column_definitions, the projection drops
+    it, so the search ``pl.col(go_to_field) == go_to_value`` would raise
+    polars ColumnNotFoundError.
+
+    The oracle degrades silently to "not found" (client-side findRowByValue
+    returns -1 for an absent field, and performGoTo does nothing). The fix must
+    therefore degrade to ``_go_to_not_found`` WITHOUT raising, and must not
+    regress the round-5 selection-propagation fix (which only runs when the row
+    is actually found / the column is present).
+    """
+
+    def test_go_to_unprojected_string_column_degrades_to_not_found(
+        self, tmp_path, mock_streamlit_goto
+    ):
+        """Go-to on an auto-detected string column dropped by the explicit
+        column_definitions projection does not crash; it returns not-found."""
+        data = pl.LazyFrame(
+            {
+                "id": list(range(100)),
+                "name": [f"item_{i}" for i in range(100)],  # unique -> auto go-to
+                "mass": [100.0 + i for i in range(100)],
+            }
+        )
+
+        table = Table(
+            cache_id="goto_unprojected_string",
+            data=data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="goto_unprojected_page",
+            index_field="id",
+            # Explicit defs EXCLUDE 'name' -> projection drops the column.
+            column_definitions=[{"field": "id"}, {"field": "mass"}],
+            go_to_fields=None,  # auto-detect -> includes 'name'
+        )
+
+        # Precondition: 'name' is an auto-detected go-to field but is NOT in the
+        # projected columns (so the naive search would hit ColumnNotFoundError).
+        assert "name" in table._go_to_fields
+        assert "name" not in (table._get_columns_to_select() or [])
+
+        state = {
+            "goto_unprojected_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "name", "value": "item_42"},
+            }
+        }
+
+        # Must NOT raise polars.exceptions.ColumnNotFoundError.
+        result = table._prepare_vue_data(state)
+
+        assert result.get("_go_to_not_found") is True
+        assert result.get("_navigate_to_page") is None
+        assert "_target_row_index" not in result
+
+    def test_go_to_unprojected_numeric_column_degrades_to_not_found(
+        self, tmp_path, mock_streamlit_goto
+    ):
+        """Same degradation for an unprojected numeric go-to column (the numeric
+        conversion path also must not run a search on a missing column)."""
+        data = pl.LazyFrame(
+            {
+                "id": list(range(100)),
+                "uid": list(range(1000, 1100)),  # unique int -> auto go-to
+                "mass": [100.0 + i for i in range(100)],
+            }
+        )
+
+        table = Table(
+            cache_id="goto_unprojected_numeric",
+            data=data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="goto_unprojected_num_page",
+            index_field="id",
+            column_definitions=[{"field": "id"}, {"field": "mass"}],  # no 'uid'
+            go_to_fields=None,
+        )
+
+        assert "uid" in table._go_to_fields
+        assert "uid" not in (table._get_columns_to_select() or [])
+
+        state = {
+            "goto_unprojected_num_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "uid", "value": 1050},
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        assert result.get("_go_to_not_found") is True
+        assert result.get("_navigate_to_page") is None
+
+    def test_go_to_projected_column_still_resolves(
+        self, tmp_path, mock_streamlit_goto
+    ):
+        """Guard regression check: go-to on a column that IS in the projection
+        still resolves normally (the fix only catches the absent-column case)."""
+        data = pl.LazyFrame(
+            {
+                "id": list(range(100)),
+                "name": [f"item_{i}" for i in range(100)],
+                "mass": [100.0 + i for i in range(100)],
+            }
+        )
+
+        table = Table(
+            cache_id="goto_projected_ok",
+            data=data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=10,
+            pagination_identifier="goto_projected_page",
+            index_field="id",
+            column_definitions=[{"field": "id"}, {"field": "mass"}],
+            go_to_fields=None,
+        )
+
+        state = {
+            "goto_projected_page": {
+                "page": 1,
+                "page_size": 10,
+                "go_to_request": {"field": "id", "value": 42},  # 'id' is projected
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        assert result.get("_navigate_to_page") == 5  # 42 // 10 + 1
+        assert result.get("_target_row_index") == 2  # 42 % 10
+        assert result.get("_go_to_not_found") is not True

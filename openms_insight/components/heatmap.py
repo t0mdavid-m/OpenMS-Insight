@@ -958,6 +958,85 @@ class Heatmap(BaseComponent):
         # Even largest level has fewer points than threshold
         return last_filtered if last_filtered is not None else pl.DataFrame()
 
+    def _downsample_to_min_points(self, df_polars: pl.DataFrame) -> pl.DataFrame:
+        """
+        Final render-time downsample to exactly min_points (no-zoom / full view).
+
+        Mirrors the zoom path's render downsample (see _select_level_for_zoom):
+        cache levels hold ~2x min_points, so the smallest level still carries
+        roughly double the intended point budget. This reduces it to min_points
+        using the same downsample helper the zoom path uses, honoring the
+        documented contract ("final downsample at render time reduces to exactly
+        min_points") and matching the oracle, which always applies
+        downsample_heatmap() to the smallest level at the full view.
+
+        No-op when the frame already has <= min_points points (parity with the
+        zoom path's ``count > min_points`` guard and the oracle's
+        downsample_heatmap no-op on small inputs).
+
+        Args:
+            df_polars: Collected Polars DataFrame at the smallest cache level.
+
+        Returns:
+            Downsampled Polars DataFrame (<= min_points points).
+        """
+        # Need x/y columns to bin; nothing to do if data is already small enough.
+        if (
+            self._x_column is None
+            or self._y_column is None
+            or len(df_polars) <= self._min_points
+        ):
+            return df_polars
+
+        # Full-view bins: use the cached full data range (set during
+        # preprocessing) so binning spans the whole view, like the oracle.
+        # Fall back to the frame's own extent if the range is unavailable.
+        x_range = self._preprocessed_data.get("x_range")
+        y_range = self._preprocessed_data.get("y_range")
+        if x_range is None or y_range is None:
+            x_range = (
+                df_polars[self._x_column].min(),
+                df_polars[self._x_column].max(),
+            )
+            y_range = (
+                df_polars[self._y_column].min(),
+                df_polars[self._y_column].max(),
+            )
+
+        render_x_bins, render_y_bins = compute_optimal_bins(
+            self._min_points, x_range, y_range
+        )
+
+        if self._use_simple_downsample:
+            return downsample_2d_simple(
+                df_polars.lazy(),
+                max_points=self._min_points,
+                intensity_column=self._intensity_column,
+                descending=not self._low_values_on_top,
+            ).collect()
+        if self._use_streaming:
+            return downsample_2d_streaming(
+                df_polars.lazy(),
+                max_points=self._min_points,
+                x_column=self._x_column,
+                y_column=self._y_column,
+                intensity_column=self._intensity_column,
+                x_bins=render_x_bins,
+                y_bins=render_y_bins,
+                x_range=x_range,
+                y_range=y_range,
+                descending=not self._low_values_on_top,
+            ).collect()
+        return downsample_2d(
+            df_polars.lazy(),
+            max_points=self._min_points,
+            x_column=self._x_column,
+            y_column=self._y_column,
+            intensity_column=self._intensity_column,
+            x_bins=render_x_bins,
+            y_bins=render_y_bins,
+        ).collect()
+
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Prepare heatmap data for Vue component.
@@ -1032,38 +1111,35 @@ class Heatmap(BaseComponent):
 
             # Apply non-categorical filters if any - returns (pandas DataFrame, hash)
             if non_categorical_filters:
-                df_pandas, data_hash = filter_and_collect_cached(
+                df_pandas, _ = filter_and_collect_cached(
                     data,
                     non_categorical_filters,
                     state,
                     columns=columns_to_select,
                     filter_defaults=self._filter_defaults,
                 )
-                # Sort for render order (last drawn = on top in scattergl)
-                # Default: ascending (high on top). low_values_on_top: descending (low on top)
-                if (
-                    self._intensity_column
-                    and self._intensity_column in df_pandas.columns
-                ):
-                    df_pandas = df_pandas.sort_values(
-                        self._intensity_column, ascending=not self._low_values_on_top
-                    ).reset_index(drop=True)
+                df_polars = pl.from_pandas(df_pandas)
             else:
                 # No filters to apply - levels already filtered by categorical filter
                 schema_names = data.collect_schema().names()
                 available_cols = [c for c in columns_to_select if c in schema_names]
                 df_polars = data.select(available_cols).collect()
-                # Sort for render order (last drawn = on top in scattergl)
-                # Default: ascending (high on top). low_values_on_top: descending (low on top)
-                if (
-                    self._intensity_column
-                    and self._intensity_column in df_polars.columns
-                ):
-                    df_polars = df_polars.sort(
-                        self._intensity_column, descending=self._low_values_on_top
-                    )
-                data_hash = compute_dataframe_hash(df_polars)
-                df_pandas = df_polars.to_pandas()
+
+            # Final render-time downsample to min_points. Cache levels hold
+            # ~2x min_points, so the smallest level still carries ~double the
+            # budget; reduce it here exactly as the zoom path does, honoring the
+            # documented contract and matching the oracle (downsample_heatmap on
+            # the smallest level at the full view). No-op when already small.
+            df_polars = self._downsample_to_min_points(df_polars)
+
+            # Sort for render order (last drawn = on top in scattergl)
+            # Default: ascending (high on top). low_values_on_top: descending (low on top)
+            if self._intensity_column and self._intensity_column in df_polars.columns:
+                df_polars = df_polars.sort(
+                    self._intensity_column, descending=self._low_values_on_top
+                )
+            data_hash = compute_dataframe_hash(df_polars)
+            df_pandas = df_polars.to_pandas()
         else:
             # Zoomed - select appropriate level
             print(f"[HEATMAP] Zoom {zoom} → selecting level...", file=sys.stderr)

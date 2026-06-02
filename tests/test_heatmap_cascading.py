@@ -14,6 +14,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from openms_insight import Heatmap
 from openms_insight.preprocessing.compression import (
     compute_compression_levels,
     downsample_2d_streaming,
@@ -391,3 +392,114 @@ class TestCascadeViaParquet:
         assert scratch_intensities == cascade_intensities, (
             "Cascade via parquet produced different results"
         )
+
+
+@pytest.fixture
+def big_heatmap_data() -> pl.LazyFrame:
+    """Heatmap data large enough that total > 2x min_points (cache buffer).
+
+    With min_points=2000 the cache builds a smallest level at ~2x = ~4000
+    points, so the render-time downsample on the no-zoom path is exercised.
+    """
+    import random
+
+    random.seed(123)
+    n = 8000
+    return pl.LazyFrame(
+        {
+            "retention_time": [random.uniform(0, 100) for _ in range(n)],
+            "mz": [random.uniform(100, 2000) for _ in range(n)],
+            "intensity": [random.uniform(100, 10000) for _ in range(n)],
+        }
+    )
+
+
+class TestNoZoomRenderDownsample:
+    """Tests for finding P1-R6-HM-MR-001.
+
+    The no-zoom (full view) render path must apply the SAME final render-time
+    downsample to ``min_points`` that the zoom path applies, instead of sending
+    the smallest cache level (~2x min_points) verbatim.
+
+    This matches:
+    - the documented contract ("Cache levels are built at 2x this value; final
+      downsample at render time reduces to exactly min_points"),
+    - the zoom path (heatmap.py _select_level_for_zoom downsamples > min_points),
+    - the oracle, whose no-zoom branch does ``downsample_heatmap(full_data[0])``
+      (FLASHApp src/render/update.py:42).
+    """
+
+    def test_no_zoom_render_downsamples_to_min_points(
+        self, mock_streamlit, temp_cache_dir: Path, big_heatmap_data: pl.LazyFrame
+    ):
+        """No-zoom render returns ~min_points, not ~2x (the cache level size)."""
+        min_points = 2000
+        heatmap = Heatmap(
+            cache_id="test_no_zoom_downsample",
+            data=big_heatmap_data,
+            x_column="retention_time",
+            y_column="mz",
+            intensity_column="intensity",
+            min_points=min_points,
+            cache_path=str(temp_cache_dir),
+        )
+
+        # The smallest cached level holds ~2x min_points (the cache buffer).
+        levels, _ = heatmap._get_levels_for_state({})
+        level0 = levels[0]
+        level0_size = (
+            level0.collect().height
+            if isinstance(level0, pl.LazyFrame)
+            else len(level0)
+        )
+        # Sanity: cache level is well above min_points (the ~2x buffer).
+        assert level0_size > 1.5 * min_points
+
+        # No-zoom render (empty state => full view).
+        result = heatmap._prepare_vue_data({})
+        n_rendered = len(result["heatmapData"])
+
+        # The render must NOT ship the full ~2x cache level...
+        assert n_rendered < level0_size
+        # ...it should be reduced to ~min_points. Spatial binning won't hit the
+        # target exactly, so allow a tolerance band around min_points but require
+        # it to be far below the ~2x cache level (the pre-fix behavior).
+        assert n_rendered <= int(1.2 * min_points), (
+            f"No-zoom shipped {n_rendered} pts (cache level={level0_size}); "
+            f"expected ~min_points={min_points}"
+        )
+        assert n_rendered >= int(0.4 * min_points)
+
+    def test_no_zoom_small_data_is_not_upsampled_or_dropped(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        """When data already has <= min_points, the no-zoom path is a no-op.
+
+        Parity with the zoom path's ``count > min_points`` guard and the
+        oracle's downsample_heatmap no-op on small inputs.
+        """
+        import random
+
+        random.seed(7)
+        n = 800
+        small = pl.LazyFrame(
+            {
+                "retention_time": [random.uniform(0, 100) for _ in range(n)],
+                "mz": [random.uniform(100, 2000) for _ in range(n)],
+                "intensity": [random.uniform(100, 10000) for _ in range(n)],
+            }
+        )
+
+        heatmap = Heatmap(
+            cache_id="test_no_zoom_small",
+            data=small,
+            x_column="retention_time",
+            y_column="mz",
+            intensity_column="intensity",
+            min_points=2000,
+            cache_path=str(temp_cache_dir),
+        )
+
+        result = heatmap._prepare_vue_data({})
+        # All points preserved (no downsampling, no growth).
+        assert len(result["heatmapData"]) == n
