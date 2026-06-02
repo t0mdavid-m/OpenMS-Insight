@@ -19,6 +19,45 @@ export interface ExternalAnnotation {
 }
 
 /**
+ * Sentinel value for an OPEN / undetermined proteoform terminus (mirrors the
+ * Python `UNDETERMINED_TERMINUS`). When `proteoform_start`/`proteoform_end`
+ * equals this, the corresponding terminus is rendered as undetermined (red "??").
+ */
+export const UNDETERMINED_TERMINUS = -2
+
+/**
+ * Ambiguous modification range (P0). Describes a spanning dotted modification
+ * region over residues [start, end] (0-based, inclusive) carrying a mass badge
+ * and a "Possible Modifications" label list. DISTINCT from the per-residue
+ * fixed-mod `modifications` field.
+ */
+export interface ModRange {
+  /** 0-based inclusive start residue index of the spanning modification */
+  start: number
+  /** 0-based inclusive end residue index of the spanning modification */
+  end: number
+  /** Mass difference (Da) of the ambiguous modification */
+  mass_diff: number
+  /** Human-readable list of possible modification labels (for the tooltip) */
+  labels: string
+}
+
+/**
+ * Selected tag span for the tag-highlight overlay (P0). Carries the protein-
+ * absolute (0-based, inclusive) start/end residue indices of the selected
+ * sequence tag and whether it is N-terminal. Delivered to SequenceView through
+ * the optional `tag_span` interactivity sentinel.
+ */
+export interface TagSpan {
+  /** Start residue index (protein-absolute, 0-based, inclusive) */
+  start: number
+  /** End residue index (protein-absolute, 0-based, inclusive) */
+  end: number
+  /** Whether this is an N-terminal tag */
+  nTerminal?: boolean
+}
+
+/**
  * Sequence data structure containing peptide sequence and fragment information.
  */
 export interface SequenceData {
@@ -71,6 +110,31 @@ export interface SequenceData {
    * sequence is the full protein / starts at protein position 0). Optional. (EXTEND)
    */
   sequence_offset?: number
+  /**
+   * 0-based inclusive index of the FIRST determined residue of the proteoform
+   * within the displayed sequence. Residues before it are a truncated N-flank.
+   * Sentinel `UNDETERMINED_TERMINUS` (-2) => the N-terminus is undetermined
+   * (open). Absent => 0 (no N truncation). (EXTEND, P0)
+   */
+  proteoform_start?: number
+  /**
+   * 0-based inclusive index of the LAST determined residue of the proteoform.
+   * Residues after it are a truncated C-flank. Sentinel -2 => C-terminus
+   * undetermined (open). Absent => last residue (no C truncation). (EXTEND, P0)
+   */
+  proteoform_end?: number
+  /**
+   * Observed/deconvolved proteoform mass (Da). Its presence switches the mass
+   * header title to "Proteoform" (vs "Precursor") and marks the TnT path.
+   * Optional. (EXTEND, P1)
+   */
+  computed_mass?: number
+  /**
+   * Ambiguous modification ranges (spanning dotted mod regions with mass badge
+   * and possible-mod labels). DISTINCT from per-residue `modifications`.
+   * Optional. (EXTEND, P0)
+   */
+  mod_ranges?: ModRange[]
 }
 
 /**
@@ -107,6 +171,25 @@ export interface SequenceObject {
    * data is available for this residue. Drives coverage coloring. (EXTEND)
    */
   coverage?: number
+  /**
+   * Whether this residue is a truncated proteoform flank (struck through).
+   * (EXTEND, P0)
+   */
+  truncated?: boolean
+  /** Whether the selected tag's left bracket starts at this residue (P0) */
+  tagStart?: boolean
+  /** Whether the selected tag's right bracket ends at this residue (P0) */
+  tagEnd?: boolean
+  /** Ambiguous-modification region: this residue is the span start (P0) */
+  modStart?: boolean
+  /** Ambiguous-modification region: this residue is interior to the span (P0) */
+  modCenter?: boolean
+  /** Ambiguous-modification region: this residue is the span end (P0) */
+  modEnd?: boolean
+  /** Mass badge for an ambiguous-modification span end (e.g. "+134.99") (P0) */
+  modMass?: string
+  /** Possible-modification labels for the span tooltip (P0) */
+  modLabels?: string
   /** Whether this position has a matched a ion */
   aIon: boolean
   /** Whether this position has a matched b ion */

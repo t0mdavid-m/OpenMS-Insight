@@ -2,9 +2,16 @@
   <div
     :id="id"
     class="d-flex justify-center align-center rounded-lg"
-    :class="[aminoAcidCellClass, { highlighted: isHighlighted }, { 'fixed-mod': fixedModification }]"
+    :class="[
+      aminoAcidCellClass,
+      { highlighted: isHighlighted },
+      { 'regex-highlighted': isRegexHighlighted },
+      { truncated: isTruncated },
+      { 'fixed-mod': fixedModification },
+    ]"
     :style="cellStyles"
     @click="selectCell"
+    @contextmenu.prevent="toggleMenuOpen"
   >
     <!-- Fragment ion markers (N-terminal: a, b, c) -->
     <div v-if="showFragments && sequenceObject.aIon" class="frag-marker-container frag-marker-a">
@@ -40,25 +47,38 @@
       </svg>
     </div>
 
-    <!-- Modification marker with dotted pattern (like FLASHApp) -->
-    <div v-if="modification !== null" class="rounded-lg mod-marker mod-start"></div>
-    <div v-if="modification !== null" class="rounded-lg mod-marker mod-end"></div>
+    <!-- Tag-span bracket markers (P0) -->
+    <div v-if="showTags && sequenceObject.tagStart" class="rounded-lg tag-marker tag-start"></div>
+    <div v-if="showTags && sequenceObject.tagEnd" class="rounded-lg tag-marker tag-end"></div>
 
-    <!-- Modification mass badge -->
-    <div v-if="modification !== null" class="rounded-lg mod-mass">
-      {{ modificationDisplay }}
+    <!-- Ambiguous-modification spanning region markers (P0). Also driven by the
+         per-residue fixed-mod `modification` value (existing behavior) and the
+         interactive variable modification. -->
+    <div v-if="showModifications && (sequenceObject.modStart || isPointModification)" class="rounded-lg mod-marker mod-start"></div>
+    <div v-if="showModifications && (sequenceObject.modEnd || isPointModification)" class="rounded-lg mod-marker mod-end"></div>
+    <div v-if="showModifications && sequenceObject.modStart && !sequenceObject.modEnd" class="mod-marker mod-start-cont"></div>
+    <div v-if="showModifications && !sequenceObject.modStart && sequenceObject.modEnd" class="mod-marker mod-end-cont"></div>
+    <div v-if="showModifications && sequenceObject.modCenter" class="mod-marker mod-center-cont"></div>
+
+    <!-- Modification mass badge + tooltip (Possible Modifications) -->
+    <div v-if="showModifications && (sequenceObject.modEnd || isPointModification)" class="rounded-lg mod-mass">
+      {{ modMassDisplay }}
       <v-tooltip activator="parent" class="foreground">
-        Modification Mass: {{ modificationDisplay }} Da
+        {{ `Modification Mass: ${modMassDisplay} Da` }}
+        <template v-if="sequenceObject.modLabels">
+          <br />
+          {{ `Possible Modifications: ${sequenceObject.modLabels}` }}
+        </template>
       </v-tooltip>
     </div>
 
-    <!-- Modification mass with fragment ion border coloring -->
-    <div v-if="showFragments && modification !== null && sequenceObject.aIon && !sequenceObject.bIon" class="rounded-lg mod-mass-a">{{ modificationDisplay }}</div>
-    <div v-if="showFragments && modification !== null && sequenceObject.bIon" class="rounded-lg mod-mass-b">{{ modificationDisplay }}</div>
-    <div v-if="showFragments && modification !== null && sequenceObject.cIon && !sequenceObject.bIon" class="rounded-lg mod-mass-c">{{ modificationDisplay }}</div>
+    <!-- Modification mass with fragment ion border coloring (span end) -->
+    <div v-if="showFragments && showModifications && (sequenceObject.modEnd || isPointModification) && sequenceObject.aIon && !sequenceObject.bIon" class="rounded-lg mod-mass-a">{{ modMassDisplay }}</div>
+    <div v-if="showFragments && showModifications && (sequenceObject.modEnd || isPointModification) && sequenceObject.bIon" class="rounded-lg mod-mass-b">{{ modMassDisplay }}</div>
+    <div v-if="showFragments && showModifications && (sequenceObject.modEnd || isPointModification) && sequenceObject.cIon && !sequenceObject.bIon" class="rounded-lg mod-mass-c">{{ modMassDisplay }}</div>
 
     <!-- Extra fragment type indicator -->
-    <div v-if="hasExtraFragTypes" class="frag-marker-extra-type">
+    <div v-if="showModifications && hasExtraFragTypes" class="frag-marker-extra-type">
       <svg viewBox="0 0 10 10">
         <circle cx="5" cy="5" r="0.5" class="extra-frag-circle" stroke-width="0.3" fill="gold" />
       </svg>
@@ -66,6 +86,37 @@
 
     <!-- Amino acid letter -->
     <div class="aa-text">{{ aminoAcid }}</div>
+
+    <!-- Variable / custom modification context menu (Deconv path only) -->
+    <v-menu
+      v-model="menuOpen"
+      activator="parent"
+      location="end"
+      :open-on-click="false"
+      :close-on-content-click="false"
+      width="200px"
+    >
+      <v-list>
+        <v-list-item>
+          <v-select
+            v-model="selectedModification"
+            :clearable="true"
+            label="Modification"
+            density="compact"
+            :items="modificationsForSelect"
+            @update:model-value="updateSelectedModification"
+            @click:clear="selectedModification = undefined"
+          >
+          </v-select>
+        </v-list-item>
+        <v-list-item v-if="customSelected">
+          <v-form @submit.prevent>
+            <v-text-field v-model="customModMass" hide-details label="Monoisotopic mass in Da" type="number" />
+            <v-btn type="submit" :block="true" class="mt-2" @click="updateCustomModification">Submit</v-btn>
+          </v-form>
+        </v-list-item>
+      </v-list>
+    </v-menu>
 
     <!-- Tooltip -->
     <v-tooltip activator="parent">
@@ -82,6 +133,7 @@ import { defineComponent, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import type { SequenceObject } from '@/types/sequence-data'
 import type { Theme } from 'streamlit-component-lib'
+import { potentialModificationMap, type KnownModification, modificationMassMap } from './modification'
 
 export default defineComponent({
   name: 'AminoAcidCell',
@@ -106,6 +158,16 @@ export default defineComponent({
       type: Boolean,
       default: true,
     },
+    /** Whether ambiguous/variable modification markers are shown (P0/P1) */
+    showModifications: {
+      type: Boolean,
+      default: true,
+    },
+    /** Whether tag-span bracket markers are shown (P0) */
+    showTags: {
+      type: Boolean,
+      default: false,
+    },
     fontSize: {
       type: Number,
       default: 12,
@@ -114,6 +176,12 @@ export default defineComponent({
       type: Boolean,
       default: false,
     },
+    /** Whether this residue is regex-highlighted (P1) */
+    isRegexHighlighted: {
+      type: Boolean,
+      default: false,
+    },
+    /** Per-residue fixed-mod mass shift (existing behavior); null = none */
     modification: {
       type: Number as PropType<number | null>,
       default: null,
@@ -127,11 +195,31 @@ export default defineComponent({
       type: Boolean,
       default: false,
     },
+    /** Disable the right-click variable-modification context menu (TnT path) */
+    disableVariableModificationSelection: {
+      type: Boolean,
+      default: true,
+    },
+    /** Current interactive variable modification mass for this residue (0 = none) */
+    variableMod: {
+      type: Number as PropType<number | undefined>,
+      default: undefined,
+    },
   },
-  emits: ['selected', 'residueSelected'],
+  // 'residueSelected' (existing) for the tag cross-link; 'update-modification'
+  // (index, mass) for interactive variable modifications.
+  emits: ['selected', 'residueSelected', 'update-modification'],
   setup() {
     const streamlitData = useStreamlitDataStore()
     return { streamlitData }
+  },
+  data() {
+    return {
+      menuOpen: false,
+      selectedModification: undefined as KnownModification | undefined,
+      customSelected: false,
+      customModMass: '0' as string,
+    }
   },
   computed: {
     id(): string {
@@ -161,6 +249,27 @@ export default defineComponent({
         this.sequenceObject.yIon ||
         this.sequenceObject.zIon
       )
+    },
+    /** Whether this residue is a truncated proteoform flank (P0) */
+    isTruncated(): boolean {
+      return this.sequenceObject.truncated === true
+    },
+    modificationsForSelect(): string[] {
+      return ['None', 'Custom', ...this.potentialModifications]
+    },
+    potentialModifications(): KnownModification[] {
+      return potentialModificationMap[this.aminoAcid] ?? []
+    },
+    /**
+     * Whether a POINT modification badge/marker should show on this single
+     * residue: either a per-residue fixed-mod value (existing behavior) or an
+     * interactive variable modification selected on it. (DISTINCT from the
+     * spanning ambiguous mod-range markers, which use modStart/modEnd/modCenter.)
+     */
+    isPointModification(): boolean {
+      if (this.modification !== null) return true
+      if (this.selectedModification !== undefined) return true
+      return this.variableMod !== undefined && this.variableMod !== 0
     },
     /**
      * Whether this residue is covered by at least one sequence tag (coverage > 0),
@@ -222,13 +331,33 @@ export default defineComponent({
         position: 'relative',
       }
     },
-    modificationDisplay(): string {
-      if (this.modification === null) return ''
-      const mod = this.modification
-      if (mod >= 0) {
-        return `+${mod.toFixed(2)}`
+    /**
+     * Mass badge text. An interactive variable / custom modification takes
+     * precedence; otherwise the spanning mod-range badge (modMass) or the
+     * per-residue fixed-mod value is shown.
+     */
+    modMassDisplay(): string {
+      if (this.selectedModification !== undefined) {
+        return formatSigned(modificationMassMap[this.selectedModification])
       }
-      return mod.toFixed(2)
+      if (this.variableMod !== undefined && this.variableMod !== 0) {
+        return formatSigned(this.variableMod)
+      }
+      if (this.sequenceObject.modMass) {
+        return this.sequenceObject.modMass
+      }
+      if (this.modification !== null) {
+        return formatSigned(this.modification)
+      }
+      return ''
+    },
+  },
+  watch: {
+    selectedModification() {
+      // Reflect selection into the badge immediately (parity with legacy).
+      if (this.selectedModification !== undefined && modificationMassMap[this.selectedModification] !== undefined) {
+        this.sequenceObject.modMass = formatSigned(modificationMassMap[this.selectedModification])
+      }
     },
   },
   methods: {
@@ -244,8 +373,40 @@ export default defineComponent({
         this.$emit('selected', this.index)
       }
     },
+    toggleMenuOpen(): void {
+      if (this.disableVariableModificationSelection) {
+        return
+      }
+      this.menuOpen = !this.menuOpen
+    },
+    updateSelectedModification(modification: 'None' | 'Custom' | KnownModification) {
+      if (modification === 'None') {
+        this.selectedModification = undefined
+      } else if (modification === 'Custom') {
+        this.customSelected = true
+        return
+      } else {
+        this.selectedModification = modification as KnownModification
+      }
+      this.toggleMenuOpen()
+      this.customSelected = false
+      this.$emit(
+        'update-modification',
+        this.index,
+        this.selectedModification ? modificationMassMap[this.selectedModification] : 0,
+      )
+    },
+    updateCustomModification() {
+      this.$emit('update-modification', this.index, parseFloat(this.customModMass))
+      this.toggleMenuOpen()
+    },
   },
 })
+
+/** Format a mass shift with an explicit sign (e.g. "+57.02", "-0.98"). */
+function formatSigned(mass: number): string {
+  return mass.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 2 })
+}
 </script>
 
 <style scoped>
@@ -260,6 +421,28 @@ export default defineComponent({
   color: #000000;
   outline: 3px solid #29335c;
   font-weight: bold;
+}
+
+/* Regex highlighting (P1) */
+.sequence-amino-acid.regex-highlighted {
+  background-color: #e3f2fd !important;
+  color: #1565c0 !important;
+  outline: 2px solid #1976d2 !important;
+  font-weight: bold;
+}
+
+/* When both highlighted and regex-highlighted, prioritize normal highlighting */
+.sequence-amino-acid.highlighted.regex-highlighted {
+  background-color: #f3a712 !important;
+  color: #000000 !important;
+  outline: 3px solid #29335c !important;
+}
+
+/* Truncated proteoform flank (P0) */
+.sequence-amino-acid.truncated .aa-text {
+  color: rgba(128, 128, 128, 0.3);
+  outline: rgba(128, 128, 128, 0.3);
+  text-decoration: line-through !important;
 }
 
 .sequence-amino-acid {
@@ -339,6 +522,28 @@ export default defineComponent({
   font-weight: 500;
 }
 
+/* Tag-span bracket markers (P0) */
+.tag-marker {
+  position: absolute;
+  top: -7.5%;
+  left: -7.5%;
+  width: 115%;
+  height: 115%;
+  display: flex;
+  align-items: center;
+  justify-content: right;
+  border: 0.3em solid black;
+  z-index: 1100;
+}
+
+.tag-start {
+  clip-path: inset(0 50% 0 0);
+}
+
+.tag-end {
+  clip-path: inset(0 0 0 50%);
+}
+
 /* Modification marker with dotted pattern background (like FLASHApp) */
 .mod-marker {
   position: absolute;
@@ -360,6 +565,18 @@ export default defineComponent({
 
 .mod-end {
   clip-path: inset(0 0 0 50%);
+}
+
+.mod-start-cont {
+  clip-path: inset(0 0 0 50%);
+}
+
+.mod-end-cont {
+  clip-path: inset(0 50% 0 0);
+}
+
+.mod-center-cont {
+  width: 125%;
 }
 
 /* Modification mass badge */

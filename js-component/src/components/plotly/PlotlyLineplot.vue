@@ -1,5 +1,7 @@
 <template>
-  <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  <div :id="id" class="plot-container" :style="cssCustomProperties">
+    <button v-if="showBackButton" class="simple-button" @click="backButton">↩</button>
+  </div>
 </template>
 
 <script lang="ts">
@@ -28,6 +30,11 @@ const DEFAULT_CONFIG = {
   xPosScalingFactor: 80,
   xPosScalingThreshold: 500,
   minAnnotationWidth: 40,
+  // Legacy FLASHApp constants for the augmented/tag-walk views (P1):
+  //   half-width = rangeWidth / legacyXPosScalingFactor (27.5),
+  //   all-or-nothing hide when half-width > legacyXPosScalingThreshold (30).
+  legacyXPosScalingFactor: 27.5,
+  legacyXPosScalingThreshold: 30,
 }
 
 export default defineComponent({
@@ -53,6 +60,16 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
+      // --- Augmented-view (charge drill-down) + modebar toggle state (parity) ---
+      // localTitle drives the deconv ↔ m/z (charge) sub-view switch without
+      // mutating the prop (FLASHApp PlotlyLineplotUnified localTitle pattern).
+      localTitle: undefined as string | undefined,
+      // Index (into the FIRST-series peak rows) of the deconv mass the user
+      // drilled into; undefined → deconv view.
+      selectedMassIndex: undefined as number | undefined,
+      // Modebar toggles (FLASHApp): annotations on/off, deconvolved-peaks highlight.
+      annotationsVisible: true as boolean,
+      deconvolvedPeaksHighlightMode: false as boolean,
     }
   },
   computed: {
@@ -76,6 +93,54 @@ export default defineComponent({
         ...DEFAULT_CONFIG,
         ...this.args.config,
       }
+    },
+
+    /**
+     * Effective plot title. Defaults to the prop title but is overridden by
+     * localTitle once the user drills into the charge sub-view (parity with
+     * FLASHApp localTitle, which flips to 'Augmented Annotated Spectrum').
+     */
+    effectiveTitle(): string {
+      return this.localTitle ?? this.args.title ?? ''
+    },
+
+    /**
+     * True when we are in the charge-state drill-down ("Augmented Annotated
+     * Spectrum") sub-view. Driven by selectedMassIndex (set on a deconv-peak
+     * click that carries signal arrays).
+     */
+    inChargeSubView(): boolean {
+      return this.selectedMassIndex !== undefined && this.hasSignalDrilldown
+    },
+
+    /**
+     * Whether the per-row signal arrays needed for the charge drill-down are
+     * present (FLASHApp gates the drill-down + "Show Deconvolved Peaks" on this).
+     */
+    hasSignalDrilldown(): boolean {
+      const config = this.plotConfig
+      const flag =
+        (config?.hasSignalDrilldown as boolean) ?? this.args.hasSignalDrilldown ?? false
+      const pd = this.plotData
+      return flag && !!pd && !!pd.signal_mzs && !!pd.signal_charges
+    },
+
+    /**
+     * Back button is shown only in the charge sub-view (FLASHApp showBackButton).
+     */
+    showBackButton(): boolean {
+      return this.inChargeSubView
+    },
+
+    /**
+     * Whether to draw signal-peak dot markers. Default OFF for FLASHApp parity (the
+     * legacy renderer does not draw these); enabled via showSignalMarkers (P2).
+     */
+    showSignalMarkers(): boolean {
+      const config = this.plotConfig
+      return (
+        (config?.showSignalMarkers as boolean) ?? this.args.showSignalMarkers ?? false
+      )
     },
 
     /**
@@ -202,6 +267,23 @@ export default defineComponent({
         (config?.signalPeakColumn as string) || this.args.signalPeakColumn
       if (signalCol && rawData[signalCol]) {
         result.signal_mask = rawData[signalCol] as boolean[]
+      }
+
+      // --- Charge drill-down: per-row signal arrays (lists per deconv peak) ---
+      const signalMzCol =
+        (config?.signalMzColumn as string) || this.args.signalMzColumn
+      const signalChargeCol =
+        (config?.signalChargeColumn as string) || this.args.signalChargeColumn
+      const signalIntCol =
+        (config?.signalIntensityColumn as string) || this.args.signalIntensityColumn
+      if (signalMzCol && rawData[signalMzCol]) {
+        result.signal_mzs = rawData[signalMzCol] as unknown as number[][]
+      }
+      if (signalChargeCol && rawData[signalChargeCol]) {
+        result.signal_charges = rawData[signalChargeCol] as unknown as number[][]
+      }
+      if (signalIntCol && rawData[signalIntCol]) {
+        result.signal_intensities = rawData[signalIntCol] as unknown as number[][]
       }
 
       // --- Tagger extension: tag-overlay highlight + labels ---
@@ -369,6 +451,21 @@ export default defineComponent({
         return this.manualXRange
       }
 
+      // Charge drill-down sub-view: zoom to the drilled mass's m/z span.
+      if (this.inChargeSubView) {
+        const span = this.chargeSubViewSpan
+        if (span) return span
+      }
+
+      // Deconvolved-peaks highlight mode shows the ENTIRE spectrum (FLASHApp
+      // priority 1: overrides the tag-walk auto-zoom).
+      if (this.deconvolvedPeaksHighlightMode && this.isDataReady && this.plotData) {
+        const xs = this.plotData.x_values
+        if (xs.length > 0) {
+          return [Math.min(...xs) * 0.98, Math.max(...xs) * 1.02]
+        }
+      }
+
       // Tagger extension: when a tag walk is present, auto-zoom to the tag's
       // mass span (with padding). Matches FLASHApp PlotlyLineplotTagger, which
       // ranges to [min(masses)*0.98, max(masses)*1.02] for the deconv view.
@@ -399,8 +496,25 @@ export default defineComponent({
     yRange(): number[] {
       if (!this.isDataReady || !this.plotData) return [0, 1]
 
-      const { x_values, y_values } = this.plotData
       const xRange = this.xRange
+
+      // Charge drill-down sub-view: the spectrum shown is the signal m/z peaks,
+      // so the y-range must come from their intensities (not the deconv sticks).
+      if (this.inChargeSubView) {
+        const sig = this.chargeSignal
+        let maxY = 0
+        if (sig && sig.intensities.length > 0) {
+          for (let i = 0; i < sig.mzs.length; i++) {
+            const x = sig.mzs[i]
+            const y = sig.intensities[i]
+            if (x >= xRange[0] && x <= xRange[1] && y > maxY) maxY = y
+          }
+        }
+        if (maxY === 0) return [0, 1]
+        return [0, maxY * 1.8]
+      }
+
+      const { x_values, y_values } = this.plotData
 
       // Find max y within the visible x range
       let maxY = 0
@@ -652,6 +766,53 @@ export default defineComponent({
     },
 
     /**
+     * Legacy box half-width for the augmented/tag-walk views:
+     *   xpos_scaling = rangeWidth / legacyXPosScalingFactor (27.5).
+     * Unified across the tag-walk and charge-sub-view paths (P1 — was /27.5 inline
+     * for tag-walk but the annotation path used 80; these are now distinct configs
+     * so each path keeps its intended geometry while sharing one named constant).
+     */
+    legacyXposScaling(): number {
+      const xRange = this.xRange
+      return (xRange[1] - xRange[0]) / this.config.legacyXPosScalingFactor
+    },
+
+    /**
+     * Legacy all-or-nothing overlap suppression for the tag-walk (augmented deconv)
+     * view: when the per-mass box half-width exceeds legacyXPosScalingThreshold (30),
+     * hide ALL mass annotations (FLASHApp PlotlyLineplotTagger:385-391). This is the
+     * documented divergence from the greedy resolver used for plain annotated
+     * spectra — the augmented views match the legacy threshold behavior exactly.
+     */
+    tagWalkAnnotationsHidden(): boolean {
+      if (!this.tagWalk) return false
+      return this.legacyXposScaling > this.config.legacyXPosScalingThreshold
+    },
+
+    /**
+     * The residue-walk gap index selected by the user (tag-walk selectedAA),
+     * mapped into walkMasses gap-space honoring direction (nTerminal). residues[i]
+     * labels the gap between walkMasses[i] and walkMasses[i+1].
+     *
+     * OPTIONAL/backward-compatible: when selectedAA is absent this is undefined and
+     * nothing is highlighted as "selected" (legacy fallback to mass-order only).
+     * When nTerminal is false the index is mirrored (gaps - 1 - selectedAA),
+     * matching the legacy reversedSelectedAA convention for C-terminal-ordered tags.
+     */
+    walkSelectedGap(): number | undefined {
+      const tw = this.tagWalk
+      if (!tw || tw.selectedAA === undefined) return undefined
+      const gaps = Math.max(this.walkMasses.length - 1, 0)
+      if (gaps === 0) return undefined
+      // Default (nTerminal true or unspecified): direct index.
+      // nTerminal === false: mirror into the reversed gap space (legacy behavior).
+      const nTerm = tw.nTerminal
+      const idx = nTerm === false ? gaps - 1 - tw.selectedAA : tw.selectedAA
+      if (idx < 0 || idx >= gaps) return undefined
+      return idx
+    },
+
+    /**
      * Tagger extension: invisible hover markers at each tag-walk mass (parity
      * with the legacy buttonTraces) so the user can hover a mass to read it.
      */
@@ -683,7 +844,7 @@ export default defineComponent({
      */
     tagWalkShapes(): Partial<Plotly.Shape>[] {
       const masses = this.walkMasses
-      if (masses.length === 0) return []
+      if (masses.length === 0 || this.tagWalkAnnotationsHidden) return []
 
       const yRange = this.yRange
       if (yRange[1] <= 0) return []
@@ -691,21 +852,26 @@ export default defineComponent({
       const ypos_low = ymax * 1.18
       const ypos_high = ymax * 1.32
 
-      const xRange = this.xRange
-      // Legacy: xpos_scaling = (xRange[1]-xRange[0]) / xPosScalingFactor (27.5).
-      const xpos_scaling = (xRange[1] - xRange[0]) / 27.5
+      // Legacy box half-width (rangeWidth / legacyXPosScalingFactor, default 27.5).
+      const xpos_scaling = this.legacyXposScaling
 
       const color = this.styling.annotationColors?.massButton || this.styling.highlightColor
+      const selColor =
+        this.styling.annotationColors?.selectedMassButton || this.styling.selectedColor
+      const sel = this.walkSelectedGap
 
       const shapes: Partial<Plotly.Shape>[] = []
-      for (const mass of masses) {
+      for (let i = 0; i < masses.length; i++) {
+        // Legacy: a mass box is "selected" when it bounds the selected gap
+        // (selectedAA == i || selectedAA == i-1).
+        const isSelected = sel !== undefined && (sel === i || sel === i - 1)
         shapes.push({
           type: 'rect',
-          x0: mass - xpos_scaling,
+          x0: masses[i] - xpos_scaling,
           y0: ypos_low,
-          x1: mass + xpos_scaling,
+          x1: masses[i] + xpos_scaling,
           y1: ypos_high,
-          fillcolor: color,
+          fillcolor: isSelected ? selColor : color,
           line: { width: 0 },
         })
       }
@@ -723,7 +889,7 @@ export default defineComponent({
     tagWalkAnnotations(): Partial<Plotly.Annotations>[] {
       const tw = this.tagWalk
       const masses = this.walkMasses
-      if (!tw || masses.length === 0) return []
+      if (!tw || masses.length === 0 || this.tagWalkAnnotationsHidden) return []
 
       const yRange = this.yRange
       if (yRange[1] <= 0) return []
@@ -750,12 +916,16 @@ export default defineComponent({
         })
       }
 
-      // Residue letters for each gap.
+      // Residue letters for each gap (selected gap → selected color + bold).
       const residues = tw.residues || []
+      const selArrowColor =
+        this.styling.annotationColors?.selectedSequenceArrow || this.styling.selectedColor
+      const sel = this.walkSelectedGap
       for (let i = 0; i < masses.length - 1; i++) {
         const xMid = (masses[i] + masses[i + 1]) / 2
         const aa = i < residues.length ? residues[i] : ''
         const delta = Math.abs(masses[i + 1] - masses[i])
+        const isSelected = sel !== undefined && sel === i
         annotations.push({
           x: xMid,
           y: yPosAA,
@@ -764,7 +934,13 @@ export default defineComponent({
           text: aa,
           hovertext: 'Δ=' + delta.toFixed(2) + ' Da',
           showarrow: false,
-          font: { size: 15, color: arrowColor },
+          font: {
+            size: 15,
+            color: isSelected ? selArrowColor : arrowColor,
+            family: isSelected
+              ? 'Arial Black, Arial Bold, Arial, sans-serif'
+              : 'sans-serif',
+          },
         })
       }
 
@@ -779,7 +955,7 @@ export default defineComponent({
      */
     tagWalkArrows(): Partial<Plotly.Annotations>[] {
       const masses = this.walkMasses
-      if (masses.length < 2) return []
+      if (masses.length < 2 || this.tagWalkAnnotationsHidden) return []
 
       const yRange = this.yRange
       if (yRange[1] <= 0) return []
@@ -789,9 +965,13 @@ export default defineComponent({
 
       const arrowColor =
         this.styling.annotationColors?.sequenceArrow || this.styling.highlightColor
+      const selArrowColor =
+        this.styling.annotationColors?.selectedSequenceArrow || this.styling.selectedColor
+      const sel = this.walkSelectedGap
 
       const arrows: Partial<Plotly.Annotations>[] = []
       for (let i = 0; i < masses.length - 1; i++) {
+        const color = sel !== undefined && sel === i ? selArrowColor : arrowColor
         let xStart = masses[i]
         let xEnd = masses[i + 1]
         const xMid = (xStart + xEnd) / 2
@@ -825,7 +1005,7 @@ export default defineComponent({
           arrowhead: 0,
           arrowsize: 1,
           arrowwidth: 2,
-          arrowcolor: arrowColor,
+          arrowcolor: color,
         })
         // Headed segment (mid → end)
         arrows.push({
@@ -841,10 +1021,180 @@ export default defineComponent({
           arrowhead: 2,
           arrowsize: 1,
           arrowwidth: 2,
-          arrowcolor: arrowColor,
+          arrowcolor: color,
         })
       }
       return arrows
+    },
+
+    /**
+     * Charge drill-down: the raw signal m/z / charge / intensity arrays for the
+     * deconv peak the user drilled into (selectedMassIndex). Mirrors the legacy
+     * highlightedValues[selectedMass] tuple (mzs/charges/intensity).
+     */
+    chargeSignal(): { mzs: number[]; charges: number[]; intensities: number[] } | undefined {
+      const pd = this.plotData
+      const idx = this.selectedMassIndex
+      if (!pd || idx === undefined || !pd.signal_mzs || !pd.signal_charges) {
+        return undefined
+      }
+      const mzs = (pd.signal_mzs[idx] as number[]) || []
+      const charges = (pd.signal_charges[idx] as number[]) || []
+      const intensities = pd.signal_intensities
+        ? ((pd.signal_intensities[idx] as number[]) || [])
+        : []
+      if (mzs.length === 0) return undefined
+      return { mzs, charges, intensities }
+    },
+
+    /**
+     * Charge drill-down: per charge state, the intensity-weighted center-of-gravity
+     * m/z (FLASHApp PlotlyLineplotTagger:345-373 / Unified:848-902). When intensity
+     * is unavailable the COG falls back to a plain mean of the m/z values.
+     */
+    chargeGroups(): Array<{ charge: number; cogMz: number }> {
+      const sig = this.chargeSignal
+      if (!sig) return []
+      const grouped = new Map<number, { mz: number; intensity: number }[]>()
+      for (let i = 0; i < sig.mzs.length; i++) {
+        const mz = sig.mzs[i]
+        const charge = sig.charges[i]
+        const intensity = sig.intensities.length > i ? sig.intensities[i] : 1
+        const entry = { mz, intensity }
+        if (grouped.has(charge)) {
+          grouped.get(charge)!.push(entry)
+        } else {
+          grouped.set(charge, [entry])
+        }
+      }
+      const out: Array<{ charge: number; cogMz: number }> = []
+      grouped.forEach((entries, charge) => {
+        const summed = entries.reduce((s, v) => s + v.intensity, 0)
+        let cogMz: number
+        if (summed > 0) {
+          cogMz = entries.reduce((s, v) => s + (v.intensity / summed) * v.mz, 0)
+        } else {
+          cogMz = entries.reduce((s, v) => s + v.mz, 0) / entries.length
+        }
+        out.push({ charge, cogMz })
+      })
+      return out
+    },
+
+    /**
+     * Charge drill-down: the m/z span [min,max]*[0.98,1.02] for auto-zoom in the
+     * sub-view (FLASHApp PlotlyLineplotTagger:596-598).
+     */
+    chargeSubViewSpan(): number[] | undefined {
+      const sig = this.chargeSignal
+      if (!sig || sig.mzs.length === 0) return undefined
+      const lo = Math.min(...sig.mzs)
+      const hi = Math.max(...sig.mzs)
+      if (!isFinite(lo) || !isFinite(hi)) return undefined
+      return [lo * 0.98, hi * 1.02]
+    },
+
+    /**
+     * Charge drill-down: the z="+charge" box shapes at each charge's COG m/z.
+     * Uses the legacy half-width geometry: 0.5 * rangeWidth / legacyXPosScalingFactor
+     * (FLASHApp xpos_scaling/2 with xPosScalingFactor=27.5). Fill rule follows the
+     * legacy #E4572E (highlight) / #F3A712 (selected-residue) palette.
+     */
+    chargeSubViewShapes(): Partial<Plotly.Shape>[] {
+      const groups = this.chargeGroups
+      if (groups.length === 0) return []
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos_low = ymax * 1.18
+      const ypos_high = ymax * 1.32
+
+      const xRange = this.xRange
+      const halfWidth = 0.5 * (xRange[1] - xRange[0]) / this.config.legacyXPosScalingFactor
+
+      // #F3A712 when the drilled mass is the selected residue, #E4572E otherwise.
+      const fill = this.isSelectedResidueMass
+        ? this.styling.selectedColor
+        : this.styling.highlightColor
+
+      const shapes: Partial<Plotly.Shape>[] = []
+      for (const g of groups) {
+        shapes.push({
+          type: 'rect',
+          x0: g.cogMz - halfWidth,
+          y0: ypos_low,
+          x1: g.cogMz + halfWidth,
+          y1: ypos_high,
+          fillcolor: fill,
+          line: { width: 0 },
+        })
+      }
+      return shapes
+    },
+
+    /**
+     * Charge drill-down: the z="+charge" label annotations at each COG m/z.
+     */
+    chargeSubViewAnnotations(): Partial<Plotly.Annotations>[] {
+      const groups = this.chargeGroups
+      if (groups.length === 0) return []
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+
+      const annotations: Partial<Plotly.Annotations>[] = []
+      for (const g of groups) {
+        annotations.push({
+          x: g.cogMz,
+          y: ypos,
+          xref: 'x',
+          yref: 'y',
+          text: 'z=+' + g.charge,
+          showarrow: false,
+          font: { size: 15, color: 'white' },
+        })
+      }
+      return annotations
+    },
+
+    /**
+     * Charge drill-down: stick traces for the drilled mass's signal m/z peaks.
+     */
+    chargeSubViewTraces(): Plotly.Data[] {
+      const sig = this.chargeSignal
+      if (!sig) return this.getFallbackData()
+      const baseline = -10000000
+      const x: number[] = []
+      const y: number[] = []
+      for (let i = 0; i < sig.mzs.length; i++) {
+        const intensity = sig.intensities.length > i ? sig.intensities[i] : 1
+        x.push(sig.mzs[i], sig.mzs[i], sig.mzs[i])
+        y.push(baseline, intensity, baseline)
+      }
+      return [
+        {
+          x,
+          y,
+          mode: 'lines',
+          type: 'scatter',
+          connectgaps: false,
+          marker: { color: this.styling.highlightColor },
+          hoverinfo: 'x+y',
+        },
+      ]
+    },
+
+    /**
+     * Whether the drilled-into mass is the currently selected residue (tag-walk
+     * selectedAA), driving the #F3A712 fill in the sub-view. Matches FLASHApp
+     * `selectedAA == selectedMass || selectedAA == selectedMass-1`.
+     */
+    isSelectedResidueMass(): boolean {
+      const tw = this.tagWalk
+      const sel = this.selectedMassIndex
+      if (!tw || sel === undefined || tw.selectedAA === undefined) return false
+      return tw.selectedAA === sel || tw.selectedAA === sel - 1
     },
 
     /**
@@ -872,6 +1222,12 @@ export default defineComponent({
     traces(): Plotly.Data[] {
       if (!this.isDataReady || !this.plotData) {
         return this.getFallbackData()
+      }
+
+      // Charge drill-down sub-view: render the drilled mass's signal m/z peaks as
+      // sticks (the z="+charge" labels/boxes are drawn via layout shapes/annots).
+      if (this.inChargeSubView) {
+        return this.chargeSubViewTraces
       }
 
       const traces: Plotly.Data[] = []
@@ -1002,8 +1358,9 @@ export default defineComponent({
 
       // --- Tagger extension: signal-peak markers (drawn on top of sticks) ---
       // Marks peaks flagged as SignalPeaks members with a distinct dot at the tip.
+      // NOT a legacy feature → OFF by default; gated behind showSignalMarkers (P2).
       // Guarded by presence of signal_mask → no effect on plots without it.
-      if (pd.signal_mask) {
+      if (pd.signal_mask && this.showSignalMarkers) {
         const sm = pd.signal_mask
         const marker_x: number[] = []
         const marker_y: number[] = []
@@ -1055,12 +1412,15 @@ export default defineComponent({
      * Build Plotly layout.
      */
     layout(): Partial<Plotly.Layout> {
+      const title = this.effectiveTitle
+      // In the charge sub-view the x-axis becomes m/z (FLASHApp xAxisLabel).
+      const xLabel = this.inChargeSubView ? 'm/z' : this.args.xLabel
       return {
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: title ? { text: `<b>${title}</b>` } : undefined,
         showlegend: false,
         height: this.args.height || 400,
         xaxis: {
-          title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
+          title: xLabel ? { text: xLabel } : undefined,
           showgrid: false,
           showline: true,
           linecolor: 'grey',
@@ -1072,7 +1432,8 @@ export default defineComponent({
           showgrid: true,
           gridcolor: this.theme?.secondaryBackgroundColor || '#f0f0f0',
           rangemode: 'nonnegative',
-          fixedrange: false,
+          // Spectrum modes lock the y-axis (FLASHApp PlotlyLineplotTagger:634).
+          fixedrange: true,
           showline: true,
           linecolor: 'grey',
           linewidth: 1,
@@ -1087,20 +1448,40 @@ export default defineComponent({
         margin: {
           l: 60,
           r: 20,
-          t: this.args.title ? 50 : 20,
+          t: title ? 50 : 20,
           b: 50,
         },
-        shapes: this.tagWalk
-          ? [...this.annotationShapes, ...this.tagWalkShapes]
-          : this.annotationShapes,
-        annotations: this.tagWalk
-          ? [
-              ...this.peakAnnotations,
-              ...this.tagWalkAnnotations,
-              ...this.tagWalkArrows,
-            ]
-          : this.peakAnnotations,
+        shapes: this.layoutShapes,
+        annotations: this.layoutAnnotations,
       }
+    },
+
+    /**
+     * Consolidated layout shapes, honoring the charge sub-view, the tag walk, and
+     * the annotationsVisible toggle.
+     */
+    layoutShapes(): Partial<Plotly.Shape>[] {
+      if (this.inChargeSubView) {
+        return this.annotationsVisible ? this.chargeSubViewShapes : []
+      }
+      if (!this.annotationsVisible) return []
+      return this.tagWalk
+        ? [...this.annotationShapes, ...this.tagWalkShapes]
+        : this.annotationShapes
+    },
+
+    /**
+     * Consolidated layout annotations, honoring the charge sub-view, the tag walk,
+     * and the annotationsVisible toggle.
+     */
+    layoutAnnotations(): Partial<Plotly.Annotations>[] {
+      if (this.inChargeSubView) {
+        return this.annotationsVisible ? this.chargeSubViewAnnotations : []
+      }
+      if (!this.annotationsVisible) return []
+      return this.tagWalk
+        ? [...this.peakAnnotations, ...this.tagWalkAnnotations, ...this.tagWalkArrows]
+        : this.peakAnnotations
     },
 
     cssCustomProperties(): Record<string, string> {
@@ -1131,9 +1512,12 @@ export default defineComponent({
           oldFirstX: oldData?.x_values?.[0],
         })
         if (this.isInitialized) {
-          // Reset zoom when data changes (e.g., switching spectra)
+          // Reset zoom + charge sub-view when data changes (e.g. switching spectra),
+          // mirroring the legacy selectedScan watcher restoring the deconv view.
           this.manualXRange = undefined
           this.lastAutoZoomedPeakIndex = undefined
+          this.selectedMassIndex = undefined
+          this.localTitle = undefined
           this.renderPlot()
         }
       },
@@ -1154,10 +1538,12 @@ export default defineComponent({
     'streamlitDataStore.allDataForDrawing.tagWalk': {
       handler() {
         if (this.isInitialized) {
-          // A new tag walk owns the x-range; drop any stale manual zoom so the
-          // auto-zoom-to-tag-span takes effect.
+          // A new tag walk owns the x-range; drop any stale manual zoom and exit
+          // any charge sub-view (legacy selectedTag watcher restores deconv view).
           this.manualXRange = undefined
           this.lastAutoZoomedPeakIndex = undefined
+          this.selectedMassIndex = undefined
+          this.localTitle = undefined
           this.renderPlot()
         }
       },
@@ -1223,32 +1609,65 @@ export default defineComponent({
           return
         }
 
-        const modeBarButtons = [
+        const modeBarButtons: Array<Record<string, unknown>> = [
+          // "Hide/Show Annotations" toggle (FLASHApp parity).
           {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
+            title: this.annotationsVisible ? 'Hide Annotations' : 'Show Annotations',
+            name: 'toggleAnnotations',
             icon: {
               width: 1792,
               height: 1792,
-              path: 'M1152 1376v-160q0-14-9-23t-23-9h-96v-512q0-14-9-23t-23-9h-320q-14 0-23 9t-9 23v160q0 14 9 23t23 9h96v320h-96q-14 0-23 9t-9 23v160q0 14 9 23t23 9h320q14 0 23-9t9-23zm-128-896v-160q0-14-9-23t-23-9h-192q-14 0-23 9t-9 23v160q0 14 9 23t23 9h192q14 0 23-9t9-23zm640 416q0 209-103 385.5t-279.5 279.5-385.5 103-385.5-103-279.5-279.5-103-385.5 103-385.5 279.5-279.5 385.5-103 385.5 103 279.5 279.5 103 385.5z',
+              path: 'M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z',
             },
             click: () => {
-              const element = document.getElementById(this.id)
-              if (element) {
-                Plotly.downloadImage(element, {
-                  filename: this.args.title || 'plot',
-                  height: 400,
-                  width: 1200,
-                  format: 'svg',
-                })
-              }
+              this.toggleAnnotations()
             },
           },
         ]
 
+        // "Show/Hide Deconvolved Peaks" — gated on presence of signal data (parity).
+        if (this.hasSignalDrilldown) {
+          modeBarButtons.push({
+            title: this.deconvolvedPeaksHighlightMode
+              ? 'Hide Deconvolved Peaks'
+              : 'Show Deconvolved Peaks',
+            name: 'toggleDeconvolvedPeaks',
+            icon: {
+              width: 1792,
+              height: 1792,
+              path: 'M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z',
+            },
+            click: () => {
+              this.toggleDeconvolvedPeaksHighlight()
+            },
+          })
+        }
+
+        modeBarButtons.push({
+          title: 'Download as SVG',
+          name: 'toImageSvg',
+          icon: {
+            width: 1792,
+            height: 1792,
+            path: 'M1152 1376v-160q0-14-9-23t-23-9h-96v-512q0-14-9-23t-23-9h-320q-14 0-23 9t-9 23v160q0 14 9 23t23 9h96v320h-96q-14 0-23 9t-9 23v160q0 14 9 23t23 9h320q14 0 23-9t9-23zm-128-896v-160q0-14-9-23t-23-9h-192q-14 0-23 9t-9 23v160q0 14 9 23t23 9h192q14 0 23-9t9-23zm640 416q0 209-103 385.5t-279.5 279.5-385.5 103-385.5-103-279.5-279.5-103-385.5 103-385.5 279.5-279.5 385.5-103 385.5 103 279.5 279.5 103 385.5z',
+          },
+          click: () => {
+            const element = document.getElementById(this.id)
+            if (element) {
+              Plotly.downloadImage(element, {
+                filename: this.effectiveTitle || 'plot',
+                height: 400,
+                width: 1200,
+                format: 'svg',
+              })
+            }
+          },
+        })
+
         await Plotly.newPlot(this.id, this.traces, this.layout, {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-          modeBarButtonsToAdd: modeBarButtons,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          modeBarButtonsToAdd: modeBarButtons as any,
           scrollZoom: true,
           responsive: true,
         })
@@ -1399,46 +1818,93 @@ export default defineComponent({
     },
 
     onPlotClick(eventData: any): void {
-      // Only handle clicks if interactivity is configured
+      if (!this.plotData) return
+      if (!eventData.points || eventData.points.length === 0) return
+
+      const point = eventData.points[0]
+      const clickedX = point.x
+
+      // In the charge sub-view, clicks do not re-drill (a back button restores
+      // the deconv view) — match FLASHApp (onPlotClick only acts on deconv view).
+      if (this.inChargeSubView) return
+
+      // Find the nearest deconv peak to the clicked x position
+      // (Plotly click returns a triplet index; we map back to the actual peak).
+      const xValues = this.plotData.x_values
+      let nearestIndex = 0
+      let nearestDistance = Infinity
+      for (let i = 0; i < xValues.length; i++) {
+        const distance = Math.abs(xValues[i] - clickedX)
+        if (distance < nearestDistance) {
+          nearestDistance = distance
+          nearestIndex = i
+        }
+      }
+
+      // --- Charge-state drill-down (P0): clicking a deconv peak that carries
+      // signal arrays switches to the "Augmented Annotated Spectrum" m/z sub-view.
+      if (this.hasSignalDrilldown) {
+        const pd = this.plotData
+        const sigMz = pd.signal_mzs && (pd.signal_mzs[nearestIndex] as number[])
+        if (sigMz && sigMz.length > 0) {
+          this.selectedMassIndex = nearestIndex
+          this.localTitle = 'Augmented Annotated Spectrum'
+          this.manualXRange = undefined
+          this.lastAutoZoomedPeakIndex = undefined
+          this.renderPlot()
+          // Fall through so the selection store is still updated for the click.
+        }
+      }
+
+      // Only update selection if interactivity is configured.
       if (!this.interactivity || Object.keys(this.interactivity).length === 0) {
         return
       }
 
-      if (eventData.points && eventData.points.length > 0) {
-        const point = eventData.points[0]
-        const clickedX = point.x
+      // Update selection store using the interactivity mapping
+      for (const [identifier, column] of Object.entries(this.interactivity)) {
+        // Look for the interactivity column data (e.g., interactivity_peak_id)
+        const columnKey = `interactivity_${column}`
+        const columnValues = this.plotData[columnKey] as unknown[] | undefined
 
-        // Find the nearest peak to the clicked x position
-        // Plotly click returns triplet index, we need to find the actual peak
-        if (!this.plotData) return
-
-        const xValues = this.plotData.x_values
-        let nearestIndex = 0
-        let nearestDistance = Infinity
-
-        for (let i = 0; i < xValues.length; i++) {
-          const distance = Math.abs(xValues[i] - clickedX)
-          if (distance < nearestDistance) {
-            nearestDistance = distance
-            nearestIndex = i
-          }
-        }
-
-        // Update selection store using the interactivity mapping
-        for (const [identifier, column] of Object.entries(this.interactivity)) {
-          // Look for the interactivity column data (e.g., interactivity_peak_id)
-          const columnKey = `interactivity_${column}`
-          const columnValues = this.plotData[columnKey] as unknown[] | undefined
-
-          if (columnValues && Array.isArray(columnValues) && nearestIndex < columnValues.length) {
-            // Use the value from the interactivity column
-            this.selectionStore.updateSelection(identifier, columnValues[nearestIndex])
-          } else if (column === this.args.xColumn) {
-            // Fallback: use x value if no interactivity column data
-            this.selectionStore.updateSelection(identifier, xValues[nearestIndex])
-          }
+        if (columnValues && Array.isArray(columnValues) && nearestIndex < columnValues.length) {
+          // Use the value from the interactivity column
+          this.selectionStore.updateSelection(identifier, columnValues[nearestIndex])
+        } else if (column === this.args.xColumn) {
+          // Fallback: use x value if no interactivity column data
+          this.selectionStore.updateSelection(identifier, xValues[nearestIndex])
         }
       }
+    },
+
+    /**
+     * Restore the deconv view from the charge sub-view (FLASHApp back button).
+     */
+    backButton(): void {
+      this.selectedMassIndex = undefined
+      this.localTitle = undefined
+      this.manualXRange = undefined
+      this.lastAutoZoomedPeakIndex = undefined
+      this.renderPlot()
+    },
+
+    /**
+     * Toggle annotation visibility (FLASHApp "Hide/Show Annotations").
+     */
+    toggleAnnotations(): void {
+      this.annotationsVisible = !this.annotationsVisible
+      this.renderPlot()
+    },
+
+    /**
+     * Toggle deconvolved-peaks highlighting (FLASHApp "Show Deconvolved Peaks").
+     * When ON, the whole spectrum's x-range is shown (no auto-zoom-to-tag).
+     */
+    toggleDeconvolvedPeaksHighlight(): void {
+      this.deconvolvedPeaksHighlightMode = !this.deconvolvedPeaksHighlightMode
+      this.manualXRange = undefined
+      this.lastAutoZoomedPeakIndex = undefined
+      this.renderPlot()
     },
 
     getFallbackData(): Plotly.Data[] {

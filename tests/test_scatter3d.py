@@ -220,3 +220,207 @@ def test_validation_missing_column(mock_streamlit, temp_cache_dir):
             data=bad,
             cache_path=str(temp_cache_dir),
         )
+
+
+# --------------------------------------------------------------------------- #
+# Precursor cross-scan lookup (FLASHApp getPrecursorSignal parity)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def sample_precursor_data() -> pl.LazyFrame:
+    """MS1 precursor scan + MS2 product scan with the four precursor columns.
+
+    Real (file) scan numbers live in ``Scan``; the deconv row index lives in
+    ``index``. Scan 100 is the MS1 precursor (PrecursorScan=0). Scan 101 is the
+    MS2 product whose PrecursorScan points at 100 and whose PrecursorMass (999.0)
+    matches MonoMass index 1 of scan 100.
+
+    Scan 100 (MS1, index 0):
+        MonoMass = [500.0, 999.0]
+        mass 0 signal: [(0, 250.0, 1000.0, 2)]   noisy: [(1, 251.0, 40.0, 2)]
+        mass 1 signal: [(0, 333.0, 2000.0, 3),    noisy: [(2, 334.0, 60.0, 3)]
+                        (1, 499.5, 1800.0, 2)]
+    Scan 101 (MS2, index 1):
+        MonoMass = [123.0]
+        PrecursorScan = 100, PrecursorMass = 999.0
+        (its own peaks should NOT be drawn for the precursor-signal view)
+    """
+    return pl.LazyFrame(
+        {
+            "index": [0, 1],
+            "Scan": [100, 101],
+            "PrecursorScan": [0, 100],
+            "PrecursorMass": [0.0, 999.0],
+            "MonoMass": [[500.0, 999.0], [123.0]],
+            "SignalPeaks": [
+                [
+                    [_record(0, 250.0, 1000.0, 2)],
+                    [_record(0, 333.0, 2000.0, 3), _record(1, 499.5, 1800.0, 2)],
+                ],
+                [
+                    [_record(0, 61.5, 500.0, 2)],
+                ],
+            ],
+            "NoisyPeaks": [
+                [
+                    [_record(1, 251.0, 40.0, 2)],
+                    [_record(2, 334.0, 60.0, 3)],
+                ],
+                [
+                    [_record(1, 62.0, 10.0, 2)],
+                ],
+            ],
+        }
+    )
+
+
+def _make_precursor(data, temp_cache_dir, cache_id):
+    return Scatter3D(
+        cache_id=cache_id,
+        data=data,
+        cache_path=str(temp_cache_dir),
+        scan_filter="index",
+        scan_column="Scan",
+        precursor_scan_column="PrecursorScan",
+        precursor_mass_column="PrecursorMass",
+        mono_mass_column="MonoMass",
+    )
+
+
+def test_precursor_lookup_ms2_resolves_precursor_mass(
+    mock_streamlit, temp_cache_dir, sample_precursor_data
+):
+    comp = _make_precursor(sample_precursor_data, temp_cache_dir, "prec_ms2")
+    # Select the MS2 scan (index 1), no mass -> resolve precursor scan 100's mass 1.
+    result = comp._prepare_vue_data({"scanIndex": 1})
+    payload = result["scatter3dData"]
+    assert payload["hasSelection"] is True
+    # Title stays "Precursor signals"
+    assert payload["massSelected"] is False
+    # Should be scan 100 mass-1's peaks (flat per-peak list -> number[][]), NOT the
+    # MS2 scan's own peaks.
+    assert payload["signalPeaks"] is not None
+    assert len(payload["signalPeaks"]) == 2
+    assert payload["signalPeaks"][0][1] == pytest.approx(333.0)
+    assert payload["signalPeaks"][1][1] == pytest.approx(499.5)
+    assert len(payload["noisyPeaks"]) == 1
+    assert payload["noisyPeaks"][0][1] == pytest.approx(334.0)
+
+
+def test_precursor_lookup_ms1_blank(
+    mock_streamlit, temp_cache_dir, sample_precursor_data
+):
+    comp = _make_precursor(sample_precursor_data, temp_cache_dir, "prec_ms1")
+    # Selecting the MS1 scan (index 0, PrecursorScan == 0) -> blank scene.
+    result = comp._prepare_vue_data({"scanIndex": 0})
+    payload = result["scatter3dData"]
+    assert payload["hasSelection"] is True
+    assert payload["massSelected"] is False
+    assert payload["signalPeaks"] is None
+    assert payload["noisyPeaks"] is None
+
+
+def test_precursor_lookup_no_mass_match_blank(mock_streamlit, temp_cache_dir):
+    # MS2 PrecursorMass has no MonoMass match in the precursor scan -> blank.
+    data = pl.LazyFrame(
+        {
+            "index": [0, 1],
+            "Scan": [100, 101],
+            "PrecursorScan": [0, 100],
+            "PrecursorMass": [0.0, 888.0],  # no match in [500.0, 999.0]
+            "MonoMass": [[500.0, 999.0], [123.0]],
+            "SignalPeaks": [
+                [[_record(0, 250.0, 1000.0, 2)], [_record(0, 333.0, 2000.0, 3)]],
+                [[_record(0, 61.5, 500.0, 2)]],
+            ],
+            "NoisyPeaks": [
+                [[], []],
+                [[]],
+            ],
+        }
+    )
+    comp = _make_precursor(data, temp_cache_dir, "prec_nomatch")
+    payload = comp._prepare_vue_data({"scanIndex": 1})["scatter3dData"]
+    assert payload["signalPeaks"] is None
+    assert payload["noisyPeaks"] is None
+
+
+def test_precursor_lookup_missing_precursor_row_blank(mock_streamlit, temp_cache_dir):
+    # MS2 points to a PrecursorScan that doesn't exist -> blank.
+    data = pl.LazyFrame(
+        {
+            "index": [0],
+            "Scan": [101],
+            "PrecursorScan": [100],  # no row with Scan == 100
+            "PrecursorMass": [999.0],
+            "MonoMass": [[123.0]],
+            "SignalPeaks": [[[_record(0, 61.5, 500.0, 2)]]],
+            "NoisyPeaks": [[[]]],
+        }
+    )
+    comp = _make_precursor(data, temp_cache_dir, "prec_missingrow")
+    payload = comp._prepare_vue_data({"scanIndex": 0})["scatter3dData"]
+    assert payload["signalPeaks"] is None
+
+
+def test_precursor_lookup_mass_selected_uses_own_scan(
+    mock_streamlit, temp_cache_dir, sample_precursor_data
+):
+    # When a mass IS selected, precursor lookup is bypassed: subscript the
+    # SELECTED scan's own per-mass arrays (legacy mass-signal behavior).
+    comp = _make_precursor(sample_precursor_data, temp_cache_dir, "prec_mass")
+    payload = comp._prepare_vue_data({"scanIndex": 0, "massIndex": 1})["scatter3dData"]
+    assert payload["massSelected"] is True
+    # scan 100 (index 0) mass 1 own peaks
+    assert len(payload["signalPeaks"]) == 2
+    assert payload["signalPeaks"][0][1] == pytest.approx(333.0)
+
+
+def test_precursor_lookup_disabled_without_columns(
+    mock_streamlit, temp_cache_dir, sample_precursor_data
+):
+    # Without the precursor columns wired, behavior falls back to own-scan peaks.
+    comp = Scatter3D(
+        cache_id="prec_disabled",
+        data=sample_precursor_data,
+        cache_path=str(temp_cache_dir),
+        scan_filter="index",
+    )
+    assert comp._precursor_lookup_enabled() is False
+    payload = comp._prepare_vue_data({"scanIndex": 1})["scatter3dData"]
+    # MS2 scan's OWN nested per-mass peaks (number[][][]) returned, not precursor.
+    assert payload["signalPeaks"] is not None
+    assert payload["signalPeaks"][0][0][1] == pytest.approx(61.5)
+
+
+def test_precursor_partial_columns_raises(mock_streamlit, temp_cache_dir):
+    # Configuring only some of the four precursor columns is a wiring error.
+    data = pl.LazyFrame(
+        {
+            "index": [0],
+            "Scan": [100],
+            "SignalPeaks": [[[_record(0, 1.0, 2.0, 1.0)]]],
+            "NoisyPeaks": [[[]]],
+        }
+    )
+    with pytest.raises(ValueError, match="all four columns"):
+        Scatter3D(
+            cache_id="prec_partial",
+            data=data,
+            cache_path=str(temp_cache_dir),
+            scan_column="Scan",  # only one of four
+        )
+
+
+def test_precursor_lookup_cache_reconstruction(
+    mock_streamlit, temp_cache_dir, sample_precursor_data
+):
+    cache_id = "prec_recon"
+    _make_precursor(sample_precursor_data, temp_cache_dir, cache_id)
+    comp2 = Scatter3D(cache_id=cache_id, cache_path=str(temp_cache_dir))
+    # Config restored from cache -> precursor lookup still active.
+    assert comp2._scan_column == "Scan"
+    assert comp2._precursor_scan_column == "PrecursorScan"
+    payload = comp2._prepare_vue_data({"scanIndex": 1})["scatter3dData"]
+    assert payload["signalPeaks"][0][1] == pytest.approx(333.0)

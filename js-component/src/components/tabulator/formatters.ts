@@ -166,6 +166,78 @@ export function badgeFormatter(
 }
 
 /**
+ * Parameters for the fixed-precision formatter.
+ */
+export interface FixedFormatterParams extends BaseFormatterParams {
+  /** Number of decimal places (default: 4) */
+  precision?: number
+}
+
+/**
+ * Format a number with a fixed number of decimals and NO thousands grouping.
+ *
+ * Mirrors the legacy FLASHApp `toFixedFormatter()` (4 decimals, no comma
+ * grouping) used by the Scan/Mass tables. Unlike Tabulator's built-in "money"
+ * formatter, this never inserts thousands separators.
+ *
+ * Example (precision 4): 47712.3456 -> "47712.3456"
+ */
+export function fixedFormatter(
+  cell: CellComponent,
+  params: FixedFormatterParams
+): string {
+  const value = cell.getValue()
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+  const num = Number(value)
+  if (isNaN(num)) {
+    return String(value)
+  }
+  const precision = params.precision ?? 4
+  return num.toFixed(precision)
+}
+
+/**
+ * Parameters for the dash-on-negative-one formatter.
+ */
+export interface DashNegativeOneFormatterParams extends BaseFormatterParams {
+  /** When set, non-sentinel values render with this many decimals (no grouping). */
+  precision?: number
+}
+
+/**
+ * Render the FLASHApp `-1` sentinel as a dash ("-"), otherwise the number.
+ *
+ * Mirrors the legacy Protein/Tag tables, which display ProteoformMass /
+ * ProteoformLevelQvalue / N mass / C mass equal to -1 as "-". When `precision`
+ * is given, non-sentinel values are formatted with that many decimals and no
+ * thousands grouping; otherwise the raw value is shown.
+ *
+ * Example: -1 -> "-"; 1234.5 (precision 2) -> "1234.50"
+ */
+export function dashNegativeOneFormatter(
+  cell: CellComponent,
+  params: DashNegativeOneFormatterParams
+): string {
+  const value = cell.getValue()
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+  const num = Number(value)
+  if (isNaN(num)) {
+    return String(value)
+  }
+  if (num === -1) {
+    return '-'
+  }
+  if (params.precision !== undefined && params.precision !== null) {
+    return num.toFixed(params.precision)
+  }
+  return String(value)
+}
+
+/**
  * Map of custom formatter names to their implementations.
  * Use this to resolve string formatter names from Python column definitions.
  */
@@ -173,6 +245,8 @@ export const customFormatters: Record<string, CustomFormatterFunction> = {
   scientific: scientificFormatter,
   signed: signedFormatter,
   badge: badgeFormatter,
+  fixed: fixedFormatter,
+  dashNegativeOne: dashNegativeOneFormatter,
 }
 
 /**

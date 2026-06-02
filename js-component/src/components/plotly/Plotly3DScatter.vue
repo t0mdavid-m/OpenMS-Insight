@@ -23,10 +23,16 @@ interface Plotly3DScatterArgs {
 /**
  * Payload sent under `scatter3dData` by Python `_prepare_vue_data`.
  *
- * `signalPeaks` / `noisyPeaks` are the per-charge-peak arrays for the selected
- * scan (when no mass is selected) or for the single selected mass (post array
- * subscript). Each inner record is the 4-tuple [peak_index, mz, intensity, charge].
- * When a mass is selected the arrays are already subscripted to that mass.
+ * `signalPeaks` / `noisyPeaks` may arrive in two shapes; `normalizePeaks`
+ * flattens both to a flat list of peak records (number[][]):
+ *   - number[][][] : the selected scan's per-mass nested arrays (no mass
+ *     selected, and the precursor cross-scan lookup is NOT wired).
+ *   - number[][]   : a single mass's per-peak records, already subscripted —
+ *     either because a mass IS selected (massSelected=true) OR because the
+ *     precursor cross-scan lookup resolved the precursor scan's matching mass
+ *     for a selected MS2 scan (massSelected=false, title stays "Precursor
+ *     signals", mirroring FLASHApp getPrecursorSignal).
+ * Each inner record is the 4-tuple [peak_index, mz, intensity, charge].
  */
 interface Scatter3DData {
   hasSelection: boolean

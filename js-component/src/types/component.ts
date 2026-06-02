@@ -88,6 +88,12 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   annotation2Column?: string | null // Second series annotation text
   hasSecondSeries?: boolean // True when both x2Column and y2Column are set
   signalPeakColumn?: string | null // Boolean column flagging SignalPeaks membership
+  // Charge drill-down: per-row signal-peak arrays (lists per deconv-peak row)
+  signalMzColumn?: string | null // list[float] of signal-peak m/z per row
+  signalChargeColumn?: string | null // list[int] of signal-peak charges per row
+  signalIntensityColumn?: string | null // list[float] of signal-peak intensities per row
+  hasSignalDrilldown?: boolean // True when signalMz + signalCharge columns are wired
+  showSignalMarkers?: boolean // Draw signal-peak dot markers (default false, parity)
   tagHighlightColumn?: string | null // Boolean column for tag-overlay highlight
   tagAnnotationColumn?: string | null // Text column for tag-overlay labels
   tagWalkEnabled?: boolean // True when a tag (residue) walk overlay is wired
@@ -103,6 +109,10 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
 export interface TagWalk {
   masses: number[]
   residues: string[]
+  /** OPTIONAL direction anchor (FLASHApp selectedTag.nTerminal). */
+  nTerminal?: boolean
+  /** OPTIONAL within-tag residue index the user selected (FLASHApp selectedAA). */
+  selectedAA?: number
 }
 
 export interface LinePlotStyling {
@@ -130,6 +140,17 @@ export interface LinePlotConfig {
   enableManualZoom?: boolean
   showChargeLabels?: boolean
   minAnnotationWidth?: number
+  /**
+   * Legacy box-width scaling divisor used by the tag-walk / augmented-view paths
+   * (FLASHApp xPosScalingFactor = 27.5). Box half-width = rangeWidth / this value.
+   */
+  legacyXPosScalingFactor?: number
+  /**
+   * Legacy all-or-nothing annotation hide threshold (FLASHApp = 30). When the
+   * per-mass box half-width exceeds this (in legacy data units), ALL augmented-view
+   * mass annotations are suppressed.
+   */
+  legacyXPosScalingThreshold?: number
 }
 
 /**
@@ -372,6 +393,10 @@ export interface PlotData {
   signal_mask?: boolean[] // SignalPeaks membership flags (first series)
   tag_mask?: boolean[] // Tag-overlay highlight flags (first series)
   tag_annotations?: string[] // Tag-overlay labels (first series)
+  // Charge drill-down: per deconv-peak row, the signal-peak arrays composing it.
+  signal_mzs?: number[][] // signal-peak m/z values per row
+  signal_charges?: number[][] // signal-peak charges per row
+  signal_intensities?: number[][] // signal-peak intensities per row
   // Allow dynamic interactivity columns like interactivity_peak_id
   [key: string]: unknown[] | undefined
 }

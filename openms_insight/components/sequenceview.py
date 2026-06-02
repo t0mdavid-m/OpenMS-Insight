@@ -16,7 +16,16 @@ PROTON_MASS = 1.007276
 
 # Cache version - increment when cache format changes
 # v2: added optional coverage / maxCoverage / fixed_modifications round-trip + settings.
-CACHE_VERSION = 2
+# v3: added optional proteoform_start / proteoform_end / computed_mass / mod_ranges
+#     round-trip (truncation + determined-terminus rendering, precursor/proteoform
+#     mass header, ambiguous modification ranges) + disable_variable_modifications.
+CACHE_VERSION = 3
+
+# Sentinel value (mirrors FLASHApp) for an OPEN / undetermined proteoform terminus
+# on the N- or C-side. When proteoform_start/proteoform_end is this value the
+# corresponding terminus is rendered as undetermined (red "??" marker) and the
+# flank up to the determined boundary is not struck through.
+UNDETERMINED_TERMINUS = -2
 
 # Optional per-sequence columns carried through the cache when present in the
 # source data (TnT proteoform coverage path). All are backward-compatible: when
@@ -31,7 +40,74 @@ OPTIONAL_SEQUENCE_COLUMNS = [
     # StartPos/EndPos even when the displayed sequence is a proteoform substring.
     # Absent => 0 (displayed sequence starts at protein position 0).
     "sequence_offset",
+    # 0-based inclusive index of the FIRST determined residue of the proteoform
+    # within the full displayed protein sequence. Residues before it are a
+    # truncated N-flank (struck through). Sentinel -2 (UNDETERMINED_TERMINUS) =
+    # the N-terminus is undetermined (open). Absent => 0 (no N truncation).
+    "proteoform_start",
+    # 0-based inclusive index of the LAST determined residue of the proteoform.
+    # Residues after it are a truncated C-flank. Sentinel -2 = C-terminus
+    # undetermined (open). Absent => last residue (no C truncation).
+    "proteoform_end",
+    # Observed/deconvolved proteoform mass (Da). Its presence switches the mass
+    # header title to "Proteoform" (vs "Precursor") and marks the TnT path. Absent
+    # => no proteoform mass / "Precursor" header semantics.
+    "computed_mass",
+    # Ambiguous modification ranges: list of
+    # {"start": int, "end": int, "mass_diff": float, "labels": str} describing a
+    # spanning dotted modification region with a mass badge and possible-mod labels.
+    # DISTINCT from the per-residue fixed-mod `modifications` field. Absent => [].
+    "mod_ranges",
+    # Observed PRECURSOR mass (Da) for the mass header (Precursor path). Drives
+    # the "Observed mass" / "Δ Mass" header rows when computed_mass is absent.
+    # Absent => 0.0 (header omits observed/precursor data).
+    "precursor_mass",
 ]
+
+
+def _normalize_mod_ranges(raw: Any) -> List[Dict[str, Any]]:
+    """Normalize ambiguous modification ranges into a JSON-serializable list.
+
+    Accepts a list of dict-like / struct-like entries (e.g. from a polars
+    list-of-struct column or a plain Python list) and returns a list of
+    ``{"start": int, "end": int, "mass_diff": float, "labels": str}``. Entries
+    missing required keys are skipped. Mirrors the shape consumed by
+    ``prepareAmbigiousModifications`` on the Vue side.
+    """
+    if raw is None:
+        return []
+    try:
+        items = list(raw)
+    except TypeError:
+        return []
+
+    result: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if "start" not in item or "end" not in item:
+            continue
+        try:
+            start = int(item["start"])
+            end = int(item["end"])
+        except (TypeError, ValueError):
+            continue
+        mass_diff_raw = item.get("mass_diff", 0.0)
+        try:
+            mass_diff = float(mass_diff_raw) if mass_diff_raw is not None else 0.0
+        except (TypeError, ValueError):
+            mass_diff = 0.0
+        labels = item.get("labels", "")
+        result.append(
+            {
+                "start": start,
+                "end": end,
+                "mass_diff": mass_diff,
+                "labels": "" if labels is None else str(labels),
+            }
+        )
+    return result
+
 
 # Amino acids that carry FLASHDeconv fixed modifications (Carbamidomethyl on C,
 # oxidation on M). Mirrors src/render/sequence.py::setFixedModification, which
@@ -415,6 +491,7 @@ class SequenceView:
         annotation_config: Optional[Dict[str, Any]] = None,
         settings: Optional[Dict[str, Any]] = None,
         compute_fixed_mods: bool = False,
+        disable_variable_modifications: bool = True,
         cache_path: str = ".",
         title: Optional[str] = None,
         height: int = 400,
@@ -464,6 +541,13 @@ class SequenceView:
                 from the sequence (Deconv path parity with ``setFixedModification``)
                 when the source data does not already carry ``fixed_modifications``.
                 Default False (no regression).
+            disable_variable_modifications: If True (default), the residue/terminal
+                right-click "variable / custom modification" context menu is
+                disabled in Vue (TnT path is unaffected). Set False on the Deconv /
+                submitted-sequence path to enable interactive variable modifications
+                (known mods + custom monoisotopic mass) which adjust theoretical
+                fragment masses (prefix vs suffix). Mirrors FLASHApp's
+                ``disableVariableModifications`` (true when displaying TnT).
             cache_path: Base path for cache storage.
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
@@ -486,6 +570,7 @@ class SequenceView:
             or annotation_config is not None
             or settings is not None
             or compute_fixed_mods is not False
+            or disable_variable_modifications is not True
             or title is not None
             or height != 400
             or bool(kwargs)
@@ -517,6 +602,7 @@ class SequenceView:
             self._interactivity = interactivity or {}
 
             self._compute_fixed_mods = compute_fixed_mods
+            self._disable_variable_modifications = disable_variable_modifications
 
             # Store annotation config with defaults
             self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
@@ -596,6 +682,7 @@ class SequenceView:
             "annotation_config": self._annotation_config,
             "settings": self._settings,
             "compute_fixed_mods": self._compute_fixed_mods,
+            "disable_variable_modifications": self._disable_variable_modifications,
         }
 
     def _cache_exists(self) -> bool:
@@ -635,6 +722,9 @@ class SequenceView:
         )
         self._settings = config.get("settings", {})
         self._compute_fixed_mods = config.get("compute_fixed_mods", False)
+        self._disable_variable_modifications = config.get(
+            "disable_variable_modifications", True
+        )
         self._config = {}
 
         # Load cached LazyFrames
@@ -897,6 +987,30 @@ class SequenceView:
         if "sequence_offset" in entry and entry["sequence_offset"] is not None:
             sequence_data["sequence_offset"] = int(entry["sequence_offset"])
 
+        # Proteoform truncation / determined-terminus rendering (EXTEND, P0).
+        # proteoform_start / proteoform_end are 0-based inclusive determined-region
+        # bounds; sentinel UNDETERMINED_TERMINUS (-2) => that terminus is open.
+        # Only attached when provided so existing inputs render the full sequence
+        # with no truncation (Vue defaults: start=0, end=last, both determined).
+        if "proteoform_start" in entry and entry["proteoform_start"] is not None:
+            sequence_data["proteoform_start"] = int(entry["proteoform_start"])
+        if "proteoform_end" in entry and entry["proteoform_end"] is not None:
+            sequence_data["proteoform_end"] = int(entry["proteoform_end"])
+
+        # Observed/deconvolved proteoform mass (EXTEND, P1). Presence switches the
+        # mass header to the "Proteoform" title and marks the TnT path in Vue.
+        if "computed_mass" in entry and entry["computed_mass"] is not None:
+            sequence_data["computed_mass"] = float(entry["computed_mass"])
+
+        # Ambiguous modification ranges (EXTEND, P0). List of
+        # {start, end, mass_diff, labels} spanning dotted mod regions. DISTINCT
+        # from the per-residue fixed-mod `modifications` field above. Only attached
+        # when provided (and non-empty) so existing inputs are unaffected.
+        if "mod_ranges" in entry and entry["mod_ranges"] is not None:
+            normalized_ranges = _normalize_mod_ranges(entry["mod_ranges"])
+            if normalized_ranges:
+                sequence_data["mod_ranges"] = normalized_ranges
+
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
 
@@ -904,7 +1018,15 @@ class SequenceView:
         # Vue expects observedMasses and peakIds as separate arrays
         observed_masses: List[float] = []
         peak_ids: List[int] = []
+        # Observed PRECURSOR mass for the mass header (Precursor path). Sourced
+        # from the optional per-sequence ``precursor_mass`` column when present;
+        # 0.0 otherwise (header then omits observed/precursor data). (EXTEND, P1)
         precursor_mass: float = 0.0
+        if "precursor_mass" in entry and entry["precursor_mass"] is not None:
+            try:
+                precursor_mass = float(entry["precursor_mass"])
+            except (TypeError, ValueError):
+                precursor_mass = 0.0
 
         if peaks_df.height > 0:
             observed_masses = peaks_df["mass"].to_list()
@@ -915,8 +1037,18 @@ class SequenceView:
         # raw sequence string is unchanged across proteoform selections.
         cov_sig = sequence_data.get("maxCoverage", "")
         fixed_sig = ",".join(fixed_modifications)
+        # Include proteoform bounds / masses / mod-range count so a change in
+        # those re-renders the Vue side even when the raw sequence is unchanged.
+        pf_sig = (
+            f"{sequence_data.get('proteoform_start', '')}:"
+            f"{sequence_data.get('proteoform_end', '')}:"
+            f"{sequence_data.get('computed_mass', '')}:"
+            f"{precursor_mass}:"
+            f"{len(sequence_data.get('mod_ranges', []))}"
+        )
         hash_input = (
-            f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}:{fixed_sig}"
+            f"{sequence_str}:{peaks_df.height}:{precursor_charge}:"
+            f"{cov_sig}:{fixed_sig}:{pf_sig}"
         )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
@@ -951,6 +1083,9 @@ class SequenceView:
             "componentType": self._get_vue_component_name(),
             "height": self._height,
             "deconvolved": self._deconvolved,
+            # Gate the residue/terminal variable-modification context menu in Vue.
+            # True (default) disables it (TnT path); set False on the Deconv path.
+            "disableVariableModifications": self._disable_variable_modifications,
         }
 
         if self._title:
