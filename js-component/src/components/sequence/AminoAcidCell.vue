@@ -2,7 +2,7 @@
   <div
     :id="id"
     class="d-flex justify-center align-center rounded-lg"
-    :class="[aminoAcidCellClass, { highlighted: isHighlighted }, { 'fixed-mod': fixedModification }]"
+    :class="[aminoAcidCellClass, { highlighted: isHighlighted }, { 'fixed-mod': fixedModification }, { truncated: truncated }]"
     :style="cellStyles"
     @click="selectCell"
   >
@@ -130,6 +130,14 @@ export default defineComponent({
      * legacy behavior (only fragment-bearing cells emit on click).
      */
     emitOnAnyClick: {
+      type: Boolean,
+      default: false,
+    },
+    /**
+     * When true, this residue lies outside the identified proteoform window and
+     * is rendered greyed/dimmed (the legacy FLASHTnT "truncated" residue style).
+     */
+    truncated: {
       type: Boolean,
       default: false,
     },
@@ -263,6 +271,12 @@ export default defineComponent({
 
 .fixed-mod {
   color: #f3a712;
+}
+
+/* Residues outside the identified proteoform window (FLASHTnT truncation) are
+   dimmed so the matched proteoform region stands out. */
+.truncated {
+  opacity: 0.35;
 }
 
 /* Fragment marker base container */

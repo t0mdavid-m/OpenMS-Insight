@@ -72,6 +72,14 @@ export interface SequenceData {
   coverage?: number[]
   /** Maximum coverage value, used to normalize `coverage` for shading */
   maxCoverage?: number
+  /**
+   * 0-based start residue (inclusive) of the identified proteoform window.
+   * Residues outside [proteoform_start, proteoform_end] are greyed, and
+   * precomputed fragment positions are offset by proteoform_start (FLASHTnT).
+   */
+  proteoform_start?: number
+  /** 0-based end residue (inclusive) of the proteoform window. */
+  proteoform_end?: number
 }
 
 /**
@@ -106,6 +114,8 @@ export interface SequenceObject {
   zIon: boolean
   /** Extra fragment type labels (e.g., '-H2O', '-NH3') */
   extraTypes: string[]
+  /** Whether this residue lies outside the proteoform window (greyed). */
+  truncated?: boolean
 }
 
 /**

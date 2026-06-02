@@ -598,3 +598,58 @@ class TestSequenceViewMassHeaderAndFragments:
         assert sd["observed_mass"] == pytest.approx(879.40, abs=1e-2)
         # Nested-list fragment masses keep full Float64 precision (not downcast).
         assert sd["precomputed_fragment_masses"]["y"][0] == [147.11]
+
+
+class TestSequenceViewProteoformWindow:
+    """Proteoform truncation window + per-residue modification override (FLASHTnT)."""
+
+    def _data(self) -> pl.LazyFrame:
+        # PEPTIDER (length 8); proteoform window = residues 1..5 inclusive; a
+        # +79.97 mod at residue index 2. The modifications array is FULL length.
+        return pl.LazyFrame(
+            {
+                "scan_id": [1],
+                "sequence": ["PEPTIDER"],
+                "precursor_charge": [2],
+                "pf_start": [1],
+                "pf_end": [5],
+                "mods": [[None, None, 79.97, None, None, None, None, None]],
+            }
+        )
+
+    def test_proteoform_window_and_mods_in_vue_data(self, temp_cache_dir: Path):
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_pf",
+            sequence_data=self._data(),
+            cache_path=str(temp_cache_dir),
+            filters={"identification": "scan_id"},
+            proteoform_start_column="pf_start",
+            proteoform_end_column="pf_end",
+            modifications_column="mods",
+        )
+        sd = sv._prepare_vue_data({"identification": 1})["sequenceData"]
+        assert sd["proteoform_start"] == 1
+        assert sd["proteoform_end"] == 5
+        # The per-residue modification array overrides the parsed (all-null) one.
+        assert sd["modifications"][2] == pytest.approx(79.97)
+        assert sd["modifications"][0] is None
+        assert len(sd["modifications"]) == len("PEPTIDER")
+
+    def test_window_and_mods_survive_cache_reconstruction(self, temp_cache_dir: Path):
+        from openms_insight.components.sequenceview import SequenceView
+
+        SequenceView(
+            cache_id="test_sv_pf_recon",
+            sequence_data=self._data(),
+            cache_path=str(temp_cache_dir),
+            filters={"identification": "scan_id"},
+            proteoform_start_column="pf_start",
+            proteoform_end_column="pf_end",
+            modifications_column="mods",
+        )
+        sv2 = SequenceView(cache_id="test_sv_pf_recon", cache_path=str(temp_cache_dir))
+        sd = sv2._prepare_vue_data({"identification": 1})["sequenceData"]
+        assert sd["proteoform_start"] == 1 and sd["proteoform_end"] == 5
+        assert sd["modifications"][2] == pytest.approx(79.97)

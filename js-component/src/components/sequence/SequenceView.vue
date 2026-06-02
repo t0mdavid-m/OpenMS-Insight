@@ -141,6 +141,7 @@
             :is-highlighted="selectedAAIndex === aaIndex"
             :modification="modifications[aaIndex] ?? null"
             :coverage-fraction="coverageFraction(aaIndex)"
+            :truncated="aaObj.truncated === true"
             :emit-on-any-click="hasPositionInteractivity"
             @selected="onAminoAcidSelected"
           />
@@ -323,6 +324,21 @@ export default defineComponent({
     },
     modifications(): (number | null)[] {
       return this.sequenceData?.modifications ?? []
+    },
+    /**
+     * 0-based start residue of the identified proteoform window (inclusive), or
+     * null when the full sequence is the proteoform. Residues outside
+     * [start, end] are greyed, and precomputed fragment positions are offset by
+     * start so they land on the right residues of the full sequence (FLASHTnT).
+     */
+    proteoformStart(): number | null {
+      const v = this.sequenceData?.proteoform_start
+      return typeof v === 'number' ? v : null
+    },
+    /** 0-based end residue of the proteoform window (inclusive), or null. */
+    proteoformEnd(): number | null {
+      const v = this.sequenceData?.proteoform_end
+      return typeof v === 'number' ? v : null
     },
     theoreticalMass(): number {
       return this.sequenceData?.theoretical_mass ?? 0
@@ -507,9 +523,15 @@ export default defineComponent({
   methods: {
     initializeSequenceObjects(): void {
       this.sequenceObjects = []
-      for (const aa of this.sequence) {
+      // Residues outside the proteoform window [start, end] are greyed
+      // ("truncated") -- the legacy FLASHTnT sequence view behaviour.
+      const start = this.proteoformStart
+      const end = this.proteoformEnd
+      for (let i = 0; i < this.sequence.length; i++) {
+        const truncated = start !== null && end !== null && (i < start || i > end)
         this.sequenceObjects.push({
-          aminoAcid: aa,
+          aminoAcid: this.sequence[i],
+          truncated,
           aIon: false,
           bIon: false,
           cIon: false,
@@ -577,7 +599,13 @@ export default defineComponent({
     markAminoAcidPosition(ionType: string, ionNumber: number, typeName: string): void {
       const sequenceLength = this.sequence.length
       const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
-      const aaIndex = isPrefixIon ? ionNumber - 1 : sequenceLength - ionNumber
+      // Precomputed fragment masses are indexed within the proteoform window
+      // [start, end]; offset by start so a prefix ion k lands on residue
+      // start+k-1 and a suffix ion k on residue end+1-k of the FULL sequence.
+      // Defaults (start=0, end=length-1) reduce to the untruncated mapping.
+      const start = this.proteoformStart ?? 0
+      const end = this.proteoformEnd ?? sequenceLength - 1
+      const aaIndex = isPrefixIon ? start + ionNumber - 1 : end + 1 - ionNumber
 
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         const aaObj = this.sequenceObjects[aaIndex]

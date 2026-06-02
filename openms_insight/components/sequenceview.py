@@ -415,6 +415,9 @@ class SequenceView:
         theoretical_mass_column: Optional[str] = None,
         observed_mass_column: Optional[str] = None,
         fragment_mass_columns: Optional[Dict[str, str]] = None,
+        modifications_column: Optional[str] = None,
+        proteoform_start_column: Optional[str] = None,
+        proteoform_end_column: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -481,6 +484,18 @@ class SequenceView:
                 override the pyOpenMS-from-sequence recomputation for both the
                 b/y annotation flags and the "Matching Fragments" table. Carried
                 through cache. When None, the recompute path is used unchanged.
+            modifications_column: Optional column holding a PER-RESIDUE
+                modification-mass array (one entry per residue of the full
+                sequence; mass float or null). When set it overrides the
+                modifications parsed from the sequence string -- used by FLASHTnT,
+                which supplies a bare residue sequence plus a separate mod array.
+            proteoform_start_column: Optional column holding the 0-based start
+                residue of the identified proteoform window (inclusive). Residues
+                outside ``[start, end]`` render greyed ("truncated") and the
+                precomputed fragment positions are offset by ``start`` so they
+                land on the right residues of the full sequence (FLASHTnT).
+            proteoform_end_column: Optional column holding the 0-based end residue
+                of the proteoform window (inclusive). See proteoform_start_column.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -506,6 +521,9 @@ class SequenceView:
             or theoretical_mass_column is not None
             or observed_mass_column is not None
             or fragment_mass_columns is not None
+            or modifications_column is not None
+            or proteoform_start_column is not None
+            or proteoform_end_column is not None
             or bool(kwargs)
         )
 
@@ -534,6 +552,9 @@ class SequenceView:
             self._theoretical_mass_column = theoretical_mass_column
             self._observed_mass_column = observed_mass_column
             self._fragment_mass_columns = dict(fragment_mass_columns or {})
+            self._modifications_column = modifications_column
+            self._proteoform_start_column = proteoform_start_column
+            self._proteoform_end_column = proteoform_end_column
             self._filters = filters or {}
             self._filter_defaults = {}
             for identifier in self._filters.keys():
@@ -611,6 +632,9 @@ class SequenceView:
             "theoretical_mass_column": self._theoretical_mass_column,
             "observed_mass_column": self._observed_mass_column,
             "fragment_mass_columns": self._fragment_mass_columns,
+            "modifications_column": self._modifications_column,
+            "proteoform_start_column": self._proteoform_start_column,
+            "proteoform_end_column": self._proteoform_end_column,
         }
 
     def _cache_exists(self) -> bool:
@@ -654,6 +678,9 @@ class SequenceView:
         self._theoretical_mass_column = config.get("theoretical_mass_column")
         self._observed_mass_column = config.get("observed_mass_column")
         self._fragment_mass_columns = config.get("fragment_mass_columns") or {}
+        self._modifications_column = config.get("modifications_column")
+        self._proteoform_start_column = config.get("proteoform_start_column")
+        self._proteoform_end_column = config.get("proteoform_end_column")
         self._config = {}
 
         # Load cached LazyFrames
@@ -697,6 +724,9 @@ class SequenceView:
                     self._max_coverage_column,
                     self._theoretical_mass_column,
                     self._observed_mass_column,
+                    self._modifications_column,
+                    self._proteoform_start_column,
+                    self._proteoform_end_column,
                     *self._fragment_mass_columns.values(),
                 )
                 if c is not None
@@ -992,6 +1022,29 @@ class SequenceView:
         # Precomputed per-residue fragment masses (override pyOpenMS recompute).
         precomputed_fragments = self._get_precomputed_fragments_for_state(state)
 
+        # Per-residue modifications override (FLASHTnT supplies a bare sequence plus
+        # a separate per-residue modification-mass array) and the proteoform
+        # truncation window [start, end] (residues outside it are greyed and the
+        # precomputed fragment positions are offset by start).
+        mods_override = None
+        if self._modifications_column is not None:
+            df = self._select_row_for_state(state, [self._modifications_column])
+            if df is not None and df[self._modifications_column][0] is not None:
+                mods_override = [
+                    float(m) if m is not None else None
+                    for m in df[self._modifications_column][0]
+                ]
+        proteoform_start = None
+        proteoform_end = None
+        if self._proteoform_start_column is not None:
+            df = self._select_row_for_state(state, [self._proteoform_start_column])
+            if df is not None and df[self._proteoform_start_column][0] is not None:
+                proteoform_start = int(df[self._proteoform_start_column][0])
+        if self._proteoform_end_column is not None:
+            df = self._select_row_for_state(state, [self._proteoform_end_column])
+            if df is not None and df[self._proteoform_end_column][0] is not None:
+                proteoform_end = int(df[self._proteoform_end_column][0])
+
         # Build sequence data structure
         sequence_data = {
             "sequence": residues,
@@ -1018,6 +1071,15 @@ class SequenceView:
         # observed peaks instead of recomputing from the bare sequence.
         if precomputed_fragments is not None:
             sequence_data["precomputed_fragment_masses"] = precomputed_fragments
+        # Per-residue modification masses (overrides the parsed-from-string array).
+        if mods_override is not None:
+            sequence_data["modifications"] = mods_override
+        # Proteoform truncation window (0-based, inclusive). Drives residue greying
+        # and the fragment-position offset on the Vue side.
+        if proteoform_start is not None:
+            sequence_data["proteoform_start"] = proteoform_start
+        if proteoform_end is not None:
+            sequence_data["proteoform_end"] = proteoform_end
 
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
@@ -1046,9 +1108,17 @@ class SequenceView:
                 f"{ion}={len(vals)}"
                 for ion, vals in sorted(precomputed_fragments.items())
             )
+        mods_sig = ""
+        if mods_override is not None:
+            mods_sig = ":".join(
+                "" if m is None else f"{i}={m}"
+                for i, m in enumerate(mods_override)
+                if m is not None
+            )
         hash_input = (
             f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}"
             f":{header_theoretical}:{header_observed}:{frag_sig}"
+            f":{proteoform_start}:{proteoform_end}:{mods_sig}"
         )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
