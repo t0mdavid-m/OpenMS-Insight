@@ -6,7 +6,7 @@ which is required by App.vue for component selection.
 
 import pytest
 
-from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
+from openms_insight import Heatmap, LinePlot, Plot3D, Table, VolcanoPlot
 
 
 @pytest.mark.parametrize(
@@ -31,6 +31,15 @@ from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
             VolcanoPlot,
             "sample_volcanoplot_data",
             {"log2fc_column": "log2FC", "pvalue_column": "pvalue"},
+        ),
+        (
+            Plot3D,
+            "sample_plot3d_data",
+            {
+                "x_column": "mass",
+                "y_column": "charge",
+                "z_column": "intensity",
+            },
         ),
     ],
 )

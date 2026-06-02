@@ -8,6 +8,7 @@ visualizations with cross-component selection state management.
 from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
+from .components.plot3d import Plot3D
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.table import Table
 from .components.volcanoplot import VolcanoPlot
@@ -31,6 +32,7 @@ __all__ = [
     "LinePlot",
     "Heatmap",
     "VolcanoPlot",
+    "Plot3D",
     "SequenceView",
     "SequenceViewResult",
     "MirrorPlot",

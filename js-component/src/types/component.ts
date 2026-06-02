@@ -228,6 +228,52 @@ export interface MirrorPlotStyling {
 }
 
 /**
+ * Plot3D component arguments (Plotly scatter3d).
+ */
+export interface Plot3DComponentArgs extends BaseComponentArgs {
+  componentType: 'Plotly3D'
+  /** Column name for the x-axis (neutral mass) */
+  xColumn: string
+  /** Column name for the y-axis (charge state) */
+  yColumn: string
+  /** Column name for the z-axis (intensity) */
+  zColumn: string
+  /** Categorical column mapping each point to a series (e.g. Signal/Noise) */
+  seriesColumn?: string
+  /** Map of series value -> color (default Signal #3366CC / Noise #DC3912) */
+  seriesColors?: Record<string, string>
+  /** Plotly trace mode (render-time switch) */
+  mode?: 'lines' | 'markers' | 'lines+markers'
+  /** Render each point as a vertical stem (drop line) */
+  stem?: boolean
+  /** Baseline z value for stem triplets (clipped by z-axis range) */
+  stemBaseline?: number
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  zLabel?: string
+  /** y-axis tick spacing (integer charge ticks => 1) */
+  yDtick?: number
+  /** y-axis tick origin */
+  yTick0?: number
+  /** Initial scene camera eye */
+  cameraEye?: { x: number; y: number; z: number }
+  /** Log10-transform z (default false = linear) */
+  logZ?: boolean
+  /** Extra tidy columns surfaced on hover */
+  hoverColumns?: string[]
+  interactivity?: InteractivityMapping
+  height?: number
+}
+
+/**
+ * Plot3D data format.
+ * Each entry is a row with x, y, z, optional series, and any additional
+ * columns needed for hover or interactivity.
+ */
+export type Plot3DData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -237,6 +283,7 @@ export type ComponentArgs =
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
+  | Plot3DComponentArgs
 
 /**
  * Component layout entry.

@@ -3,6 +3,7 @@
     "Heatmap": "heatmap",
     "LinePlot": "lineplot",
     "MirrorPlot": "mirrorplot",
+    "Plot3D": "plot3d",
     "SequenceView": "sequence_view",
     "Table": "table",
     "VolcanoPlot": "volcanoplot"
@@ -13,6 +14,7 @@
     "Heatmap",
     "LinePlot",
     "MirrorPlot",
+    "Plot3D",
     "SequenceView",
     "SequenceViewResult",
     "StateManager",

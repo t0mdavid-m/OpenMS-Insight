@@ -130,6 +130,34 @@ def sample_volcanoplot_data() -> pl.LazyFrame:
 
 
 @pytest.fixture
+def sample_plot3d_data() -> pl.LazyFrame:
+    """Create sample tidy long-format data for the Plot3D component.
+
+    One row per plotted point. Includes:
+    - a non-positive intensity row (to exercise drop_nonpositive_z),
+    - two series values ("Signal"/"Noise"),
+    - two scan values (to exercise filtering).
+    """
+    return pl.LazyFrame(
+        {
+            "mass": [1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3500.0],
+            "charge": [2, 3, 2, 4, 3, 2],
+            "intensity": [500.0, 1200.0, 0.0, 800.0, 1500.0, 300.0],
+            "series": [
+                "Signal",
+                "Signal",
+                "Noise",
+                "Signal",
+                "Noise",
+                "Noise",
+            ],
+            "scan": [100, 100, 100, 200, 200, 200],
+            "mass_index": [0, 1, 0, 0, 1, 1],
+        }
+    )
+
+
+@pytest.fixture
 def sample_categorical_heatmap_data() -> pl.LazyFrame:
     """Create sample data for categorical Heatmap component."""
     import random
