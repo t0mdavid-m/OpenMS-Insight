@@ -694,8 +694,10 @@ class Table(BaseComponent):
                     # Find the row with row_number, also pulling the interactivity
                     # columns so we can propagate the cross-component selection to the
                     # navigated row (parity with onRowClick / client-side go-to).
-                    interactivity_columns = (
-                        list(self._interactivity.values())
+                    # Dedupe (order-preserving) in case multiple identifiers map to
+                    # the same column - polars select() rejects duplicate names.
+                    interactivity_columns = list(
+                        dict.fromkeys(self._interactivity.values())
                         if self._interactivity
                         else []
                     )

@@ -1585,3 +1585,286 @@ class TestSelectionNavigationTypeMismatch:
         page_data = result["tableData"]
         target_idx = result.get("_target_row_index")
         assert page_data.iloc[target_idx]["string_id"] == "042"
+
+
+# =============================================================================
+# TestGoToSelectionPropagation
+# =============================================================================
+
+
+@pytest.fixture
+def goto_interactivity_table(pagination_test_data, tmp_path, mock_streamlit_goto):
+    """
+    Go-to table WITH interactivity configured.
+
+    Under server-side pagination, a go-to must propagate the cross-component
+    selection to the navigated row (so downstream linked components update),
+    not merely highlight it visually.
+    """
+    from openms_insight.core.state import reset_default_state_manager
+
+    # Reset the module-global default state manager so the selection state this
+    # test reads back is not polluted by other tests (server-side go-to writes
+    # selection via get_default_state_manager()).
+    reset_default_state_manager()
+    return Table(
+        cache_id="test_goto_interactivity_table",
+        data=pagination_test_data,
+        cache_path=str(tmp_path),
+        pagination=True,
+        page_size=100,
+        pagination_identifier="goto_interactivity_page",
+        index_field="id",
+        interactivity={"selected_id": "id", "selected_value": "value"},
+        go_to_fields=["id", "value"],
+    )
+
+
+def _goto_state(go_to_request, pagination_identifier="goto_interactivity_page"):
+    """Build a pagination state dict with a go_to_request for the given table."""
+    return {
+        pagination_identifier: {
+            "page": 1,
+            "page_size": 100,
+            "go_to_request": go_to_request,
+        }
+    }
+
+
+class TestGoToSelectionPropagation:
+    """
+    Tests for finding P1-R5-TBL-GOTO-001.
+
+    A server-side (DEFAULT) go-to must update the cross-component selection for
+    the table's interactivity identifier(s) to the TARGET row's value(s), so
+    downstream linked components update -- not just highlight the row visually.
+
+    The selection is written via the default StateManager (the same mechanism
+    the selection-navigation block uses), so we read it back from there.
+    """
+
+    def test_go_to_sets_interactivity_selection_to_target_row(
+        self, goto_interactivity_table
+    ):
+        """
+        Server-side go-to sets the interactivity selection to the target row.
+
+        This is the core regression: previously go-to returned only
+        _navigate_to_page / _target_row_index and never updated selection, so
+        downstream components did not follow the navigated row.
+        """
+        from openms_insight.core.state import get_default_state_manager
+
+        state = {}
+        state.update(_goto_state({"field": "id", "value": 350}))
+
+        result = goto_interactivity_table._prepare_vue_data(state)
+
+        # Sanity: navigation hints are present (row found on page 4).
+        assert result.get("_navigate_to_page") == 4
+        assert result.get("_target_row_index") == 50
+
+        # The cross-component selection must now point at the target row's values.
+        sm = get_default_state_manager()
+        assert sm.get_selection("selected_id") == 350
+        # value column for id=350 is "item_350"
+        assert sm.get_selection("selected_value") == "item_350"
+
+    def test_go_to_selection_value_is_native_python_type(
+        self, goto_interactivity_table
+    ):
+        """
+        Propagated selection values are native Python types (JSON-serializable),
+        not numpy/polars scalars. Matches onRowClick / auto-selection conversion.
+        """
+        from openms_insight.core.state import get_default_state_manager
+
+        state = {}
+        state.update(_goto_state({"field": "id", "value": 200}))
+
+        goto_interactivity_table._prepare_vue_data(state)
+
+        sm = get_default_state_manager()
+        sel_id = sm.get_selection("selected_id")
+        sel_value = sm.get_selection("selected_value")
+        assert isinstance(sel_id, int)
+        assert isinstance(sel_value, str)
+        assert sel_id == 200
+
+    def test_go_to_via_string_field_sets_selection(self, goto_interactivity_table):
+        """Go-to by a string field propagates the selection for both identifiers."""
+        from openms_insight.core.state import get_default_state_manager
+
+        state = {}
+        # value="item_250" corresponds to id=250
+        state.update(_goto_state({"field": "value", "value": "item_250"}))
+
+        result = goto_interactivity_table._prepare_vue_data(state)
+
+        assert result.get("_navigate_to_page") == 3
+        sm = get_default_state_manager()
+        assert sm.get_selection("selected_id") == 250
+        assert sm.get_selection("selected_value") == "item_250"
+
+    def test_go_to_not_found_does_not_change_selection(
+        self, goto_interactivity_table
+    ):
+        """
+        A not-found go-to must not set any selection (nothing to navigate to).
+        """
+        from openms_insight.core.state import get_default_state_manager
+
+        state = {}
+        state.update(_goto_state({"field": "id", "value": 9999}))
+
+        result = goto_interactivity_table._prepare_vue_data(state)
+
+        assert result.get("_go_to_not_found") is True
+        sm = get_default_state_manager()
+        assert sm.get_selection("selected_id") is None
+        assert sm.get_selection("selected_value") is None
+
+    def test_go_to_does_not_retrigger_navigation_on_next_render(
+        self, goto_interactivity_table
+    ):
+        """
+        No navigate<->select loop: after a go-to propagates selection, a
+        subsequent render that lands on the go-to's target page WITHOUT a
+        go_to_request must NOT emit a fresh navigation hint.
+
+        The go-to block updates the in-render `state` view to the propagated
+        selection, so the selection-navigation block records it as the current
+        selection and sees no change on the next render.
+        """
+        from openms_insight.core.state import get_default_state_manager
+
+        # First render: go-to to id=350 (page 4) -> propagates selection.
+        state1 = {}
+        state1.update(_goto_state({"field": "id", "value": 350}))
+        result1 = goto_interactivity_table._prepare_vue_data(state1)
+        assert result1.get("_navigate_to_page") == 4
+
+        sm = get_default_state_manager()
+        assert sm.get_selection("selected_id") == 350
+
+        # Second render: Vue has cleared go_to_request and we're now sitting on
+        # page 4 with the selection that go-to set. No go_to_request this time.
+        state2 = {
+            "selected_id": sm.get_selection("selected_id"),
+            "selected_value": sm.get_selection("selected_value"),
+            "goto_interactivity_page": {
+                "page": 4,
+                "page_size": 100,
+            },
+        }
+        result2 = goto_interactivity_table._prepare_vue_data(state2)
+
+        # No spurious navigation hint should be emitted (selection already on its
+        # page; nothing changed) -> no navigate/select loop.
+        assert "_navigate_to_page" not in result2
+
+    def test_go_to_propagated_selection_survives_auto_selection(
+        self, goto_interactivity_table
+    ):
+        """
+        Auto-selection (first-row default) must not override the go-to selection.
+
+        In the bridge, auto-selection is only applied when the selection is None.
+        Because go-to sets the selection here, the go-to value wins. We verify
+        the go-to selection is the TARGET row's value, not the first row's.
+        """
+        from openms_insight.core.state import get_default_state_manager
+
+        state = {}
+        # Target is far from the first row (id=0); first-row value would be id=0.
+        state.update(_goto_state({"field": "id", "value": 499}))
+
+        goto_interactivity_table._prepare_vue_data(state)
+
+        sm = get_default_state_manager()
+        # Must be the navigated row (499), NOT the first row (0).
+        assert sm.get_selection("selected_id") == 499
+
+    def test_go_to_field_equals_interactivity_column(
+        self, pagination_test_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to works when the go-to field is also an interactivity column.
+
+        Ensures the interactivity-column projection (which adds the interactivity
+        columns to the search select) doesn't collide with the searched field.
+        """
+        from openms_insight.core.state import (
+            get_default_state_manager,
+            reset_default_state_manager,
+        )
+
+        reset_default_state_manager()
+        table = Table(
+            cache_id="goto_field_eq_interactivity",
+            data=pagination_test_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="goto_field_eq_page",
+            index_field="id",
+            interactivity={"selected_id": "id"},  # same column as go-to field
+            go_to_fields=["id"],
+        )
+
+        state = {
+            "goto_field_eq_page": {
+                "page": 1,
+                "page_size": 100,
+                "go_to_request": {"field": "id", "value": 350},
+            }
+        }
+
+        result = table._prepare_vue_data(state)
+
+        assert result.get("_navigate_to_page") == 4
+        assert get_default_state_manager().get_selection("selected_id") == 350
+
+    def test_go_to_duplicate_interactivity_columns(
+        self, pagination_test_data, tmp_path, mock_streamlit_goto
+    ):
+        """
+        Go-to handles multiple identifiers mapping to the same column.
+
+        polars select() rejects duplicate output names, so the interactivity
+        projection must dedupe columns. Both identifiers should be set.
+        """
+        from openms_insight.core.state import (
+            get_default_state_manager,
+            reset_default_state_manager,
+        )
+
+        reset_default_state_manager()
+        table = Table(
+            cache_id="goto_dup_interactivity",
+            data=pagination_test_data,
+            cache_path=str(tmp_path),
+            pagination=True,
+            page_size=100,
+            pagination_identifier="goto_dup_page",
+            index_field="id",
+            # Two identifiers -> same underlying column
+            interactivity={"sel_a": "id", "sel_b": "id"},
+            go_to_fields=["value"],
+        )
+
+        state = {
+            "goto_dup_page": {
+                "page": 1,
+                "page_size": 100,
+                "go_to_request": {"field": "value", "value": "item_120"},
+            }
+        }
+
+        # Must not raise polars DuplicateError.
+        result = table._prepare_vue_data(state)
+
+        assert result.get("_navigate_to_page") == 2  # id=120 on page 2
+        sm = get_default_state_manager()
+        assert sm.get_selection("sel_a") == 120
+        assert sm.get_selection("sel_b") == 120

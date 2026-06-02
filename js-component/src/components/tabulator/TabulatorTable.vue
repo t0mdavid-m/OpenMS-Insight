@@ -1018,9 +1018,30 @@ export default defineComponent({
       console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: rows[${targetIndex}] exists:`, !!rows?.[targetIndex])
 
       if (rows && rows[targetIndex]) {
+        const targetRow = rows[targetIndex]
         this.tabulator.deselectRow()
-        rows[targetIndex].select()
-        rows[targetIndex].scrollTo('center', false)
+        targetRow.select()
+        targetRow.scrollTo('center', false)
+
+        // Propagate the cross-component selection to the navigated row so
+        // downstream linked components update (parity with onRowClick and the
+        // client-side go-to path). Python's server-side go-to also sets this
+        // selection authoritatively; updating here mirrors onRowClick exactly
+        // and keeps behavior correct even if Python's value hasn't arrived yet.
+        // Guard with skipNextSync so the resulting store watcher doesn't redo
+        // the (already-applied) visual selection.
+        const interactivity = this.args.interactivity || {}
+        const rowData = targetRow.getData()
+        if (rowData && Object.keys(interactivity).length > 0) {
+          this.skipNextSync = true
+          for (const [identifier, column] of Object.entries(interactivity)) {
+            const value = rowData[column as string]
+            this.selectionStore.updateSelection(identifier, value)
+          }
+          this.$nextTick(() => {
+            this.skipNextSync = false
+          })
+        }
         console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: SUCCESS - selected row ${targetIndex}`)
       }
     },
