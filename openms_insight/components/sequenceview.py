@@ -21,7 +21,17 @@ CACHE_VERSION = 2
 # Optional per-sequence columns carried through the cache when present in the
 # source data (TnT proteoform coverage path). All are backward-compatible: when
 # absent the Vue side falls back to no coverage shading and empty fixed mods.
-OPTIONAL_SEQUENCE_COLUMNS = ["coverage", "maxCoverage", "fixed_modifications"]
+OPTIONAL_SEQUENCE_COLUMNS = [
+    "coverage",
+    "maxCoverage",
+    "fixed_modifications",
+    # Offset from a residue's 0-based grid index to its PROTEIN-ABSOLUTE 0-based
+    # position. Carried through so the residue-click cross-link (interactivity
+    # column "residue_position") emits protein-absolute coordinates that match tag
+    # StartPos/EndPos even when the displayed sequence is a proteoform substring.
+    # Absent => 0 (displayed sequence starts at protein position 0).
+    "sequence_offset",
+]
 
 # Amino acids that carry FLASHDeconv fixed modifications (Carbamidomethyl on C,
 # oxidation on M). Mirrors src/render/sequence.py::setFixedModification, which
@@ -426,6 +436,17 @@ class SequenceView:
                 Example: {"spectrum": "scan_id", "sequence": "sequence_id"}
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {"peak": "peak_id"} sets 'peak' selection to clicked peak's ID.
+                Two click sources are supported and may be combined:
+                - Fragment-table row click -> the mapped column resolves to the
+                  matched peak's ``peak_id`` (e.g. ``{"massIndex": "peak_id"}``).
+                - Sequence RESIDUE click -> use the special sentinel column
+                  ``"residue_position"`` (e.g. ``{"selectedAApos": "residue_position"}``).
+                  Clicking a residue COVERED by sequence tags (coverage > 0) sets
+                  the named selection to that residue's PROTEIN-ABSOLUTE 0-based
+                  position (grid index + ``sequence_offset``); clicking the same
+                  residue again clears it (toggle). This drives the Tag-Table
+                  range-containment cross-link (``StartPos <= pos <= EndPos``).
+                  ``"residue_position"`` is NOT a data column; it is a sentinel.
             deconvolved: If False (default), peaks are m/z values and matching considers
                 charge states 1 to precursor_charge. If True, peaks are neutral masses.
             annotation_config: Configuration for fragment matching:
@@ -871,6 +892,10 @@ class SequenceView:
             sequence_data["coverage"] = list(entry["coverage"])
         if "maxCoverage" in entry and entry["maxCoverage"] is not None:
             sequence_data["maxCoverage"] = entry["maxCoverage"]
+        # Protein-absolute residue offset for the residue-click cross-link (EXTEND).
+        # Only attached when provided; the Vue side defaults to 0 otherwise.
+        if "sequence_offset" in entry and entry["sequence_offset"] is not None:
+            sequence_data["sequence_offset"] = int(entry["sequence_offset"])
 
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)

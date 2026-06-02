@@ -63,6 +63,14 @@ export interface SequenceData {
   neutral_losses?: boolean
   /** Whether to enable proton loss/addition matching by default */
   proton_loss_addition?: boolean
+  /**
+   * Offset added to a residue's 0-based grid index to obtain its PROTEIN-ABSOLUTE
+   * 0-based position. Used by the residue-click Tag-Table cross-link so the emitted
+   * position matches protein-absolute tag coordinates (StartPos/EndPos) even when
+   * the displayed sequence is a proteoform substring. Defaults to 0 (the displayed
+   * sequence is the full protein / starts at protein position 0). Optional. (EXTEND)
+   */
+  sequence_offset?: number
 }
 
 /**

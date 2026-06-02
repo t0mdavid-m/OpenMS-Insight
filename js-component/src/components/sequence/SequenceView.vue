@@ -130,9 +130,10 @@
             :show-fragments="showFragments"
             :show-coverage="showCoverage"
             :font-size="fontSize"
-            :is-highlighted="selectedAAIndex === aaIndex"
+            :is-highlighted="selectedAAIndex === aaIndex || selectedResidueIndex === aaIndex"
             :modification="modifications[aaIndex] ?? null"
             @selected="onAminoAcidSelected"
+            @residue-selected="onResidueSelected"
           />
 
           <!-- Row number (right) -->
@@ -257,6 +258,10 @@ export default defineComponent({
       sequenceObjects: [] as SequenceObject[],
       fragmentTableData: [] as FragmentTableRow[],
       selectedAAIndex: undefined as number | undefined,
+      // 0-based grid index of the residue toggled for the Tag-Table cross-link
+      // (EXTEND). undefined => no residue selected. Used for highlighting and
+      // toggle detection; the value PUBLISHED to the store is protein-absolute.
+      selectedResidueIndex: undefined as number | undefined,
       selectedFragmentRowIndex: undefined as number | undefined,
       copySnackbar: false,
       copySnackbarText: '',
@@ -312,6 +317,29 @@ export default defineComponent({
     /** Per-residue normalized coverage (EXTEND). Empty when unavailable. */
     coverage(): number[] {
       return this.sequenceData?.coverage ?? []
+    },
+    /**
+     * Offset from a residue's 0-based grid index to its PROTEIN-ABSOLUTE 0-based
+     * position (EXTEND). Defaults to 0 (displayed sequence == full protein /
+     * starts at protein position 0). Drives the residue-click Tag-Table cross-link.
+     */
+    sequenceOffset(): number {
+      return this.sequenceData?.sequence_offset ?? 0
+    },
+    /**
+     * The interactivity identifier (if any) mapped to the special sentinel column
+     * "residue_position" (EXTEND). When configured, clicking a covered residue
+     * sets this selection to the clicked residue's protein-absolute position
+     * (toggle off when re-clicking the same residue), mirroring FLASHApp's
+     * selectionStore.selectedAApos used by the Tag-Table range filter.
+     */
+    residuePositionIdentifier(): string | undefined {
+      for (const [identifier, column] of Object.entries(this.interactivity)) {
+        if (column === 'residue_position') {
+          return identifier
+        }
+      }
+      return undefined
     },
     /** Raw maximum coverage (EXTEND). -1 when unavailable. */
     maxCoverage(): number {
@@ -393,6 +421,15 @@ export default defineComponent({
         const oldSeq = oldData?.sequence?.join('') ?? ''
         if (newSeq !== oldSeq) {
           this.autoZoomApplied = false
+          // New proteoform/sequence: clear any residue toggle so the highlight
+          // and published residue-position selection don't carry across (EXTEND).
+          if (this.selectedResidueIndex !== undefined) {
+            this.selectedResidueIndex = undefined
+            const identifier = this.residuePositionIdentifier
+            if (identifier !== undefined) {
+              this.selectionStore.updateSelection(identifier, undefined)
+            }
+          }
         }
 
         this.initializeSequenceObjects()
@@ -752,6 +789,30 @@ export default defineComponent({
     },
     isFixedModification(aminoAcid: string): boolean {
       return this.fixedModificationSites.includes(aminoAcid)
+    },
+    /**
+     * Residue -> Tag-Table cross-link (EXTEND). Toggle the residue-position
+     * selection for the clicked covered residue, mirroring FLASHApp's
+     * AminoAcidCell.selectCell + selectionStore.selectedAApos:
+     *   - clicking a new residue sets the selection to its PROTEIN-ABSOLUTE
+     *     0-based position (grid index + sequenceOffset),
+     *   - clicking the already-selected residue clears it (toggle off).
+     * No-op when no interactivity identifier maps to "residue_position".
+     */
+    onResidueSelected(aaIndex: number): void {
+      const identifier = this.residuePositionIdentifier
+      if (identifier === undefined) {
+        return
+      }
+      if (this.selectedResidueIndex === aaIndex) {
+        // Toggle off: clear both the highlight and the published selection.
+        this.selectedResidueIndex = undefined
+        this.selectionStore.updateSelection(identifier, undefined)
+      } else {
+        this.selectedResidueIndex = aaIndex
+        // Publish the PROTEIN-ABSOLUTE position so it matches tag StartPos/EndPos.
+        this.selectionStore.updateSelection(identifier, aaIndex + this.sequenceOffset)
+      }
     },
     onAminoAcidSelected(aaIndex: number): void {
       this.selectedAAIndex = aaIndex

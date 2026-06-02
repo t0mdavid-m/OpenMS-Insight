@@ -128,7 +128,7 @@ export default defineComponent({
       default: false,
     },
   },
-  emits: ['selected'],
+  emits: ['selected', 'residueSelected'],
   setup() {
     const streamlitData = useStreamlitDataStore()
     return { streamlitData }
@@ -161,6 +161,14 @@ export default defineComponent({
         this.sequenceObject.yIon ||
         this.sequenceObject.zIon
       )
+    },
+    /**
+     * Whether this residue is covered by at least one sequence tag (coverage > 0),
+     * mirroring FLASHApp's AminoAcidCell.DoesThisAAHaveSequenceTags. Only covered
+     * residues are clickable for the Tag-Table cross-link. (EXTEND)
+     */
+    hasSequenceTags(): boolean {
+      return this.coverage > 0
     },
     aminoAcidCellClass(): Record<string, boolean> {
       return {
@@ -225,6 +233,13 @@ export default defineComponent({
   },
   methods: {
     selectCell(): void {
+      // Residue -> Tag-Table cross-link (EXTEND): clicking a residue COVERED by
+      // sequence tags (coverage > 0) emits its index for the parent to toggle the
+      // residue-position selection, mirroring FLASHApp AminoAcidCell.selectCell.
+      if (this.hasSequenceTags) {
+        this.$emit('residueSelected', this.index)
+      }
+      // Fragment selection (existing behavior) is independent of coverage.
       if (this.hasMatchingFragments) {
         this.$emit('selected', this.index)
       }

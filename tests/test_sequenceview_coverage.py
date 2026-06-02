@@ -310,3 +310,63 @@ class TestFragmentMassesShape:
             # Each position entry is itself a list (supports >1 mass).
             for per_pos in sd[key]:
                 assert isinstance(per_pos, list)
+
+
+class TestResiduePositionInteractivity:
+    """Residue-click Tag-Table cross-link: the SequenceView carries the optional
+    per-proteoform ``sequence_offset`` so the Vue residue click can emit
+    PROTEIN-ABSOLUTE positions, and accepts the ``residue_position`` sentinel in
+    interactivity (documented; no data column required)."""
+
+    def test_sequence_offset_round_trip(self, temp_cache_dir: Path):
+        from openms_insight.components.sequenceview import SequenceView
+
+        data = pl.LazyFrame(
+            {
+                "proteoform_index": [0, 1],
+                "sequence": ["PEPTIDEK", "ACDEFGHK"],
+                "precursor_charge": [1, 1],
+                "coverage": [[0.0] * 8, [0.0] * 8],
+                "maxCoverage": [1.0, 1.0],
+                # Proteoform 1 is a substring starting at protein position 135.
+                "sequence_offset": [0, 135],
+            }
+        )
+        sv = SequenceView(
+            cache_id="offset_rt",
+            sequence_data=data,
+            cache_path=str(temp_cache_dir),
+            filters={"proteinIndex": "proteoform_index"},
+            interactivity={"selectedAApos": "residue_position"},
+        )
+
+        # Full-protein proteoform (offset 0) -> emitted == grid index.
+        sd0 = sv._prepare_vue_data({"proteinIndex": 0})["sequenceData"]
+        assert sd0["sequence_offset"] == 0
+
+        # Offset proteoform -> Vue adds 135 to the grid index for the published pos.
+        sd1 = sv._prepare_vue_data({"proteinIndex": 1})["sequenceData"]
+        assert sd1["sequence_offset"] == 135
+
+        # Interactivity mapping carries the residue_position sentinel.
+        assert sv.get_interactivity_mapping() == {"selectedAApos": "residue_position"}
+
+    def test_sequence_offset_absent_defaults_omitted(self, temp_cache_dir: Path):
+        """When the source carries no sequence_offset column, the key is omitted
+        (Vue defaults to 0); existing inputs are unaffected."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="offset_absent",
+            sequence_data=pl.LazyFrame(
+                {
+                    "proteoform_index": [0],
+                    "sequence": ["PEPTIDEK"],
+                    "precursor_charge": [1],
+                }
+            ),
+            cache_path=str(temp_cache_dir),
+            filters={"proteinIndex": "proteoform_index"},
+        )
+        sd = sv._prepare_vue_data({"proteinIndex": 0})["sequenceData"]
+        assert "sequence_offset" not in sd
