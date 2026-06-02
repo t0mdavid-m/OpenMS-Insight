@@ -338,6 +338,37 @@ export default defineComponent({
     },
 
     /**
+     * The selected tag's highlighted masses at level 0 (deconvolved), i.e. the
+     * MonoMass values whose `highlight_mask` is true. These are the oracle's
+     * `highlightedValues.map(a => a.mass)` (PlotlyLineplotTagger.vue:599-607) and
+     * drive the level-0 tag-zoom x-range. Empty when no tag is selected, in which
+     * case level 0 keeps the full-extent range.
+     */
+    taggerLevel0HighlightedX(): number[] {
+      const data = this.plotData
+      if (!data || !data.highlight_mask) return []
+      const out: number[] = []
+      for (let i = 0; i < data.x_values.length; i++) {
+        if (data.highlight_mask[i]) out.push(data.x_values[i])
+      }
+      return out
+    },
+
+    /**
+     * Maximum tag-annotation span before the level-0 x-range switches from a
+     * fit-to-masses range to a centroid-centered fixed window. Oracle
+     * PlotlyLineplotTagger.vue:290-291 — `maxAnnotationRange = xPosScalingFactor
+     * (27.5) * xPosScalingThreshold (30) = 825`. We reproduce the oracle constant
+     * exactly: scaling from `args.xPosScalingFactor` (27.5 for tagger) times the
+     * oracle threshold 30.
+     */
+    taggerMaxAnnotationRange(): number {
+      const factor = this.args.xPosScalingFactor || 27.5
+      const threshold = 30
+      return factor * threshold
+    },
+
+    /**
      * The plot data currently being drawn: tagger level-1 charge clusters when
      * drilled in, otherwise the level-0 / default `plotData`. All downstream
      * stick/zoom/trace computeds read this so level 1 reuses the same machinery.
@@ -466,6 +497,24 @@ export default defineComponent({
           return [Math.min(...hl) * 0.98, Math.max(...hl) * 1.02]
         }
         return [minX * 0.98, maxX * 1.02]
+      }
+      // Tagger level-0 (deconvolved) ZOOMS to the selected tag's highlighted
+      // masses (oracle PlotlyLineplotTagger.vue:599-609). Fit [min*0.98, max*1.02];
+      // if that span exceeds maxAnnotationRange, center on the highlighted-mass
+      // centroid with a fixed +/- 0.5*0.9*maxAnnotationRange offset. With no tag
+      // selected (no highlights) we fall through to the full-extent range below.
+      if (this.mode === 'tagger' && this.level === 'deconvolved') {
+        const masses = this.taggerLevel0HighlightedX
+        if (masses.length > 0) {
+          const xminFull = Math.min(...masses) * 0.98
+          const xmaxFull = Math.max(...masses) * 1.02
+          if (xmaxFull - xminFull < this.taggerMaxAnnotationRange) {
+            return [xminFull, xmaxFull]
+          }
+          const xcenter = masses.reduce((acc, m) => acc + m, 0) / masses.length
+          const offset = 0.5 * 0.9 * this.taggerMaxAnnotationRange
+          return [xcenter - offset, xcenter + offset]
+        }
       }
       const padding = (maxX - minX) * 0.02
 

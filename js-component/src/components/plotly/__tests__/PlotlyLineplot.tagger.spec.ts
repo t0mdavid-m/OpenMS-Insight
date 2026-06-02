@@ -58,6 +58,9 @@ interface PlotlyLineplotVM {
   traces: AnyRecord[]
   annotationBoxData: Array<{ x: number; visible: boolean; label: string }>
   layout: { annotations?: AnyRecord[] }
+  xRange: number[]
+  taggerLevel0HighlightedX: number[]
+  taggerMaxAnnotationRange: number
 }
 
 function mountLineplot(args: AnyRecord, data: AnyRecord) {
@@ -233,5 +236,107 @@ describe('PlotlyLineplot level-0 mass-badge hover (P1-R2-LP-TAG-001)', () => {
     const vm = wrapper.vm as unknown as PlotlyLineplotVM
     // Default mode: the oracle has no mass-button hover here.
     expect(vm.taggerMassBadgeHoverTrace).toEqual([])
+  })
+})
+
+/**
+ * Finding P1-R3-LP-TAG-001 (Level-0 tag-zoom x-range): in tagger mode at Level-0
+ * ("Augmented Deconvolved Spectrum", level === 'deconvolved'), the x-range must
+ * ZOOM to the SELECTED tag's highlighted masses (oracle PlotlyLineplotTagger.vue
+ * :599-609 — fit [min*0.98, max*1.02]; if that span exceeds maxAnnotationRange =
+ * 27.5*30 = 825, center on the highlighted-mass centroid with a +/- 0.5*0.9*
+ * maxAnnotationRange offset). With NO tag selected (no highlights) Level-0 keeps
+ * the full-extent [minX-pad, maxX+pad] range so the whole deconvolved spectrum is
+ * shown. Previously the Level-0 branch was missing, so a selected tag fell through
+ * to full extent and the mass buttons / sequence arrows rendered tiny.
+ */
+describe('PlotlyLineplot tagger Level-0 tag-zoom x-range (P1-R3-LP-TAG-001)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('zooms Level-0 x-range to the selected tag masses (not full extent)', () => {
+    // Deconvolved spectrum spanning 100..900; the selected tag highlights
+    // 200/350/500. Full extent would be ~[100, 900]; the tag-zoom fits to the
+    // highlighted masses: [200*0.98, 500*1.02] = [196, 510] (span 314 < 825).
+    const data: AnyRecord = {
+      plotData: {
+        MonoMass: [100.0, 200.0, 350.0, 500.0, 900.0],
+        SumIntensity: [5, 100, 80, 60, 5],
+        peak_id: [0, 1, 2, 3, 4],
+        highlight: [false, true, true, true, false],
+        selected_gold: [false, false, false, false, false],
+        mass_label: ['', '200.00', '350.00', '500.00', ''],
+      },
+      _plotConfig: { mode: 'tagger', level: 'deconvolved' },
+    }
+    const { wrapper } = mountLineplot(TAGGER_ARGS, data)
+    const vm = wrapper.vm as unknown as PlotlyLineplotVM
+
+    expect(vm.level).toBe('deconvolved')
+    expect(vm.taggerLevel0HighlightedX).toEqual([200.0, 350.0, 500.0])
+    // maxAnnotationRange = 27.5 * 30 = 825 (oracle constant).
+    expect(vm.taggerMaxAnnotationRange).toBeCloseTo(825, 6)
+
+    const range = vm.xRange
+    // Fitted to the tag masses, NOT to the full 100..900 extent.
+    expect(range[0]).toBeCloseTo(200.0 * 0.98, 6) // 196
+    expect(range[1]).toBeCloseTo(500.0 * 1.02, 6) // 510
+
+    // Sanity: this is a real zoom — the full extent (~[100-pad, 900+pad]) is wider.
+    const fullPadding = (900.0 - 100.0) * 0.02
+    expect(range[0]).toBeGreaterThan(100.0 - fullPadding)
+    expect(range[1]).toBeLessThan(900.0 + fullPadding)
+  })
+
+  it('centers on the highlighted-mass centroid when the tag span exceeds maxAnnotationRange', () => {
+    // Two highlighted masses 1000 and 5000: fitted span (5000*1.02 - 1000*0.98 =
+    // 5100 - 980 = 4120) exceeds 825, so the oracle centers on the centroid
+    // ((1000+5000)/2 = 3000) with +/- 0.5*0.9*825 = +/-371.25.
+    const data: AnyRecord = {
+      plotData: {
+        MonoMass: [500.0, 1000.0, 5000.0, 6000.0],
+        SumIntensity: [5, 100, 90, 5],
+        peak_id: [0, 1, 2, 3],
+        highlight: [false, true, true, false],
+        selected_gold: [false, false, false, false],
+        mass_label: ['', '1000.00', '5000.00', ''],
+      },
+      _plotConfig: { mode: 'tagger', level: 'deconvolved' },
+    }
+    const { wrapper } = mountLineplot(TAGGER_ARGS, data)
+    const vm = wrapper.vm as unknown as PlotlyLineplotVM
+
+    expect(vm.level).toBe('deconvolved')
+    const range = vm.xRange
+    const offset = 0.5 * 0.9 * 825 // 371.25
+    expect(range[0]).toBeCloseTo(3000.0 - offset, 6) // 2628.75
+    expect(range[1]).toBeCloseTo(3000.0 + offset, 6) // 3371.25
+  })
+
+  it('keeps Level-0 full-extent when NO tag is selected (no highlights)', () => {
+    // No highlighted masses (no tag selected): Level-0 must show the full
+    // deconvolved spectrum, [minX - padding, maxX + padding].
+    const data: AnyRecord = {
+      plotData: {
+        MonoMass: [100.0, 400.0, 900.0],
+        SumIntensity: [10, 50, 20],
+        peak_id: [0, 1, 2],
+        highlight: [false, false, false],
+        selected_gold: [false, false, false],
+        mass_label: ['', '', ''],
+      },
+      _plotConfig: { mode: 'tagger', level: 'deconvolved' },
+    }
+    const { wrapper } = mountLineplot(TAGGER_ARGS, data)
+    const vm = wrapper.vm as unknown as PlotlyLineplotVM
+
+    expect(vm.level).toBe('deconvolved')
+    expect(vm.taggerLevel0HighlightedX).toEqual([])
+
+    const range = vm.xRange
+    const padding = (900.0 - 100.0) * 0.02 // 16
+    expect(range[0]).toBeCloseTo(100.0 - padding, 6) // 84
+    expect(range[1]).toBeCloseTo(900.0 + padding, 6) // 916
   })
 })
