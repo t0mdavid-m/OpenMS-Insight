@@ -45,6 +45,13 @@ export interface ColumnMetadata {
 
 /**
  * Table component arguments.
+ *
+ * `columnDefinitions` are raw Tabulator column dicts that round-trip through the
+ * disk cache, so any `formatter` must be a JSON-serializable string (not an
+ * inline JS function). String formatter names are resolved to functions in
+ * `TabulatorTable.vue` via the `customFormatters` registry (formatters.ts).
+ * Supported custom names: "scientific", "signed", "badge", "fixed",
+ * "placeholder" (each accepts an optional `formatterParams` object).
  */
 export interface TableComponentArgs extends BaseComponentArgs {
   componentType: 'TabulatorTable'

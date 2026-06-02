@@ -564,9 +564,12 @@ export default defineComponent({
           if (colDef.headerTooltip === undefined) {
             colDef.headerTooltip = true
           }
-          // Resolve custom formatter names to their implementations
-          // Python sends formatter as a string (e.g., "scientific", "signed", "badge")
-          // We replace it with the actual formatter function
+          // Resolve custom formatter names to their implementations.
+          // Python sends formatter as a string, which we swap for the registered
+          // function. Supported custom names (see formatters.ts customFormatters):
+          // "scientific", "signed", "badge", "fixed", "placeholder".
+          // No per-name logic lives here — the registry resolves names generically,
+          // so new formatters require no change to this file.
           if (typeof colDef.formatter === 'string' && isCustomFormatter(colDef.formatter)) {
             const customFormatter = getCustomFormatter(colDef.formatter)
             if (customFormatter) {
