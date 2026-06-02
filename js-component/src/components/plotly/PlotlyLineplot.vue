@@ -516,9 +516,11 @@ export default defineComponent({
           return [xcenter - offset, xcenter + offset]
         }
       }
-      const padding = (maxX - minX) * 0.02
-
-      return [minX - padding, maxX + padding]
+      // Default full-extent range uses the oracle's MULTIPLICATIVE padding
+      // (PlotlyLineplotUnified.vue:653-655 and PlotlyLineplotTagger.vue:593-595):
+      // [minX*0.98, maxX*1.02]. Shared by default stick mode and the tagger
+      // no-tag (deconvolved) view.
+      return [minX * 0.98, maxX * 1.02]
     },
 
     /**

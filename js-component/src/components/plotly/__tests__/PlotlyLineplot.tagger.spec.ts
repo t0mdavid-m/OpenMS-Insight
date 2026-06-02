@@ -283,10 +283,9 @@ describe('PlotlyLineplot tagger Level-0 tag-zoom x-range (P1-R3-LP-TAG-001)', ()
     expect(range[0]).toBeCloseTo(200.0 * 0.98, 6) // 196
     expect(range[1]).toBeCloseTo(500.0 * 1.02, 6) // 510
 
-    // Sanity: this is a real zoom — the full extent (~[100-pad, 900+pad]) is wider.
-    const fullPadding = (900.0 - 100.0) * 0.02
-    expect(range[0]).toBeGreaterThan(100.0 - fullPadding)
-    expect(range[1]).toBeLessThan(900.0 + fullPadding)
+    // Sanity: this is a real zoom — the full extent [100*0.98, 900*1.02] is wider.
+    expect(range[0]).toBeGreaterThan(100.0 * 0.98)
+    expect(range[1]).toBeLessThan(900.0 * 1.02)
   })
 
   it('centers on the highlighted-mass centroid when the tag span exceeds maxAnnotationRange', () => {
@@ -316,7 +315,7 @@ describe('PlotlyLineplot tagger Level-0 tag-zoom x-range (P1-R3-LP-TAG-001)', ()
 
   it('keeps Level-0 full-extent when NO tag is selected (no highlights)', () => {
     // No highlighted masses (no tag selected): Level-0 must show the full
-    // deconvolved spectrum, [minX - padding, maxX + padding].
+    // deconvolved spectrum, oracle multiplicative padding [minX*0.98, maxX*1.02].
     const data: AnyRecord = {
       plotData: {
         MonoMass: [100.0, 400.0, 900.0],
@@ -335,8 +334,8 @@ describe('PlotlyLineplot tagger Level-0 tag-zoom x-range (P1-R3-LP-TAG-001)', ()
     expect(vm.taggerLevel0HighlightedX).toEqual([])
 
     const range = vm.xRange
-    const padding = (900.0 - 100.0) * 0.02 // 16
-    expect(range[0]).toBeCloseTo(100.0 - padding, 6) // 84
-    expect(range[1]).toBeCloseTo(900.0 + padding, 6) // 916
+    // Full extent uses the oracle's multiplicative padding [min*0.98, max*1.02].
+    expect(range[0]).toBeCloseTo(100.0 * 0.98, 6) // 98
+    expect(range[1]).toBeCloseTo(900.0 * 1.02, 6) // 918
   })
 })
