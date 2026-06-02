@@ -87,6 +87,35 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   overlayYColumn?: string
   overlayColor?: string
   overlayName?: string
+  // FLASHTnT "tagger overlay" (opt-in). When tagOverlay is true AND a tagData
+  // selection is present, matched tag-mass sticks are recolored and inter-residue
+  // amino-acid arrows + per-mass charge z=N buttons are drawn over the spectrum.
+  tagOverlay?: boolean
+  /** PRIMARY list-column whose per-row value is [mz, intensity, charge] triplets. */
+  signalPeaksColumn?: string
+  /** Selected tag (mirror of StateManager `tagData`); Vue also reads the store. */
+  tagData?: TaggerTagData
+  /** Optional amino-acid position (mirror of StateManager `AApos`). */
+  aaPos?: number
+}
+
+/**
+ * Selected-tag payload for the tagger overlay.
+ * Mirrors the StateManager `tagData` state key.
+ */
+export interface TaggerTagData {
+  /** Fragment masses of the tag, in descending order (reversed indexing). */
+  masses: number[]
+  /** Tag residue sequence (e.g. "PEPT"). */
+  sequence: string
+  /** True for an N-terminal tag. */
+  nTerminal?: boolean
+  /** Tag start position within the parent sequence. */
+  startPos?: number
+  /** Tag end position within the parent sequence. */
+  endPos?: number
+  /** Index (within the tag) of the selected amino acid. */
+  selectedAA: number
 }
 
 export interface LinePlotStyling {

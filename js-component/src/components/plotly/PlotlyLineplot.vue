@@ -8,7 +8,19 @@ import Plotly from 'plotly.js-dist-min'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
-import type { LinePlotComponentArgs, PlotData } from '@/types/component'
+import type { LinePlotComponentArgs, PlotData, TaggerTagData } from '@/types/component'
+
+// Tolerance (Da) for matching a tag fragment mass against a primary stick mass.
+const TAG_MASS_TOLERANCE = 1e-5
+
+// Per-matched-mass constituent signal peaks resolved from the SignalPeaks
+// list-column. mzs / intensity / charges are index-aligned.
+type TaggerHighlightData = {
+  mass: number
+  mzs: number[]
+  intensity: number[]
+  charges: number[]
+}
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -151,6 +163,138 @@ export default defineComponent({
      */
     interactivity(): Record<string, string> {
       return this.args.interactivity || {}
+    },
+
+    // ===== Tagger overlay (FLASHTnT "Augmented Deconvolved Spectrum") =====
+    // All gated on `args.tagOverlay && tagData`; when inactive every computed
+    // below returns an empty result and rendering is byte-identical to before.
+
+    /**
+     * Whether the tagger overlay should render: opt-in flag AND a tag selection.
+     */
+    tagOverlayActive(): boolean {
+      return Boolean(this.args.tagOverlay) && this.tagData !== undefined
+    },
+
+    /**
+     * Selected tag. Prefer the live StateManager value (selection store), then
+     * the snapshot forwarded via args. Undefined → overlay renders nothing.
+     */
+    tagData(): TaggerTagData | undefined {
+      const fromStore = this.selectionStore.$state.tagData as TaggerTagData | undefined
+      if (fromStore && Array.isArray(fromStore.masses)) return fromStore
+      const fromArgs = this.args.tagData
+      if (fromArgs && Array.isArray(fromArgs.masses)) return fromArgs
+      return undefined
+    },
+
+    /**
+     * Name of the SignalPeaks list-column in plotData (dynamic config or args).
+     */
+    signalPeaksColumn(): string | undefined {
+      const config = this.plotConfig
+      return (config?.signalPeaksColumn as string) || this.args.signalPeaksColumn
+    },
+
+    /**
+     * Per-primary-peak SignalPeaks constituents: array (per stick) of
+     * [mz, intensity, charge] triplets. Index-aligned 1:1 with x_values.
+     */
+    signalPeaks(): number[][][] {
+      const col = this.signalPeaksColumn
+      if (!col) return []
+      const rawData = this.streamlitDataStore.allDataForDrawing?.plotData as
+        | Record<string, unknown[]>
+        | undefined
+      const values = rawData?.[col] as number[][][] | undefined
+      return values || []
+    },
+
+    /**
+     * Raw (non-stick) primary x masses, used for tag-mass matching.
+     */
+    tagMassValues(): number[] {
+      if (!this.isDataReady || !this.plotData) return []
+      return this.plotData.x_values
+    },
+
+    /**
+     * For each tag fragment mass, the index of the first primary stick within
+     * ±TAG_MASS_TOLERANCE. All-or-nothing: returns [] unless every tag mass
+     * matched (mirrors the reference's highlightedMassPos).
+     */
+    highlightedMassPos(): number[] {
+      const tag = this.tagData
+      if (!tag || !Array.isArray(tag.masses)) return []
+      const masses = tag.masses
+      const xMass = this.tagMassValues
+
+      const positions: number[] = []
+      for (let i = 0; i < masses.length; i++) {
+        for (let j = 0; j < xMass.length; j++) {
+          if (Math.abs(masses[i] - xMass[j]) <= TAG_MASS_TOLERANCE) {
+            positions.push(j)
+            break
+          }
+        }
+      }
+      return positions.length === masses.length ? positions : []
+    },
+
+    /**
+     * Tag fragment masses arrive in descending order, so rendered AA letters use
+     * a reversed index (sequence.length - 1 - i). Reverse the selected within-tag
+     * index into that same space so the gold highlight lands on the right residue.
+     */
+    reversedSelectedAA(): number | undefined {
+      const tag = this.tagData
+      if (!tag) return undefined
+      return tag.sequence.length - 1 - tag.selectedAA
+    },
+
+    /**
+     * Resolved constituents for each matched mass: {mass, mzs, intensity,
+     * charges}. Peak triplets are [mz, intensity, charge] (indices 0/1/2).
+     */
+    highlightedValues(): TaggerHighlightData[] {
+      const positions = this.highlightedMassPos
+      const xMass = this.tagMassValues
+      const signals = this.signalPeaks
+
+      const result: TaggerHighlightData[] = []
+      for (let i = 0; i < positions.length; i++) {
+        const pos = positions[i]
+        const mass = xMass[pos]
+        const mzs: number[] = []
+        const charges: number[] = []
+        const intensity: number[] = []
+        const peaks = signals[pos]
+        if (Array.isArray(peaks)) {
+          for (let j = 0; j < peaks.length; j++) {
+            const peak = peaks[j]
+            if (!Array.isArray(peak)) continue
+            mzs.push(peak[0])
+            intensity.push(peak[1])
+            charges.push(peak[2])
+          }
+        }
+        result.push({ mass, mzs, charges, intensity })
+      }
+      return result
+    },
+
+    /**
+     * Set of matched-mass indices keyed by stick index (for fast recolor lookup).
+     * Maps primary-peak index -> matched-mass ordinal (its position in
+     * highlightedMassPos / highlightedValues).
+     */
+    matchedMassIndexByStick(): Map<number, number> {
+      const map = new Map<number, number>()
+      const positions = this.highlightedMassPos
+      for (let i = 0; i < positions.length; i++) {
+        map.set(positions[i], i)
+      }
+      return map
     },
 
     /**
@@ -514,6 +658,273 @@ export default defineComponent({
       return !selectedBox.visible
     },
 
+    // ===== Tagger overlay geometry (mass buttons, AA arrows, z=N buttons) =====
+
+    /** Resolved annotation color tokens (orange matched / gold selected). */
+    tagColors(): {
+      massButton: string
+      selectedMassButton: string
+      sequenceArrow: string
+      selectedSequenceArrow: string
+    } {
+      const ann = (this.args.styling?.annotationColors || {}) as Record<string, string>
+      return {
+        massButton: ann.massButton || this.styling.highlightColor,
+        selectedMassButton: ann.selectedMassButton || this.styling.selectedColor,
+        sequenceArrow: ann.sequenceArrow || this.styling.highlightColor,
+        selectedSequenceArrow: ann.selectedSequenceArrow || this.styling.selectedColor,
+      }
+    },
+
+    /**
+     * x scaling for tagger annotation widths. Mirrors the reference:
+     * (xRange width) / xPosScalingFactor, zoom-reactive via xRange.
+     */
+    tagXPosScaling(): number {
+      const xRange = this.xRange
+      const factor = (this.config.xPosScalingFactor as number) || 80
+      return (xRange[1] - xRange[0]) / factor
+    },
+
+    /**
+     * Top band y geometry for tagger annotations, derived from yRange (which
+     * already adds 1.8x headroom). Matches the reference's ypos_low/ypos/high.
+     */
+    tagBandY(): { low: number; mid: number; high: number } {
+      const yRange = this.yRange
+      const ymax = yRange[1] / 1.8
+      return { low: ymax * 1.18, mid: ymax * 1.25, high: ymax * 1.32 }
+    },
+
+    /**
+     * Charge z=N buttons for the SELECTED matched mass: group constituent peaks
+     * by charge, draw a box + "z=N" label at each charge's intensity-weighted
+     * center-of-gravity m/z. Ported from the reference's grouped-by-charge COG.
+     * Returns empty unless a single matched mass is selected (via reversedSelectedAA).
+     */
+    tagChargeButtons(): {
+      shapes: Partial<Plotly.Shape>[]
+      annotations: Partial<Plotly.Annotations>[]
+    } {
+      const empty = { shapes: [], annotations: [] }
+      if (!this.tagOverlayActive) return empty
+
+      const highlighted = this.highlightedValues
+      const selAA = this.reversedSelectedAA
+      if (selAA === undefined || highlighted.length === 0) return empty
+
+      // The selected residue sits between matched masses selAA and selAA+1;
+      // show z=N buttons for the matched mass at index selAA (clamped).
+      const massIdx = Math.max(0, Math.min(selAA, highlighted.length - 1))
+      const entry = highlighted[massIdx]
+      if (!entry || entry.mzs.length === 0) return empty
+
+      const band = this.tagBandY
+      const xScaling = this.tagXPosScaling
+      const fillcolor = this.tagColors.selectedMassButton
+
+      // Group mz/intensity by charge.
+      const grouped = new Map<number, { mz: number; intensity: number }[]>()
+      for (let i = 0; i < entry.mzs.length; i++) {
+        const charge = entry.charges[i]
+        const item = { mz: entry.mzs[i], intensity: entry.intensity[i] }
+        const bucket = grouped.get(charge)
+        if (bucket) bucket.push(item)
+        else grouped.set(charge, [item])
+      }
+
+      const shapes: Partial<Plotly.Shape>[] = []
+      const annotations: Partial<Plotly.Annotations>[] = []
+      grouped.forEach((items, charge) => {
+        const summed = items.reduce((sum, v) => sum + v.intensity, 0)
+        if (summed <= 0) return
+        // Intensity-weighted center-of-gravity m/z.
+        const cog = items.reduce((sum, v) => sum + (v.intensity / summed) * v.mz, 0)
+        shapes.push({
+          type: 'rect',
+          x0: cog - 0.5 * xScaling,
+          y0: band.low,
+          x1: cog + 0.5 * xScaling,
+          y1: band.high,
+          fillcolor,
+          line: { width: 0 },
+        })
+        annotations.push({
+          x: cog,
+          y: band.mid,
+          xref: 'x',
+          yref: 'y',
+          text: 'z=' + charge,
+          showarrow: false,
+          font: { size: 15 },
+        })
+      })
+
+      return { shapes, annotations }
+    },
+
+    /**
+     * Mass-button boxes + mass labels for every matched mass, plus inter-residue
+     * amino-acid arrows and letters between consecutive matched masses (with a
+     * Δ-mass hover). Ported from the reference 'Augmented Deconvolved Spectrum'.
+     */
+    tagAnnotationData(): {
+      shapes: Partial<Plotly.Shape>[]
+      annotations: Partial<Plotly.Annotations>[]
+      traces: Plotly.Data[]
+    } {
+      const empty = { shapes: [], annotations: [], traces: [] }
+      if (!this.tagOverlayActive) return empty
+
+      const highlighted = this.highlightedValues
+      if (highlighted.length === 0) return empty
+
+      const band = this.tagBandY
+      const xScaling = this.tagXPosScaling
+      const selAA = this.reversedSelectedAA
+      const colors = this.tagColors
+      const tag = this.tagData
+
+      const shapes: Partial<Plotly.Shape>[] = []
+      const buttonAnnotations: Partial<Plotly.Annotations>[] = []
+      const arrowAnnotations: Partial<Plotly.Annotations>[] = []
+      const traces: Plotly.Data[] = []
+
+      // Hide the dense per-mass annotations when too zoomed out (reference gate).
+      const threshold = (this.config.xPosScalingThreshold as number) || 500
+      if (xScaling > threshold) {
+        return { shapes, annotations: [...buttonAnnotations, ...arrowAnnotations], traces }
+      }
+
+      // 1) Mass buttons: rect + mass label + invisible hover marker.
+      for (let i = 0; i < highlighted.length; i++) {
+        const isSel = selAA === i || selAA === i - 1
+        const fillcolor = isSel ? colors.selectedMassButton : colors.massButton
+        const family = isSel
+          ? 'Arial Black, Arial Bold, Arial, sans-serif'
+          : 'sans-serif'
+        const mass = highlighted[i].mass
+
+        traces.push({
+          x: [mass],
+          y: [band.mid],
+          mode: 'markers',
+          marker: { size: 20, opacity: 0 },
+          hoverinfo: 'text',
+          hovertext: String(mass),
+          type: 'scatter',
+        })
+        shapes.push({
+          type: 'rect',
+          x0: mass - xScaling,
+          y0: band.low,
+          x1: mass + xScaling,
+          y1: band.high,
+          fillcolor,
+          line: { width: 0 },
+        })
+        buttonAnnotations.push({
+          x: mass,
+          y: band.mid,
+          xref: 'x',
+          yref: 'y',
+          text: mass.toFixed(2),
+          showarrow: false,
+          font: { size: 15, family },
+        })
+      }
+
+      // 2) Inter-residue arrows + AA letters between consecutive matched masses.
+      const yPosArrow = band.mid * 0.5
+      const yPosAA = band.mid * 0.6
+      const sequence = tag?.sequence
+
+      for (let i = 0; i < highlighted.length - 1; i++) {
+        const isSel = selAA === i
+        const fillcolor = isSel ? colors.selectedSequenceArrow : colors.sequenceArrow
+        const family = isSel
+          ? 'Arial Black, Arial Bold, Arial, sans-serif'
+          : 'sans-serif'
+
+        let xStart = highlighted[i].mass
+        let xEnd = highlighted[i + 1].mass
+        const xMid = (xStart + xEnd) / 2
+        let xMidStart = xMid
+        let xMidEnd = xMid
+        const diff = Math.abs(xStart - xEnd) * 0.9
+        let delta = 0
+        let AA = ''
+        if (sequence !== undefined) {
+          AA = sequence[sequence.length - 1 - i] || ''
+        }
+
+        if (xStart > xEnd) {
+          delta = xStart - xEnd
+          xStart -= diff
+          xMidStart += diff * 0.1
+          xEnd += diff
+          xMidEnd -= diff * 0.1
+        } else {
+          delta = xEnd - xStart
+          xStart += diff
+          xMidStart -= diff * 0.1
+          xEnd -= diff
+          xMidEnd += diff * 0.1
+        }
+
+        arrowAnnotations.push({
+          ax: xMidStart,
+          ay: yPosArrow,
+          xref: 'x',
+          yref: 'y',
+          x: xStart,
+          y: yPosArrow,
+          axref: 'x',
+          ayref: 'y',
+          showarrow: true,
+          arrowhead: 0,
+          arrowsize: 1,
+          arrowwidth: 2,
+          arrowcolor: fillcolor,
+        })
+        arrowAnnotations.push({
+          ax: xMidEnd,
+          ay: yPosArrow,
+          xref: 'x',
+          yref: 'y',
+          x: xEnd,
+          y: yPosArrow,
+          axref: 'x',
+          ayref: 'y',
+          showarrow: true,
+          arrowhead: 2,
+          arrowsize: 1,
+          arrowwidth: 2,
+          arrowcolor: fillcolor,
+        })
+        arrowAnnotations.push({
+          x: xMid,
+          y: yPosAA,
+          xref: 'x',
+          yref: 'y',
+          text: AA,
+          hovertext: 'Δ=' + delta.toFixed(2) + ' Da',
+          showarrow: false,
+          font: { size: 15, color: fillcolor, family },
+        })
+      }
+
+      return {
+        shapes: [...shapes, ...this.tagChargeButtons.shapes],
+        annotations: [
+          ...buttonAnnotations,
+          ...arrowAnnotations,
+          ...this.tagChargeButtons.annotations,
+        ],
+        traces,
+      }
+    },
+
     /**
      * Build Plotly traces.
      * Uses stick format triplets generated from raw data.
@@ -579,6 +990,14 @@ export default defineComponent({
       const selectedIndex = this.selectedPeakIndex
       const baseline = -10000000
 
+      // Tag overlay: classification is driven by tag-mass matching instead of
+      // the static highlight mask / selected peak. Matched sticks become orange
+      // (highlightColor), and the selected residue's matched masses become gold
+      // (selectedColor); everything else stays unhighlighted.
+      const tagActive = this.tagOverlayActive
+      const matchedByStick = tagActive ? this.matchedMassIndexByStick : undefined
+      const selAA = tagActive ? this.reversedSelectedAA : undefined
+
       // Split into unhighlighted, highlighted, and selected
       const unhighlighted_x: number[] = []
       const unhighlighted_y: number[] = []
@@ -592,8 +1011,21 @@ export default defineComponent({
       for (let i = 0; i < numPoints; i++) {
         const x = this.plotData.x_values[i]
         const y = this.plotData.y_values[i]
-        const isHighlighted = highlight_mask ? highlight_mask[i] : false
-        const isSelected = selectedIndex !== undefined && i === selectedIndex
+
+        let isHighlighted: boolean
+        let isSelected: boolean
+        if (tagActive && matchedByStick) {
+          const massOrdinal = matchedByStick.get(i)
+          const isMatched = massOrdinal !== undefined
+          isSelected =
+            isMatched &&
+            selAA !== undefined &&
+            (selAA === massOrdinal || selAA === (massOrdinal as number) - 1)
+          isHighlighted = isMatched && !isSelected
+        } else {
+          isHighlighted = highlight_mask ? highlight_mask[i] : false
+          isSelected = selectedIndex !== undefined && i === selectedIndex
+        }
 
         if (isSelected) {
           // Selected peak goes in gold trace (drawn last, on top)
@@ -666,6 +1098,14 @@ export default defineComponent({
         })
       }
 
+      // Tagger overlay: invisible hover markers carrying each matched mass value.
+      if (tagActive) {
+        const buttonTraces = this.tagAnnotationData.traces
+        if (buttonTraces.length > 0) {
+          traces.push(...buttonTraces)
+        }
+      }
+
       return traces
     },
 
@@ -708,9 +1148,27 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
-        shapes: this.annotationShapes,
-        annotations: this.peakAnnotations,
+        shapes: this.allShapes,
+        annotations: this.allAnnotations,
       }
+    },
+
+    /**
+     * Layout shapes: base annotation boxes plus, when active, the tagger
+     * mass-button / z=N boxes. Tagger-inactive → identical to annotationShapes.
+     */
+    allShapes(): Partial<Plotly.Shape>[] {
+      if (!this.tagOverlayActive) return this.annotationShapes
+      return [...this.annotationShapes, ...this.tagAnnotationData.shapes]
+    },
+
+    /**
+     * Layout annotations: base peak labels plus, when active, the tagger mass
+     * labels, AA arrows/letters and z=N labels. Inactive → identical to before.
+     */
+    allAnnotations(): Partial<Plotly.Annotations>[] {
+      if (!this.tagOverlayActive) return this.peakAnnotations
+      return [...this.peakAnnotations, ...this.tagAnnotationData.annotations]
     },
 
     cssCustomProperties(): Record<string, string> {
