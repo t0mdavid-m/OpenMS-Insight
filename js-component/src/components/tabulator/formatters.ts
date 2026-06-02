@@ -76,13 +76,16 @@ export interface PlaceholderFormatterParams extends BaseFormatterParams {
 
 /**
  * Type for custom formatter functions.
- * Matches Tabulator's formatter signature.
+ * Matches Tabulator's formatter signature. The return type includes `number`
+ * because passthrough formatters (e.g. `fixed`, `placeholder`) may return the
+ * raw cell value untouched when their guard/sentinel does not apply; Tabulator
+ * renders such values directly.
  */
 export type CustomFormatterFunction = (
   cell: CellComponent,
   params: BaseFormatterParams,
   onRendered?: (callback: () => void) => void
-) => string | HTMLElement
+) => string | number | HTMLElement
 
 /**
  * Format a number in scientific (exponential) notation.
@@ -218,7 +221,7 @@ export function fixedFormatter(
   cell: CellComponent,
   params: FixedFormatterParams
 ): string | number {
-  const value = cell.getValue()
+  const value: unknown = cell.getValue()
 
   if (value === null || value === undefined || value === '') {
     return ''
@@ -235,7 +238,7 @@ export function fixedFormatter(
   }
 
   // Guard not satisfied (or non-numeric): return the raw value untouched.
-  return value
+  return value as string | number
 }
 
 /**
@@ -260,7 +263,7 @@ export function placeholderFormatter(
   cell: CellComponent,
   params: PlaceholderFormatterParams
 ): string | number {
-  const value = cell.getValue()
+  const value: unknown = cell.getValue()
 
   const sentinels = params.sentinels ?? [-1]
   const text = params.text ?? '-'
@@ -271,7 +274,7 @@ export function placeholderFormatter(
     loose ? value == sentinel : value === sentinel
   )
 
-  return matches ? text : value
+  return matches ? text : (value as string | number)
 }
 
 /**
