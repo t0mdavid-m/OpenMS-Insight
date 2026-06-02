@@ -175,20 +175,52 @@ def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[f
 
 def calculate_fragment_masses_pyopenms(
     sequence_str: str,
+    determined_start: int = 0,
+    determined_end: Optional[int] = None,
 ) -> Dict[str, List[List[float]]]:
     """Calculate theoretical fragment masses using pyOpenMS TheoreticalSpectrumGenerator.
 
+    Fragments are computed over the DETERMINED region
+    ``residues[determined_start .. determined_end]`` (inclusive), mirroring
+    FLASHApp where theoretical fragments are generated for the determined
+    proteoform span only (not the full protein). The returned per-position lists
+    therefore have one entry per residue of the determined substring; the Vue
+    side places prefix ion ``i`` at grid index ``determined_start + i`` and
+    suffix ion ``j`` at ``determined_end - j``. With no truncation
+    (``start == 0`` and ``end == last``) this is identical to computing over the
+    full sequence (backward-compatible).
+
     Args:
         sequence_str: Peptide sequence string (can include modifications)
+        determined_start: 0-based inclusive start of the determined region.
+        determined_end: 0-based inclusive end of the determined region. ``None``
+            => last residue (full sequence).
 
     Returns:
         Dict with fragment_masses_a, fragment_masses_b, etc.
-        Each is a list of lists (one per position, supporting multiple masses).
+        Each is a list of lists (one per determined-region position, supporting
+        multiple masses).
     """
     try:
         from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
 
-        aa_seq = AASequence.fromString(sequence_str)
+        full_seq = AASequence.fromString(sequence_str)
+        full_size = full_seq.size()
+
+        # Resolve the determined region (clamp, default end -> last residue).
+        start = determined_start if determined_start > 0 else 0
+        end = (
+            determined_end
+            if (determined_end is not None and determined_end >= 0)
+            else (full_size - 1)
+        )
+        if full_size == 0 or start > end:
+            aa_seq = full_seq
+        elif start == 0 and end == full_size - 1:
+            aa_seq = full_seq
+        else:
+            # Fragment over the determined substring only (parity with FLASHApp).
+            aa_seq = full_seq.getSubsequence(start, end - start + 1)
         n = aa_seq.size()
 
         # Configure TheoreticalSpectrumGenerator
@@ -266,7 +298,9 @@ def calculate_fragment_masses_pyopenms(
 
     except ImportError:
         # Fallback to simple calculation without pyOpenMS
-        return _calculate_fragment_masses_simple(sequence_str)
+        return _calculate_fragment_masses_simple(
+            sequence_str, determined_start, determined_end
+        )
     except Exception as e:
         print(f"Error calculating fragments for {sequence_str}: {e}")
         return {f"fragment_masses_{ion}": [] for ion in ["a", "b", "c", "x", "y", "z"]}
@@ -274,8 +308,16 @@ def calculate_fragment_masses_pyopenms(
 
 def _calculate_fragment_masses_simple(
     sequence_str: str,
+    determined_start: int = 0,
+    determined_end: Optional[int] = None,
 ) -> Dict[str, List[List[float]]]:
-    """Fallback fragment calculation without pyOpenMS."""
+    """Fallback fragment calculation without pyOpenMS.
+
+    Fragments are computed over the determined region
+    ``residues[determined_start .. determined_end]`` (inclusive) for parity with
+    the pyOpenMS path. With no truncation this is identical to computing over the
+    full sequence.
+    """
     # Amino acid monoisotopic masses
     AA_MASSES = {
         "A": 71.037114,
@@ -311,8 +353,19 @@ def _calculate_fragment_masses_simple(
         "z": 1.991841,
     }
 
-    # Extract plain sequence
-    residues, _ = parse_openms_sequence(sequence_str)
+    # Extract plain sequence, then restrict to the determined region.
+    all_residues, _ = parse_openms_sequence(sequence_str)
+    full_size = len(all_residues)
+    start = determined_start if determined_start > 0 else 0
+    end = (
+        determined_end
+        if (determined_end is not None and determined_end >= 0)
+        else full_size - 1
+    )
+    if full_size == 0 or start > end:
+        residues = all_residues
+    else:
+        residues = all_residues[start : end + 1]
     n = len(residues)
     result = {}
 
@@ -946,8 +999,26 @@ class SequenceView:
         # Parse sequence
         residues, modifications = parse_openms_sequence(sequence_str)
 
-        # Calculate theoretical fragment masses
-        fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
+        # Resolve the DETERMINED region from the optional proteoform bounds so
+        # theoretical fragments are computed over that span only (parity with
+        # FLASHApp). The UNDETERMINED_TERMINUS (-2) sentinel and absent bounds
+        # both collapse to the full sequence (start=0, end=last) -> no change.
+        last_residue = len(residues) - 1 if residues else 0
+        raw_start = entry.get("proteoform_start")
+        raw_end = entry.get("proteoform_end")
+        determined_start = (
+            int(raw_start) if (raw_start is not None and int(raw_start) > 0) else 0
+        )
+        determined_end = (
+            int(raw_end)
+            if (raw_end is not None and int(raw_end) >= 0)
+            else last_residue
+        )
+
+        # Calculate theoretical fragment masses over the determined region.
+        fragment_masses = calculate_fragment_masses_pyopenms(
+            sequence_str, determined_start, determined_end
+        )
 
         # Calculate theoretical mass
         theoretical_mass = get_theoretical_mass(sequence_str)

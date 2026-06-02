@@ -180,7 +180,11 @@ export interface FixedFormatterParams extends BaseFormatterParams {
  * grouping) used by the Scan/Mass tables. Unlike Tabulator's built-in "money"
  * formatter, this never inserts thousands separators.
  *
- * Example (precision 4): 47712.3456 -> "47712.3456"
+ * For legacy pixel parity, `toFixed` is only applied when the raw value's string
+ * length exceeds 4 characters; shorter values are left bare (e.g. `1.0` -> "1",
+ * not "1.0000"), matching the legacy `String(value).length > 4` guard.
+ *
+ * Example (precision 4): 47712.3456 -> "47712.3456"; 1.0 -> "1"
  */
 export function fixedFormatter(
   cell: CellComponent,
@@ -193,6 +197,11 @@ export function fixedFormatter(
   const num = Number(value)
   if (isNaN(num)) {
     return String(value)
+  }
+  // Legacy parity: only apply toFixed for values whose string form is longer
+  // than 4 characters; leave short values bare.
+  if (String(value).length <= 4) {
+    return String(num)
   }
   const precision = params.precision ?? 4
   return num.toFixed(precision)

@@ -246,6 +246,121 @@ class TestParityHashSensitivity:
         assert h0 != h2
 
 
+class TestTruncatedFragmentPlacement:
+    """Fix 1 (P0): theoretical fragments must be computed over the DETERMINED
+    region [proteoform_start .. proteoform_end], so the Vue side places prefix
+    ion i at grid index start+i and suffix ion j at end-j.
+
+    We verify the determined-region selection at the Python boundary (the masses
+    handed to Vue): the number of per-position fragment lists must equal the
+    determined-region length, and each prefix/suffix mass must reflect the
+    determined substring (NOT the full protein). Together with the unchanged Vue
+    placement formulas (prefix -> start+i, suffix -> end-j), this fixes the
+    misplacement for truncated proteoforms while leaving the no-truncation case
+    identical.
+    """
+
+    def _b_offset_and_aa(self):
+        # Mirror the fallback constants so the test is independent of pyOpenMS.
+        from openms_insight.components.sequenceview import (
+            _calculate_fragment_masses_simple,
+        )
+
+        # AA monoisotopic masses used by the fallback (subset we need here).
+        aa = {
+            "P": 97.052764,
+            "E": 129.042593,
+            "T": 101.047679,
+            "C": 103.009185,
+            "M": 131.040485,
+            "I": 113.084064,
+            "D": 115.026943,
+            "K": 128.094963,
+        }
+        return _calculate_fragment_masses_simple, aa
+
+    def test_fallback_fragments_use_determined_region(self):
+        """Determined region PEPTCMIDEK[2..9] = 'PTCMIDE' ... actually [2..9] of
+        'PEPTCMIDEK' (P E P T C M I D E K) is 'PTCMIDE' -> residues index 2..9
+        inclusive = ['P','T','C','M','I','D','E','K'] (8 residues)."""
+        calc, aa = self._b_offset_and_aa()
+        seq = "PEPTCMIDEK"  # P0 E1 P2 T3 C4 M5 I6 D7 E8 K9
+        start, end = 2, 9  # determined region: indices 2..9 -> 'PTCMIDEK'
+        det = list(seq)[start : end + 1]
+        assert det == ["P", "T", "C", "M", "I", "D", "E", "K"]
+
+        masses = calc(seq, start, end)
+        # One per-position list per DETERMINED residue, not per full protein.
+        assert len(masses["fragment_masses_b"]) == len(det) == 8
+        assert len(masses["fragment_masses_y"]) == len(det) == 8
+
+        # Prefix ion i=0 (b1) corresponds to the FIRST determined residue (grid
+        # index start) -> mass == AA mass of det[0] (b-ion offset 0.0).
+        b1 = masses["fragment_masses_b"][0][0]
+        assert b1 == pytest.approx(aa[det[0]], abs=1e-3)
+        # Prefix ion i=1 (b2) -> det[0]+det[1] (grid index start+1).
+        b2 = masses["fragment_masses_b"][1][0]
+        assert b2 == pytest.approx(aa[det[0]] + aa[det[1]], abs=1e-3)
+
+        # Suffix ion j=0 (y1) corresponds to the LAST determined residue (grid
+        # index end) -> AA mass of det[-1] + y offset (18.010565).
+        y_off = 18.010565
+        y1 = masses["fragment_masses_y"][0][0]
+        assert y1 == pytest.approx(aa[det[-1]] + y_off, abs=1e-3)
+        # Suffix ion j=1 (y2) -> det[-1]+det[-2] (grid index end-1).
+        y2 = masses["fragment_masses_y"][1][0]
+        assert y2 == pytest.approx(aa[det[-1]] + aa[det[-2]] + y_off, abs=1e-3)
+
+    def test_no_truncation_unchanged(self):
+        """start=0, end=last must be identical to computing over the full string."""
+        calc, _ = self._b_offset_and_aa()
+        seq = "PEPTCMIDEK"
+        full = calc(seq)  # default bounds -> full sequence
+        explicit = calc(seq, 0, len(seq) - 1)
+        assert full == explicit
+        # All ion types span the full protein length.
+        assert len(full["fragment_masses_b"]) == len(seq)
+        assert len(full["fragment_masses_y"]) == len(seq)
+
+    def test_prepare_vue_data_fragments_over_determined_region(
+        self, temp_cache_dir: Path, proteoform_parity_data: pl.LazyFrame
+    ):
+        """End-to-end: _prepare_vue_data emits fragment lists sized to the
+        determined region for a truncated proteoform, and to the full sequence
+        for the non-truncated one."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="trunc_frag",
+            sequence_data=proteoform_parity_data,
+            cache_path=str(temp_cache_dir),
+            filters={"proteinIndex": "proteoform_index"},
+        )
+
+        # Proteoform 0: PEPTCMIDEK, determined [2..9] -> 8 residues.
+        sd0 = sv._prepare_vue_data({"proteinIndex": 0})["sequenceData"]
+        assert sd0["proteoform_start"] == 2
+        assert sd0["proteoform_end"] == 9
+        assert len(sd0["fragment_masses_b"]) == 8
+        assert len(sd0["fragment_masses_y"]) == 8
+        # Full sequence still rendered (10 residues) -> prefix ion i lands at
+        # grid index start(2)+i, suffix ion j at end(9)-j on the Vue side.
+        assert len(sd0["sequence"]) == 10
+
+        # Proteoform 1: ACDEFGHK, full region (start=0, end=7) -> 8 residues,
+        # equals full sequence length (no truncation regression).
+        sd1 = sv._prepare_vue_data({"proteinIndex": 1})["sequenceData"]
+        assert sd1["proteoform_start"] == 0
+        assert sd1["proteoform_end"] == 7
+        assert len(sd1["fragment_masses_b"]) == len(sd1["sequence"]) == 8
+
+        # Proteoform 2: MKLVNVALVF, C-terminus undetermined (end sentinel -2)
+        # -> determined region is [0 .. last] = full sequence (10 residues).
+        sd2 = sv._prepare_vue_data({"proteinIndex": 2})["sequenceData"]
+        assert sd2["proteoform_end"] == -2
+        assert len(sd2["fragment_masses_b"]) == len(sd2["sequence"]) == 10
+
+
 class TestParityBackwardCompat:
     def test_two_column_unaffected(
         self, temp_cache_dir: Path, sample_sequence_data: pl.LazyFrame

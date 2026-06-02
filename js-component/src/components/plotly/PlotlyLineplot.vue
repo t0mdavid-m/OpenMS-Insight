@@ -482,8 +482,13 @@ export default defineComponent({
       if (x2 && x2.length > 0) {
         xValues = xValues.concat(x2)
       }
-      const minX = Math.min(...xValues)
-      const maxX = Math.max(...xValues)
+      // Filter out null/NaN before min/max: the diagonal-concat anno series can
+      // contribute null MonoMass values, which would poison Math.min/Math.max
+      // (mirrors the guarding in tagWalkSpan / chargeSubViewSpan).
+      const finiteX = xValues.filter((x) => x != null && Number.isFinite(x))
+      if (finiteX.length === 0) return [0, 1]
+      const minX = Math.min(...finiteX)
+      const maxX = Math.max(...finiteX)
       const padding = (maxX - minX) * 0.02
 
       return [minX - padding, maxX + padding]
@@ -1150,7 +1155,7 @@ export default defineComponent({
           y: ypos,
           xref: 'x',
           yref: 'y',
-          text: 'z=+' + g.charge,
+          text: 'z=' + g.charge,
           showarrow: false,
           font: { size: 15, color: 'white' },
         })

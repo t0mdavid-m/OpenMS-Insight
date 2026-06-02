@@ -224,6 +224,7 @@
             :variable-mod="variableModifications[aaIndex]"
             @selected="onAminoAcidSelected"
             @residue-selected="onResidueSelected"
+            @residue-selection-cleared="onResidueSelectionCleared"
             @update-modification="onUpdateModification"
           />
 
@@ -1000,11 +1001,18 @@ export default defineComponent({
         return Math.abs(massDiffDa) <= this.fragmentMassTolerance
       }
     },
-    /** Mark amino acid position with matched ion */
+    /**
+     * Mark amino acid position with matched ion (P0). Fragments are matched over
+     * the DETERMINED region [sequenceStart..sequenceEnd]; prefix ion i (1-based
+     * ionNumber) lands at grid index sequenceStart + (ionNumber-1), suffix ion j
+     * at sequenceEnd - (ionNumber-1). With no truncation (start=0, end=last) this
+     * reduces to the legacy bare placement (ionNumber-1 / length-ionNumber).
+     */
     markAminoAcidPosition(ionType: string, ionNumber: number, typeName: string): void {
-      const sequenceLength = this.sequence.length
       const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
-      const aaIndex = isPrefixIon ? ionNumber - 1 : sequenceLength - ionNumber
+      const aaIndex = isPrefixIon
+        ? this.sequenceStart + (ionNumber - 1)
+        : this.sequenceEnd - (ionNumber - 1)
 
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         const aaObj = this.sequenceObjects[aaIndex]
@@ -1083,7 +1091,11 @@ export default defineComponent({
     /** Match fragments using theoretical masses */
     matchFragmentsTheoretical(): FragmentTableRow[] {
       const matchingFragments: FragmentTableRow[] = []
-      const sequenceLength = this.sequence.length
+      // Fragments are computed (in Python) over the DETERMINED region
+      // [sequenceStart..sequenceEnd]; theoIndex 0 corresponds to grid index
+      // sequenceStart (prefix) / sequenceEnd (suffix). (P0)
+      const sequenceStart = this.sequenceStart
+      const sequenceEnd = this.sequenceEnd
 
       // Get active extra fragment types
       const extraFragments = Object.entries(extraFragmentTypeObject)
@@ -1115,20 +1127,23 @@ export default defineComponent({
         const theoreticalFrags = this.getFragmentMasses(ionType.text)
 
         for (let theoIndex = 0; theoIndex < theoreticalFrags.length; theoIndex++) {
-          // Per-position variable-modification mass shift (P1). For prefix ions
-          // (b{theoIndex+1} covers residues 0..theoIndex) add mods at index
-          // <= theoIndex; for suffix ions (covers the C-terminal theoIndex+1
-          // residues) add mods at index >= n-1-theoIndex.
+          // Per-position variable-modification mass shift (P1). Variable mods
+          // are keyed by PROTEIN-ABSOLUTE grid index. For prefix ions
+          // (b{theoIndex+1} covers determined residues at grid indices
+          // sequenceStart..sequenceStart+theoIndex) add mods at grid index
+          // <= sequenceStart+theoIndex; for suffix ions (covers grid indices
+          // sequenceEnd-theoIndex..sequenceEnd) add mods at grid index
+          // >= sequenceEnd-theoIndex.
           let varMassShift = 0
           if (variableModsActive) {
             for (const [varIndexStr, varMass] of Object.entries(this.variableModifications)) {
               if (!varMass) continue
               const varIndex = parseInt(varIndexStr, 10)
               if (isPrefix) {
-                if (varIndex <= theoIndex) {
+                if (varIndex <= sequenceStart + theoIndex) {
                   varMassShift += varMass
                 }
-              } else if (varIndex >= sequenceLength - 1 - theoIndex) {
+              } else if (varIndex >= sequenceEnd - theoIndex) {
                 varMassShift += varMass
               }
             }
@@ -1277,6 +1292,22 @@ export default defineComponent({
         this.selectionStore.updateSelection(identifier, aaIndex + this.sequenceOffset)
       }
     },
+    /**
+     * Clear the residue-position selection when the Tags toggle is turned off
+     * (P2, parity with FLASHApp). Clears both the highlight and the published
+     * selection. No-op when nothing is selected. Idempotent across the many
+     * cells that emit this on the same toggle.
+     */
+    onResidueSelectionCleared(): void {
+      if (this.selectedResidueIndex === undefined) {
+        return
+      }
+      this.selectedResidueIndex = undefined
+      const identifier = this.residuePositionIdentifier
+      if (identifier !== undefined) {
+        this.selectionStore.updateSelection(identifier, undefined)
+      }
+    },
     onAminoAcidSelected(aaIndex: number): void {
       this.selectedAAIndex = aaIndex
 
@@ -1284,12 +1315,15 @@ export default defineComponent({
       const aaObj = this.sequenceObjects[aaIndex]
       let ionName = ''
 
-      if (aaObj.bIon) ionName = `b${aaIndex + 1}`
-      else if (aaObj.aIon) ionName = `a${aaIndex + 1}`
-      else if (aaObj.cIon) ionName = `c${aaIndex + 1}`
-      else if (aaObj.yIon) ionName = `y${this.sequence.length - aaIndex}`
-      else if (aaObj.xIon) ionName = `x${this.sequence.length - aaIndex}`
-      else if (aaObj.zIon) ionName = `z${this.sequence.length - aaIndex}`
+      // Ion numbers are relative to the DETERMINED region: prefix ion # is
+      // (gridIndex - sequenceStart + 1), suffix ion # is (sequenceEnd - gridIndex + 1).
+      // With no truncation this matches the legacy bare placement. (P0)
+      if (aaObj.bIon) ionName = `b${aaIndex - this.sequenceStart + 1}`
+      else if (aaObj.aIon) ionName = `a${aaIndex - this.sequenceStart + 1}`
+      else if (aaObj.cIon) ionName = `c${aaIndex - this.sequenceStart + 1}`
+      else if (aaObj.yIon) ionName = `y${this.sequenceEnd - aaIndex + 1}`
+      else if (aaObj.xIon) ionName = `x${this.sequenceEnd - aaIndex + 1}`
+      else if (aaObj.zIon) ionName = `z${this.sequenceEnd - aaIndex + 1}`
 
       if (ionName) {
         const rowIndex = this.fragmentTableData.findIndex((row) => row.Name === ionName)
@@ -1304,7 +1338,10 @@ export default defineComponent({
       const ionNumber = item.IonNumber
       const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
 
-      const aaIndex = isPrefixIon ? ionNumber - 1 : this.sequence.length - ionNumber
+      // Map ion number back to its grid index over the DETERMINED region (P0).
+      const aaIndex = isPrefixIon
+        ? this.sequenceStart + (ionNumber - 1)
+        : this.sequenceEnd - (ionNumber - 1)
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         this.selectedAAIndex = aaIndex
       }

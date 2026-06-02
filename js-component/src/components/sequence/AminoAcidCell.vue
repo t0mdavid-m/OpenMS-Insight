@@ -206,9 +206,11 @@ export default defineComponent({
       default: undefined,
     },
   },
-  // 'residueSelected' (existing) for the tag cross-link; 'update-modification'
-  // (index, mass) for interactive variable modifications.
-  emits: ['selected', 'residueSelected', 'update-modification'],
+  // 'residueSelected' (existing) for the tag cross-link; 'residueSelectionCleared'
+  // when the Tags toggle is turned off (parity with FLASHApp clearing
+  // selectedAApos); 'update-modification' (index, mass) for interactive
+  // variable modifications.
+  emits: ['selected', 'residueSelected', 'residueSelectionCleared', 'update-modification'],
   setup() {
     const streamlitData = useStreamlitDataStore()
     return { streamlitData }
@@ -359,13 +361,22 @@ export default defineComponent({
         this.sequenceObject.modMass = formatSigned(modificationMassMap[this.selectedModification])
       }
     },
+    // Clear the residue selection when the Tags toggle is turned off (P2, parity
+    // with FLASHApp AminoAcidCell ~372-376). The parent owns the selection state.
+    showTags(newValue: boolean) {
+      if (!newValue) {
+        this.$emit('residueSelectionCleared')
+      }
+    },
   },
   methods: {
     selectCell(): void {
       // Residue -> Tag-Table cross-link (EXTEND): clicking a residue COVERED by
       // sequence tags (coverage > 0) emits its index for the parent to toggle the
       // residue-position selection, mirroring FLASHApp AminoAcidCell.selectCell.
-      if (this.hasSequenceTags) {
+      // Gated on the Tags toggle (P2): the residue selection is only active when
+      // sequence tags are visible (parity with FLASHApp ~386).
+      if (this.hasSequenceTags && this.showTags) {
         this.$emit('residueSelected', this.index)
       }
       // Fragment selection (existing behavior) is independent of coverage.
