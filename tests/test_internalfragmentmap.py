@@ -8,9 +8,9 @@ import pytest
 
 from openms_insight import InternalFragmentMap
 from openms_insight.components.internalfragmentmap import (
+    _terminal_masses,
     internal_fragment_data,
     internal_fragment_masses,
-    _terminal_masses,
 )
 
 SEQ = "PEPTIDERPEPTIDEK"  # 16 residues

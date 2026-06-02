@@ -320,7 +320,7 @@ class InternalFragmentMap:
             self._load_from_cache()
         else:
             self._filters = filters or {}
-            self._filter_defaults = {k: None for k in self._filters}
+            self._filter_defaults = dict.fromkeys(self._filters)
 
             # Resolve sequence source
             self._static_sequence: Optional[str] = None
@@ -416,7 +416,7 @@ class InternalFragmentMap:
         with open(self._cache_dir / ".cache_config.json") as f:
             cfg = json.load(f)
         self._filters = cfg.get("filters", {})
-        self._filter_defaults = {k: None for k in self._filters}
+        self._filter_defaults = dict.fromkeys(self._filters)
         self._sequence_column = cfg.get("sequence_column", "sequence")
         self._mass_column = cfg.get("mass_column", "mass")
         self._tolerance_ppm = cfg.get("tolerance_ppm", 10.0)

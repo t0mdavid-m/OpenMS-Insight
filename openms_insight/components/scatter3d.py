@@ -24,7 +24,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.registry import register_component
-from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
+from ..preprocessing.filtering import filter_and_collect_cached
 
 
 @register_component("scatter3d")

@@ -1,6 +1,5 @@
 """Tests for Scatter3D component."""
 
-from pathlib import Path
 
 import polars as pl
 import pytest
