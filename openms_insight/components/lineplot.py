@@ -1,6 +1,22 @@
-"""Line plot component using Plotly.js."""
+"""Line plot component using Plotly.js.
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+Supports three rendering ``mode`` values (config-time):
+
+- ``"default"`` (implicit): the classic stick spectrum with highlight masks,
+  per-row annotation labels, click-to-select and dynamic annotations. Behavior
+  is unchanged from earlier versions.
+- ``"density"``: a static two-series KDE / FDR plot (target vs decoy). Consumes a
+  precomputed tidy long ``{x, y, group}`` frame; an optional ``kde_from`` lazily
+  imports scipy to build the curves from raw scores.
+- ``"tagger"``: a stateful de-novo sequence-tag overlay with a derived two-level
+  drill-down, routed entirely through the generic selection store. All heavy
+  numeric work (highlight masks, intensity-weighted center-of-gravity, reversed
+  sequence index, sequence-arrow segments) happens here in Python.
+"""
+
+import hashlib
+import json
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import polars as pl
 
@@ -44,6 +60,12 @@ class LinePlot(BaseComponent):
 
     _component_type: str = "lineplot"
 
+    # Default level-0 / level-1 labels for tagger mode (oracle parity).
+    _TAGGER_TITLE_L0 = "Augmented Deconvolved Spectrum"
+    _TAGGER_TITLE_L1 = "Augmented Annotated Spectrum"
+    _TAGGER_XLABEL_L0 = "Monoisotopic Mass"
+    _TAGGER_XLABEL_L1 = "m/z"
+
     def __init__(
         self,
         cache_id: str,
@@ -63,6 +85,23 @@ class LinePlot(BaseComponent):
         annotation_column: Optional[str] = None,
         styling: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
+        # Mode selector (config-time, cache-affecting)
+        mode: str = "default",
+        # --- density-mode params (config-time) ---
+        group_column: str = "group",
+        target_value: str = "target",
+        decoy_value: str = "decoy",
+        kde_from: Optional[Dict[str, str]] = None,
+        kde_points: int = 200,
+        # --- tagger-mode params (config-time) ---
+        signal_peaks_column: Optional[str] = None,
+        mz_column: Optional[str] = None,
+        mz_intensity_column: Optional[str] = None,
+        tag_payload_key: str = "tag",
+        mass_match_tol: float = 1e-5,
+        title_level1: Optional[str] = None,
+        x_label_level1: Optional[str] = None,
+        x_pos_scaling_factor: float = 27.5,
         **kwargs,
     ):
         """
@@ -102,6 +141,30 @@ class LinePlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options
+            mode: Rendering mode — ``"default"`` (classic stick spectrum),
+                ``"density"`` (two-series target/decoy KDE plot), or ``"tagger"``
+                (sequence-tag overlay with drill-down). Cache-affecting.
+            group_column: (density) Column holding the ``target``/``decoy`` label.
+            target_value: (density) Value in ``group_column`` mapping to the target
+                series. Default ``"target"``.
+            decoy_value: (density) Value mapping to the decoy series. Default
+                ``"decoy"``. The decoy series may be absent (target-only plot).
+            kde_from: (density) Optional ``{"score": <col>, "label": <col>}`` to
+                build the KDE from raw scores at preprocess time. Requires scipy to
+                be installed (lazily imported); omit to pass a precomputed frame.
+            kde_points: (density) Number of ``linspace`` points per series (200).
+            signal_peaks_column: (tagger) Column of per-mass raw signal peaks,
+                ``list[mass][peak] = [peak_index, mz, intensity, charge]``.
+            mz_column: (tagger) Column with the annotated (m/z) spectrum masses.
+            mz_intensity_column: (tagger) Column with the annotated spectrum
+                intensities.
+            tag_payload_key: (tagger) Selection identifier carrying the opaque
+                ``TagData`` payload. Default ``"tag"``.
+            mass_match_tol: (tagger) Mass-match tolerance for highlighting tag
+                fragment masses against the deconvolved masses. Default ``1e-5``.
+            title_level1: (tagger) Title shown at the annotated (level-1) drill-down.
+            x_label_level1: (tagger) X-axis label at level 1 (default ``"m/z"``).
+            x_pos_scaling_factor: (tagger) Oracle level-1 charge-label scaling (27.5).
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -114,9 +177,29 @@ class LinePlot(BaseComponent):
         self._styling = styling or {}
         self._plot_config = config or {}
 
+        # Mode + per-mode config
+        self._mode = mode or "default"
+        # density
+        self._group_column = group_column
+        self._target_value = target_value
+        self._decoy_value = decoy_value
+        self._kde_from = kde_from
+        self._kde_points = kde_points
+        # tagger
+        self._signal_peaks_column = signal_peaks_column
+        self._mz_column = mz_column
+        self._mz_intensity_column = mz_intensity_column
+        self._tag_payload_key = tag_payload_key
+        self._mass_match_tol = mass_match_tol
+        self._title_level1 = title_level1
+        self._x_label_level1 = x_label_level1
+        self._x_pos_scaling_factor = x_pos_scaling_factor
+
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: Optional[Dict[str, Any]] = None
         self._dynamic_title: Optional[str] = None
+        # Generic render-time per-peak annotation descriptors (not cached)
+        self._peak_annotations: Optional[List[Dict[str, Any]]] = None
 
         super().__init__(
             cache_id=cache_id,
@@ -137,6 +220,20 @@ class LinePlot(BaseComponent):
             annotation_column=annotation_column,
             styling=styling,
             config=config,
+            mode=mode,
+            group_column=group_column,
+            target_value=target_value,
+            decoy_value=decoy_value,
+            kde_from=kde_from,
+            kde_points=kde_points,
+            signal_peaks_column=signal_peaks_column,
+            mz_column=mz_column,
+            mz_intensity_column=mz_intensity_column,
+            tag_payload_key=tag_payload_key,
+            mass_match_tol=mass_match_tol,
+            title_level1=title_level1,
+            x_label_level1=x_label_level1,
+            x_pos_scaling_factor=x_pos_scaling_factor,
             **kwargs,
         )
 
@@ -157,6 +254,23 @@ class LinePlot(BaseComponent):
             "y_label": self._y_label,
             "styling": self._styling,
             "plot_config": self._plot_config,
+            # Mode + per-mode config
+            "mode": self._mode,
+            # density
+            "group_column": self._group_column,
+            "target_value": self._target_value,
+            "decoy_value": self._decoy_value,
+            "kde_from": self._kde_from,
+            "kde_points": self._kde_points,
+            # tagger
+            "signal_peaks_column": self._signal_peaks_column,
+            "mz_column": self._mz_column,
+            "mz_intensity_column": self._mz_intensity_column,
+            "tag_payload_key": self._tag_payload_key,
+            "mass_match_tol": self._mass_match_tol,
+            "title_level1": self._title_level1,
+            "x_label_level1": self._x_label_level1,
+            "x_pos_scaling_factor": self._x_pos_scaling_factor,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -170,9 +284,27 @@ class LinePlot(BaseComponent):
         self._y_label = config.get("y_label", self._y_column)
         self._styling = config.get("styling", {})
         self._plot_config = config.get("plot_config", {})
+        # Mode + per-mode config
+        self._mode = config.get("mode", "default")
+        # density
+        self._group_column = config.get("group_column", "group")
+        self._target_value = config.get("target_value", "target")
+        self._decoy_value = config.get("decoy_value", "decoy")
+        self._kde_from = config.get("kde_from")
+        self._kde_points = config.get("kde_points", 200)
+        # tagger
+        self._signal_peaks_column = config.get("signal_peaks_column")
+        self._mz_column = config.get("mz_column")
+        self._mz_intensity_column = config.get("mz_intensity_column")
+        self._tag_payload_key = config.get("tag_payload_key", "tag")
+        self._mass_match_tol = config.get("mass_match_tol", 1e-5)
+        self._title_level1 = config.get("title_level1")
+        self._x_label_level1 = config.get("x_label_level1")
+        self._x_pos_scaling_factor = config.get("x_pos_scaling_factor", 27.5)
         # Initialize dynamic annotations (not cached)
         self._dynamic_annotations = None
         self._dynamic_title = None
+        self._peak_annotations = None
 
     def _get_row_group_size(self) -> int:
         """
@@ -196,6 +328,12 @@ class LinePlot(BaseComponent):
 
         schema = self._raw_data.collect_schema()
         column_names = schema.names()
+
+        # Density mode raw-score path: x/y columns are produced by the KDE step,
+        # so only the source score/label columns must exist up-front.
+        if self._mode == "density":
+            self._validate_density_mappings(column_names)
+            return
 
         # Validate x and y columns exist
         for col_name, col_label in [
@@ -221,6 +359,53 @@ class LinePlot(BaseComponent):
                 f"Available columns: {column_names}"
             )
 
+        # Tagger mode: validate the list columns it explodes per render.
+        if self._mode == "tagger":
+            self._validate_tagger_mappings(column_names)
+
+    def _validate_density_mappings(self, column_names: List[str]) -> None:
+        """Per-mode column existence checks for density mode."""
+        if self._kde_from:
+            for role in ("score", "label"):
+                col = self._kde_from.get(role)
+                if col is None:
+                    raise ValueError(
+                        f"kde_from must define '{role}' column for density mode"
+                    )
+                if col not in column_names:
+                    raise ValueError(
+                        f"kde_from {role} column '{col}' not found in data. "
+                        f"Available columns: {column_names}"
+                    )
+        else:
+            # Pre-binned tidy frame: x/y/group must exist
+            for col_name, col_label in [
+                (self._x_column, "x_column"),
+                (self._y_column, "y_column"),
+                (self._group_column, "group_column"),
+            ]:
+                if col_name not in column_names:
+                    raise ValueError(
+                        f"{col_label} '{col_name}' not found in data. "
+                        f"Available columns: {column_names}"
+                    )
+
+    def _validate_tagger_mappings(self, column_names: List[str]) -> None:
+        """Per-mode column existence checks for tagger mode."""
+        if not self._signal_peaks_column:
+            raise ValueError("tagger mode requires signal_peaks_column")
+        if self._signal_peaks_column not in column_names:
+            raise ValueError(
+                f"signal_peaks_column '{self._signal_peaks_column}' not found in "
+                f"data. Available columns: {column_names}"
+            )
+        for col in (self._mz_column, self._mz_intensity_column):
+            if col is not None and col not in column_names:
+                raise ValueError(
+                    f"tagger column '{col}' not found in data. "
+                    f"Available columns: {column_names}"
+                )
+
     def _preprocess(self) -> None:
         """
         Preprocess plot data.
@@ -230,13 +415,16 @@ class LinePlot(BaseComponent):
         """
         data = self._raw_data
 
-        # Sort by filter columns for efficient predicate pushdown.
-        # This clusters identical filter values together, enabling Polars
-        # to skip row groups that don't contain the target value when
-        # filtering by selection state.
-        if self._filters:
-            sort_columns = list(self._filters.values())
-            data = data.sort(sort_columns)
+        if self._mode == "density":
+            data = self._preprocess_density(data)
+        else:
+            # Sort by filter columns for efficient predicate pushdown. This
+            # clusters identical filter values together, enabling Polars to skip
+            # row groups that don't contain the target value when filtering by
+            # selection state. (Applies to default + tagger modes.)
+            if self._filters:
+                sort_columns = list(self._filters.values())
+                data = data.sort(sort_columns)
 
         # Store configuration in preprocessed data for serialization
         self._preprocessed_data["plot_config"] = {
@@ -244,35 +432,134 @@ class LinePlot(BaseComponent):
             "y_column": self._y_column,
             "highlight_column": self._highlight_column,
             "annotation_column": self._annotation_column,
+            "mode": self._mode,
         }
 
         # Store LazyFrame for streaming to disk (filter happens at render time)
         # Base class will use sink_parquet() to stream without full materialization
         self._preprocessed_data["data"] = data  # Keep lazy
 
+    def _preprocess_density(self, data: pl.LazyFrame) -> pl.LazyFrame:
+        """
+        Normalize density-mode input to the tidy long ``{x, y, group}`` frame.
+
+        Two input shapes are accepted:
+
+        1. Pre-binned tidy (preferred): pass through unchanged. No scipy needed.
+        2. Raw scores (``kde_from`` set): run ``scipy.stats.gaussian_kde`` per
+           group (lazily imported) and emit the tidy long frame. scipy is an
+           optional dependency — a clear error is raised if it is missing.
+        """
+        if not self._kde_from:
+            # Project to the tidy schema (defensive: keep just x/y/group).
+            return data.select([self._x_column, self._y_column, self._group_column])
+
+        score_col = self._kde_from["score"]
+        label_col = self._kde_from["label"]
+
+        try:
+            import numpy as np
+            from scipy.stats import gaussian_kde
+        except ImportError as exc:  # pragma: no cover - depends on env
+            raise ImportError(
+                "LinePlot(mode='density', kde_from=...) requires scipy and numpy. "
+                "Install scipy, or pass a precomputed tidy {x, y, group} frame "
+                "instead of using kde_from."
+            ) from exc
+
+        df = data.select([score_col, label_col]).collect()
+
+        frames: list[pl.DataFrame] = []
+        for group_value in (self._target_value, self._decoy_value):
+            scores = (
+                df.filter(pl.col(label_col) == group_value)[score_col]
+                .drop_nulls()
+                .to_numpy()
+            )
+            if scores.size == 0:
+                # Empty group (e.g. no decoys) -> contribute no rows (oracle parity:
+                # empty decoy => target-only plot).
+                continue
+            grid = np.linspace(scores.min(), scores.max(), self._kde_points)
+            density = gaussian_kde(scores)(grid)
+            frames.append(
+                pl.DataFrame(
+                    {
+                        self._x_column: grid,
+                        self._y_column: density,
+                        self._group_column: [group_value] * len(grid),
+                    }
+                )
+            )
+
+        if frames:
+            return pl.concat(frames).lazy()
+        # Degenerate: no data at all -> empty tidy frame with correct schema.
+        return pl.DataFrame(
+            schema={
+                self._x_column: pl.Float64,
+                self._y_column: pl.Float64,
+                self._group_column: pl.Utf8,
+            }
+        ).lazy()
+
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
+        if self._mode == "density":
+            return "PlotlyDensityPlot"
+        if self._mode == "tagger":
+            # Tagger reuses the line-plot dispatch; mode switches behavior in-Vue.
+            return "PlotlyLineplot"
         return "PlotlyLineplotUnified"
 
     def _get_data_key(self) -> str:
         """Return the key used to send primary data to Vue."""
         return "plotData"
 
+    def get_state_dependencies(self) -> List[str]:
+        """
+        Return list of state keys that affect this component's data.
+
+        - density: static plot, no dependencies (cached once per dataset).
+        - tagger: ``spectrum`` (filter), ``tag`` (filter, TagData payload) and
+          ``tagger_mass`` (interactivity drill-down) all change the emitted
+          frames, so all three are dependencies.
+        - default: base behavior (filter identifiers).
+        """
+        if self._mode == "density":
+            return []
+        if self._mode == "tagger":
+            deps = list(self._filters.keys())
+            for ident in self._interactivity.keys():
+                if ident not in deps:
+                    deps.append(ident)
+            return deps
+        return list(self._filters.keys())
+
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Prepare plot data for Vue component.
 
-        LinePlots filter based on filters mapping if provided.
-
-        Sends data as a pandas DataFrame for efficient Arrow serialization.
-        Vue parses the Arrow table and extracts column arrays for rendering.
+        Branches on ``self._mode``:
+        - density: emit the tidy ``{x, y, group}`` frame (no filtering).
+        - tagger: emit level-0 sticks + sequence-arrow segments + level-1 charge
+          clusters, all keyed by stable ``peak_id``.
+        - default: classic stick spectrum (filter + highlight + annotations).
 
         Args:
             state: Current selection state from StateManager
 
         Returns:
-            Dict with plotData (pandas DataFrame) and _hash for change detection
+            Dict with primary data and ``_hash`` for change detection
         """
+        if self._mode == "density":
+            return self._prepare_vue_data_density(state)
+        if self._mode == "tagger":
+            return self._prepare_vue_data_tagger(state)
+        return self._prepare_vue_data_default(state)
+
+    def _prepare_vue_data_default(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Classic stick-spectrum payload (unchanged behavior)."""
         # Build list of columns to select (projection pushdown for efficiency)
         columns_to_select = [self._x_column, self._y_column]
         if self._highlight_column:
@@ -351,8 +638,6 @@ class LinePlot(BaseComponent):
             annotation_col = "_dynamic_annotation"
 
             # Update hash to include dynamic annotation state
-            import hashlib
-
             ann_hash = hashlib.md5(
                 str(sorted(self._dynamic_annotations.keys())).encode()
             ).hexdigest()[:8]
@@ -360,11 +645,258 @@ class LinePlot(BaseComponent):
 
         # Send as DataFrame for Arrow serialization (efficient binary transfer)
         # Vue will parse and extract columns using the config
-        return {
+        result: Dict[str, Any] = {
             "plotData": df_pandas,
             "_hash": data_hash,
             "_plotConfig": self._build_plot_config(highlight_col, annotation_col),
         }
+        # Attach generic render-time per-peak annotation descriptors (not cached).
+        self._attach_peak_annotations(result)
+        return result
+
+    def _prepare_vue_data_density(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Static density payload: emit the tidy long ``{x, y, group}`` frame."""
+        data = self._preprocessed_data.get("data")
+        if data is None:
+            data = self._raw_data
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+
+        # Project to the tidy columns (ignore selection state — static plot).
+        columns = [self._x_column, self._y_column, self._group_column]
+        df_polars = data.select(columns).collect()
+        df_pandas = df_polars.to_pandas()
+
+        # Stable hash: data does not depend on state. Include row count + the
+        # observed target/decoy value set + mode/columns.
+        value_set = sorted(
+            set(df_polars[self._group_column].to_list())
+            if len(df_polars) > 0
+            else []
+        )
+        hash_input = "|".join(
+            [
+                "density",
+                self._x_column,
+                self._y_column,
+                self._group_column,
+                str(len(df_polars)),
+                str(value_set),
+                str(self._target_value),
+                str(self._decoy_value),
+            ]
+        )
+        data_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+
+        return {
+            "plotData": df_pandas,
+            "_hash": data_hash,
+            "_plotConfig": {
+                "mode": "density",
+                "xColumn": self._x_column,
+                "yColumn": self._y_column,
+                "groupColumn": self._group_column,
+                "targetValue": self._target_value,
+                "decoyValue": self._decoy_value,
+            },
+        }
+
+    def _prepare_vue_data_tagger(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Tagger payload: explode the selected scan row into tidy frames.
+
+        Emits three ``plotData*`` Arrow tables:
+        - ``plotData``: level-0 deconvolved sticks (highlight/selected/mass_label).
+        - ``plotDataTaggerSegments``: level-0 sequence arrows (one per adjacent
+          highlighted pair).
+        - ``plotDataTaggerCharges``: level-1 m/z clusters for the open mass
+          (precomputed center-of-gravity per charge); empty unless a (valid)
+          ``tagger_mass`` is selected.
+        """
+        import pandas as pd
+
+        data = self._preprocessed_data.get("data")
+        if data is None:
+            data = self._raw_data
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+
+        # Filter to the selected spectrum row (one row of list columns).
+        filtered, _ = filter_and_collect_cached(
+            data,
+            self._filters,
+            state,
+            columns=None,
+            filter_defaults=self._filter_defaults,
+        )
+
+        # Extract the tag payload (opaque dict carried by the 'tag' selection).
+        tag = state.get(self._tag_payload_key)
+        tag_masses, sequence, selected_aa = _parse_tag_payload(tag)
+
+        # Pull the single scan row's list columns.
+        if len(filtered) == 0:
+            mono_mass: List[float] = []
+            sum_intensity: List[float] = []
+            signal_peaks: List[Any] = []
+        else:
+            row = filtered.iloc[0]
+            mono_mass = _as_float_list(row.get(self._x_column))
+            sum_intensity = _as_float_list(row.get(self._y_column))
+            signal_peaks = _as_list(row.get(self._signal_peaks_column))
+
+        # --- Level-0 highlight masks + gold (reversed-index) selection ---
+        highlighted_pos = _highlight_mass_positions(
+            mono_mass, tag_masses, self._mass_match_tol
+        )
+        reversed_selected_aa = _reversed_selected_aa(sequence, selected_aa)
+        # Map MonoMass index -> position within the highlighted list (for the gold rule)
+        idx_to_hpos = {idx: hpos for hpos, idx in enumerate(highlighted_pos)}
+        highlighted_set = set(highlighted_pos)
+
+        highlight_flags: List[bool] = []
+        selected_flags: List[bool] = []
+        mass_labels: List[str] = []
+        for i, mass in enumerate(mono_mass):
+            is_hl = i in highlighted_set
+            highlight_flags.append(is_hl)
+            gold = False
+            if is_hl and reversed_selected_aa is not None:
+                hpos = idx_to_hpos[i]
+                gold = (reversed_selected_aa == hpos) or (
+                    reversed_selected_aa == hpos - 1
+                )
+            selected_flags.append(gold)
+            mass_labels.append(f"{mass:.2f}" if is_hl else "")
+
+        df_level0 = pd.DataFrame(
+            {
+                self._x_column: mono_mass,
+                self._y_column: sum_intensity,
+                "peak_id": list(range(len(mono_mass))),
+                "highlight": highlight_flags,
+                "selected_gold": selected_flags,
+                "mass_label": mass_labels,
+            }
+        )
+
+        # --- Stale tagger_mass reset: ignore a peak_id not in the highlight set ---
+        tagger_mass = state.get(self._interactivity_first_identifier())
+        if tagger_mass is not None and isinstance(tagger_mass, float):
+            if tagger_mass.is_integer():
+                tagger_mass = int(tagger_mass)
+        valid_open_mass = tagger_mass is not None and tagger_mass in highlighted_set
+
+        # --- Level-0 sequence-arrow segments (adjacent highlighted pairs) ---
+        df_segments = pd.DataFrame(
+            compute_tagger_segments(
+                mono_mass, highlighted_pos, sequence, reversed_selected_aa
+            )
+        )
+        if df_segments.empty:
+            df_segments = pd.DataFrame(
+                columns=["x_start", "x_end", "residue", "delta", "selected"]
+            )
+
+        # --- Level-1 m/z charge clusters (only when a valid mass is open) ---
+        if valid_open_mass:
+            # Position of the open mass within the highlighted list (oracle index).
+            open_hpos = idx_to_hpos[tagger_mass]
+            df_charges = pd.DataFrame(
+                compute_tagger_charges(
+                    signal_peaks[tagger_mass]
+                    if tagger_mass < len(signal_peaks)
+                    else [],
+                    selected_aa=selected_aa,
+                    selected_mass_index=open_hpos,
+                )
+            )
+        else:
+            df_charges = pd.DataFrame()
+        if df_charges.empty:
+            df_charges = pd.DataFrame(
+                columns=[
+                    "mz",
+                    "intensity",
+                    "charge",
+                    "peak_id",
+                    "cog",
+                    "charge_label",
+                    "selected",
+                ]
+            )
+
+        # --- Hash includes spectrum + tag payload + drill-down state ---
+        spectrum_value = None
+        for ident in self._filters.keys():
+            spectrum_value = state.get(ident)
+            break
+        tag_digest = hashlib.md5(
+            json.dumps(
+                {
+                    "masses": tag_masses,
+                    "sequence": sequence,
+                    "selectedAA": selected_aa,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()[:8]
+        level = "annotated" if valid_open_mass else "deconvolved"
+        hash_input = "|".join(
+            [
+                "tagger",
+                str(spectrum_value),
+                tag_digest,
+                str(tagger_mass if valid_open_mass else None),
+                str(len(mono_mass)),
+                str(len(df_charges)),
+            ]
+        )
+        data_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+
+        return {
+            "plotData": df_level0,
+            "plotDataTaggerSegments": df_segments,
+            "plotDataTaggerCharges": df_charges,
+            "_hash": data_hash,
+            "_plotConfig": {
+                "mode": "tagger",
+                "xColumn": self._x_column,
+                "yColumn": self._y_column,
+                "highlightColumn": "highlight",
+                "selectedColumn": "selected_gold",
+                "annotationColumn": "mass_label",
+                "interactivityColumns": {
+                    col: col
+                    for col in (
+                        self._interactivity.values() if self._interactivity else []
+                    )
+                },
+                "level": level,
+            },
+        }
+
+    def _interactivity_first_identifier(self) -> Optional[str]:
+        """Return the first interactivity identifier (the drill-down key)."""
+        if self._interactivity:
+            return next(iter(self._interactivity.keys()))
+        return None
+
+    def _attach_peak_annotations(self, result: Dict[str, Any]) -> None:
+        """
+        Attach generic render-time per-peak annotation descriptors to the payload.
+
+        Mirrors the dynamic-annotation pattern: descriptors are NOT cached (the
+        bridge re-applies them on a cache hit via :meth:`_apply_fresh_annotations`)
+        and the hash absorbs them so the frontend re-renders when they change.
+        """
+        if self._peak_annotations is None:
+            return
+        result["peakAnnotations"] = self._peak_annotations
+        digest = hashlib.md5(
+            json.dumps(self._peak_annotations, sort_keys=True, default=str).encode()
+        ).hexdigest()[:8]
+        result["_hash"] = f"{result.get('_hash', '')}_pa{digest}"
 
     def _get_component_args(self) -> Dict[str, Any]:
         """
@@ -373,6 +905,9 @@ class LinePlot(BaseComponent):
         Returns:
             Dict with all plot configuration for Vue
         """
+        if self._mode == "density":
+            return self._get_component_args_density()
+
         # Default styling
         default_styling = {
             "highlightColor": "#E4572E",
@@ -397,11 +932,15 @@ class LinePlot(BaseComponent):
                 **self._styling["annotationColors"],
             }
 
+        if self._mode == "tagger":
+            return self._get_component_args_tagger(styling)
+
         # Use dynamic title if set, otherwise static title
         title = self._dynamic_title if self._dynamic_title else (self._title or "")
 
         args: Dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
+            "mode": "default",
             "title": title,
             "xLabel": self._x_label,
             "yLabel": self._y_label,
@@ -419,6 +958,61 @@ class LinePlot(BaseComponent):
         # Add any extra config options
         args.update(self._config)
 
+        return args
+
+    def _get_component_args_density(self) -> Dict[str, Any]:
+        """Component args for the density (target/decoy KDE) plot."""
+        styling = {"targetColor": "green", "decoyColor": "red", **self._styling}
+        args: Dict[str, Any] = {
+            "componentType": "PlotlyDensityPlot",
+            "mode": "density",
+            "title": self._title or "",
+            "xLabel": self._x_label if self._x_label != self._x_column else "QScore",
+            "yLabel": self._y_label if self._y_label != self._y_column else "Density",
+            "xColumn": self._x_column,
+            "yColumn": self._y_column,
+            "groupColumn": self._group_column,
+            "targetValue": self._target_value,
+            "decoyValue": self._decoy_value,
+            "scoreLabel": self._plot_config.get("scoreLabel", "QScore"),
+            "styling": styling,
+            "config": self._plot_config,
+        }
+        return args
+
+    def _get_component_args_tagger(self, styling: Dict[str, Any]) -> Dict[str, Any]:
+        """Component args for the tagger overlay (reuses PlotlyLineplot dispatch)."""
+        title_l0 = self._title or self._TAGGER_TITLE_L0
+        title_l1 = self._title_level1 or self._TAGGER_TITLE_L1
+        xlabel_l0 = (
+            self._x_label if self._x_label != self._x_column else self._TAGGER_XLABEL_L0
+        )
+        xlabel_l1 = self._x_label_level1 or self._TAGGER_XLABEL_L1
+
+        args: Dict[str, Any] = {
+            "componentType": "PlotlyLineplot",
+            "mode": "tagger",
+            "title": title_l0,
+            "titleLevel1": title_l1,
+            "xLabel": xlabel_l0,
+            "xLabelLevel1": xlabel_l1,
+            "yLabel": self._y_label if self._y_label != self._y_column else "Intensity",
+            "styling": styling,
+            "interactivity": self._interactivity,
+            "xColumn": self._x_column,
+            "yColumn": self._y_column,
+            "highlightColumn": "highlight",
+            "selectedColumn": "selected_gold",
+            "annotationColumn": "mass_label",
+            "taggerMassButtons": True,
+            "taggerSegmentsKey": "plotDataTaggerSegments",
+            "taggerChargesKey": "plotDataTaggerCharges",
+            "xPosScalingFactor": self._x_pos_scaling_factor,
+            "config": self._plot_config,
+        }
+        for key, val in self._config.items():
+            if key not in args:
+                args[key] = val
         return args
 
     def with_styling(
@@ -525,6 +1119,50 @@ class LinePlot(BaseComponent):
         self._dynamic_title = None
         return self
 
+    def set_peak_annotations(
+        self, annotations: Optional[List[Dict[str, Any]]]
+    ) -> "LinePlot":
+        """
+        Set generic per-peak annotation descriptors (render-time, not cached).
+
+        This is a flat list of self-describing label descriptors in **data
+        coordinates**, independent of the per-row ``annotation_column`` model.
+        It supports drawing **multiple** labels at arbitrary x positions with
+        per-label color — e.g. per-charge ``z={charge}`` labels placed at each
+        charge group's intensity-weighted center-of-gravity m/z.
+
+        Each descriptor is a dict:
+        - ``x`` (float): data-x of the label.
+        - ``text`` (str): label text (e.g. ``"z=12"``).
+        - ``color`` (str, optional): badge fill (defaults to the highlight color).
+        - ``hover`` (str, optional): hover text for an invisible point at the label.
+        - ``group`` (str|int, optional): group id for overlap-suppression scoping.
+        - ``y`` (float, optional): explicit label y (defaults to the computed band).
+
+        The COG / charge-group math is performed in Python by the caller (see
+        :func:`compute_charge_annotations`), keeping the heavy logic testable and
+        the Vue side a dumb renderer. The existing ``annotation_column`` path is
+        unaffected (still used for deconvolved-spectrum mass labels).
+
+        Args:
+            annotations: List of descriptor dicts, or None to clear.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._peak_annotations = annotations
+        return self
+
+    def clear_peak_annotations(self) -> "LinePlot":
+        """
+        Clear any generic per-peak annotation descriptors.
+
+        Returns:
+            Self for method chaining
+        """
+        self._peak_annotations = None
+        return self
+
     def _build_plot_config(
         self,
         highlight_col: Optional[str],
@@ -577,6 +1215,8 @@ class LinePlot(BaseComponent):
 
         # Remove _plotConfig since it may reference dynamic columns
         vue_data.pop("_plotConfig", None)
+        # Render-time peak annotations are re-applied by _apply_fresh_annotations.
+        vue_data.pop("peakAnnotations", None)
         return vue_data
 
     def _apply_fresh_annotations(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -642,6 +1282,8 @@ class LinePlot(BaseComponent):
         vue_data = dict(vue_data)
         vue_data["plotData"] = df_pandas
         vue_data["_plotConfig"] = self._build_plot_config(highlight_col, annotation_col)
+        # Re-attach generic per-peak annotations from the live instance.
+        self._attach_peak_annotations(vue_data)
         return vue_data
 
     @classmethod
@@ -793,6 +1435,237 @@ class LinePlot(BaseComponent):
         return render_component(
             component=self, state_manager=state_manager, key=key, height=height
         )
+
+
+# ---------------------------------------------------------------------------
+# Pure, testable numeric helpers (tagger + charge-annotation math).
+#
+# These mirror the oracle (PlotlyLineplotTagger.vue / PlotlyLineplotUnified.vue)
+# byte-for-byte: 1e-5 mass tolerance, COG = Σ (I/ΣI)·mz, reversed-index
+# `len-1-selectedAA`, gold rule `== i || == i-1` for masses / `== i` for arrows.
+# ---------------------------------------------------------------------------
+
+
+def _as_list(value: Any) -> List[Any]:
+    """Coerce a (possibly numpy/None) cell value to a Python list."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    # numpy arrays / polars-backed sequences
+    try:
+        return list(value)
+    except TypeError:
+        return [value]
+
+
+def _as_float_list(value: Any) -> List[float]:
+    """Coerce a cell value to a list of floats."""
+    return [float(v) for v in _as_list(value)]
+
+
+def _parse_tag_payload(tag: Any):
+    """
+    Extract ``(masses, sequence, selectedAA)`` from a TagData payload.
+
+    The payload is the opaque dict the (oracle) tag table builds:
+    ``{sequence, nTerminal, masses, selectedAA, startPos, endPos}``. Non-zero
+    masses are kept (oracle ``filter(n => n !== 0)``).
+    """
+    if not isinstance(tag, dict):
+        return [], "", None
+    masses = [float(m) for m in _as_list(tag.get("masses")) if float(m) != 0.0]
+    sequence = tag.get("sequence") or ""
+    selected_aa = tag.get("selectedAA")
+    return masses, sequence, selected_aa
+
+
+def _highlight_mass_positions(
+    mono_mass: List[float],
+    tag_masses: List[float],
+    tol: float,
+) -> List[int]:
+    """
+    Match each tag fragment mass to a MonoMass index within ``tol`` (oracle
+    ``highlightedMassPos``). All-or-nothing: if not every tag mass matches a
+    deconvolved mass, return ``[]`` (no highlight).
+    """
+    positions: List[int] = []
+    for target in tag_masses:
+        for j, mass in enumerate(mono_mass):
+            if abs(target - mass) <= tol:
+                positions.append(j)
+                break
+    if len(positions) == len(tag_masses):
+        return positions
+    return []
+
+
+def _reversed_selected_aa(sequence: str, selected_aa: Any) -> Optional[int]:
+    """
+    Reverse the within-tag residue index into the descending-mass space
+    (oracle ``reversedSelectedAA = sequence.length - 1 - selectedAA``).
+    """
+    if not sequence or selected_aa is None:
+        return None
+    try:
+        return (len(sequence) - 1) - int(selected_aa)
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_tagger_segments(
+    mono_mass: List[float],
+    highlighted_pos: List[int],
+    sequence: str,
+    reversed_selected_aa: Optional[int],
+) -> List[Dict[str, Any]]:
+    """
+    Build the level-0 sequence-arrow segments (one per adjacent highlighted pair).
+
+    Mirrors the oracle arrow loop (PlotlyLineplotTagger.vue 449–540):
+    - ``residue = sequence[len-1-i]`` (reversed index),
+    - ``delta = |x_start - x_end|``,
+    - ``selected`` (gold) iff ``reversed_selected_aa == i``.
+
+    Returns one fewer row than the number of highlighted masses.
+    """
+    segments: List[Dict[str, Any]] = []
+    for i in range(len(highlighted_pos) - 1):
+        x_start = mono_mass[highlighted_pos[i]]
+        x_end = mono_mass[highlighted_pos[i + 1]]
+        residue = ""
+        if sequence:
+            reverse_index = len(sequence) - 1 - i
+            if 0 <= reverse_index < len(sequence):
+                residue = sequence[reverse_index]
+        segments.append(
+            {
+                "x_start": x_start,
+                "x_end": x_end,
+                "residue": residue,
+                "delta": abs(x_start - x_end),
+                "selected": reversed_selected_aa is not None
+                and reversed_selected_aa == i,
+            }
+        )
+    return segments
+
+
+def compute_charge_cog(peaks_for_charge: List[tuple]) -> float:
+    """
+    Intensity-weighted center-of-gravity m/z for one charge group.
+
+    ``COG = Σ (I_i / ΣI) · mz_i`` (oracle formula). ``peaks_for_charge`` is a
+    list of ``(mz, intensity)`` tuples. A zero total intensity yields the simple
+    mean (degenerate guard).
+    """
+    total = sum(intensity for _mz, intensity in peaks_for_charge)
+    if total == 0:
+        n = len(peaks_for_charge)
+        return sum(mz for mz, _ in peaks_for_charge) / n if n else 0.0
+    return sum((intensity / total) * mz for mz, intensity in peaks_for_charge)
+
+
+def compute_tagger_charges(
+    signal_peaks_for_mass: List[Any],
+    selected_aa: Any = None,
+    selected_mass_index: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Explode one mass's raw signal peaks into level-1 charge-cluster rows.
+
+    Each ``signal`` is ``[peak_index, mz, intensity, charge]`` (FLASHApp layout).
+    Rows carry the per-charge intensity-weighted ``cog`` (precomputed),
+    ``charge_label = f"z={charge}"`` and a ``selected`` (gold) flag matching the
+    oracle level-1 rule (``selectedAA == selected_mass_index`` or
+    ``selectedAA == selected_mass_index - 1``).
+    """
+    # Group (mz, intensity) by charge while preserving first-seen charge order.
+    order: List[int] = []
+    groups: Dict[int, List[tuple]] = {}
+    rows_raw: List[tuple] = []  # (mz, intensity, charge)
+    for signal in signal_peaks_for_mass:
+        sig = _as_list(signal)
+        if len(sig) < 4:
+            continue
+        mz = float(sig[1])
+        intensity = float(sig[2])
+        charge = int(round(float(sig[3])))
+        rows_raw.append((mz, intensity, charge))
+        if charge not in groups:
+            groups[charge] = []
+            order.append(charge)
+        groups[charge].append((mz, intensity))
+
+    cog_by_charge = {c: compute_charge_cog(groups[c]) for c in order}
+
+    gold = False
+    if selected_aa is not None and selected_mass_index is not None:
+        try:
+            saa = int(selected_aa)
+            gold = (saa == selected_mass_index) or (saa == selected_mass_index - 1)
+        except (TypeError, ValueError):
+            gold = False
+
+    rows: List[Dict[str, Any]] = []
+    for peak_id, (mz, intensity, charge) in enumerate(rows_raw):
+        rows.append(
+            {
+                "mz": mz,
+                "intensity": intensity,
+                "charge": charge,
+                "peak_id": peak_id,
+                "cog": cog_by_charge[charge],
+                "charge_label": f"z={charge}",
+                "selected": gold,
+            }
+        )
+    return rows
+
+
+def compute_charge_annotations(
+    signal_peaks_for_mass: List[Any],
+    color: str = "#E4572E",
+) -> List[Dict[str, Any]]:
+    """
+    Build generic ``PeakAnnotation`` descriptors for per-charge labels.
+
+    Convenience producer for :meth:`LinePlot.set_peak_annotations`: groups one
+    mass's raw signal peaks (``[peak_index, mz, intensity, charge]``) by charge,
+    computes the intensity-weighted center-of-gravity m/z per group (oracle
+    formula) and emits one ``{x, text, color, hover, group}`` label per charge.
+
+    This keeps the library generic (it consumes plain descriptors); callers in
+    any MS viewer can reuse it for the plain Annotated-Spectrum charge overlay.
+    """
+    order: List[int] = []
+    groups: Dict[int, List[tuple]] = {}
+    for signal in signal_peaks_for_mass:
+        sig = _as_list(signal)
+        if len(sig) < 4:
+            continue
+        mz = float(sig[1])
+        intensity = float(sig[2])
+        charge = int(round(float(sig[3])))
+        if charge not in groups:
+            groups[charge] = []
+            order.append(charge)
+        groups[charge].append((mz, intensity))
+
+    labels: List[Dict[str, Any]] = []
+    for charge in order:
+        cog = compute_charge_cog(groups[charge])
+        labels.append(
+            {
+                "x": cog,
+                "text": f"z={charge}",
+                "color": color,
+                "hover": f"z={charge}",
+                "group": "charge",
+            }
+        )
+    return labels
 
 
 # Type hint import

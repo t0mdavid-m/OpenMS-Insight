@@ -144,9 +144,28 @@ def clear_component_annotations() -> None:
         st.session_state[_COMPONENT_ANNOTATIONS_KEY].clear()
 
 
+def _has_render_time_annotations(component: "BaseComponent") -> bool:
+    """
+    Whether a component carries render-time annotation state.
+
+    Covers both the legacy keyed ``_dynamic_annotations`` and the generic
+    descriptor-based ``_peak_annotations`` (LinePlot.set_peak_annotations).
+    Either kind must be re-applied to cached base data on a cache hit.
+    """
+    if getattr(component, "_dynamic_annotations", None) is not None:
+        return True
+    # Peak annotations are a list of descriptors; require a real list so that
+    # mock/uninitialized attributes don't spuriously flag render-time state.
+    return isinstance(getattr(component, "_peak_annotations", None), list)
+
+
 def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
     """
-    Compute hash of component's dynamic annotations, if any.
+    Compute hash of component's render-time annotations, if any.
+
+    Includes both the keyed ``_dynamic_annotations`` and the generic
+    descriptor-based ``_peak_annotations`` so a cache entry is invalidated when
+    either changes.
 
     Args:
         component: The component to check for annotations
@@ -154,11 +173,17 @@ def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
     Returns:
         Short hash string if annotations exist, None otherwise
     """
+    parts = []
     annotations = getattr(component, "_dynamic_annotations", None)
-    if annotations is None:
+    if annotations is not None:
+        parts.append(str(sorted(annotations.keys())))
+    peak_annotations = getattr(component, "_peak_annotations", None)
+    if isinstance(peak_annotations, list):
+        parts.append(json.dumps(peak_annotations, sort_keys=True, default=str))
+    if not parts:
         return None
-    # Hash the sorted keys (sufficient for change detection)
-    return hashlib.md5(str(sorted(annotations.keys())).encode()).hexdigest()[:8]
+    # Hash the combined parts (sufficient for change detection)
+    return hashlib.md5("|".join(parts).encode()).hexdigest()[:8]
 
 
 def _get_cached_vue_data(
@@ -241,10 +266,9 @@ def _prepare_vue_data_cached(
     Returns:
         Tuple of (vue_data dict, data_hash string)
     """
-    # Check if component has dynamic annotations (e.g., LinePlot linked to SequenceView)
-    has_dynamic_annotations = (
-        getattr(component, "_dynamic_annotations", None) is not None
-    )
+    # Check if component has render-time annotations (e.g., LinePlot linked to
+    # SequenceView, or LinePlot.set_peak_annotations charge labels)
+    has_dynamic_annotations = _has_render_time_annotations(component)
 
     # Try cache first (works for ALL components now)
     cached = _get_cached_vue_data(component_id, filter_state_hashable)
