@@ -698,6 +698,28 @@ export default defineComponent({
     },
 
     /**
+     * Set of peak indices that are GOLD/selected, mirroring the gold-trace rule in
+     * `traces()`: a peak is selected when the precomputed `selected_mask` marks it
+     * (tagger Level-0 reversed-index gold rule, oracle Tagger.vue:397-402) OR it is
+     * the single clicked peak (`selectedPeakIndex`, default mode). The annotation
+     * BOX fill and the mass-VALUE label family both key off this so the badge,
+     * stick, and label go gold together (oracle parity: gold mass button => gold
+     * rect + Arial-Black label).
+     */
+    selectedBoxIndices(): Set<number> {
+      const indices = new Set<number>()
+      const selectedIndex = this.selectedPeakIndex
+      if (selectedIndex !== undefined) indices.add(selectedIndex)
+      const selected_mask = this.activePlotData?.selected_mask
+      if (selected_mask) {
+        for (let i = 0; i < selected_mask.length; i++) {
+          if (selected_mask[i]) indices.add(i)
+        }
+      }
+      return indices
+    },
+
+    /**
      * Build Plotly shapes for annotation background boxes.
      * Box color matches the peak: selectedColor if peak is selected, highlightColor otherwise.
      */
@@ -712,13 +734,14 @@ export default defineComponent({
       const ypos_low = ymax * 1.18
       const ypos_high = ymax * 1.32
 
-      const selectedIndex = this.selectedPeakIndex
+      const selectedIndices = this.selectedBoxIndices
 
       for (const box of boxes) {
         if (!box.visible) continue
 
-        // Use selected color if this annotation's peak is selected
-        const isSelected = box.index === selectedIndex
+        // Use selected color if this annotation's peak is selected (gold mass
+        // button: precomputed selected_mask OR the clicked peak).
+        const isSelected = selectedIndices.has(box.index)
         const boxColor = isSelected ? this.styling.selectedColor : this.styling.highlightColor
 
         shapes.push({
@@ -748,8 +771,21 @@ export default defineComponent({
       const ymax = yRange[1] / 1.8
       const ypos = ymax * 1.25
 
+      const selectedIndices = this.selectedBoxIndices
+
       for (const box of boxes) {
         if (!box.visible) continue
+
+        // Mass-VALUE label font (oracle PlotlyLineplotUnified.vue:964-975 /
+        // PlotlyLineplotTagger.vue:431-442): size 15, NO color (=> Plotly theme
+        // text color, i.e. dark — not white), and a BOLD family for the
+        // selected/gold mass button (oracle family swap at Unified:931-933 /
+        // Tagger.vue:397-402). Shared by default-mode annotated-spectrum mass
+        // labels and tagger Level-0 mass buttons.
+        const isSelected = selectedIndices.has(box.index)
+        const family = isSelected
+          ? 'Arial Black, Arial Bold, Arial, sans-serif'
+          : 'sans-serif'
 
         annotations.push({
           x: box.x,
@@ -759,8 +795,8 @@ export default defineComponent({
           text: box.label,
           showarrow: false,
           font: {
-            size: 14,
-            color: 'white',
+            size: 15,
+            family,
           },
         })
       }
@@ -1249,7 +1285,10 @@ export default defineComponent({
         })
       }
 
-      // Selected trace (top layer, gold color)
+      // Selected trace (top layer, gold color). Parity: the oracle gold/selected
+      // stick uses ONLY `marker: { color: selectedColor }` at the SAME default
+      // line width as the other sticks (PlotlyLineplotUnified.vue:1132-1138 /
+      // PlotlyLineplotTagger.vue:569-575) — no width override.
       if (selected_x.length > 0) {
         traces.push({
           x: selected_x,
@@ -1258,7 +1297,6 @@ export default defineComponent({
           type: 'scatter',
           connectgaps: false,
           marker: { color: this.styling.selectedColor },
-          line: { width: 3 }, // Make selected peak slightly thicker
           hoverinfo: 'x+y',
         })
       }

@@ -56,7 +56,9 @@ interface PlotlyLineplotVM {
   taggerChargeAnnotations: AnyRecord[]
   taggerMassBadgeHoverTrace: AnyRecord[]
   traces: AnyRecord[]
-  annotationBoxData: Array<{ x: number; visible: boolean; label: string }>
+  annotationBoxData: Array<{ x: number; visible: boolean; label: string; index: number }>
+  peakAnnotations: AnyRecord[]
+  annotationShapes: AnyRecord[]
   layout: { annotations?: AnyRecord[] }
   xRange: number[]
   taggerLevel0HighlightedX: number[]
@@ -141,6 +143,126 @@ describe('PlotlyLineplot tagger charge badge (P1-R2-LP-ANN-001)', () => {
       // Parity: font is { size: 15 } only — no color key (=> theme text color).
       expect(a.font).toEqual({ size: 15 })
       expect((a.font as AnyRecord).color).toBeUndefined()
+    }
+  })
+})
+
+/**
+ * Finding P1-RX-LP-MASS-001 (mass-VALUE label font parity): the deconvolved-spectrum
+ * mass labels AND the tagger Level-0 mass-button labels (the `mass_label` /
+ * annotationColumn path) must render with the ORACLE font — `size: 15`, NO explicit
+ * `color` (=> Plotly theme text color, dark, NOT white), and a BOLD family
+ * ('Arial Black, Arial Bold, Arial, sans-serif') for the SELECTED/gold mass button,
+ * else 'sans-serif' (oracle PlotlyLineplotUnified.vue:964-975 /
+ * PlotlyLineplotTagger.vue:431-442, with the family swap at Unified:931-933 /
+ * Tagger.vue:397-402). The previous code forced `{ size: 14, color: 'white' }` with no
+ * family, diverging from the oracle on size, color, and the gold-button bold family.
+ * The selected/gold mass-button RECT must also use the gold selectedColor so the badge,
+ * stick, and label go gold together (oracle Tagger.vue:419-429).
+ */
+describe('PlotlyLineplot mass-label font parity (P1-RX-LP-MASS-001)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders mass labels at size 15, no white color, with gold->bold family', () => {
+    // Level-0 deconvolved spectrum: two highlighted mass badges, the FIRST is the
+    // gold/selected mass button (selected_gold: true) per the reversed-index rule.
+    const data: AnyRecord = {
+      plotData: {
+        MonoMass: [150.0, 250.0, 999.0],
+        SumIntensity: [100, 80, 5],
+        peak_id: [0, 1, 2],
+        highlight: [true, true, false],
+        selected_gold: [true, false, false],
+        mass_label: ['150.00', '250.00', ''],
+      },
+      _plotConfig: { mode: 'tagger', level: 'deconvolved' },
+    }
+    const { wrapper } = mountLineplot(TAGGER_ARGS, data)
+    const vm = wrapper.vm as unknown as PlotlyLineplotVM
+
+    expect(vm.level).toBe('deconvolved')
+
+    // Map visible mass-label annotations by their text for assertion.
+    const visibleBoxes = vm.annotationBoxData.filter((b) => b.visible)
+    expect(visibleBoxes.length).toBeGreaterThan(0)
+
+    const labels = vm.peakAnnotations.filter((a) =>
+      ['150.00', '250.00'].includes(a.text as string),
+    )
+    expect(labels.length).toBe(2)
+
+    for (const a of labels) {
+      const font = a.font as AnyRecord
+      // Oracle size is 15 (not the old 14).
+      expect(font.size).toBe(15)
+      // No forced color => Plotly theme text color (dark), NOT white.
+      expect(font.color).toBeUndefined()
+      // Family is always set (oracle defaults to 'sans-serif').
+      expect(typeof font.family).toBe('string')
+    }
+
+    const goldLabel = labels.find((a) => a.text === '150.00') as AnyRecord
+    const plainLabel = labels.find((a) => a.text === '250.00') as AnyRecord
+    // The selected/gold mass button label uses the oracle BOLD family.
+    expect((goldLabel.font as AnyRecord).family).toBe(
+      'Arial Black, Arial Bold, Arial, sans-serif',
+    )
+    // The non-selected mass button label uses the oracle default 'sans-serif'.
+    expect((plainLabel.font as AnyRecord).family).toBe('sans-serif')
+
+    // The selected/gold mass-button RECT must use the gold selectedColor so the
+    // badge matches the gold stick + bold label (oracle Tagger.vue:419-429).
+    const goldBox = visibleBoxes.find((b) => b.index === 0)
+    expect(goldBox).toBeDefined()
+    const goldShape = vm.annotationShapes.find(
+      (s) =>
+        (s.x0 as number) <= goldBox!.x && (s.x1 as number) >= goldBox!.x,
+    ) as AnyRecord
+    expect(goldShape).toBeDefined()
+    expect(goldShape.fillcolor).toBe('#F3A712') // selectedColor (gold)
+  })
+
+  it('uses size-15/no-color/sans-serif for default-mode (click-selected) mass labels', () => {
+    // Default (non-tagger) annotated-spectrum mass labels share the same annotation
+    // path; with no click selection the label family is the oracle 'sans-serif' and
+    // the font has size 15 with no color.
+    const data: AnyRecord = {
+      plotData: {
+        x: [150.5, 250.5],
+        y: [100, 80],
+        peak_id: [0, 1],
+        highlight: [true, true],
+        annotation: ['b2', 'b3'],
+      },
+      _plotConfig: { mode: 'default' },
+    }
+    const defaultArgs: AnyRecord = {
+      componentType: 'PlotlyLineplot',
+      mode: 'default',
+      title: 'Annotated Spectrum',
+      xLabel: 'm/z',
+      yLabel: 'Intensity',
+      xColumn: 'x',
+      yColumn: 'y',
+      highlightColumn: 'highlight',
+      annotationColumn: 'annotation',
+      interactivity: { peak: 'peak_id' },
+    }
+    const { wrapper } = mountLineplot(defaultArgs, data)
+    const vm = wrapper.vm as unknown as PlotlyLineplotVM
+
+    const labels = vm.peakAnnotations.filter((a) =>
+      ['b2', 'b3'].includes(a.text as string),
+    )
+    expect(labels.length).toBe(2)
+    for (const a of labels) {
+      const font = a.font as AnyRecord
+      expect(font.size).toBe(15)
+      expect(font.color).toBeUndefined()
+      // No selection => default oracle family.
+      expect(font.family).toBe('sans-serif')
     }
   })
 })
