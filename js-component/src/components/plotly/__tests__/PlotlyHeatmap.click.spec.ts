@@ -123,6 +123,19 @@ function mountHeatmap(args: Record<string, unknown>, heatmapData: unknown[]) {
   return { wrapper, selectionStore: useSelectionStore() }
 }
 
+/**
+ * Flush pending microtasks/timers until the async renderPlot() chain has
+ * registered its plotly_click handler (renderPlot is awaited inside $nextTick).
+ */
+async function waitForClickHandler(): Promise<ClickHandler> {
+  for (let i = 0; i < 50 && registeredClickHandlers.length === 0; i++) {
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  expect(registeredClickHandlers.length).toBeGreaterThan(0)
+  return registeredClickHandlers[registeredClickHandlers.length - 1]
+}
+
 describe('PlotlyHeatmap categorical click routing (P1-HM-INT-001)', () => {
   beforeEach(() => {
     registeredClickHandlers.length = 0
@@ -168,12 +181,10 @@ describe('PlotlyHeatmap categorical click routing (P1-HM-INT-001)', () => {
       categoryColumn: 'group',
       interactivity: INTERACTIVITY,
     }
-    const { wrapper, selectionStore } = mountHeatmap(args, CATEGORICAL_DATA)
-    await wrapper.vm.$nextTick()
+    const { selectionStore } = mountHeatmap(args, CATEGORICAL_DATA)
 
     // A plotly_click handler should have been registered during render.
-    expect(registeredClickHandlers.length).toBeGreaterThan(0)
-    const handler = registeredClickHandlers[registeredClickHandlers.length - 1]
+    const handler = await waitForClickHandler()
 
     // Find the Treatment trace's customdata as Plotly would supply it.
     const treatment = lastTraces.find((t) => t.name === 'Treatment')!
@@ -209,14 +220,14 @@ describe('PlotlyHeatmap categorical click routing (P1-HM-INT-001)', () => {
       interactivity: INTERACTIVITY,
       // no categoryColumn -> single continuous trace, no customdata attached
     }
-    const { wrapper, selectionStore } = mountHeatmap(args, continuousData)
-    await wrapper.vm.$nextTick()
+    const { selectionStore } = mountHeatmap(args, continuousData)
+
+    const handler = await waitForClickHandler()
 
     // Continuous mode must NOT attach customdata (single combined trace).
     expect(lastTraces).toHaveLength(1)
     expect(lastTraces[0].customdata).toBeUndefined()
 
-    const handler = registeredClickHandlers[registeredClickHandlers.length - 1]
     // Plotly delivers no customdata; only a flat pointIndex into the combined data.
     handler({ points: [{ curveNumber: 0, pointIndex: 2 }] })
 

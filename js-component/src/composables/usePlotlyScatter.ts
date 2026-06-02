@@ -146,7 +146,7 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
         //    beyond the first. (Same pattern as Plotly3D / PlotlyVolcano.)
         // 2. Flat index (single-trace continuous mode): pointIndex maps 1:1 to
         //    the combined data array, so look the row up directly.
-        const customData = point.customdata as Record<string, unknown> | undefined
+        const customData = point.customdata as unknown as Record<string, unknown> | undefined
         const pointData =
           customData && typeof customData === 'object'
             ? customData

@@ -442,7 +442,7 @@ export default defineComponent({
         // shared click handler cannot use a flat index into the combined data to
         // resolve points in categories beyond the first. customdata makes each
         // point self-describing (same approach as Plotly3D / PlotlyVolcano).
-        const customdata = indices.map((i) => {
+        const customdata: unknown[] = indices.map((i) => {
           const row = sourceData[i]
           const cd: Record<string, unknown> = {}
           for (const column of interactivityColumns) {

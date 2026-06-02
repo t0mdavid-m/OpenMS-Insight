@@ -25,6 +25,9 @@ phases:
       - name: parity-diff
         cmd: "python migration/parity_diff.py"
         cwd: /home/user/OpenMS-Insight
+      - name: vitest
+        cmd: "npx vitest run"
+        cwd: /home/user/OpenMS-Insight/js-component
     units:
       # --- Heatmap (target: openms_insight/components/heatmap.py) ---
       - id: heatmap:log
@@ -182,6 +185,9 @@ phases:
       - name: parity-diff
         cmd: "python migration/parity_diff.py"
         cwd: /home/user/OpenMS-Insight
+      - name: vitest
+        cmd: "npx vitest run"
+        cwd: /home/user/OpenMS-Insight/js-component
     critics: [simplicity, feature-parity, reusability]   # three critics per unit
     units:
       - id: api:table
