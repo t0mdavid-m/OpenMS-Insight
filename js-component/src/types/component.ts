@@ -81,6 +81,41 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
+  // Optional overlay (second) series drawn beneath the primary spectrum.
+  hasOverlay?: boolean
+  overlayXColumn?: string
+  overlayYColumn?: string
+  overlayColor?: string
+  overlayName?: string
+  // FLASHTnT "tagger overlay" (opt-in). When tagOverlay is true AND a tagData
+  // selection is present, matched tag-mass sticks are recolored and inter-residue
+  // amino-acid arrows + per-mass charge z=N buttons are drawn over the spectrum.
+  tagOverlay?: boolean
+  /** PRIMARY list-column whose per-row value is [mz, intensity, charge] triplets. */
+  signalPeaksColumn?: string
+  /** Selected tag (mirror of StateManager `tagData`); Vue also reads the store. */
+  tagData?: TaggerTagData
+  /** Optional amino-acid position (mirror of StateManager `AApos`). */
+  aaPos?: number
+}
+
+/**
+ * Selected-tag payload for the tagger overlay.
+ * Mirrors the StateManager `tagData` state key.
+ */
+export interface TaggerTagData {
+  /** Fragment masses of the tag, in descending order (reversed indexing). */
+  masses: number[]
+  /** Tag residue sequence (e.g. "PEPT"). */
+  sequence: string
+  /** True for an N-terminal tag. */
+  nTerminal?: boolean
+  /** Tag start position within the parent sequence. */
+  startPos?: number
+  /** Tag end position within the parent sequence. */
+  endPos?: number
+  /** Index (within the tag) of the selected amino acid. */
+  selectedAA: number
 }
 
 export interface LinePlotStyling {
@@ -144,7 +179,13 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
   deconvolved?: boolean
   /** Max charge state to consider for fragment matching when deconvolved=false. */
   precursorCharge?: number
-  /** Interactivity mapping: identifier name -> column name for click handling. */
+  /**
+   * Interactivity mapping: identifier name -> column name for click handling.
+   * As a special case, mapping an identifier to the sentinel column value
+   * `"<position>"` makes a residue click emit that residue's 0-based index
+   * within the displayed sequence (e.g. `{ AApos: "<position>" }`), instead of
+   * the matched peak id. Other identifiers keep emitting the matched PeakId.
+   */
   interactivity?: InteractivityMapping
 }
 
@@ -228,6 +269,124 @@ export interface MirrorPlotStyling {
 }
 
 /**
+ * DensityPlot per-series presentation entry.
+ */
+export interface DensitySeries {
+  /** Series key (matches the `series` column value in densityData). */
+  name: string
+  /** Legend label. */
+  label: string
+  /** Line/marker color (CSS color string). */
+  color: string
+}
+
+/**
+ * DensityPlot component arguments.
+ */
+export interface DensityPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyDensity'
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  /** Draw "lines+markers" when true, else "lines". */
+  showMarkers?: boolean
+  /** Ordered per-series presentation (name, label, color). */
+  series: DensitySeries[]
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * DensityPlot data format: long format, one row per (series, grid point).
+ * Columns: series (string), x (number), y (number).
+ */
+export type DensityData = Record<string, unknown>
+
+/**
+ * Scatter3D component arguments (3D signal/noise stick plot).
+ */
+export interface Scatter3DComponentArgs extends BaseComponentArgs {
+  componentType: 'Plotly3DScatter'
+  title?: string
+  /** Long-format column names. */
+  mzColumn?: string
+  chargeColumn?: string
+  intensityColumn?: string
+  kindColumn?: string
+  /** kind_column values marking signal / noise peaks. */
+  signalValue?: string
+  noiseValue?: string
+  signalColor?: string
+  noiseColor?: string
+  xLabel?: string
+  yLabel?: string
+  zLabel?: string
+  interactivity?: InteractivityMapping
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * Scatter3D data format: long format, one row per peak.
+ * Columns: mz, charge, intensity, kind, plus filter columns (scan_id, mass_id).
+ */
+export type Scatter3DData = Record<string, unknown>
+
+/**
+ * FeatureView component arguments (FLASHQuant feature-group 3D trace view).
+ */
+export interface FeatureViewComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyFeatureView'
+  title?: string
+  chargeColumn?: string
+  mzColumn?: string
+  rtColumn?: string
+  intensityColumn?: string
+  isotopeColumn?: string | null
+  /**
+   * Optional column identifying the individual trace a point belongs to (e.g.
+   * an isotope-trace id). When set, the view inserts a z=-1000 sentinel break
+   * between consecutive points whose value differs within the same charge, so
+   * each trace is drawn as its own polyline. When omitted/null, all points of a
+   * charge form a single polyline (one leading + one trailing sentinel).
+   */
+  traceKeyColumn?: string | null
+  traceColor?: string
+  xLabel?: string
+  yLabel?: string
+  zLabel?: string
+  interactivity?: InteractivityMapping
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * FeatureView data format: long format, one row per trace point.
+ * Columns: feature_group, charge, mz, rt, intensity, isotope?.
+ */
+export type FeatureData = Record<string, unknown>
+
+/**
+ * InternalFragmentMap component arguments.
+ */
+export interface InternalFragmentMapComponentArgs extends BaseComponentArgs {
+  componentType: 'InternalFragmentMap'
+  title?: string
+  height?: number
+  /** ppm tolerance for matching observed vs theoretical fragment masses. */
+  tolerancePpm?: number
+  /** Per-type block colors (by, cy, bz). */
+  colors?: Record<string, string>
+}
+
+/**
+ * InternalFragmentMap data payload (self-contained, not Arrow):
+ *   sequence, observedMasses, tolerancePpm, colors,
+ *   fragment_masses_{by,cy,bz}, start_indices_{by,cy,bz}, end_indices_{by,cy,bz}.
+ */
+export type InternalFragmentData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -237,6 +396,10 @@ export type ComponentArgs =
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
+  | DensityPlotComponentArgs
+  | Scatter3DComponentArgs
+  | FeatureViewComponentArgs
+  | InternalFragmentMapComponentArgs
 
 /**
  * Component layout entry.

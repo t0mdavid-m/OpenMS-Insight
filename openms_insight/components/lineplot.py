@@ -63,6 +63,13 @@ class LinePlot(BaseComponent):
         annotation_column: Optional[str] = None,
         styling: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
+        overlay_data: Optional[pl.LazyFrame] = None,
+        overlay_x_column: Optional[str] = None,
+        overlay_y_column: Optional[str] = None,
+        overlay_color: str = "#9467bd",
+        overlay_name: str = "Overlay",
+        tag_overlay: bool = False,
+        signal_peaks_column: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -102,6 +109,27 @@ class LinePlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options
+            overlay_data: Optional second-series LazyFrame drawn over the primary
+                spectrum as sticks in a distinct color (e.g. raw/annotated peaks
+                over deconvolved sticks). Shares the same ``filters`` as the
+                primary data, so it is filtered to the same scan selection.
+            overlay_x_column: x column in ``overlay_data`` (defaults to x_column).
+            overlay_y_column: y column in ``overlay_data`` (defaults to y_column).
+            overlay_color: Color for the overlay series. Default "#9467bd".
+            overlay_name: Legend/series name for the overlay. Default "Overlay".
+            tag_overlay: Opt-in flag enabling the FLASHTnT "tagger overlay"
+                geometry (matched tag-mass highlighting, inter-residue amino-acid
+                arrows, and per-mass charge ``z=N`` buttons). Default False, in
+                which case the plot renders exactly as without this feature. The
+                overlay geometry is only drawn in Vue when both ``tag_overlay`` is
+                True AND a ``tagData`` selection is present in the StateManager.
+            signal_peaks_column: Optional list-column on the PRIMARY data. Each
+                peak row's value is a list of ``[mz, intensity, charge]`` triplets
+                (the deconvolved-mass SignalPeaks constituents), aligned 1:1 with
+                the primary peaks. Used by the tagger overlay to build per-mass
+                charge ``z=N`` buttons at each charge's intensity-weighted
+                center-of-gravity m/z. Carried through preprocessing/projection
+                and persisted in the cache config.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -113,10 +141,24 @@ class LinePlot(BaseComponent):
         self._annotation_column = annotation_column
         self._styling = styling or {}
         self._plot_config = config or {}
+        # Optional overlay (second) series
+        self._overlay_x_column = overlay_x_column or x_column
+        self._overlay_y_column = overlay_y_column or y_column
+        self._overlay_color = overlay_color
+        self._overlay_name = overlay_name
+        # Source overlay frame (cached separately at preprocess time)
+        self._source_overlay_data = overlay_data
+        self._has_overlay = overlay_data is not None
+        # Tagger overlay (opt-in; default off → behavior unchanged)
+        self._tag_overlay = tag_overlay
+        self._signal_peaks_column = signal_peaks_column
 
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: Optional[Dict[str, Any]] = None
         self._dynamic_title: Optional[str] = None
+        # Latest render state, captured in _prepare_vue_data so _get_component_args
+        # can forward tag selection (tagData / AApos) to Vue. Not cached.
+        self._render_state: Dict[str, Any] = {}
 
         super().__init__(
             cache_id=cache_id,
@@ -137,6 +179,12 @@ class LinePlot(BaseComponent):
             annotation_column=annotation_column,
             styling=styling,
             config=config,
+            overlay_x_column=overlay_x_column,
+            overlay_y_column=overlay_y_column,
+            overlay_color=overlay_color,
+            overlay_name=overlay_name,
+            tag_overlay=tag_overlay,
+            signal_peaks_column=signal_peaks_column,
             **kwargs,
         )
 
@@ -157,6 +205,13 @@ class LinePlot(BaseComponent):
             "y_label": self._y_label,
             "styling": self._styling,
             "plot_config": self._plot_config,
+            "has_overlay": self._has_overlay,
+            "overlay_x_column": self._overlay_x_column,
+            "overlay_y_column": self._overlay_y_column,
+            "overlay_color": self._overlay_color,
+            "overlay_name": self._overlay_name,
+            "tag_overlay": self._tag_overlay,
+            "signal_peaks_column": self._signal_peaks_column,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -170,9 +225,20 @@ class LinePlot(BaseComponent):
         self._y_label = config.get("y_label", self._y_column)
         self._styling = config.get("styling", {})
         self._plot_config = config.get("plot_config", {})
+        # Overlay (second) series config
+        self._has_overlay = config.get("has_overlay", False)
+        self._overlay_x_column = config.get("overlay_x_column", self._x_column)
+        self._overlay_y_column = config.get("overlay_y_column", self._y_column)
+        self._overlay_color = config.get("overlay_color", "#9467bd")
+        self._overlay_name = config.get("overlay_name", "Overlay")
+        self._source_overlay_data = None
+        # Tagger overlay config
+        self._tag_overlay = config.get("tag_overlay", False)
+        self._signal_peaks_column = config.get("signal_peaks_column")
         # Initialize dynamic annotations (not cached)
         self._dynamic_annotations = None
         self._dynamic_title = None
+        self._render_state = {}
 
     def _get_row_group_size(self) -> int:
         """
@@ -221,6 +287,12 @@ class LinePlot(BaseComponent):
                 f"Available columns: {column_names}"
             )
 
+        if self._signal_peaks_column and self._signal_peaks_column not in column_names:
+            raise ValueError(
+                f"signal_peaks_column '{self._signal_peaks_column}' not found in "
+                f"data. Available columns: {column_names}"
+            )
+
     def _preprocess(self) -> None:
         """
         Preprocess plot data.
@@ -250,6 +322,38 @@ class LinePlot(BaseComponent):
         # Base class will use sink_parquet() to stream without full materialization
         self._preprocessed_data["data"] = data  # Keep lazy
 
+        # Optional overlay (second) series: sort by filter columns too so the
+        # same predicate pushdown applies, and let the base class cache it as
+        # overlay_data.parquet (auto-reloaded as a LazyFrame on read).
+        if self._source_overlay_data is not None:
+            overlay = self._source_overlay_data
+            if self._filters:
+                overlay_sort = [
+                    c
+                    for c in self._filters.values()
+                    if c in overlay.collect_schema().names()
+                ]
+                if overlay_sort:
+                    overlay = overlay.sort(overlay_sort)
+            self._preprocessed_data["overlay_data"] = overlay
+
+    def get_state_dependencies(self) -> list:
+        """
+        State keys that affect this plot's rendered output.
+
+        Includes the filter identifiers (default) plus, when the tagger overlay
+        is enabled, the tag-selection keys (``tagData`` and ``AApos``) so the
+        bridge re-renders the component whenever the selected tag / amino-acid
+        position changes. When ``tag_overlay`` is off this matches the base
+        behavior exactly (filters only).
+        """
+        deps = list(self._filters.keys())
+        if self._tag_overlay:
+            for key in ("tagData", "AApos"):
+                if key not in deps:
+                    deps.append(key)
+        return deps
+
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
         return "PlotlyLineplotUnified"
@@ -273,12 +377,22 @@ class LinePlot(BaseComponent):
         Returns:
             Dict with plotData (pandas DataFrame) and _hash for change detection
         """
+        # Capture the latest render state so _get_component_args can forward the
+        # tag selection (tagData / AApos) to Vue alongside the static config.
+        self._render_state = dict(state) if state else {}
+
         # Build list of columns to select (projection pushdown for efficiency)
         columns_to_select = [self._x_column, self._y_column]
         if self._highlight_column:
             columns_to_select.append(self._highlight_column)
         if self._annotation_column:
             columns_to_select.append(self._annotation_column)
+        # Carry the SignalPeaks list-column (tagger overlay) through projection so
+        # it arrives 1:1-aligned inside plotData. Vue reads it as a list-per-row.
+        if self._signal_peaks_column and self._signal_peaks_column not in (
+            columns_to_select
+        ):
+            columns_to_select.append(self._signal_peaks_column)
         # Include columns needed for interactivity (e.g., peak_id)
         if self._interactivity:
             for col in self._interactivity.values():
@@ -358,13 +472,35 @@ class LinePlot(BaseComponent):
             ).hexdigest()[:8]
             data_hash = f"{data_hash}_{ann_hash}"
 
-        # Send as DataFrame for Arrow serialization (efficient binary transfer)
-        # Vue will parse and extract columns using the config
-        return {
+        # Optional overlay (second) series, filtered to the same selection.
+        result: Dict[str, Any] = {
             "plotData": df_pandas,
             "_hash": data_hash,
             "_plotConfig": self._build_plot_config(highlight_col, annotation_col),
         }
+
+        overlay = self._preprocessed_data.get("overlay_data")
+        if overlay is not None:
+            if isinstance(overlay, pl.DataFrame):
+                overlay = overlay.lazy()
+            overlay_cols = [self._overlay_x_column, self._overlay_y_column]
+            if self._filters:
+                for col in self._filters.values():
+                    if col not in overlay_cols:
+                        overlay_cols.append(col)
+            overlay_pandas, overlay_hash = filter_and_collect_cached(
+                overlay,
+                self._filters,
+                state,
+                columns=overlay_cols,
+                filter_defaults=self._filter_defaults,
+            )
+            result["plotDataOverlay"] = overlay_pandas
+            result["_hash"] = f"{data_hash}_{overlay_hash}"
+
+        # Send as DataFrame for Arrow serialization (efficient binary transfer)
+        # Vue will parse and extract columns using the config
+        return result
 
     def _get_component_args(self) -> Dict[str, Any]:
         """
@@ -415,6 +551,31 @@ class LinePlot(BaseComponent):
             "highlightColumn": self._highlight_column,
             "annotationColumn": self._annotation_column,
         }
+
+        # Overlay (second) series presentation for Vue
+        if self._has_overlay:
+            args["hasOverlay"] = True
+            args["overlayXColumn"] = self._overlay_x_column
+            args["overlayYColumn"] = self._overlay_y_column
+            args["overlayColor"] = self._overlay_color
+            args["overlayName"] = self._overlay_name
+
+        # Tagger overlay (opt-in). Always advertise the flag + the SignalPeaks
+        # column name so Vue can gate the new geometry; forward the current tag
+        # selection (read from StateManager state, not a data column) so Vue can
+        # render matched-mass highlights / arrows / z=N buttons. Vue also reads
+        # these straight from the selection store, so they stay live between the
+        # render that captures them here and the next.
+        if self._tag_overlay:
+            args["tagOverlay"] = True
+            if self._signal_peaks_column:
+                args["signalPeaksColumn"] = self._signal_peaks_column
+            tag_data = self._render_state.get("tagData")
+            if tag_data is not None:
+                args["tagData"] = tag_data
+            aa_pos = self._render_state.get("AApos")
+            if aa_pos is not None:
+                args["aaPos"] = aa_pos
 
         # Add any extra config options
         args.update(self._config)
@@ -545,6 +706,7 @@ class LinePlot(BaseComponent):
             "yColumn": self._y_column,
             "highlightColumn": highlight_col,
             "annotationColumn": annotation_col,
+            "signalPeaksColumn": self._signal_peaks_column,
             "interactivityColumns": {
                 col: col
                 for col in (self._interactivity.values() if self._interactivity else [])

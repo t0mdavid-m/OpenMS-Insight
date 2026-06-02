@@ -40,6 +40,20 @@ export interface SequenceData {
   fragment_masses_z: number[][]
   /** Calculated monoisotopic mass of the full sequence */
   theoretical_mass: number
+  /**
+   * Observed proteoform mass (optional). When both `theoretical_mass` and
+   * `observed_mass` are present, the mass header (Theoretical | Observed | Δ)
+   * is rendered above the sequence grid (FLASHTnT parity).
+   */
+  observed_mass?: number
+  /**
+   * Precomputed per-residue theoretical fragment masses, keyed by ion type
+   * ('a'|'b'|'c'|'x'|'y'|'z'). Each value mirrors the `fragment_masses_*`
+   * shape (`number[][]`: outer index = residue, inner = mass variants). When
+   * present, fragment matching uses THESE masses instead of the
+   * `fragment_masses_*` recomputed-from-sequence values.
+   */
+  precomputed_fragment_masses?: Partial<Record<string, number[][]>>
   /** List of amino acids with fixed modifications (e.g., ['C', 'M']) */
   fixed_modifications: string[]
   /** External peak annotations from search engine (optional) */
@@ -52,6 +66,20 @@ export interface SequenceData {
   neutral_losses?: boolean
   /** Whether to enable proton loss/addition matching by default */
   proton_loss_addition?: boolean
+  /** Default selected ion types (e.g. ['b','y'] or ['c','z']) from search params */
+  ion_types?: string[]
+  /** Per-residue coverage values (FLASHTnT tag/fragment coverage), one per residue */
+  coverage?: number[]
+  /** Maximum coverage value, used to normalize `coverage` for shading */
+  maxCoverage?: number
+  /**
+   * 0-based start residue (inclusive) of the identified proteoform window.
+   * Residues outside [proteoform_start, proteoform_end] are greyed, and
+   * precomputed fragment positions are offset by proteoform_start (FLASHTnT).
+   */
+  proteoform_start?: number
+  /** 0-based end residue (inclusive) of the proteoform window. */
+  proteoform_end?: number
 }
 
 /**
@@ -86,6 +114,8 @@ export interface SequenceObject {
   zIon: boolean
   /** Extra fragment type labels (e.g., '-H2O', '-NH3') */
   extraTypes: string[]
+  /** Whether this residue lies outside the proteoform window (greyed). */
+  truncated?: boolean
 }
 
 /**

@@ -6,6 +6,16 @@
         <h4>Sequence View</h4>
       </div>
 
+      <!-- Theoretical / Observed / Δ proteoform mass header (FLASHTnT parity).
+           Only shown when Python supplies both theoretical and observed mass. -->
+      <div v-if="hasMassHeader" class="d-flex justify-center mb-2 text-body-2 mass-header">
+        <span>Theoretical proteoform mass: {{ formatMass(theoreticalMass) }}</span>
+        <span class="mx-2">|</span>
+        <span>Observed proteoform mass: {{ formatMass(observedMass ?? 0) }}</span>
+        <span class="mx-2">|</span>
+        <span>Δ Mass (Da): {{ formatMass(massHeaderDelta) }}</span>
+      </div>
+
       <!-- Toolbar -->
       <div class="d-flex justify-end px-4 mb-4">
         <v-btn variant="text" icon size="small" :disabled="sequence.length === 0" @click="copySequence">
@@ -130,6 +140,9 @@
             :font-size="fontSize"
             :is-highlighted="selectedAAIndex === aaIndex"
             :modification="modifications[aaIndex] ?? null"
+            :coverage-fraction="coverageFraction(aaIndex)"
+            :truncated="aaObj.truncated === true"
+            :emit-on-any-click="hasPositionInteractivity"
             @selected="onAminoAcidSelected"
           />
 
@@ -188,6 +201,12 @@ import { extraFragmentTypeObject, type ExtraFragmentType } from './modification'
 
 // Proton mass for m/z calculations
 const PROTON_MASS = 1.007276
+
+// Sentinel interactivity column value meaning "emit the clicked residue's
+// 0-based index" instead of the matched peak id. Mirrors POSITION_SENTINEL in
+// sequenceview.py. e.g. interactivity={"AApos": "<position>"} emits AApos = the
+// clicked residue's 0-based position within the displayed sequence.
+const POSITION_SENTINEL = '<position>'
 
 // Superscript characters for charge display
 const SUPERSCRIPT_DIGITS: Record<string, string> = {
@@ -279,6 +298,19 @@ export default defineComponent({
     interactivity(): Record<string, string> {
       return (this.args.interactivity as Record<string, string>) ?? {}
     },
+    /**
+     * Identifiers whose interactivity column is the POSITION_SENTINEL. A
+     * residue click emits its 0-based index under each of these identifiers.
+     */
+    positionInteractivityIdentifiers(): string[] {
+      return Object.entries(this.interactivity)
+        .filter(([, column]) => column === POSITION_SENTINEL)
+        .map(([identifier]) => identifier)
+    },
+    /** Whether any residue-position interactivity identifier is configured. */
+    hasPositionInteractivity(): boolean {
+      return this.positionInteractivityIdentifiers.length > 0
+    },
     /** Whether data is deconvolved (neutral masses) or not (m/z values) */
     deconvolved(): boolean {
       return (this.args.deconvolved as boolean) ?? true
@@ -293,11 +325,67 @@ export default defineComponent({
     modifications(): (number | null)[] {
       return this.sequenceData?.modifications ?? []
     },
+    /**
+     * 0-based start residue of the identified proteoform window (inclusive), or
+     * null when the full sequence is the proteoform. Residues outside
+     * [start, end] are greyed, and precomputed fragment positions are offset by
+     * start so they land on the right residues of the full sequence (FLASHTnT).
+     */
+    proteoformStart(): number | null {
+      const v = this.sequenceData?.proteoform_start
+      return typeof v === 'number' ? v : null
+    },
+    /** 0-based end residue of the proteoform window (inclusive), or null. */
+    proteoformEnd(): number | null {
+      const v = this.sequenceData?.proteoform_end
+      return typeof v === 'number' ? v : null
+    },
     theoreticalMass(): number {
       return this.sequenceData?.theoretical_mass ?? 0
     },
+    /** Observed proteoform mass for the header, or undefined when not provided. */
+    observedMass(): number | undefined {
+      const m = this.sequenceData?.observed_mass
+      return typeof m === 'number' ? m : undefined
+    },
+    /**
+     * Whether the Theoretical | Observed | Δ mass header should be shown.
+     * Requires both masses to be present (FLASHTnT parity); otherwise hidden.
+     */
+    hasMassHeader(): boolean {
+      return (
+        typeof this.sequenceData?.theoretical_mass === 'number' &&
+        typeof this.sequenceData?.observed_mass === 'number'
+      )
+    },
+    /** |theoretical - observed| mass difference (Da) for the header. */
+    massHeaderDelta(): number {
+      return Math.abs(this.theoreticalMass - (this.observedMass ?? 0))
+    },
+    /**
+     * Precomputed per-residue fragment masses keyed by ion type, when supplied
+     * by Python. When present, these override the `fragment_masses_*` recompute.
+     */
+    precomputedFragmentMasses(): Partial<Record<string, number[][]>> | undefined {
+      return this.sequenceData?.precomputed_fragment_masses
+    },
     fixedModificationSites(): string[] {
       return this.sequenceData?.fixed_modifications ?? []
+    },
+    /** Per-residue coverage values (FLASHTnT), empty when not provided. */
+    coverage(): number[] {
+      return this.sequenceData?.coverage ?? []
+    },
+    /** Maximum coverage used to normalize per-residue shading. */
+    maxCoverage(): number {
+      const m = this.sequenceData?.maxCoverage
+      if (typeof m === 'number' && m > 0) return m
+      // Fall back to the array max so shading still works if max omitted.
+      return this.coverage.length > 0 ? Math.max(...this.coverage, 0) : 0
+    },
+    /** Whether per-residue coverage shading is active. */
+    hasCoverage(): boolean {
+      return this.coverage.length > 0 && this.maxCoverage > 0
     },
     /** External annotations from search engine if available */
     externalAnnotations(): ExternalAnnotation[] {
@@ -384,6 +472,14 @@ export default defineComponent({
           if (this.sequenceData?.proton_loss_addition !== undefined) {
             this.ionTypesExtra['proton loss/addition'] = this.sequenceData.proton_loss_addition
           }
+          // Default selected ion types from search params (e.g. FLASHTnT ion_type).
+          // Only override the defaults when an explicit, non-empty list is given.
+          if (Array.isArray(this.sequenceData?.ion_types) && this.sequenceData.ion_types.length > 0) {
+            const enabled = new Set(this.sequenceData.ion_types.map((t) => t.toLowerCase()))
+            for (const ion of this.ionTypes) {
+              ion.selected = enabled.has(ion.text)
+            }
+          }
           this.settingsInitialized = true
         }
         this.matchFragments()
@@ -427,9 +523,15 @@ export default defineComponent({
   methods: {
     initializeSequenceObjects(): void {
       this.sequenceObjects = []
-      for (const aa of this.sequence) {
+      // Residues outside the proteoform window [start, end] are greyed
+      // ("truncated") -- the legacy FLASHTnT sequence view behaviour.
+      const start = this.proteoformStart
+      const end = this.proteoformEnd
+      for (let i = 0; i < this.sequence.length; i++) {
+        const truncated = start !== null && end !== null && (i < start || i > end)
         this.sequenceObjects.push({
-          aminoAcid: aa,
+          aminoAcid: this.sequence[i],
+          truncated,
           aIon: false,
           bIon: false,
           cIon: false,
@@ -474,6 +576,13 @@ export default defineComponent({
     },
     getFragmentMasses(ionType: string): number[][] {
       if (!this.sequenceData) return []
+      // Prefer Python-supplied precomputed masses (e.g. modified proteoforms
+      // whose fragments cannot be recomputed from the bare sequence). Fall back
+      // to the pyOpenMS-from-sequence `fragment_masses_*` values otherwise.
+      const precomputed = this.precomputedFragmentMasses
+      if (precomputed && precomputed[ionType] !== undefined) {
+        return precomputed[ionType] as number[][]
+      }
       const key = `fragment_masses_${ionType}` as keyof SequenceData
       return (this.sequenceData[key] as number[][]) ?? []
     },
@@ -490,7 +599,13 @@ export default defineComponent({
     markAminoAcidPosition(ionType: string, ionNumber: number, typeName: string): void {
       const sequenceLength = this.sequence.length
       const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
-      const aaIndex = isPrefixIon ? ionNumber - 1 : sequenceLength - ionNumber
+      // Precomputed fragment masses are indexed within the proteoform window
+      // [start, end]; offset by start so a prefix ion k lands on residue
+      // start+k-1 and a suffix ion k on residue end+1-k of the FULL sequence.
+      // Defaults (start=0, end=length-1) reduce to the untruncated mapping.
+      const start = this.proteoformStart ?? 0
+      const end = this.proteoformEnd ?? sequenceLength - 1
+      const aaIndex = isPrefixIon ? start + ionNumber - 1 : end + 1 - ionNumber
 
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         const aaObj = this.sequenceObjects[aaIndex]
@@ -705,8 +820,22 @@ export default defineComponent({
     isFixedModification(aminoAcid: string): boolean {
       return this.fixedModificationSites.includes(aminoAcid)
     },
+    /** Normalized [0,1] coverage for a residue, or 0 when shading is inactive. */
+    coverageFraction(aaIndex: number): number {
+      if (!this.hasCoverage) return 0
+      const v = this.coverage[aaIndex]
+      if (typeof v !== 'number' || v <= 0) return 0
+      return Math.max(0, Math.min(1, v / this.maxCoverage))
+    },
     onAminoAcidSelected(aaIndex: number): void {
       this.selectedAAIndex = aaIndex
+
+      // Residue-position interactivity: emit the residue's 0-based index for
+      // every identifier mapped to POSITION_SENTINEL. The 0-based base matches
+      // the residue numbering used here (aaIndex) and FLASHApp StartPos/EndPos.
+      for (const identifier of this.positionInteractivityIdentifiers) {
+        this.selectionStore.updateSelection(identifier, aaIndex)
+      }
 
       // Find corresponding fragment in table
       const aaObj = this.sequenceObjects[aaIndex]
@@ -738,9 +867,12 @@ export default defineComponent({
       }
 
       // Handle interactivity: update selection for each mapped identifier
-      // Uses the same pattern as other components (LinePlot, Table)
+      // Uses the same pattern as other components (LinePlot, Table).
+      // Identifiers mapped to POSITION_SENTINEL carry the residue index (set by
+      // onAminoAcidSelected), never a PeakId, so they are skipped here.
       if (item.PeakId !== undefined && Object.keys(this.interactivity).length > 0) {
-        for (const [identifier, _columnName] of Object.entries(this.interactivity)) {
+        for (const [identifier, columnName] of Object.entries(this.interactivity)) {
+          if (columnName === POSITION_SENTINEL) continue
           // For SequenceView, the interactivity maps to peak_id
           // The column name tells us what field in the data this maps to
           this.selectionStore.updateSelection(identifier, item.PeakId)
@@ -751,6 +883,10 @@ export default defineComponent({
       return {
         class: index === this.selectedFragmentRowIndex ? 'bg-amber-lighten-4' : '',
       }
+    },
+    /** Format a mass value for the header to ~2 decimal places. */
+    formatMass(value: number): string {
+      return Number.isFinite(value) ? value.toFixed(2) : '—'
     },
     async copySequence(): Promise<void> {
       try {
@@ -797,6 +933,11 @@ export default defineComponent({
 
 .grid-width-40 {
   grid-template-columns: repeat(42, 1fr);
+}
+
+.mass-header {
+  flex-wrap: wrap;
+  opacity: 0.85;
 }
 
 .row-number {

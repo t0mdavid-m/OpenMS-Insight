@@ -2,7 +2,7 @@
   <div
     :id="id"
     class="d-flex justify-center align-center rounded-lg"
-    :class="[aminoAcidCellClass, { highlighted: isHighlighted }, { 'fixed-mod': fixedModification }]"
+    :class="[aminoAcidCellClass, { highlighted: isHighlighted }, { 'fixed-mod': fixedModification }, { truncated: truncated }]"
     :style="cellStyles"
     @click="selectCell"
   >
@@ -118,6 +118,29 @@ export default defineComponent({
       type: Number as PropType<number | null>,
       default: null,
     },
+    /** Normalized [0,1] per-residue coverage; 0 disables coverage shading. */
+    coverageFraction: {
+      type: Number,
+      default: 0,
+    },
+    /**
+     * When true, a click emits `selected` for ANY residue (not only ones with
+     * a matched fragment). Enabled when residue-position interactivity is
+     * configured so every residue can report its index. Default false keeps the
+     * legacy behavior (only fragment-bearing cells emit on click).
+     */
+    emitOnAnyClick: {
+      type: Boolean,
+      default: false,
+    },
+    /**
+     * When true, this residue lies outside the identified proteoform window and
+     * is rendered greyed/dimmed (the legacy FLASHTnT "truncated" residue style).
+     */
+    truncated: {
+      type: Boolean,
+      default: false,
+    },
   },
   emits: ['selected'],
   setup() {
@@ -159,9 +182,17 @@ export default defineComponent({
         'sequence-amino-acid-highlighted': this.fixedModification,
       }
     },
+    /** Background tint for per-residue coverage (FLASHTnT). Empty when none. */
+    coverageBg(): string {
+      if (!(this.coverageFraction > 0)) return ''
+      // Green shade scaled by coverage fraction, mirroring FLASHApp coverage
+      // coloring. Alpha floors at ~0.15 so even low coverage is visible.
+      const alpha = 0.15 + 0.65 * Math.max(0, Math.min(1, this.coverageFraction))
+      return `rgba(18, 135, 29, ${alpha.toFixed(3)})`
+    },
     cellStyles(): Record<string, string> {
       const isDark = this.theme?.base === 'dark'
-      return {
+      const styles: Record<string, string> = {
         '--amino-acid-cell-color': this.theme?.textColor ?? '#000',
         '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#000',
@@ -175,6 +206,12 @@ export default defineComponent({
         '--extra-frag-stroke': isDark ? 'rgba(255, 255, 255, 0.5)' : 'black',
         position: 'relative',
       }
+      // Apply coverage shading via the cell bg variable (skipped for fixed-mod
+      // / highlighted cells, which keep their own dedicated styling).
+      if (this.coverageBg && !this.fixedModification && !this.isHighlighted) {
+        styles['--amino-acid-cell-bg-color'] = this.coverageBg
+      }
+      return styles
     },
     modificationDisplay(): string {
       if (this.modification === null) return ''
@@ -187,7 +224,9 @@ export default defineComponent({
   },
   methods: {
     selectCell(): void {
-      if (this.hasMatchingFragments) {
+      // Emit when the residue carries a matched fragment (legacy behavior) or
+      // when position interactivity is active (every residue is selectable).
+      if (this.hasMatchingFragments || this.emitOnAnyClick) {
         this.$emit('selected', this.index)
       }
     },
@@ -232,6 +271,12 @@ export default defineComponent({
 
 .fixed-mod {
   color: #f3a712;
+}
+
+/* Residues outside the identified proteoform window (FLASHTnT truncation) are
+   dimmed so the matched proteoform region stands out. */
+.truncated {
+  opacity: 0.35;
 }
 
 /* Fragment marker base container */
