@@ -108,6 +108,8 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   taggerSegmentsKey?: string
   /** allDataForDrawing key holding the level-1 charge clusters. */
   taggerChargesKey?: string
+  /** allDataForDrawing key holding the level-1 full annotated spectrum. */
+  taggerLevel1Key?: string
   /** Oracle level-1 charge-label x scaling factor (27.5). */
   xPosScalingFactor?: number
   height?: number // Component height in pixels

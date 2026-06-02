@@ -13,6 +13,7 @@ from openms_insight import LinePlot
 from openms_insight.components.lineplot import (
     compute_charge_cog,
     compute_tagger_charges,
+    compute_tagger_level1_spectrum,
     compute_tagger_segments,
 )
 
@@ -134,6 +135,68 @@ class TestTaggerPrepareVueData:
         # charge labels "z=<charge>"
         assert set(charges["charge_label"]) == {"z=12", "z=13"}
 
+    def test_level1_renders_full_annotated_spectrum(
+        self, mock_streamlit, temp_cache_dir, sample_tagger_data, TAG_PAYLOAD
+    ):
+        """Level-1 draws the FULL annotated spectrum (not just the open mass's
+        envelope), highlighting ONLY the open mass's m/z peaks (oracle parity).
+
+        Scan 1 MonoMass_Anno = [75.0, 75.1, 50.0, 125.0, 175.0] (5 peaks). Mass
+        150 (MonoMass idx 0) has 3 signal peaks at mz 75.0/75.1/50.0. So the
+        level-1 frame must contain ALL 5 annotated peaks (superset of the
+        3-peak envelope) with highlight True only on the open mass's 3 peaks.
+        """
+        comp = _make(temp_cache_dir, sample_tagger_data)
+        r0 = comp._prepare_vue_data(
+            {"spectrum": 1, "tag": TAG_PAYLOAD, "tagger_mass": None}
+        )
+        # No drill-down => empty level-1 spectrum.
+        assert "plotDataTaggerLevel1" in r0
+        assert len(r0["plotDataTaggerLevel1"]) == 0
+
+        r1 = comp._prepare_vue_data(
+            {"spectrum": 1, "tag": TAG_PAYLOAD, "tagger_mass": 0}
+        )
+        lvl1 = r1["plotDataTaggerLevel1"]
+        # FULL annotated spectrum (5 peaks), NOT the 3-peak signal-peak envelope.
+        assert lvl1["x"].tolist() == [75.0, 75.1, 50.0, 125.0, 175.0]
+        assert lvl1["y"].tolist() == [3.0, 1.0, 2.0, 4.0, 6.0]
+        # ONLY the open mass's (mass 150) m/z peaks are highlighted; the peaks
+        # belonging to masses 250 (125.0) and 350 (175.0) stay unhighlighted.
+        assert lvl1["highlight"].tolist() == [True, True, True, False, False]
+
+    def test_level1_stick_gold_uses_reversed_selected_aa(
+        self, mock_streamlit, temp_cache_dir, sample_tagger_data, TAG_PAYLOAD
+    ):
+        """Level-1 STICK gold follows the reversedSelectedAA rule, scoped to the
+        open mass's peaks (oracle Tagger.vue:260 -> reversedSelectedAA).
+
+        Drill into MonoMass idx 0 (mass 150): open_hpos = 2, reversedSelectedAA =
+        (3-1)-1 = 1 => stick_gold = (1==2)||(1==1) = True for all open-mass peaks;
+        unhighlighted peaks are never gold.
+        """
+        comp = _make(temp_cache_dir, sample_tagger_data)
+        r1 = comp._prepare_vue_data(
+            {"spectrum": 1, "tag": TAG_PAYLOAD, "tagger_mass": 0}
+        )
+        lvl1 = r1["plotDataTaggerLevel1"]
+        assert lvl1["selected_gold"].tolist() == [True, True, True, False, False]
+
+        # Drill into MonoMass idx 2 (mass 350): open_hpos = 0, reversedSelectedAA
+        # = 1 => stick_gold = (1==0)||(1==-1) = False (orange, not gold).
+        r2 = comp._prepare_vue_data(
+            {"spectrum": 1, "tag": TAG_PAYLOAD, "tagger_mass": 2}
+        )
+        lvl2 = r2["plotDataTaggerLevel1"]
+        # mass 350 has one signal peak at mz 175.0 -> highlighted, not gold.
+        hl2 = [
+            x
+            for x, h in zip(lvl2["x"].tolist(), lvl2["highlight"].tolist())
+            if h
+        ]
+        assert hl2 == [175.0]
+        assert lvl2["selected_gold"].tolist() == [False] * len(lvl2)
+
     def test_cog_intensity_weighted(
         self, mock_streamlit, temp_cache_dir, sample_tagger_data, TAG_PAYLOAD
     ):
@@ -203,6 +266,7 @@ class TestTaggerComponentArgs:
         assert args["annotationColumn"] == "mass_label"
         assert args["taggerSegmentsKey"] == "plotDataTaggerSegments"
         assert args["taggerChargesKey"] == "plotDataTaggerCharges"
+        assert args["taggerLevel1Key"] == "plotDataTaggerLevel1"
 
     def test_vue_component_name(
         self, mock_streamlit, temp_cache_dir, sample_tagger_data
@@ -314,3 +378,52 @@ class TestTaggerNumericCore:
         assert all(r["cog"] == pytest.approx((3 * 75.0 + 75.1) / 4) for r in c12)
         # gold rule: selectedAA(0) == selected_mass_index(0) -> True
         assert all(r["selected"] for r in rows)
+
+    def test_compute_tagger_level1_full_spectrum_with_highlight(self):
+        """Level-1 sticks = the FULL annotated spectrum; only the open mass's m/z
+        peaks (within tol of its signal-peak mzs) are highlighted.
+
+        anno = 4 peaks; open mass signal peaks at mz 75.0/50.0 => peaks 0 and 2
+        highlighted, peaks 1 and 3 (other masses) unhighlighted.
+        """
+        anno_mz = [75.0, 125.0, 50.0, 175.0]
+        anno_int = [3.0, 4.0, 2.0, 6.0]
+        open_signal_peaks = [
+            [0.0, 75.0, 3.0, 12.0],
+            [1.0, 50.0, 2.0, 13.0],
+        ]
+        rows = compute_tagger_level1_spectrum(
+            anno_mz, anno_int, open_signal_peaks, stick_gold=False, tol=1e-5
+        )
+        # Full spectrum (4 rows), not the 2-peak envelope.
+        assert [r["x"] for r in rows] == anno_mz
+        assert [r["y"] for r in rows] == anno_int
+        assert [r["highlight"] for r in rows] == [True, False, True, False]
+
+    def test_compute_tagger_level1_stick_gold_distinct_from_badge(self):
+        """STICK gold is driven by the caller-supplied `stick_gold` bool (derived
+        from reversedSelectedAA) and applies ONLY to highlighted peaks — distinct
+        from the per-charge BADGE gold (raw selectedAA) in compute_tagger_charges.
+        """
+        anno_mz = [75.0, 125.0]
+        anno_int = [3.0, 4.0]
+        open_signal_peaks = [[0.0, 75.0, 3.0, 12.0]]
+
+        gold_rows = compute_tagger_level1_spectrum(
+            anno_mz, anno_int, open_signal_peaks, stick_gold=True, tol=1e-5
+        )
+        # Highlighted open-mass peak is gold; the unhighlighted peak never is.
+        assert [r["selected_gold"] for r in gold_rows] == [True, False]
+
+        plain_rows = compute_tagger_level1_spectrum(
+            anno_mz, anno_int, open_signal_peaks, stick_gold=False, tol=1e-5
+        )
+        assert [r["selected_gold"] for r in plain_rows] == [False, False]
+
+        # The BADGE path uses the RAW selectedAA rule, independent of stick_gold:
+        # selectedAA=0 == selected_mass_index=0 -> badge gold True even though a
+        # caller could pass stick_gold=False for the same drill-down.
+        badge = compute_tagger_charges(
+            open_signal_peaks, selected_aa=0, selected_mass_index=0
+        )
+        assert all(r["selected"] for r in badge)

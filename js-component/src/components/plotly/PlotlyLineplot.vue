@@ -295,24 +295,46 @@ export default defineComponent({
     },
 
     /**
-     * Tagger level-1 spectrum built from the open mass's charge clusters.
-     * The raw m/z signal peaks become the sticks; highlight = all peaks (they
-     * are the selected mass's envelope), selected = the gold rule from Python.
+     * Tagger level-1 spectrum: the FULL annotated (m/z) spectrum, with ONLY the
+     * open mass's m/z peaks highlighted (oracle PlotlyLineplotTagger.vue draws the
+     * whole MonoMass_Anno spectrum and merely highlights the open mass's peaks via
+     * `highlightedPos`, lines 115-119/157-164/253/760-771). Python precomputes the
+     * highlight mask (peaks within tol of the open mass's signal-peak mzs) and the
+     * STICK gold flag (reversedSelectedAA rule), distinct from the per-charge BADGE
+     * gold flag. Built from `plotDataTaggerLevel1` ({x, y, highlight, selected_gold}).
      */
     taggerLevel1Data(): PlotData | undefined {
-      const peaks = this.taggerCharges
-      if (peaks.length === 0) return undefined
-      const x_values: number[] = []
-      const y_values: number[] = []
-      const highlight_mask: boolean[] = []
-      const selected_mask: boolean[] = []
-      for (const p of peaks) {
-        x_values.push(p.mz)
-        y_values.push(p.intensity)
-        highlight_mask.push(true)
-        selected_mask.push(p.selected)
+      const key = this.args.taggerLevel1Key || 'plotDataTaggerLevel1'
+      const raw = this.streamlitDataStore.allDataForDrawing?.[key] as
+        | Record<string, unknown[]>
+        | undefined
+      if (!raw || !raw.x) return undefined
+      const x_values = (raw.x as number[]) || []
+      if (x_values.length === 0) return undefined
+      const y_values = (raw.y as number[]) || []
+      const highlight_mask = (raw.highlight as boolean[]) || []
+      const selected_mask = (raw.selected_gold as boolean[]) || []
+      return {
+        x_values,
+        y_values,
+        highlight_mask: highlight_mask.map(Boolean),
+        selected_mask: selected_mask.map(Boolean),
       }
-      return { x_values, y_values, highlight_mask, selected_mask }
+    },
+
+    /**
+     * The open mass's highlighted x (m/z) positions within the level-1 spectrum.
+     * Used to fit the level-1 x-range to the open mass (oracle parity) even though
+     * the full annotated spectrum is drawn behind it.
+     */
+    taggerLevel1HighlightedX(): number[] {
+      const data = this.taggerLevel1Data
+      if (!data || !data.highlight_mask) return []
+      const out: number[] = []
+      for (let i = 0; i < data.x_values.length; i++) {
+        if (data.highlight_mask[i]) out.push(data.x_values[i])
+      }
+      return out
     },
 
     /**
@@ -435,8 +457,14 @@ export default defineComponent({
       const xValues = this.activePlotData.x_values
       const minX = Math.min(...xValues)
       const maxX = Math.max(...xValues)
-      // Tagger level-1 fits the cluster to [min*0.98, max*1.02] (oracle parity).
+      // Tagger level-1 fits to the OPEN MASS's highlighted m/z peaks (oracle
+      // PlotlyLineplotTagger.vue:596-597 -> [min(open mzs)*0.98, max(open mzs)*1.02]),
+      // NOT the full annotated spectrum range now drawn behind it.
       if (this.mode === 'tagger' && this.level === 'annotated') {
+        const hl = this.taggerLevel1HighlightedX
+        if (hl.length > 0) {
+          return [Math.min(...hl) * 0.98, Math.max(...hl) * 1.02]
+        }
         return [minX * 0.98, maxX * 1.02]
       }
       const padding = (maxX - minX) * 0.02
@@ -841,16 +869,35 @@ export default defineComponent({
           yref: 'y',
           text: p.charge_label,
           showarrow: false,
-          font: { size: 14, color: 'white' },
+          // Charge-badge font size 15 (oracle Tagger.vue:369-372 / Unified:896-898).
+          font: { size: 15, color: 'white' },
         })
       }
       return annotations
     },
 
     /**
-     * Generic per-peak annotation descriptors (Item B): boxes computed with the
-     * existing band/overlap math. Overlap is group-scoped all-or-nothing
-     * (oracle parity) — any overlap within a group hides the whole group.
+     * Oracle charge-badge x scaling: `xpos_scaling = (1200/actualWidth) *
+     * rangeWidth / xPosScalingFactor` (PlotlyLineplotUnified.vue
+     * computeXposScalingFactor, factor default 27.5). This is the FIXED badge
+     * width the oracle uses for charge labels — NOT measured text width.
+     */
+    descriptorXposScaling(): number {
+      const xRange = this.xRange
+      const rangeWidth = xRange[1] - xRange[0]
+      const actualWidth = this.actualPlotWidth
+      if (actualWidth <= 0) return 0
+      const factor = this.args.xPosScalingFactor || 27.5
+      return ((1200 / actualWidth) * rangeWidth) / factor
+    },
+
+    /**
+     * Generic per-peak annotation descriptors (Item B): boxes sized by the
+     * oracle's FIXED `xpos_scaling` width (PlotlyLineplotUnified.vue 1331-1346),
+     * NOT measured text width. Overlap is group-scoped all-or-nothing over that
+     * fixed geometry with a 1%-of-x-range padding on both boxes (oracle
+     * testBoxesOverlapForRange 1449/1452-1460) — any overlap within a group hides
+     * the whole group.
      */
     descriptorAnnotationBoxes(): Array<{
       x: number
@@ -864,18 +911,19 @@ export default defineComponent({
       if (descriptors.length === 0) return []
 
       const xRange = this.xRange
-      const gapDataUnits = this.pixelWidthToDataUnits(4)
-      const textPaddingPx = 16
+      // 1% of the x-range padding applied to BOTH boxes (oracle parity).
+      const xPadding = (xRange[1] - xRange[0]) * 0.01
+      // Fixed badge width from xpos_scaling (oracle charge-box geometry).
+      const boxWidth = this.descriptorXposScaling
 
       const boxes = descriptors.map((d) => {
-        const textWidthPx = this.measureTextWidth(d.text)
         return {
           x: d.x,
           text: d.text,
           color: d.color,
           hover: d.hover,
           group: d.group ?? '__default__',
-          width: this.pixelWidthToDataUnits(textWidthPx + textPaddingPx),
+          width: boxWidth,
           inVisibleRange: d.x >= xRange[0] && d.x <= xRange[1],
           visible: true,
         }
@@ -894,10 +942,10 @@ export default defineComponent({
           for (let j = i + 1; j < arr.length; j++) {
             const a = arr[i]
             const b = arr[j]
-            const aLeft = a.x - a.width / 2 - gapDataUnits
-            const aRight = a.x + a.width / 2 + gapDataUnits
-            const bLeft = b.x - b.width / 2
-            const bRight = b.x + b.width / 2
+            const aLeft = a.x - a.width / 2 - xPadding
+            const aRight = a.x + a.width / 2 + xPadding
+            const bLeft = b.x - b.width / 2 - xPadding
+            const bRight = b.x + b.width / 2 + xPadding
             if (!(aRight < bLeft || aLeft > bRight)) {
               overlaps = true
               break
@@ -970,7 +1018,8 @@ export default defineComponent({
           yref: 'y',
           text: box.text,
           showarrow: false,
-          font: { size: 14, color: 'white' },
+          // Charge-badge font size 15 (oracle default; Unified:896-898).
+          font: { size: 15, color: 'white' },
         })
       }
       return annotations
@@ -1261,6 +1310,18 @@ export default defineComponent({
       handler() {
         if (this.isInitialized) {
           // Drill-down changes the active spectrum; reset zoom like plotData.
+          this.manualXRange = undefined
+          this.lastAutoZoomedPeakIndex = undefined
+          this.renderPlot()
+        }
+      },
+      deep: true,
+    },
+
+    // Re-render when the tagger level-1 full annotated spectrum changes.
+    'streamlitDataStore.allDataForDrawing.plotDataTaggerLevel1': {
+      handler() {
+        if (this.isInitialized) {
           this.manualXRange = undefined
           this.lastAutoZoomedPeakIndex = undefined
           this.renderPlot()

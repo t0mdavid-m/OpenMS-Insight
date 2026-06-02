@@ -147,6 +147,25 @@ class TestChargeAnnotationCOG:
         assert labels[0]["color"] == "#E4572E"
         assert labels[0]["text"] == "z=3"
 
+    def test_charge_annotations_emit_no_hover(self):
+        """Charge labels carry NO hover key (oracle m/z charge branch emits no
+        hover point; PlotlyLineplotUnified.vue 889-899). The badge geometry is
+        the fixed xpos_scaling width on the Vue side — descriptors only supply
+        {x, text, color, group}, never a measured-text hover.
+        """
+        sp = [
+            [0, 1000.0, 3.0, 12.0],
+            [1, 1001.0, 1.0, 12.0],
+            [2, 500.0, 2.0, 24.0],
+        ]
+        labels = compute_charge_annotations(sp)
+        assert len(labels) == 2
+        for label in labels:
+            assert "hover" not in label
+            # Fields the Vue fixed-geometry (xpos_scaling) badge path consumes.
+            assert set(label.keys()) == {"x", "text", "color", "group"}
+            assert label["group"] == "charge"
+
 
 class TestChargeAnnotationsIntegration:
     def test_charge_labels_from_signal_peaks(

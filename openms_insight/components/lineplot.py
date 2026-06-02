@@ -802,11 +802,26 @@ class LinePlot(BaseComponent):
             mono_mass: List[float] = []
             sum_intensity: List[float] = []
             signal_peaks: List[Any] = []
+            anno_mz: List[float] = []
+            anno_intensity: List[float] = []
         else:
             row = filtered.iloc[0]
             mono_mass = _as_float_list(row.get(self._x_column))
             sum_intensity = _as_float_list(row.get(self._y_column))
             signal_peaks = _as_list(row.get(self._signal_peaks_column))
+            # Full annotated (m/z) spectrum drawn at level 1 (oracle parity):
+            # MonoMass_Anno / SumIntensity_Anno (a superset of any single mass's
+            # signal-peak envelope). Optional — empty when columns not configured.
+            anno_mz = (
+                _as_float_list(row.get(self._mz_column))
+                if self._mz_column is not None
+                else []
+            )
+            anno_intensity = (
+                _as_float_list(row.get(self._mz_intensity_column))
+                if self._mz_intensity_column is not None
+                else []
+            )
 
         # --- Level-0 highlight masks + gold (reversed-index) selection ---
         highlighted_pos = _highlight_mass_positions(
@@ -865,17 +880,45 @@ class LinePlot(BaseComponent):
         if valid_open_mass:
             # Position of the open mass within the highlighted list (oracle index).
             open_hpos = idx_to_hpos[tagger_mass]
+            open_signal_peaks = (
+                signal_peaks[tagger_mass]
+                if tagger_mass < len(signal_peaks)
+                else []
+            )
+            # Per-charge COG badge clusters (z=<charge>). The BADGE gold flag uses
+            # the RAW selectedAA rule (oracle Tagger.vue:322-323), distinct from
+            # the STICK gold rule below which uses reversedSelectedAA.
             df_charges = pd.DataFrame(
                 compute_tagger_charges(
-                    signal_peaks[tagger_mass]
-                    if tagger_mass < len(signal_peaks)
-                    else [],
+                    open_signal_peaks,
                     selected_aa=selected_aa,
                     selected_mass_index=open_hpos,
                 )
             )
+            # Full annotated (m/z) spectrum drawn at level 1 (oracle parity): the
+            # entire MonoMass_Anno spectrum with ONLY the open mass's m/z peaks
+            # highlighted. The STICK gold flag uses reversedSelectedAA == open_hpos
+            # (|| == open_hpos-1) — oracle Tagger.vue:260 (reversedSelectedAA),
+            # NOT the raw selectedAA used by the charge BADGE.
+            stick_gold = (
+                reversed_selected_aa is not None
+                and (
+                    reversed_selected_aa == open_hpos
+                    or reversed_selected_aa == open_hpos - 1
+                )
+            )
+            df_level1 = pd.DataFrame(
+                compute_tagger_level1_spectrum(
+                    anno_mz,
+                    anno_intensity,
+                    open_signal_peaks,
+                    stick_gold=stick_gold,
+                    tol=self._mass_match_tol,
+                )
+            )
         else:
             df_charges = pd.DataFrame()
+            df_level1 = pd.DataFrame()
         if df_charges.empty:
             df_charges = pd.DataFrame(
                 columns=[
@@ -887,6 +930,10 @@ class LinePlot(BaseComponent):
                     "charge_label",
                     "selected",
                 ]
+            )
+        if df_level1.empty:
+            df_level1 = pd.DataFrame(
+                columns=["x", "y", "highlight", "selected_gold"]
             )
 
         # --- Hash includes spectrum + tag payload + drill-down state ---
@@ -917,6 +964,7 @@ class LinePlot(BaseComponent):
                 str(tagger_mass if valid_open_mass else None),
                 str(len(mono_mass)),
                 str(len(df_charges)),
+                str(len(df_level1)),
             ]
         )
         data_hash = hashlib.sha256(hash_input.encode()).hexdigest()
@@ -925,6 +973,7 @@ class LinePlot(BaseComponent):
             "plotData": df_level0,
             "plotDataTaggerSegments": df_segments,
             "plotDataTaggerCharges": df_charges,
+            "plotDataTaggerLevel1": df_level1,
             "_hash": data_hash,
             "_plotConfig": {
                 "mode": "tagger",
@@ -1079,6 +1128,7 @@ class LinePlot(BaseComponent):
             "taggerMassButtons": True,
             "taggerSegmentsKey": "plotDataTaggerSegments",
             "taggerChargesKey": "plotDataTaggerCharges",
+            "taggerLevel1Key": "plotDataTaggerLevel1",
             "xPosScalingFactor": self._x_pos_scaling_factor,
             "config": self._plot_config,
         }
@@ -1707,6 +1757,54 @@ def compute_tagger_charges(
     return rows
 
 
+def compute_tagger_level1_spectrum(
+    anno_mz: List[float],
+    anno_intensity: List[float],
+    open_signal_peaks: List[Any],
+    stick_gold: bool,
+    tol: float,
+) -> List[Dict[str, Any]]:
+    """
+    Build the level-1 (Augmented Annotated Spectrum) sticks: the FULL annotated
+    spectrum with ONLY the open mass's m/z peaks highlighted.
+
+    Mirrors the oracle (PlotlyLineplotTagger.vue): at level 1 the sticks come from
+    the whole ``MonoMass_Anno``/``SumIntensity_Anno`` array (``xColumn``/``yColumn``
+    lines 115-119, 157-164), and ``highlightedPos`` (lines 760-771) marks a peak as
+    highlighted iff it is within ``tol`` of one of the open mass's signal-peak mzs.
+    The rest of the spectrum stays unhighlighted (lightblue).
+
+    Gold/orange split (oracle ``plotData`` 253-283): a highlighted peak is GOLD iff
+    ``stick_gold`` (``reversedSelectedAA == selectedMass || == selectedMass-1``),
+    else ORANGE. ``stick_gold`` is the same for all of the open mass's peaks because
+    they all share ``posHighlight == selectedMass``.
+
+    Returns one row per annotated peak: ``{x, y, highlight, selected_gold}``.
+    """
+    # Collect the open mass's m/z peak positions (highlight anchors).
+    open_mzs: List[float] = []
+    for signal in open_signal_peaks:
+        sig = _as_list(signal)
+        if len(sig) < 4:
+            continue
+        open_mzs.append(float(sig[1]))
+
+    rows: List[Dict[str, Any]] = []
+    n = min(len(anno_mz), len(anno_intensity))
+    for i in range(n):
+        mz = anno_mz[i]
+        is_hl = any(abs(mz - omz) <= tol for omz in open_mzs)
+        rows.append(
+            {
+                "x": mz,
+                "y": anno_intensity[i],
+                "highlight": is_hl,
+                "selected_gold": bool(is_hl and stick_gold),
+            }
+        )
+    return rows
+
+
 def compute_charge_annotations(
     signal_peaks_for_mass: List[Any],
     color: str = "#E4572E",
@@ -1717,7 +1815,9 @@ def compute_charge_annotations(
     Convenience producer for :meth:`LinePlot.set_peak_annotations`: groups one
     mass's raw signal peaks (``[peak_index, mz, intensity, charge]``) by charge,
     computes the intensity-weighted center-of-gravity m/z per group (oracle
-    formula) and emits one ``{x, text, color, hover, group}`` label per charge.
+    formula) and emits one ``{x, text, color, group}`` label per charge. No
+    ``hover`` is set — the oracle m/z charge branch emits no hover point for
+    charge labels (PlotlyLineplotUnified.vue 889-899).
 
     This keeps the library generic (it consumes plain descriptors); callers in
     any MS viewer can reuse it for the plain Annotated-Spectrum charge overlay.
@@ -1739,12 +1839,15 @@ def compute_charge_annotations(
     labels: List[Dict[str, Any]] = []
     for charge in order:
         cog = compute_charge_cog(groups[charge])
+        # No hover: the oracle m/z charge branch (PlotlyLineplotUnified.vue
+        # 889-899) emits NO invisible hover point for charge labels. Omitting
+        # ``hover`` keeps the descriptor hover-free (descriptorHoverTrace then
+        # contributes nothing for these labels).
         labels.append(
             {
                 "x": cog,
                 "text": f"z={charge}",
                 "color": color,
-                "hover": f"z={charge}",
                 "group": "charge",
             }
         )

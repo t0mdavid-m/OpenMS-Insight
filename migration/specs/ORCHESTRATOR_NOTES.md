@@ -53,3 +53,15 @@ parallel, in this order:
 - Do NOT touch `migration/` (harness/baselines) or `FLASHApp/` or the read-only Vue oracle repo.
 - Do NOT git commit/push. The orchestrator runs the gate, refreshes the `public_api` parity
   baseline (intentional 6→7 component drift), and records the ledger centrally.
+
+## CONVERGENCE RULE — clean rounds are REAL reviews, not fixes (do not game this)
+
+- A round counts as CLEAN only when a **full, genuine re-review of ALL units** that round finds
+  **zero** findings — every unit independently re-examined against its oracle in that round.
+- A round in which ANY fix is made is a finding round; it is NOT clean.
+- **No carry-forward, no rubber-stamping.** Recording a unit `clean` without actually re-reviewing
+  it that round is forbidden. Each clean round re-reviews everything from scratch.
+- Need **≥3 CONSECUTIVE clean rounds**. ANY new finding — including a regression introduced by a
+  previous fix, or something a deeper review surfaces — resets the consecutive-clean counter to 0.
+- Consequence: the final 3 rounds must be **fix-free** — three back-to-back full reviews that each
+  find everything clean. The goal is to PROVE stable parity, not to "fix three times."
