@@ -419,6 +419,10 @@ export default defineComponent({
       const getColor = this.getCategoryColor
       const traces: Plotly.Data[] = []
 
+      // Columns the click handler needs to read for the interactivity mapping.
+      const interactivityColumns = Object.values(this.interactivity)
+      const sourceData = this.heatmapData
+
       for (const category of this.uniqueCategories) {
         // Get indices of points belonging to this category
         const indices: number[] = []
@@ -433,6 +437,20 @@ export default defineComponent({
         const y = indices.map((i) => this.yValues[i])
         const hovertext = indices.map((i) => this.intensityValues[i].toExponential(2))
 
+        // Attach per-point customdata carrying the interactivity source values
+        // for that point's GLOBAL row. Plotly's pointIndex is per-trace, so the
+        // shared click handler cannot use a flat index into the combined data to
+        // resolve points in categories beyond the first. customdata makes each
+        // point self-describing (same approach as Plotly3D / PlotlyVolcano).
+        const customdata = indices.map((i) => {
+          const row = sourceData[i]
+          const cd: Record<string, unknown> = {}
+          for (const column of interactivityColumns) {
+            cd[column] = row?.[column]
+          }
+          return cd
+        })
+
         traces.push({
           type: 'scattergl',
           name: String(category),
@@ -443,6 +461,7 @@ export default defineComponent({
             color: getColor(category),
             size: 6,
           },
+          customdata: customdata as Plotly.Datum[],
           hovertext,
           hoverinfo: 'x+y+text',
         } as Plotly.Data)
