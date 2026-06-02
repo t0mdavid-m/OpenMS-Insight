@@ -153,6 +153,16 @@ export default defineComponent({
         this.sequenceObject.zIon
       )
     },
+    /**
+     * Per-residue coverage in [0, 1], or -1 when not supplied. Mirrors the
+     * oracle AminoAcidCell `coverage` computed (undefined -> -1 -> no gradient).
+     */
+    coverage(): number {
+      if (this.sequenceObject.coverage !== undefined) {
+        return this.sequenceObject.coverage
+      }
+      return -1
+    },
     aminoAcidCellClass(): Record<string, boolean> {
       return {
         'sequence-amino-acid': !this.fixedModification,
@@ -161,7 +171,7 @@ export default defineComponent({
     },
     cellStyles(): Record<string, string> {
       const isDark = this.theme?.base === 'dark'
-      return {
+      const styles: Record<string, string> = {
         '--amino-acid-cell-color': this.theme?.textColor ?? '#000',
         '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#000',
@@ -175,6 +185,21 @@ export default defineComponent({
         '--extra-frag-stroke': isDark ? 'rgba(255, 255, 255, 0.5)' : 'black',
         position: 'relative',
       }
+
+      // Per-residue coverage gradient (oracle parity). When coverage is supplied
+      // (>= 0) paint the cell `rgba(228, 87, 46, alpha)` with the oracle's
+      // alpha = (coverage * 0.9) + 0.1 scaling (0 stays fully transparent).
+      // When coverage is absent (-1) leave the secondary background untouched
+      // (back-compatible: no visual change).
+      if (this.coverage >= 0) {
+        let alpha = this.coverage
+        if (alpha !== 0) {
+          alpha = alpha * 0.9 + 0.1
+        }
+        styles['--amino-acid-cell-bg-color'] = `rgba(228, 87, 46, ${alpha})`
+      }
+
+      return styles
     },
     modificationDisplay(): string {
       if (this.modification === null) return ''

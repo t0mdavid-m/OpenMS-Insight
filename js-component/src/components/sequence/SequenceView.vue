@@ -106,8 +106,9 @@
         </v-menu>
       </div>
 
-      <!-- Sequence grid -->
-      <div class="px-2 pb-4" :class="gridClasses" style="width: 100%; max-width: 100%">
+      <!-- Sequence grid (+ optional per-residue coverage scale legend) -->
+      <div class="sequence-and-scale">
+      <div class="px-2 pb-4 sequence-grid-part" :class="gridClasses" style="width: 100%; max-width: 100%">
         <template v-for="(aaObj, aaIndex) in sequenceObjects" :key="aaIndex">
           <!-- Row number (left) -->
           <div
@@ -118,7 +119,14 @@
           </div>
 
           <!-- N-terminal marker -->
-          <div v-if="aaIndex === 0" class="d-flex justify-center align-center terminal-cell">N</div>
+          <ProteinTerminalCell
+            v-if="aaIndex === 0"
+            protein-terminal="N-term"
+            :index="-1"
+            :truncated="nTruncation"
+            :determined="nDetermined"
+            :font-size="fontSize"
+          />
 
           <!-- Amino acid cell -->
           <AminoAcidCell
@@ -142,13 +150,23 @@
           </div>
 
           <!-- C-terminal marker -->
-          <div
+          <ProteinTerminalCell
             v-if="aaIndex === sequence.length - 1"
-            class="d-flex justify-center align-center terminal-cell"
-          >
-            C
-          </div>
+            protein-terminal="C-term"
+            :index="sequence.length"
+            :truncated="cTruncation"
+            :determined="cDetermined"
+            :font-size="fontSize"
+          />
         </template>
+      </div>
+      <!-- Per-residue coverage scale legend (oracle parity). Gated on a real
+           coverage range (maxCoverage > 0); hidden when no coverage supplied. -->
+      <div v-if="maxCoverage > 0" class="scale-container" title="Sequence Coverage">
+        <div class="scale-text">{{ maxCoverage + 'x' }}</div>
+        <div class="scale"></div>
+        <div class="scale-text">1x</div>
+      </div>
       </div>
 
       <!-- Fragment table -->
@@ -202,6 +220,7 @@ import type {
 } from '@/types/sequence-data'
 import AminoAcidCell from './AminoAcidCell.vue'
 import InternalFragmentMap from './InternalFragmentMap.vue'
+import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from './modification'
 
 // Proton mass for m/z calculations
@@ -222,6 +241,7 @@ export default defineComponent({
   components: {
     AminoAcidCell,
     InternalFragmentMap,
+    ProteinTerminalCell,
   },
   props: {
     args: {
@@ -334,6 +354,61 @@ export default defineComponent({
     },
     modifications(): (number | null)[] {
       return this.sequenceData?.modifications ?? []
+    },
+    /**
+     * Per-residue coverage (normalised to [0,1]), one entry per residue.
+     * Empty when no coverage was supplied by Python.
+     */
+    coverage(): number[] {
+      return this.sequenceData?.coverage ?? []
+    },
+    /**
+     * Raw maximum coverage count (for the scale legend label, e.g. "5x").
+     * -1 when no coverage was supplied -> the scale legend is hidden.
+     */
+    maxCoverage(): number {
+      return this.sequenceData?.maxCoverage ?? -1
+    },
+    /**
+     * Reported proteoform start (0-based). A negative value marks an
+     * UNDETERMINED N-terminus (oracle convention). Undefined -> 0 (full,
+     * determined N-terminus; back-compatible).
+     */
+    proteoformStartReported(): number {
+      return this.sequenceData?.proteoform_start ?? 0
+    },
+    /** Clamped proteoform start (negative -> 0). */
+    proteoformStart(): number {
+      return this.proteoformStartReported < 0 ? 0 : this.proteoformStartReported
+    },
+    /**
+     * Reported proteoform end (0-based). A negative value marks an UNDETERMINED
+     * C-terminus. Undefined -> last residue (full, determined C-terminus).
+     */
+    proteoformEndReported(): number {
+      return this.sequenceData?.proteoform_end ?? this.sequence.length - 1
+    },
+    /** Clamped proteoform end (negative -> last residue). */
+    proteoformEnd(): number {
+      return this.proteoformEndReported < 0
+        ? this.sequence.length - 1
+        : this.proteoformEndReported
+    },
+    /** N-terminus is truncated when the proteoform starts after residue 0. */
+    nTruncation(): boolean {
+      return this.proteoformStart > 0
+    },
+    /** N-terminus is determined unless the reported start is negative. */
+    nDetermined(): boolean {
+      return this.proteoformStartReported >= 0
+    },
+    /** C-terminus is truncated when the proteoform ends before the last residue. */
+    cTruncation(): boolean {
+      return this.proteoformEnd < this.sequence.length - 1
+    },
+    /** C-terminus is determined unless the reported end is negative. */
+    cDetermined(): boolean {
+      return this.proteoformEndReported >= 0
     },
     theoreticalMass(): number {
       return this.sequenceData?.theoretical_mass ?? 0
@@ -469,9 +544,13 @@ export default defineComponent({
   methods: {
     initializeSequenceObjects(): void {
       this.sequenceObjects = []
-      for (const aa of this.sequence) {
+      const coverage = this.coverage
+      this.sequence.forEach((aa, index) => {
         this.sequenceObjects.push({
           aminoAcid: aa,
+          // Per-residue coverage (already normalised to [0,1] in Python). Left
+          // undefined when no coverage was supplied -> no gradient.
+          coverage: coverage[index],
           aIon: false,
           bIon: false,
           cIon: false,
@@ -480,7 +559,7 @@ export default defineComponent({
           zIon: false,
           extraTypes: [],
         })
-      }
+      })
     },
     /**
      * Apply auto-zoom for short sequences.
@@ -846,11 +925,43 @@ export default defineComponent({
   opacity: 0.6;
 }
 
-.terminal-cell {
+/* Coverage scale legend layout (oracle parity). The sequence grid grows to fill
+   the row; the scale legend sits to its right. When no coverage is supplied the
+   scale-container is not rendered (v-if), so this collapses to the grid alone. */
+.sequence-and-scale {
+  display: flex;
+  align-items: center;
+}
+
+.sequence-grid-part {
+  flex-grow: 1;
+}
+
+.scale-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Vertical gradient legend: faint (1x) at the bottom -> full coverage at top,
+   using the same E4572E (228,87,46) base color as the per-residue gradient. */
+.scale {
+  width: 60px;
+  height: 100px;
+  background: linear-gradient(
+    to top,
+    rgba(228, 87, 46, 0.1),
+    rgba(228, 87, 46, 0.2) 10%,
+    rgba(228, 87, 46, 0.4) 20%,
+    rgba(228, 87, 46, 0.6) 40%,
+    rgba(228, 87, 46, 0.8) 70%,
+    rgba(228, 87, 46, 1) 100%
+  );
+}
+
+.scale-text {
+  text-align: center;
+  font-size: 14pt;
   font-weight: bold;
-  font-size: 12px;
-  background-color: rgba(128, 128, 128, 0.2);
-  border-radius: 4px;
-  aspect-ratio: 1;
 }
 </style>

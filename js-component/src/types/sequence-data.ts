@@ -63,6 +63,30 @@ export interface SequenceData {
   theoretical_mass: number
   /** List of amino acids with fixed modifications (e.g., ['C', 'M']) */
   fixed_modifications: string[]
+  /**
+   * Per-residue coverage, ALREADY normalised to [0, 1] (value / maxCoverage),
+   * one entry per residue. Present only when a `coverage_column` is configured
+   * in Python; absent otherwise (no coverage gradient, back-compatible).
+   */
+  coverage?: number[]
+  /**
+   * Raw maximum coverage count (pre-normalisation). Used for the coverage scale
+   * legend label (e.g. "5x"). Present iff `coverage` is present.
+   */
+  maxCoverage?: number
+  /**
+   * Reported proteoform N-terminus residue index (0-based). A NEGATIVE value
+   * marks an UNDETERMINED N-terminus (renders a "??" terminal marker); a value
+   * > 0 marks a truncated N-terminus (struck-through terminal letter + the
+   * residues before it dimmed). Optional; absent -> full determined terminus.
+   */
+  proteoform_start?: number
+  /**
+   * Reported proteoform C-terminus residue index (0-based). A NEGATIVE value
+   * marks an UNDETERMINED C-terminus; a value < length-1 marks a truncated
+   * C-terminus. Optional; absent -> full determined terminus.
+   */
+  proteoform_end?: number
   /** External peak annotations from search engine (optional) */
   external_annotations?: ExternalAnnotation[]
   /** Fragment tolerance value from search parameters (optional) */
@@ -111,6 +135,11 @@ export interface ObservedSpectrumData {
 export interface SequenceObject {
   /** Single-letter amino acid code */
   aminoAcid: string
+  /**
+   * Per-residue coverage, normalised to [0, 1] (from SequenceData.coverage).
+   * Undefined when no coverage is supplied -> no coverage gradient is drawn.
+   */
+  coverage?: number
   /** Whether this position has a matched a ion */
   aIon: boolean
   /** Whether this position has a matched b ion */

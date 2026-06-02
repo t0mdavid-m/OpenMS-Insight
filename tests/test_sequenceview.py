@@ -418,3 +418,407 @@ class TestSequenceViewInternalFragments:
         assert seq["internal_fragments"] is True
         for key in INTERNAL_KEYS:
             assert seq[key] == []
+
+
+# ---------------------------------------------------------------------------
+# Per-residue coverage (P1-SV-COV-001) + truncated/undetermined terminals
+# (P1-SV-COV-002).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def coverage_sequence_data() -> pl.LazyFrame:
+    """Sequence frame with per-residue coverage lists + proteoform terminals.
+
+    scan 1: PEPTIDER (len 8), coverage peaks at the last residue (max 4),
+            truncated N (start=2) + truncated C (end=6).
+    scan 2: ACDEFGHK (len 8), all-zero coverage (max 0 -> legend hidden),
+            UNDETERMINED N (start=-1) + full C.
+    scan 3: MNPQRST  (len 7), flat coverage (max 1), full N + UNDETERMINED C
+            (end=-1).
+    """
+    return pl.DataFrame(
+        {
+            "scan_id": [1, 2, 3],
+            "sequence": ["PEPTIDER", "ACDEFGHK", "MNPQRST"],
+            "precursor_charge": [2, 3, 1],
+            "cov": [
+                [0.0, 1.0, 2.0, 2.0, 1.0, 0.0, 0.0, 4.0],
+                [0.0] * 8,
+                [1.0] * 7,
+            ],
+            "pstart": [2, -1, 0],
+            "pend": [6, 7, -1],
+        }
+    ).lazy()
+
+
+class TestNormalizeCoverage:
+    """Pure-function tests for the oracle-parity coverage normalisation."""
+
+    def test_normalize_divides_by_max(self):
+        from openms_insight.components.sequenceview import normalize_coverage
+
+        normalized, max_cov = normalize_coverage([0.0, 1.0, 2.0, 4.0])
+        # value / max(value) (oracle p_cov), max returned raw.
+        assert normalized == [0.0, 0.25, 0.5, 1.0]
+        assert max_cov == 4.0
+
+    def test_normalize_all_zero(self):
+        from openms_insight.components.sequenceview import normalize_coverage
+
+        normalized, max_cov = normalize_coverage([0.0, 0.0, 0.0])
+        assert normalized == [0.0, 0.0, 0.0]
+        assert max_cov == 0.0
+
+    def test_normalize_empty(self):
+        from openms_insight.components.sequenceview import normalize_coverage
+
+        assert normalize_coverage([]) == ([], 0.0)
+
+    def test_normalize_in_unit_range(self):
+        from openms_insight.components.sequenceview import normalize_coverage
+
+        normalized, _ = normalize_coverage([3.0, 7.0, 1.0, 7.0])
+        assert all(0.0 <= v <= 1.0 for v in normalized)
+        # The maximum residue(s) normalise to exactly 1.0 (drives full alpha).
+        assert max(normalized) == 1.0
+
+
+class TestSequenceViewCoverage:
+    """Contract tests for per-residue coverage payload + cache/args wiring."""
+
+    def test_coverage_in_vue_data(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """coverage_column attaches normalised `coverage` + raw `maxCoverage`."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_cov_on",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            coverage_column="cov",
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+
+        # Per-residue coverage lands, one entry per residue, all in [0, 1].
+        assert "coverage" in seq
+        assert len(seq["coverage"]) == len(seq["sequence"])
+        assert all(0.0 <= v <= 1.0 for v in seq["coverage"])
+        # The residue with the raw max (last residue, count 4) -> alpha-driving 1.0.
+        assert seq["coverage"][7] == 1.0
+        assert seq["coverage"][0] == 0.0
+        # maxCoverage is the RAW max (legend label "4x"), not the normalised 1.0.
+        assert seq["maxCoverage"] == 4.0
+
+    def test_coverage_drives_alpha_values(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Normalised coverage equals raw/max exactly (the value Vue maps to alpha)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_cov_alpha",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            coverage_column="cov",
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        # raw [0,1,2,2,1,0,0,4] / max 4 -> exact alpha inputs.
+        assert seq["coverage"] == [0.0, 0.25, 0.5, 0.5, 0.25, 0.0, 0.0, 1.0]
+
+    def test_coverage_all_zero_max_zero(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """All-zero coverage -> maxCoverage 0 (Vue hides the scale legend)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_cov_zero",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            coverage_column="cov",
+        )
+        # scan 2 has all-zero coverage.
+        seq = sv._prepare_vue_data({"spectrum": 2})["sequenceData"]
+        assert seq["coverage"] == [0.0] * 8
+        assert seq["maxCoverage"] == 0.0
+
+    def test_coverage_off_no_keys(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """No coverage_column -> neither coverage key is emitted (back-compat)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_cov_off",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert "coverage" not in seq
+        assert "maxCoverage" not in seq
+
+    def test_coverage_hash_changes_with_flag(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """The change-detection hash differs when coverage is supplied."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv_off = SequenceView(
+            cache_id="test_sv_cov_hash_off",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+        )
+        sv_on = SequenceView(
+            cache_id="test_sv_cov_hash_on",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            coverage_column="cov",
+        )
+        h_off = sv_off._prepare_vue_data({"spectrum": 1})["_hash"]
+        h_on = sv_on._prepare_vue_data({"spectrum": 1})["_hash"]
+        assert h_off != h_on
+
+    def test_coverage_cache_roundtrip(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Reconstruction from cache restores the coverage column + payload."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        cache_id = "test_sv_cov_cache"
+        SequenceView(
+            cache_id=cache_id,
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            coverage_column="cov",
+        )
+        restored = SequenceView(cache_id=cache_id, cache_path=str(temp_cache_dir))
+        assert restored._coverage_column == "cov"
+        seq = restored._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert seq["maxCoverage"] == 4.0
+        assert seq["coverage"][7] == 1.0
+
+    def test_coverage_config_requires_data(
+        self,
+        temp_cache_dir: Path,
+    ):
+        """coverage_column without sequence_data raises (has_config gate)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        with pytest.raises(ValueError):
+            SequenceView(
+                cache_id="test_sv_cov_no_data",
+                cache_path=str(temp_cache_dir),
+                coverage_column="cov",
+            )
+
+    def test_coverage_empty_sequence_safe(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Empty sequence (filter None) -> no coverage keys, no error."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_cov_empty",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            coverage_column="cov",
+        )
+        seq = sv._prepare_vue_data({"spectrum": None})["sequenceData"]
+        assert seq["sequence"] == []
+        assert "coverage" not in seq
+        assert "maxCoverage" not in seq
+
+
+class TestSequenceViewTerminals:
+    """Contract tests for truncated / undetermined proteoform terminals."""
+
+    def test_terminals_in_vue_data(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """proteoform_start/end columns attach the terminal indices to payload."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_term_on",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            proteoform_start_column="pstart",
+            proteoform_end_column="pend",
+        )
+        # scan 1: truncated N (start 2 > 0) + truncated C (end 6 < len-1=7).
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert seq["proteoform_start"] == 2
+        assert seq["proteoform_end"] == 6
+
+    def test_terminals_undetermined_negative(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Negative terminal indices propagate (Vue renders the '??' marker)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_term_undet",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            proteoform_start_column="pstart",
+            proteoform_end_column="pend",
+        )
+        # scan 2: UNDETERMINED N (start -1). scan 3: UNDETERMINED C (end -1).
+        seq2 = sv._prepare_vue_data({"spectrum": 2})["sequenceData"]
+        assert seq2["proteoform_start"] == -1  # < 0 -> n_determined False in Vue
+        seq3 = sv._prepare_vue_data({"spectrum": 3})["sequenceData"]
+        assert seq3["proteoform_end"] == -1  # < 0 -> c_determined False in Vue
+
+    def test_terminals_start_only(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Only proteoform_start_column -> only proteoform_start emitted."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_term_start_only",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            proteoform_start_column="pstart",
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert seq["proteoform_start"] == 2
+        assert "proteoform_end" not in seq
+
+    def test_terminals_off_no_keys(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """No terminal columns -> no terminal keys (back-compat, determined)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_term_off",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert "proteoform_start" not in seq
+        assert "proteoform_end" not in seq
+
+    def test_terminals_cache_roundtrip(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Reconstruction restores the terminal columns + payload."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        cache_id = "test_sv_term_cache"
+        SequenceView(
+            cache_id=cache_id,
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            proteoform_start_column="pstart",
+            proteoform_end_column="pend",
+        )
+        restored = SequenceView(cache_id=cache_id, cache_path=str(temp_cache_dir))
+        assert restored._proteoform_start_column == "pstart"
+        assert restored._proteoform_end_column == "pend"
+        seq = restored._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert seq["proteoform_start"] == 2
+        assert seq["proteoform_end"] == 6
+
+    def test_terminals_config_requires_data(
+        self,
+        temp_cache_dir: Path,
+    ):
+        """Terminal columns without sequence_data raise (has_config gate)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        with pytest.raises(ValueError):
+            SequenceView(
+                cache_id="test_sv_term_no_data",
+                cache_path=str(temp_cache_dir),
+                proteoform_start_column="pstart",
+            )
+
+    def test_terminals_empty_sequence_safe(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Empty sequence (filter None) -> no terminal keys, no error."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_term_empty",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            proteoform_start_column="pstart",
+            proteoform_end_column="pend",
+        )
+        seq = sv._prepare_vue_data({"spectrum": None})["sequenceData"]
+        assert seq["sequence"] == []
+        assert "proteoform_start" not in seq
+        assert "proteoform_end" not in seq

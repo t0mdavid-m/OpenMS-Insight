@@ -529,6 +529,56 @@ def get_theoretical_mass(sequence_str: str) -> float:
         return 0.0
 
 
+# ---------------------------------------------------------------------------
+# Per-residue sequence coverage
+#
+# Generic port of the oracle's per-residue coverage gradient (FLASHApp uses it
+# for sequence-tag coverage, but coverage is a general proteomics concept). The
+# oracle (`FLASHApp/src/render/sequence.py` + `src/parse/tnt.py`) supplies the
+# component a per-residue list `coverage` ALREADY normalised to [0, 1]
+# (`p_cov = coverage / max(coverage)`) plus the raw integer `maxCoverage`
+# (used only for the scale legend label, e.g. "5x").
+#
+# Insight keeps that exact contract: the caller provides a per-residue coverage
+# list (a `coverage_column` in the sequence frame). We normalise it the same way
+# the oracle does and emit both `coverage` (per-residue, [0, 1]) and
+# `maxCoverage` (raw max) into `sequenceData`. The Vue side renders the
+# `rgba(228, 87, 46, alpha)` gradient per residue and a coverage scale legend.
+# When no coverage is configured, neither key is emitted (back-compatible: the
+# existing secondary-background cells are unchanged).
+# ---------------------------------------------------------------------------
+
+# Oracle coverage gradient base color (E4572E), kept here for documentation /
+# test reference. The actual rgba() string is built in AminoAcidCell.vue.
+COVERAGE_COLOR_RGB = (228, 87, 46)
+
+
+def normalize_coverage(
+    raw_coverage: List[float],
+) -> Tuple[List[float], float]:
+    """Normalise a raw per-residue coverage list the way the oracle does.
+
+    Mirrors ``FLASHApp/src/parse/tnt.py`` (``p_cov = coverage / max(coverage)``
+    when ``max(coverage) > 0`` else all-zeros, and ``maxCoverage = max(coverage)``).
+
+    Args:
+        raw_coverage: Per-residue raw coverage counts (one entry per residue).
+
+    Returns:
+        Tuple of ``(normalized_coverage, max_coverage)`` where
+        ``normalized_coverage`` is in ``[0, 1]`` (per residue) and
+        ``max_coverage`` is the raw maximum (0.0 when empty / all-zero).
+    """
+    if not raw_coverage:
+        return [], 0.0
+    max_cov = max(raw_coverage)
+    if max_cov > 0:
+        normalized = [float(c) / max_cov for c in raw_coverage]
+    else:
+        normalized = [0.0 for _ in raw_coverage]
+    return normalized, float(max_cov)
+
+
 # Default annotation configuration
 DEFAULT_ANNOTATION_CONFIG = {
     "ion_types": ["b", "y"],
@@ -604,6 +654,9 @@ class SequenceView:
         height: int = 400,
         internal_fragments: bool = False,
         internal_fragment_config: Optional[Dict[str, Any]] = None,
+        coverage_column: Optional[str] = None,
+        proteoform_start_column: Optional[str] = None,
+        proteoform_end_column: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -647,6 +700,22 @@ class SequenceView:
                 - remove_terminal_collisions: drop internals colliding with a
                   terminal b/c/x/y mass (default True, for parity)
                 - terminal_collision_ppm: ppm window for that filter (default 10.0)
+            coverage_column: Optional name of a column in the sequence frame that
+                holds a per-residue coverage list (one numeric entry per residue
+                of the sequence). When provided, the component normalises it the
+                way the oracle does (per residue / max) and renders a per-residue
+                coverage gradient + a coverage scale legend. When ``None``
+                (default) no coverage is emitted and rendering is unchanged
+                (backward compatible).
+            proteoform_start_column: Optional name of a column holding the 0-based
+                proteoform N-terminus residue index. A NEGATIVE value marks an
+                UNDETERMINED N-terminus (rendered as a "??" terminal marker); a
+                value > 0 marks a truncated N-terminus. ``None`` (default) ->
+                full determined N-terminus (no visual change).
+            proteoform_end_column: Optional name of a column holding the 0-based
+                proteoform C-terminus residue index. A NEGATIVE value marks an
+                UNDETERMINED C-terminus; a value < length-1 marks a truncated
+                C-terminus. ``None`` (default) -> full determined C-terminus.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -668,6 +737,9 @@ class SequenceView:
             or height != 400
             or internal_fragments is not False
             or internal_fragment_config is not None
+            or coverage_column is not None
+            or proteoform_start_column is not None
+            or proteoform_end_column is not None
             or bool(kwargs)
         )
 
@@ -696,6 +768,13 @@ class SequenceView:
             self._internal_fragment_config = {**DEFAULT_INTERNAL_FRAGMENT_CONFIG}
             if internal_fragment_config:
                 self._internal_fragment_config.update(internal_fragment_config)
+
+            # Per-residue coverage column (generic; off when None).
+            self._coverage_column = coverage_column
+            # Optional proteoform terminal-index columns (truncated/undetermined
+            # N/C terminals; off when None).
+            self._proteoform_start_column = proteoform_start_column
+            self._proteoform_end_column = proteoform_end_column
             self._filters = filters or {}
             self._filter_defaults = {}
             for identifier in self._filters.keys():
@@ -769,6 +848,9 @@ class SequenceView:
             "annotation_config": self._annotation_config,
             "internal_fragments": self._internal_fragments,
             "internal_fragment_config": self._internal_fragment_config,
+            "coverage_column": self._coverage_column,
+            "proteoform_start_column": self._proteoform_start_column,
+            "proteoform_end_column": self._proteoform_end_column,
         }
 
     def _cache_exists(self) -> bool:
@@ -811,6 +893,9 @@ class SequenceView:
         self._internal_fragment_config.update(
             config.get("internal_fragment_config", {})
         )
+        self._coverage_column = config.get("coverage_column")
+        self._proteoform_start_column = config.get("proteoform_start_column")
+        self._proteoform_end_column = config.get("proteoform_end_column")
         self._config = {}
 
         # Load cached LazyFrames
@@ -844,10 +929,20 @@ class SequenceView:
             filter_cols = [c for c in self._filters.values() if c in schema.names()]
 
             # Build column list: filter columns + required columns
+            # (+ the optional per-residue coverage list column, when configured).
             required = ["sequence", "precursor_charge"]
+            optional = []
+            if self._coverage_column is not None:
+                optional.append(self._coverage_column)
+            if self._proteoform_start_column is not None:
+                optional.append(self._proteoform_start_column)
+            if self._proteoform_end_column is not None:
+                optional.append(self._proteoform_end_column)
             cols = list(
                 dict.fromkeys(
-                    filter_cols + [c for c in required if c in schema.names()]
+                    filter_cols
+                    + [c for c in required if c in schema.names()]
+                    + [c for c in optional if c in schema.names()]
                 )
             )
 
@@ -936,6 +1031,114 @@ class SequenceView:
             pass
 
         return "", 1
+
+    def _get_coverage_for_state(self, state: Dict[str, Any]) -> List[float]:
+        """Get the raw per-residue coverage list for the current state.
+
+        Reads ``self._coverage_column`` from cached sequences.parquet with the
+        same predicate pushdown / None-default semantics as
+        :meth:`_get_sequence_for_state`. Returns an empty list when coverage is
+        not configured, the column is absent, the filter is unset, or no row
+        matches (so the gradient stays off and back-compat is preserved).
+
+        Returns:
+            Raw per-residue coverage values (one per residue), or ``[]``.
+        """
+        if self._coverage_column is None:
+            return []
+
+        filtered = self._cached_sequences
+        schema = filtered.collect_schema()
+        if self._coverage_column not in schema.names():
+            return []
+
+        # Apply filters (matching _get_sequence_for_state behaviour exactly).
+        for identifier, column in self._filters.items():
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    # Filter has None default and state is None - empty intentionally
+                    return []
+
+        try:
+            df = filtered.select([self._coverage_column]).head(1).collect()
+            if df.height > 0:
+                value = df[self._coverage_column][0]
+                if value is None:
+                    return []
+                # Polars list cell -> Python list of floats.
+                return [float(v) for v in value]
+        except Exception:
+            pass
+
+        return []
+
+    def _get_proteoform_terminals_for_state(
+        self, state: Dict[str, Any]
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """Get the proteoform (start, end) terminal indices for the state.
+
+        Reads ``self._proteoform_start_column`` / ``_proteoform_end_column`` from
+        cached sequences.parquet with the same predicate-pushdown / None-default
+        semantics as :meth:`_get_sequence_for_state`. Each is ``None`` when the
+        column is not configured / absent / unmatched (so the terminal markers
+        stay in their default determined state, back-compatible).
+
+        Returns:
+            Tuple of ``(start_index, end_index)``, each ``Optional[int]``.
+        """
+        if (
+            self._proteoform_start_column is None
+            and self._proteoform_end_column is None
+        ):
+            return None, None
+
+        filtered = self._cached_sequences
+        schema = filtered.collect_schema()
+        cols = [
+            c
+            for c in (self._proteoform_start_column, self._proteoform_end_column)
+            if c is not None and c in schema.names()
+        ]
+        if not cols:
+            return None, None
+
+        # Apply filters (matching _get_sequence_for_state behaviour exactly).
+        for identifier, column in self._filters.items():
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    return None, None
+
+        start_val: Optional[int] = None
+        end_val: Optional[int] = None
+        try:
+            df = filtered.select(cols).head(1).collect()
+            if df.height > 0:
+                if (
+                    self._proteoform_start_column in cols
+                    and df[self._proteoform_start_column][0] is not None
+                ):
+                    start_val = int(df[self._proteoform_start_column][0])
+                if (
+                    self._proteoform_end_column in cols
+                    and df[self._proteoform_end_column][0] is not None
+                ):
+                    end_val = int(df[self._proteoform_end_column][0])
+        except Exception:
+            pass
+
+        return start_val, end_val
 
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
@@ -1039,6 +1242,30 @@ class SequenceView:
                 self._internal_fragment_config["tolerance_ppm"]
             )
 
+        # Per-residue coverage payload (generic; gated on coverage_column).
+        # Emit `coverage` (normalised per residue, like the oracle's p_cov) and
+        # `maxCoverage` (raw max, for the scale legend). Absent when no coverage
+        # is supplied (back-compatible: no visual change).
+        if self._coverage_column is not None:
+            raw_coverage = self._get_coverage_for_state(state)
+            if raw_coverage:
+                normalized, max_cov = normalize_coverage(raw_coverage)
+                sequence_data["coverage"] = normalized
+                sequence_data["maxCoverage"] = max_cov
+
+        # Optional proteoform terminal indices (truncated / undetermined "??"
+        # terminals). Emit only the values that were supplied; absent values keep
+        # the Vue default (full determined terminus). Back-compatible.
+        if (
+            self._proteoform_start_column is not None
+            or self._proteoform_end_column is not None
+        ):
+            start_val, end_val = self._get_proteoform_terminals_for_state(state)
+            if start_val is not None:
+                sequence_data["proteoform_start"] = start_val
+            if end_val is not None:
+                sequence_data["proteoform_end"] = end_val
+
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
 
@@ -1052,11 +1279,17 @@ class SequenceView:
             observed_masses = peaks_df["mass"].to_list()
             peak_ids = peaks_df["peak_id"].to_list()
 
-        # Create hash for change detection. Fold the internal-fragments flag in so
-        # flipping config re-renders (the internal arrays ride sequenceData).
+        # Create hash for change detection. Fold the internal-fragments flag and
+        # the coverage flag in so flipping either re-renders (both ride
+        # sequenceData).
+        coverage_in_payload = int("coverage" in sequence_data)
+        term_start = sequence_data.get("proteoform_start", "")
+        term_end = sequence_data.get("proteoform_end", "")
         hash_input = (
             f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
             f":{int(self._internal_fragments)}"
+            f":{int(self._coverage_column is not None)}:{coverage_in_payload}"
+            f":{term_start}:{term_end}"
         )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
