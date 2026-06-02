@@ -1037,6 +1037,65 @@ class Table(BaseComponent):
             },
         )
 
+    def with_fixed_format(
+        self,
+        field: str,
+        precision: int = 4,
+        min_length: int = 4,
+    ) -> "Table":
+        """
+        Format a numeric column with fixed decimal places, guarded by length.
+
+        Wraps the ``fixed`` registry formatter (reproduces the original
+        ``toFixedFormatter``): values whose string representation is longer than
+        ``min_length`` are rendered with ``precision`` decimals; shorter values
+        are returned untouched (no trailing-zero padding). Set ``min_length=0``
+        for an unconditional fixed-decimal render.
+
+        Args:
+            field: Column field name
+            precision: Number of decimal places (default: 4)
+            min_length: Min string length before reformatting (default: 4)
+
+        Returns:
+            Self for method chaining
+        """
+        return self.with_column_formatter(
+            field,
+            "fixed",
+            {"precision": precision, "minLength": min_length},
+        )
+
+    def with_placeholder(
+        self,
+        field: str,
+        sentinels=(-1,),
+        text: str = "-",
+        loose: bool = True,
+    ) -> "Table":
+        """
+        Replace sentinel "missing value" markers with placeholder text.
+
+        Wraps the ``placeholder`` registry formatter (generalizes the inline
+        ``value == -1 ? '-' : value``): cells matching any sentinel render
+        ``text``; all other values are rendered unchanged.
+
+        Args:
+            field: Column field name
+            sentinels: Values to replace with ``text`` (default: ``(-1,)``)
+            text: Replacement text rendered for a sentinel match (default: "-")
+            loose: Use loose (==) comparison when True, strict (===) when False
+                (default: True)
+
+        Returns:
+            Self for method chaining
+        """
+        return self.with_column_formatter(
+            field,
+            "placeholder",
+            {"sentinels": list(sentinels), "text": text, "loose": loose},
+        )
+
     def with_progress_bar(
         self,
         field: str,
