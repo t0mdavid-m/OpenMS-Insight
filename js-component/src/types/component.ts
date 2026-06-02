@@ -67,11 +67,23 @@ export interface TableComponentArgs extends BaseComponentArgs {
 
 /**
  * Line plot component arguments.
+ *
+ * `mode` selects rendering behavior in-component:
+ * - 'default': classic stick spectrum (highlight + per-row annotation labels).
+ * - 'tagger': sequence-tag overlay with a derived two-level drill-down. Level is
+ *   DERIVED from the `tagger_mass` selection (null => level 0). Heavy math
+ *   (highlight masks, COG, sequence-arrow segments) is precomputed in Python and
+ *   arrives as `plotData` (level 0) + `taggerSegmentsKey` + `taggerChargesKey`.
  */
 export interface LinePlotComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
+  mode?: 'default' | 'tagger'
   title: string
+  /** Title shown at the annotated (level-1) drill-down (tagger). */
+  titleLevel1?: string
   xLabel?: string
+  /** X-axis label at the annotated (level-1) drill-down (tagger). */
+  xLabelLevel1?: string
   yLabel?: string
   styling?: LinePlotStyling
   config?: LinePlotConfig
@@ -79,8 +91,106 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   xColumn?: string // Column name for x-axis values
   yColumn?: string // Column name for y-axis values
   highlightColumn?: string // Column name for highlight mask (boolean)
+  /** Column name for the gold/selected mask (tagger). */
+  selectedColumn?: string
   annotationColumn?: string // Column name for annotation text
+  // --- tagger-specific ---
+  /** Draw mass-button rects/labels above highlighted peaks (level 0). */
+  taggerMassButtons?: boolean
+  /** allDataForDrawing key holding the level-0 sequence-arrow segments. */
+  taggerSegmentsKey?: string
+  /** allDataForDrawing key holding the level-1 charge clusters. */
+  taggerChargesKey?: string
+  /** Oracle level-1 charge-label x scaling factor (27.5). */
+  xPosScalingFactor?: number
   height?: number // Component height in pixels
+}
+
+/**
+ * Density (target/decoy KDE / FDR) plot component arguments.
+ *
+ * Static two-series plot fed a tidy long {x, y, group} frame; no interactivity.
+ */
+export interface DensityPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyDensityPlot'
+  mode: 'density'
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  /** Column names in the tidy long frame. */
+  xColumn: string
+  yColumn: string
+  groupColumn: string
+  /** Value in groupColumn that maps to the target (green) series. */
+  targetValue: string
+  /** Value in groupColumn that maps to the decoy (red) series. */
+  decoyValue: string
+  /** Legend noun, e.g. "QScore" (default) or "ProteoformLevelQvalue". */
+  scoreLabel?: string
+  styling?: { targetColor?: string; decoyColor?: string }
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * One level-0 sequence-arrow segment (tagger). Precomputed in Python.
+ */
+export interface TaggerSegment {
+  x_start: number
+  x_end: number
+  residue: string
+  delta: number
+  selected: boolean
+}
+
+/**
+ * One level-1 charge-cluster peak (tagger). `cog` is the precomputed
+ * intensity-weighted center-of-gravity m/z for the peak's charge group.
+ */
+export interface TaggerChargePeak {
+  mz: number
+  intensity: number
+  charge: number
+  cog: number
+  charge_label: string
+  selected: boolean
+  peak_id: number
+}
+
+/**
+ * Opaque TagData payload carried by the generic `tag` selection identifier
+ * (set by the tag table, read by Python). Mirrors the oracle TagData shape.
+ * Documentation-only — the generic store stores it as an opaque object value.
+ */
+export interface TaggerTagPayload {
+  sequence: string
+  nTerminal: boolean
+  masses: number[]
+  selectedAA: number
+  startPos: number
+  endPos: number
+}
+
+/**
+ * Generic per-peak annotation descriptor (render-time, data coordinates).
+ *
+ * Self-describing label independent of the per-row column model: any caller can
+ * emit `{x, text, color}` triplets. Charge labels are just `text="z="+charge`,
+ * `x=COG`. Arrives via `allDataForDrawing.peakAnnotations`.
+ */
+export interface PeakAnnotation {
+  /** Data-x of the label (e.g. intensity-weighted COG m/z). */
+  x: number
+  /** Label text (e.g. "z=12"). */
+  text: string
+  /** Badge fill; defaults to styling.highlightColor. */
+  color?: string
+  /** Optional hover text for an invisible hover point at the label. */
+  hover?: string
+  /** Optional group id for overlap-suppression scoping. */
+  group?: string | number
+  /** Optional explicit label y (defaults to the computed ypos band). */
+  y?: number
 }
 
 export interface LinePlotStyling {
@@ -279,6 +389,7 @@ export type Plot3DData = Record<string, unknown>
 export type ComponentArgs =
   | TableComponentArgs
   | LinePlotComponentArgs
+  | DensityPlotComponentArgs
   | HeatmapComponentArgs
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
@@ -317,6 +428,8 @@ export interface PlotData {
   x_values: number[]
   y_values: number[]
   highlight_mask?: boolean[]
+  /** Gold/selected mask (tagger level 0). */
+  selected_mask?: boolean[]
   annotations?: string[]
   // Allow dynamic interactivity columns like interactivity_peak_id
   [key: string]: unknown[] | undefined

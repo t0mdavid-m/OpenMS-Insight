@@ -27,6 +27,7 @@ import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
 import TabulatorTable from './components/tabulator/TabulatorTable.vue'
 import PlotlyLineplot from './components/plotly/PlotlyLineplot.vue'
+import PlotlyDensityPlot from './components/plotly/PlotlyDensityPlot.vue'
 import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
 import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
 import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
@@ -38,6 +39,7 @@ export default defineComponent({
   components: {
     TabulatorTable,
     PlotlyLineplot,
+    PlotlyDensityPlot,
     PlotlyHeatmap,
     PlotlyMirrorPlot,
     PlotlyVolcano,
@@ -200,6 +202,8 @@ export default defineComponent({
         case 'PlotlyLineplotUnified':
         case 'PlotlyLineplot':
           return PlotlyLineplot
+        case 'PlotlyDensityPlot':
+          return PlotlyDensityPlot
         case 'PlotlyHeatmap':
           return PlotlyHeatmap
         case 'PlotlyMirrorPlot':

@@ -28,6 +28,39 @@ if TYPE_CHECKING:
     from .sequenceview import SequenceView
 
 
+# Structured constructor params stored in self._config (for subprocess
+# recreation) that must NOT leak into _get_component_args as top-level args —
+# they are already surfaced via dedicated camelCase args / `config`.
+_MANAGED_CONFIG_KEYS = frozenset(
+    {
+        "x_column",
+        "y_column",
+        "title",
+        "x_label",
+        "y_label",
+        "highlight_column",
+        "annotation_column",
+        "styling",
+        "config",
+        "mode",
+        "group_column",
+        "target_value",
+        "decoy_value",
+        "kde_from",
+        "kde_points",
+        "signal_peaks_column",
+        "mz_column",
+        "mz_intensity_column",
+        "tag_payload_key",
+        "mass_match_tol",
+        "title_level1",
+        "x_label_level1",
+        "x_pos_scaling_factor",
+        "plot_config",
+    }
+)
+
+
 @register_component("lineplot")
 class LinePlot(BaseComponent):
     """
@@ -324,10 +357,36 @@ class LinePlot(BaseComponent):
 
     def _validate_mappings(self) -> None:
         """Validate columns exist in data schema."""
-        super()._validate_mappings()
+        if self._raw_data is None:
+            return  # Skip validation when reconstructing from cache
 
         schema = self._raw_data.collect_schema()
         column_names = schema.names()
+
+        # Tagger mode: the interactivity column (peak_id) is SYNTHESIZED per
+        # render (0..len(MonoMass)-1), not a stored column. Validate filters
+        # here and skip the base interactivity-column existence check for it.
+        if self._mode == "tagger":
+            for identifier, column in self._filters.items():
+                if column not in column_names:
+                    raise ValueError(
+                        f"Filter column '{column}' for identifier '{identifier}' "
+                        f"not found in data. Available columns: {column_names}"
+                    )
+            self._validate_tagger_mappings(column_names)
+            # Validate x/y list columns + optional annotation/highlight columns.
+            for col_name, col_label in [
+                (self._x_column, "x_column"),
+                (self._y_column, "y_column"),
+            ]:
+                if col_name not in column_names:
+                    raise ValueError(
+                        f"{col_label} '{col_name}' not found in data. "
+                        f"Available columns: {column_names}"
+                    )
+            return
+
+        super()._validate_mappings()
 
         # Density mode raw-score path: x/y columns are produced by the KDE step,
         # so only the source score/label columns must exist up-front.
@@ -358,10 +417,6 @@ class LinePlot(BaseComponent):
                 f"annotation_column '{self._annotation_column}' not found in data. "
                 f"Available columns: {column_names}"
             )
-
-        # Tagger mode: validate the list columns it explodes per render.
-        if self._mode == "tagger":
-            self._validate_tagger_mappings(column_names)
 
     def _validate_density_mappings(self, column_names: List[str]) -> None:
         """Per-mode column existence checks for density mode."""
@@ -722,9 +777,17 @@ class LinePlot(BaseComponent):
             data = data.lazy()
 
         # Filter to the selected spectrum row (one row of list columns).
+        # The `tag` filter identifier carries an opaque TagData payload (not a
+        # column-matchable scalar), so it is EXCLUDED from row filtering — only
+        # the scan/spectrum filter(s) select the row.
+        row_filters = {
+            ident: col
+            for ident, col in self._filters.items()
+            if ident != self._tag_payload_key
+        }
         filtered, _ = filter_and_collect_cached(
             data,
-            self._filters,
+            row_filters,
             state,
             columns=None,
             filter_defaults=self._filter_defaults,
@@ -827,8 +890,12 @@ class LinePlot(BaseComponent):
             )
 
         # --- Hash includes spectrum + tag payload + drill-down state ---
+        # Use the scan/spectrum filter value (exclude the opaque tag payload key,
+        # which is captured separately via tag_digest below).
         spectrum_value = None
         for ident in self._filters.keys():
+            if ident == self._tag_payload_key:
+                continue
             spectrum_value = state.get(ident)
             break
         tag_digest = hashlib.md5(
@@ -955,8 +1022,13 @@ class LinePlot(BaseComponent):
             "annotationColumn": self._annotation_column,
         }
 
-        # Add any extra config options
-        args.update(self._config)
+        # Add any extra pass-through config options, excluding the structured
+        # constructor params that are stored in self._config purely for
+        # subprocess recreation (they are already surfaced via dedicated args /
+        # `config`) and must not leak as top-level component args.
+        for key, val in self._config.items():
+            if key not in _MANAGED_CONFIG_KEYS and key not in args:
+                args[key] = val
 
         return args
 
@@ -1162,6 +1234,17 @@ class LinePlot(BaseComponent):
         """
         self._peak_annotations = None
         return self
+
+    def _preserves_plot_config(self) -> bool:
+        """
+        Whether a cache hit should keep the cached _plotConfig verbatim.
+
+        Tagger mode emits a fully state-derived _plotConfig (drill-down ``level``,
+        selected/highlight column names) that the generic _build_plot_config
+        rebuild cannot reproduce. Tagger is fully state-dependent, so a cache hit
+        means the cached config is still correct — preserve it.
+        """
+        return self._mode == "tagger"
 
     def _build_plot_config(
         self,

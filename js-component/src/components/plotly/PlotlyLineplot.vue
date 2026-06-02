@@ -1,5 +1,15 @@
 <template>
-  <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  <div class="plot-wrapper">
+    <button
+      v-if="showBackButton"
+      class="tagger-back-button"
+      title="Back to deconvolved spectrum"
+      @click="onTaggerBack"
+    >
+      &#8617;
+    </button>
+    <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -8,7 +18,13 @@ import Plotly from 'plotly.js-dist-min'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
-import type { LinePlotComponentArgs, PlotData } from '@/types/component'
+import type {
+  LinePlotComponentArgs,
+  PlotData,
+  PeakAnnotation,
+  TaggerSegment,
+  TaggerChargePeak,
+} from '@/types/component'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -75,6 +91,131 @@ export default defineComponent({
     },
 
     /**
+     * Rendering mode ('default' | 'tagger'). Default keeps current behavior.
+     */
+    mode(): string {
+      return this.args.mode || 'default'
+    },
+
+    /**
+     * The interactivity identifier carrying the tagger drill-down mass
+     * (first interactivity key). null => level 0.
+     */
+    taggerMassIdentifier(): string | undefined {
+      const keys = Object.keys(this.interactivity)
+      return keys.length > 0 ? keys[0] : undefined
+    },
+
+    /**
+     * Derived drill-down level. 'annotated' (level 1) when the tagger_mass
+     * selection is set, else 'deconvolved' (level 0). Never a stored title.
+     */
+    level(): 'deconvolved' | 'annotated' {
+      if (this.mode !== 'tagger') return 'deconvolved'
+      // Trust Python's authoritative level (it applies the stale-mass reset).
+      const cfgLevel = this.plotConfig?.level as string | undefined
+      if (cfgLevel === 'annotated' || cfgLevel === 'deconvolved') {
+        return cfgLevel
+      }
+      const ident = this.taggerMassIdentifier
+      if (ident !== undefined) {
+        const val = this.selectionStore.$state[ident]
+        if (val !== undefined && val !== null) return 'annotated'
+      }
+      return 'deconvolved'
+    },
+
+    /**
+     * Back button only at the tagger annotated (level-1) drill-down.
+     */
+    showBackButton(): boolean {
+      return this.mode === 'tagger' && this.level === 'annotated'
+    },
+
+    /**
+     * Title derived from level (tagger), else the static title.
+     */
+    displayTitle(): string {
+      if (this.mode === 'tagger') {
+        return this.level === 'annotated'
+          ? this.args.titleLevel1 || this.args.title
+          : this.args.title
+      }
+      return this.args.title
+    },
+
+    /**
+     * X-axis label derived from level (tagger), else the static x label.
+     */
+    displayXLabel(): string | undefined {
+      if (this.mode === 'tagger') {
+        return this.level === 'annotated'
+          ? this.args.xLabelLevel1 || this.args.xLabel
+          : this.args.xLabel
+      }
+      return this.args.xLabel
+    },
+
+    /**
+     * Level-0 sequence-arrow segments (tagger), column-parsed from Python.
+     */
+    taggerSegments(): TaggerSegment[] {
+      const key = this.args.taggerSegmentsKey || 'plotDataTaggerSegments'
+      const raw = this.streamlitDataStore.allDataForDrawing?.[key] as
+        | Record<string, unknown[]>
+        | undefined
+      if (!raw || !raw.x_start) return []
+      const n = (raw.x_start as number[]).length
+      const segments: TaggerSegment[] = []
+      for (let i = 0; i < n; i++) {
+        segments.push({
+          x_start: (raw.x_start as number[])[i],
+          x_end: (raw.x_end as number[])[i],
+          residue: (raw.residue as string[])[i],
+          delta: (raw.delta as number[])[i],
+          selected: Boolean((raw.selected as unknown[])[i]),
+        })
+      }
+      return segments
+    },
+
+    /**
+     * Level-1 charge clusters (tagger) for the open mass, column-parsed.
+     */
+    taggerCharges(): TaggerChargePeak[] {
+      const key = this.args.taggerChargesKey || 'plotDataTaggerCharges'
+      const raw = this.streamlitDataStore.allDataForDrawing?.[key] as
+        | Record<string, unknown[]>
+        | undefined
+      if (!raw || !raw.mz) return []
+      const n = (raw.mz as number[]).length
+      const peaks: TaggerChargePeak[] = []
+      for (let i = 0; i < n; i++) {
+        peaks.push({
+          mz: (raw.mz as number[])[i],
+          intensity: (raw.intensity as number[])[i],
+          charge: (raw.charge as number[])[i],
+          cog: (raw.cog as number[])[i],
+          charge_label: (raw.charge_label as string[])[i],
+          selected: Boolean((raw.selected as unknown[])[i]),
+          peak_id: (raw.peak_id as number[])[i],
+        })
+      }
+      return peaks
+    },
+
+    /**
+     * Generic per-peak annotation descriptors (Item B), from the data payload.
+     * Independent of the per-row column model; each descriptor is fully
+     * self-describing in data coordinates.
+     */
+    peakAnnotationDescriptors(): PeakAnnotation[] {
+      const raw = this.streamlitDataStore.allDataForDrawing?.peakAnnotations
+      if (!raw || !Array.isArray(raw)) return []
+      return raw as PeakAnnotation[]
+    },
+
+    /**
      * Get actual plot width from DOM.
      */
     actualPlotWidth(): number {
@@ -125,6 +266,14 @@ export default defineComponent({
         result.highlight_mask = rawData[highlightCol] as boolean[]
       }
 
+      // Add explicit gold/selected mask if present (tagger level 0). This lets
+      // the reversed-index gold rule (precomputed in Python) drive the gold
+      // trace directly, instead of the single-peak click selection.
+      const selectedCol = (config?.selectedColumn as string) || this.args.selectedColumn
+      if (selectedCol && rawData[selectedCol]) {
+        result.selected_mask = rawData[selectedCol] as boolean[]
+      }
+
       // Add annotations if present
       const annotationCol = (config?.annotationColumn as string) || this.args.annotationColumn
       if (annotationCol && rawData[annotationCol]) {
@@ -146,6 +295,39 @@ export default defineComponent({
     },
 
     /**
+     * Tagger level-1 spectrum built from the open mass's charge clusters.
+     * The raw m/z signal peaks become the sticks; highlight = all peaks (they
+     * are the selected mass's envelope), selected = the gold rule from Python.
+     */
+    taggerLevel1Data(): PlotData | undefined {
+      const peaks = this.taggerCharges
+      if (peaks.length === 0) return undefined
+      const x_values: number[] = []
+      const y_values: number[] = []
+      const highlight_mask: boolean[] = []
+      const selected_mask: boolean[] = []
+      for (const p of peaks) {
+        x_values.push(p.mz)
+        y_values.push(p.intensity)
+        highlight_mask.push(true)
+        selected_mask.push(p.selected)
+      }
+      return { x_values, y_values, highlight_mask, selected_mask }
+    },
+
+    /**
+     * The plot data currently being drawn: tagger level-1 charge clusters when
+     * drilled in, otherwise the level-0 / default `plotData`. All downstream
+     * stick/zoom/trace computeds read this so level 1 reuses the same machinery.
+     */
+    activePlotData(): PlotData | undefined {
+      if (this.mode === 'tagger' && this.level === 'annotated') {
+        return this.taggerLevel1Data
+      }
+      return this.plotData
+    },
+
+    /**
      * Get interactivity mapping from args.
      * Maps identifier names to column names.
      */
@@ -158,7 +340,13 @@ export default defineComponent({
      * Looks up the selection value and finds the matching index in the data.
      */
     selectedPeakIndex(): number | undefined {
-      if (!this.isDataReady || !this.plotData) {
+      if (!this.isDataReady || !this.activePlotData) {
+        return undefined
+      }
+
+      // Tagger mode drives the gold trace from the precomputed selected_mask
+      // (reversed-index gold rule), not the single-peak click selection.
+      if (this.mode === 'tagger') {
         return undefined
       }
 
@@ -171,7 +359,7 @@ export default defineComponent({
 
         // Look for the interactivity column data (e.g., interactivity_peak_id)
         const columnKey = `interactivity_${column}`
-        const columnValues = this.plotData[columnKey] as unknown[] | undefined
+        const columnValues = this.activePlotData[columnKey] as unknown[] | undefined
 
         if (columnValues && Array.isArray(columnValues)) {
           // Find the index with matching value
@@ -182,7 +370,7 @@ export default defineComponent({
           }
         } else if (column === this.args.xColumn) {
           // Fallback: if no interactivity column data, try matching x values
-          const xValues = this.plotData.x_values
+          const xValues = this.activePlotData.x_values
           for (let i = 0; i < xValues.length; i++) {
             if (xValues[i] === selectedValue) {
               return i
@@ -197,11 +385,11 @@ export default defineComponent({
      * Check if data is ready for rendering.
      */
     isDataReady(): boolean {
-      if (!this.plotData) return false
+      if (!this.activePlotData) return false
       return (
-        Array.isArray(this.plotData.x_values) &&
-        Array.isArray(this.plotData.y_values) &&
-        this.plotData.x_values.length > 0
+        Array.isArray(this.activePlotData.x_values) &&
+        Array.isArray(this.activePlotData.y_values) &&
+        this.activePlotData.x_values.length > 0
       )
     },
 
@@ -210,9 +398,9 @@ export default defineComponent({
      * Each data point (x) becomes triplet: [x, x, x]
      */
     xValuesStick(): number[] {
-      if (!this.isDataReady || !this.plotData) return []
+      if (!this.isDataReady || !this.activePlotData) return []
       const result: number[] = []
-      for (const x of this.plotData.x_values) {
+      for (const x of this.activePlotData.x_values) {
         result.push(x, x, x)
       }
       return result
@@ -224,10 +412,10 @@ export default defineComponent({
      * Using large negative value (matching FLASHApp) to avoid visual artifacts.
      */
     yValuesStick(): number[] {
-      if (!this.isDataReady || !this.plotData) return []
+      if (!this.isDataReady || !this.activePlotData) return []
       const result: number[] = []
       const baseline = -10000000
-      for (const y of this.plotData.y_values) {
+      for (const y of this.activePlotData.y_values) {
         result.push(baseline, y, baseline)
       }
       return result
@@ -242,11 +430,15 @@ export default defineComponent({
         return this.manualXRange
       }
 
-      if (!this.isDataReady || !this.plotData) return [0, 1]
+      if (!this.isDataReady || !this.activePlotData) return [0, 1]
 
-      const xValues = this.plotData.x_values
+      const xValues = this.activePlotData.x_values
       const minX = Math.min(...xValues)
       const maxX = Math.max(...xValues)
+      // Tagger level-1 fits the cluster to [min*0.98, max*1.02] (oracle parity).
+      if (this.mode === 'tagger' && this.level === 'annotated') {
+        return [minX * 0.98, maxX * 1.02]
+      }
       const padding = (maxX - minX) * 0.02
 
       return [minX - padding, maxX + padding]
@@ -257,9 +449,9 @@ export default defineComponent({
      * Adds extra space at top for annotations.
      */
     yRange(): number[] {
-      if (!this.isDataReady || !this.plotData) return [0, 1]
+      if (!this.isDataReady || !this.activePlotData) return [0, 1]
 
-      const { x_values, y_values } = this.plotData
+      const { x_values, y_values } = this.activePlotData
       const xRange = this.xRange
 
       // Find max y within the visible x range
@@ -298,9 +490,9 @@ export default defineComponent({
       label: string
       index: number
     }> {
-      if (!this.isDataReady || !this.plotData) return []
+      if (!this.isDataReady || !this.activePlotData) return []
 
-      const { x_values, y_values, annotations, highlight_mask } = this.plotData
+      const { x_values, y_values, annotations, highlight_mask } = this.activePlotData
       if (!annotations) return []
 
       const peaks: Array<{ x: number; y: number; label: string; index: number }> = []
@@ -498,6 +690,328 @@ export default defineComponent({
     },
 
     /**
+     * Tagger level-0 sequence arrows + residue letters (from precomputed
+     * `plotDataTaggerSegments`). Two arrow annotations + a residue-letter
+     * annotation (hover `Δ=<delta> Da`) per adjacent highlighted-mass pair.
+     * Ports oracle 449–540; gold when the segment is selected.
+     */
+    taggerArrowAnnotations(): Partial<Plotly.Annotations>[] {
+      if (this.mode !== 'tagger' || this.level !== 'deconvolved') return []
+      const segments = this.taggerSegments
+      if (segments.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+      const yPosArrow = ypos * 0.5
+      const yPosAA = ypos * 0.6
+
+      const annotations: Partial<Plotly.Annotations>[] = []
+      const orange = this.styling.highlightColor
+      const gold = this.styling.selectedColor
+
+      for (const seg of segments) {
+        const color = seg.selected ? gold : orange
+        const family = seg.selected
+          ? 'Arial Black, Arial Bold, Arial, sans-serif'
+          : 'sans-serif'
+
+        let xStart = seg.x_start
+        let xEnd = seg.x_end
+        const xMid = (xStart + xEnd) / 2
+        let xMidStart = xMid
+        let xMidEnd = xMid
+        const diff = Math.abs(xStart - xEnd) * 0.9
+
+        if (xStart > xEnd) {
+          xStart -= diff
+          xMidStart += diff * 0.1
+          xEnd += diff
+          xMidEnd -= diff * 0.1
+        } else {
+          xStart += diff
+          xMidStart -= diff * 0.1
+          xEnd -= diff
+          xMidEnd += diff * 0.1
+        }
+
+        annotations.push({
+          ax: xMidStart,
+          ay: yPosArrow,
+          xref: 'x',
+          yref: 'y',
+          x: xStart,
+          y: yPosArrow,
+          axref: 'x',
+          ayref: 'y',
+          showarrow: true,
+          arrowhead: 0,
+          arrowsize: 1,
+          arrowwidth: 2,
+          arrowcolor: color,
+        })
+        annotations.push({
+          ax: xMidEnd,
+          ay: yPosArrow,
+          xref: 'x',
+          yref: 'y',
+          x: xEnd,
+          y: yPosArrow,
+          axref: 'x',
+          ayref: 'y',
+          showarrow: true,
+          arrowhead: 2,
+          arrowsize: 1,
+          arrowwidth: 2,
+          arrowcolor: color,
+        })
+        annotations.push({
+          x: xMid,
+          y: yPosAA,
+          xref: 'x',
+          yref: 'y',
+          text: seg.residue,
+          hovertext: `Δ=${seg.delta.toFixed(2)} Da`,
+          showarrow: false,
+          font: { size: 15, color, family },
+        })
+      }
+      return annotations
+    },
+
+    /**
+     * Tagger level-1 per-charge badge rects, placed at the precomputed COG.
+     * Ports oracle 330–373 (rect [cog ± 0.5*xpos_scaling], band y).
+     */
+    taggerChargeShapes(): Partial<Plotly.Shape>[] {
+      if (this.mode !== 'tagger' || this.level !== 'annotated') return []
+      const charges = this.taggerCharges
+      if (charges.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos_low = ymax * 1.18
+      const ypos_high = ymax * 1.32
+      const xRange = this.xRange
+      const xpos_scaling = (xRange[1] - xRange[0]) / (this.args.xPosScalingFactor || 27.5)
+
+      const shapes: Partial<Plotly.Shape>[] = []
+      const seen = new Set<number>()
+      for (const p of charges) {
+        if (seen.has(p.charge)) continue
+        seen.add(p.charge)
+        const fill = p.selected ? this.styling.selectedColor : this.styling.highlightColor
+        shapes.push({
+          type: 'rect',
+          x0: p.cog - 0.5 * xpos_scaling,
+          y0: ypos_low,
+          x1: p.cog + 0.5 * xpos_scaling,
+          y1: ypos_high,
+          fillcolor: fill,
+          line: { width: 0 },
+        })
+      }
+      return shapes
+    },
+
+    /**
+     * Tagger level-1 per-charge `z=<charge>` text labels at the COG.
+     */
+    taggerChargeAnnotations(): Partial<Plotly.Annotations>[] {
+      if (this.mode !== 'tagger' || this.level !== 'annotated') return []
+      const charges = this.taggerCharges
+      if (charges.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+
+      const annotations: Partial<Plotly.Annotations>[] = []
+      const seen = new Set<number>()
+      for (const p of charges) {
+        if (seen.has(p.charge)) continue
+        seen.add(p.charge)
+        annotations.push({
+          x: p.cog,
+          y: ypos,
+          xref: 'x',
+          yref: 'y',
+          text: p.charge_label,
+          showarrow: false,
+          font: { size: 14, color: 'white' },
+        })
+      }
+      return annotations
+    },
+
+    /**
+     * Generic per-peak annotation descriptors (Item B): boxes computed with the
+     * existing band/overlap math. Overlap is group-scoped all-or-nothing
+     * (oracle parity) — any overlap within a group hides the whole group.
+     */
+    descriptorAnnotationBoxes(): Array<{
+      x: number
+      text: string
+      color?: string
+      hover?: string
+      width: number
+      visible: boolean
+    }> {
+      const descriptors = this.peakAnnotationDescriptors
+      if (descriptors.length === 0) return []
+
+      const xRange = this.xRange
+      const gapDataUnits = this.pixelWidthToDataUnits(4)
+      const textPaddingPx = 16
+
+      const boxes = descriptors.map((d) => {
+        const textWidthPx = this.measureTextWidth(d.text)
+        return {
+          x: d.x,
+          text: d.text,
+          color: d.color,
+          hover: d.hover,
+          group: d.group ?? '__default__',
+          width: this.pixelWidthToDataUnits(textWidthPx + textPaddingPx),
+          inVisibleRange: d.x >= xRange[0] && d.x <= xRange[1],
+          visible: true,
+        }
+      })
+
+      // Group-scoped all-or-nothing overlap suppression (oracle charge labels).
+      const byGroup = new Map<string | number, typeof boxes>()
+      for (const b of boxes) {
+        const arr = byGroup.get(b.group) || []
+        arr.push(b)
+        byGroup.set(b.group, arr)
+      }
+      for (const arr of byGroup.values()) {
+        let overlaps = false
+        for (let i = 0; i < arr.length && !overlaps; i++) {
+          for (let j = i + 1; j < arr.length; j++) {
+            const a = arr[i]
+            const b = arr[j]
+            const aLeft = a.x - a.width / 2 - gapDataUnits
+            const aRight = a.x + a.width / 2 + gapDataUnits
+            const bLeft = b.x - b.width / 2
+            const bRight = b.x + b.width / 2
+            if (!(aRight < bLeft || aLeft > bRight)) {
+              overlaps = true
+              break
+            }
+          }
+        }
+        if (overlaps) {
+          for (const b of arr) b.visible = false
+        }
+      }
+
+      return boxes.map((b) => ({
+        x: b.x,
+        text: b.text,
+        color: b.color,
+        hover: b.hover,
+        width: b.width,
+        visible: b.visible && b.inVisibleRange,
+      }))
+    },
+
+    /**
+     * Item B: colored rect shapes for the generic per-peak descriptors.
+     */
+    descriptorAnnotationShapes(): Partial<Plotly.Shape>[] {
+      const boxes = this.descriptorAnnotationBoxes
+      if (boxes.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos_low = ymax * 1.18
+      const ypos_high = ymax * 1.32
+
+      const shapes: Partial<Plotly.Shape>[] = []
+      for (const box of boxes) {
+        if (!box.visible) continue
+        shapes.push({
+          type: 'rect',
+          x0: box.x - box.width / 2,
+          y0: ypos_low,
+          x1: box.x + box.width / 2,
+          y1: ypos_high,
+          fillcolor: box.color || this.styling.highlightColor,
+          line: { width: 0 },
+        })
+      }
+      return shapes
+    },
+
+    /**
+     * Item B: text labels (+ optional hover points) for the generic descriptors.
+     */
+    descriptorPeakAnnotations(): Partial<Plotly.Annotations>[] {
+      const boxes = this.descriptorAnnotationBoxes
+      if (boxes.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+
+      const annotations: Partial<Plotly.Annotations>[] = []
+      for (const box of boxes) {
+        if (!box.visible) continue
+        annotations.push({
+          x: box.x,
+          y: ypos,
+          xref: 'x',
+          yref: 'y',
+          text: box.text,
+          showarrow: false,
+          font: { size: 14, color: 'white' },
+        })
+      }
+      return annotations
+    },
+
+    /**
+     * Item B: invisible hover points carrying descriptor hover text.
+     */
+    descriptorHoverTrace(): Plotly.Data[] {
+      const boxes = this.descriptorAnnotationBoxes
+      const xs: number[] = []
+      const ys: number[] = []
+      const texts: string[] = []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+
+      for (const box of boxes) {
+        if (!box.visible || !box.hover) continue
+        xs.push(box.x)
+        ys.push(ypos)
+        texts.push(box.hover)
+      }
+      if (xs.length === 0) return []
+      return [
+        {
+          x: xs,
+          y: ys,
+          mode: 'markers',
+          type: 'scatter',
+          marker: { color: 'rgba(0,0,0,0)', size: 14 },
+          text: texts,
+          hoverinfo: 'text',
+          showlegend: false,
+        },
+      ]
+    },
+
+    /**
      * Check if the selected peak is annotated but its annotation is currently hidden.
      */
     selectedAnnotationHidden(): boolean {
@@ -520,12 +1034,12 @@ export default defineComponent({
      * Includes a separate gold trace for the selected peak.
      */
     traces(): Plotly.Data[] {
-      if (!this.isDataReady || !this.plotData) {
+      if (!this.isDataReady || !this.activePlotData) {
         return this.getFallbackData()
       }
 
       const traces: Plotly.Data[] = []
-      const { highlight_mask } = this.plotData
+      const { highlight_mask, selected_mask } = this.activePlotData
       const selectedIndex = this.selectedPeakIndex
       const baseline = -10000000
 
@@ -537,13 +1051,17 @@ export default defineComponent({
       const selected_x: number[] = []
       const selected_y: number[] = []
 
-      const numPoints = this.plotData.x_values.length
+      const numPoints = this.activePlotData.x_values.length
 
       for (let i = 0; i < numPoints; i++) {
-        const x = this.plotData.x_values[i]
-        const y = this.plotData.y_values[i]
+        const x = this.activePlotData.x_values[i]
+        const y = this.activePlotData.y_values[i]
         const isHighlighted = highlight_mask ? highlight_mask[i] : false
-        const isSelected = selectedIndex !== undefined && i === selectedIndex
+        // Gold/selected: precomputed mask (tagger reversed-index rule) OR the
+        // single clicked peak (default mode click selection).
+        const isSelected =
+          (selected_mask ? Boolean(selected_mask[i]) : false) ||
+          (selectedIndex !== undefined && i === selectedIndex)
 
         if (isSelected) {
           // Selected peak goes in gold trace (drawn last, on top)
@@ -613,6 +1131,9 @@ export default defineComponent({
         })
       }
 
+      // Append invisible hover points for generic per-peak descriptors (Item B).
+      for (const t of this.descriptorHoverTrace) traces.push(t)
+
       return traces
     },
 
@@ -620,12 +1141,30 @@ export default defineComponent({
      * Build Plotly layout.
      */
     layout(): Partial<Plotly.Layout> {
+      // Title/xLabel are derived from the tagger drill-down level (default mode
+      // uses the static args values unchanged).
+      const title = this.displayTitle
+      const xLabel = this.displayXLabel
+
+      // Merge column-based + tagger-overlay + generic-descriptor shapes/labels.
+      const shapes: Partial<Plotly.Shape>[] = [
+        ...this.annotationShapes,
+        ...this.taggerChargeShapes,
+        ...this.descriptorAnnotationShapes,
+      ]
+      const annotations: Partial<Plotly.Annotations>[] = [
+        ...this.peakAnnotations,
+        ...this.taggerArrowAnnotations,
+        ...this.taggerChargeAnnotations,
+        ...this.descriptorPeakAnnotations,
+      ]
+
       return {
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: title ? { text: `<b>${title}</b>` } : undefined,
         showlegend: false,
         height: this.args.height || 400,
         xaxis: {
-          title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
+          title: xLabel ? { text: xLabel } : undefined,
           showgrid: false,
           showline: true,
           linecolor: 'grey',
@@ -652,11 +1191,11 @@ export default defineComponent({
         margin: {
           l: 60,
           r: 20,
-          t: this.args.title ? 50 : 20,
+          t: title ? 50 : 20,
           b: 50,
         },
-        shapes: this.annotationShapes,
-        annotations: this.peakAnnotations,
+        shapes,
+        annotations,
       }
     },
 
@@ -699,6 +1238,39 @@ export default defineComponent({
 
     // Re-render when plot config changes (e.g., dynamic annotations)
     'streamlitDataStore.allDataForDrawing._plotConfig': {
+      handler() {
+        if (this.isInitialized) {
+          this.renderPlot()
+        }
+      },
+      deep: true,
+    },
+
+    // Re-render when tagger sequence-arrow segments change (level 0).
+    'streamlitDataStore.allDataForDrawing.plotDataTaggerSegments': {
+      handler() {
+        if (this.isInitialized) {
+          this.renderPlot()
+        }
+      },
+      deep: true,
+    },
+
+    // Re-render when tagger level-1 charge clusters change (drill-down).
+    'streamlitDataStore.allDataForDrawing.plotDataTaggerCharges': {
+      handler() {
+        if (this.isInitialized) {
+          // Drill-down changes the active spectrum; reset zoom like plotData.
+          this.manualXRange = undefined
+          this.lastAutoZoomedPeakIndex = undefined
+          this.renderPlot()
+        }
+      },
+      deep: true,
+    },
+
+    // Re-render when generic per-peak annotation descriptors change (Item B).
+    'streamlitDataStore.allDataForDrawing.peakAnnotations': {
       handler() {
         if (this.isInitialized) {
           this.renderPlot()
@@ -779,7 +1351,7 @@ export default defineComponent({
               const element = document.getElementById(this.id)
               if (element) {
                 Plotly.downloadImage(element, {
-                  filename: this.args.title || 'plot',
+                  filename: this.displayTitle || this.args.title || 'plot',
                   height: 400,
                   width: 1200,
                   format: 'svg',
@@ -947,12 +1519,18 @@ export default defineComponent({
         return
       }
 
+      // Tagger: clicks are inert at level 1 (no level-2); use the back button.
+      if (this.mode === 'tagger' && this.level === 'annotated') {
+        return
+      }
+
       if (eventData.points && eventData.points.length > 0) {
         const point = eventData.points[0]
         const clickedX = point.x
 
         // Find the nearest peak to the clicked x position
         // Plotly click returns triplet index, we need to find the actual peak
+        // (in tagger mode this is the level-0 deconvolved spectrum / plotData).
         if (!this.plotData) return
 
         const xValues = this.plotData.x_values
@@ -964,6 +1542,15 @@ export default defineComponent({
           if (distance < nearestDistance) {
             nearestDistance = distance
             nearestIndex = i
+          }
+        }
+
+        // Tagger level 0: only react to clicks on a highlighted mass button
+        // (parity with the oracle "if (!highlightedMassPos[i]) break").
+        if (this.mode === 'tagger') {
+          const highlight = this.plotData.highlight_mask
+          if (!highlight || !highlight[nearestIndex]) {
+            return
           }
         }
 
@@ -981,6 +1568,17 @@ export default defineComponent({
             this.selectionStore.updateSelection(identifier, xValues[nearestIndex])
           }
         }
+      }
+    },
+
+    /**
+     * Tagger back button: clear the drill-down mass selection (=> level 0).
+     * Routes through the generic selection store (sets tagger_mass = null).
+     */
+    onTaggerBack(): void {
+      const ident = this.taggerMassIdentifier
+      if (ident !== undefined) {
+        this.selectionStore.updateSelection(ident, null)
       }
     },
 
@@ -1025,9 +1623,39 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.plot-wrapper {
+  position: relative;
+  width: 100%;
+}
+
 .plot-container {
   position: relative;
   width: 100%;
   min-height: 100px;
+}
+
+/* Round back button shown at the tagger annotated (level-1) drill-down. */
+.tagger-back-button {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #ccc;
+  background: #ffffff;
+  color: #333;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.tagger-back-button:hover {
+  background: #f0f0f0;
 }
 </style>

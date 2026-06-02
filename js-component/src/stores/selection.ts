@@ -4,6 +4,15 @@
  * Supports any identifier-based selection using dynamic keys.
  * Uses separate counters for selection and pagination state to prevent
  * rapid pagination clicks from causing legitimate selection updates to be rejected.
+ *
+ * Values may be primitives OR opaque objects — the store stores them verbatim
+ * and App.vue JSON-clones state before sending to Python, so object payloads
+ * round-trip fine. Conventional identifiers used by the LinePlot tagger mode
+ * (no store fields required, just dynamic keys):
+ * - `tag`: the opaque TagData payload object `{sequence, nTerminal, masses,
+ *   selectedAA, startPos, endPos}` (set by the tag table; read by Python).
+ * - `tagger_mass`: the drill-down peak id (int) opened at level 1, or `null`
+ *   for level 0 (set by clicking a mass button / cleared by the back button).
  */
 
 import { defineStore } from 'pinia'

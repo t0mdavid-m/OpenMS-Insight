@@ -19,6 +19,25 @@ from openms_insight import Heatmap, LinePlot, Plot3D, Table, VolcanoPlot
             {"x_column": "mass", "y_column": "intensity"},
         ),
         (
+            LinePlot,
+            "sample_density_data",
+            {"mode": "density"},
+        ),
+        (
+            LinePlot,
+            "sample_tagger_data",
+            {
+                "mode": "tagger",
+                "filters": {"spectrum": "scan_id", "tag": "tag_id"},
+                "interactivity": {"tagger_mass": "peak_id"},
+                "x_column": "MonoMass",
+                "y_column": "SumIntensity",
+                "signal_peaks_column": "SignalPeaks",
+                "mz_column": "MonoMass_Anno",
+                "mz_intensity_column": "SumIntensity_Anno",
+            },
+        ),
+        (
             Heatmap,
             "sample_heatmap_data",
             {

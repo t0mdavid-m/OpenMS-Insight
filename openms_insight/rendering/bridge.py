@@ -298,6 +298,14 @@ def _prepare_vue_data_cached(
             # No dynamic annotations - ensure _plotConfig is present
             # When annotations are cleared, Vue needs _plotConfig with null columns
             # to stop showing stale annotations (Vue merge only updates keys present)
+            #
+            # Some components (e.g. LinePlot tagger mode) emit a richer, fully
+            # state-derived _plotConfig (e.g. drill-down `level`) that the generic
+            # _build_plot_config(highlight, annotation) rebuild cannot reproduce.
+            # Such components are fully state-dependent, so the cached _plotConfig
+            # is correct on a hit — preserve it verbatim.
+            if getattr(component, "_preserves_plot_config", lambda: False)() is True:
+                return cached_data, cached_hash
             if hasattr(component, "_build_plot_config"):
                 vue_data = dict(cached_data)
                 vue_data["_plotConfig"] = component._build_plot_config(
@@ -431,6 +439,16 @@ def _validate_interactivity_selections(
         if selected_value is None:
             # Awaiting filter - no data to validate against
             return False
+
+        # Skip non-scalar filter values: some filter identifiers carry an opaque
+        # payload (e.g. the tagger 'tag' = TagData dict) rather than a
+        # column-matchable scalar. Such filters don't restrict rows here.
+        if isinstance(selected_value, (dict, list)):
+            continue
+
+        # Skip filters whose column isn't present in the data schema.
+        if column not in data.collect_schema().names():
+            continue
 
         # Convert float to int for integer columns (type mismatch handling)
         if isinstance(selected_value, float) and selected_value.is_integer():
