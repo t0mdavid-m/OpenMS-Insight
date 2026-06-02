@@ -254,6 +254,239 @@ def _calculate_fragment_masses_simple(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Internal fragment math
+#
+# Ported verbatim from FLASHApp/src/render/sequence.py
+# (`getInternalFragmentMassesWithSeq` + `getInternalFragmentDataFromSeq`) so the
+# theoretical-internal-fragment enumeration runs in Python. The Vue side only
+# matches these enumerated masses against the selected scan's observed masses
+# (mirroring how the terminal map already works).
+#
+# Parity-critical details (do NOT "fix" these without re-deriving golden values):
+#   * minimum internal length 5 (`if j < i + min_length - 1: continue`)
+#   * start index is 0-based (i); end index is 1-based, exclusive-style (j+1)
+#   * the start is barred from the first and last residue (i in [1, L-2]); the
+#     end MAY reach the C-terminus (end == L includes the last residue)
+#   * per-family neutral shift: by/cz -> +0, bz -> -NH3, cy -> +NH3
+#   * ambiguous (partially overlapping) modifications fork into TWO candidates at
+#     the same (start, end); fully-contained mods add once to the single candidate
+#   * the per-candidate terminal-collision filter drops internals matching any
+#     terminal b/c/x/y neutral mass within `terminal_collision_ppm` (default ON)
+# ---------------------------------------------------------------------------
+
+# Oracle constants (kept as separate literals to match the oracle arithmetic;
+# H2O_INTERNAL == 18.010564683 is also written verbatim inside the mass formula).
+H2O_INTERNAL = 18.010564683
+NH3_INTERNAL = 17.0265491015
+
+# Verbatim copy of `aa_masses` from FLASHApp/src/render/sequence.py. The internal
+# fragment math uses THIS table (not pyOpenMS) for the residue sum, including the
+# X/Z -> 0 and the high-resolution U mass.
+INTERNAL_AA_MASSES: Dict[str, float] = {
+    "A": 71.037114,
+    "R": 156.101111,
+    "N": 114.042927,
+    "D": 115.026943,
+    "C": 103.009185,
+    "E": 129.042593,
+    "Q": 128.058578,
+    "G": 57.021464,
+    "H": 137.058912,
+    "I": 113.084064,
+    "L": 113.084064,
+    "K": 128.094963,
+    "M": 131.040485,
+    "F": 147.068414,
+    "P": 97.052764,
+    "S": 87.032028,
+    "T": 101.047679,
+    "U": 150.953633405,
+    "W": 186.079313,
+    "Y": 163.063329,
+    "V": 99.068414,
+    "X": 0,
+    "Z": 0,
+}
+
+# Default internal-fragment configuration (parity defaults). Surfaced so callers
+# can override per instance; `remove_terminal_collisions` defaults ON for parity.
+DEFAULT_INTERNAL_FRAGMENT_CONFIG: Dict[str, Any] = {
+    "min_length": 5,
+    "ion_types": ["by", "bz", "cy"],
+    "tolerance": 10.0,
+    "tolerance_ppm": True,
+    "remove_terminal_collisions": True,
+    "terminal_collision_ppm": 10.0,
+}
+
+
+def _internal_shift(res_type: str) -> float:
+    """Neutral-mass shift for an internal-ion family (oracle logic, verbatim)."""
+    if res_type in ("by", "cz"):
+        return -H2O_INTERNAL
+    if res_type == "bz":
+        return -H2O_INTERNAL - NH3_INTERNAL
+    return -H2O_INTERNAL + NH3_INTERNAL  # "cy"
+
+
+def _is_match_with_tolerance(
+    sorted_masses: List[float], target: float, ppm: float
+) -> bool:
+    """Port of `isMatchWithTolerance`: binary search a sorted mass list.
+
+    Returns True if any value in ``sorted_masses`` is within ``ppm`` of
+    ``target`` (tolerance computed as ``target * ppm / 1e6``).
+    """
+    tol = target * ppm / 1e6
+    lo, hi = 0, len(sorted_masses) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if abs(sorted_masses[mid] - target) <= tol:
+            return True
+        elif sorted_masses[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return False
+
+
+def _terminal_collision_masses(
+    fragment_masses: Dict[str, List[List[float]]],
+) -> List[float]:
+    """Build the sorted terminal-mass list for the collision filter.
+
+    The oracle uses ``byp + bys + czp + czs`` (b/y prefix-suffix + c/z
+    prefix-suffix neutral masses for charge 0). Those four families correspond to
+    the terminal ``b, y, c, z`` neutral masses, which Insight already computes via
+    :func:`calculate_fragment_masses_pyopenms`. Flatten those per-position lists
+    and sort ascending.
+    """
+    masses: List[float] = []
+    for ion in ("b", "c", "x", "y"):
+        for per_pos in fragment_masses.get(f"fragment_masses_{ion}", []):
+            masses.extend(per_pos)
+    masses.sort()
+    return masses
+
+
+def compute_internal_fragment_masses(
+    residues: List[str],
+    res_type: str,
+    *,
+    min_length: int = 5,
+    modifications: Optional[List[Tuple[int, int, float]]] = None,
+    terminal_masses: Optional[List[float]] = None,
+    terminal_collision_ppm: float = 10.0,
+) -> Tuple[List[float], List[int], List[int]]:
+    """Enumerate theoretical internal-fragment masses for one family.
+
+    Pure port of ``getInternalFragmentMassesWithSeq`` (FLASHApp). Returns three
+    parallel flat lists ``(masses, start_indices, end_indices)`` where each entry
+    is one enumerated internal fragment. ``start`` is 0-based, ``end`` is 1-based
+    (exclusive-style), matching the Vue fill predicate
+    ``aaIndex > start && aaIndex <= end``.
+
+    Args:
+        residues: Plain single-letter residue list (no modification syntax).
+        res_type: Internal-ion family ('by', 'cz', 'bz', or 'cy').
+        min_length: Minimum internal-fragment residue length (default 5).
+        modifications: Optional list of ``(start_1based, end_1based, mass)``
+            ranges. Fully-contained mods add to the single candidate; partially
+            overlapping mods fork into a second ``mass + m`` candidate.
+        terminal_masses: Optional sorted terminal masses for the collision
+            filter. When provided, candidates matching any terminal mass within
+            ``terminal_collision_ppm`` are dropped.
+        terminal_collision_ppm: ppm window for the terminal-collision filter.
+
+    Returns:
+        Tuple of (masses, start_indices, end_indices).
+    """
+    shift = _internal_shift(res_type)
+    masses: List[float] = []
+    starts: List[int] = []
+    ends: List[int] = []
+    length = len(residues)
+
+    for i in range(length):
+        # First position cannot start an internal fragment.
+        if i == 0:
+            continue
+        # Last position cannot start one (and ends the i-loop).
+        if i == length - 1:
+            break
+
+        mass = 0.0
+        for j in range(length):
+            # Accumulate residues from i..j inclusive.
+            if j >= i:
+                mass += INTERNAL_AA_MASSES[residues[j]]
+            # Enforce minimum length (oracle: i + 5 - 1).
+            if j < i + min_length - 1:
+                continue
+
+            candidates = [mass]
+            if modifications is not None:
+                for (s, e, m) in modifications:
+                    # Modification fully contained in [i+1, j+1].
+                    if (s >= i + 1) and (e <= j + 1):
+                        candidates[0] += m
+                    # Modification partially overlaps: emit BOTH variants.
+                    elif (s >= i + 1) or (e <= j + 1):
+                        candidates.append(mass + m)
+
+            for mm in candidates:
+                # Per-candidate terminal-collision filter.
+                if (
+                    terminal_masses is not None
+                    and _is_match_with_tolerance(
+                        terminal_masses, mm, terminal_collision_ppm
+                    )
+                ):
+                    continue
+                masses.append(mm + 18.010564683 + shift)
+                starts.append(i)  # 0-based N bound
+                ends.append(j + 1)  # 1-based C bound (exclusive-style)
+
+    return masses, starts, ends
+
+
+def compute_internal_fragment_data(
+    residues: List[str],
+    *,
+    ion_types: Tuple[str, ...] = ("by", "bz", "cy"),
+    min_length: int = 5,
+    modifications: Optional[List[Tuple[int, int, float]]] = None,
+    terminal_masses: Optional[List[float]] = None,
+    remove_terminal_collisions: bool = True,
+    terminal_collision_ppm: float = 10.0,
+) -> Dict[str, List]:
+    """Enumerate internal fragments for all requested families.
+
+    Pure port of ``getInternalFragmentDataFromSeq`` (FLASHApp). Produces, for each
+    family in ``ion_types``, three flat lists keyed
+    ``fragment_masses_<fam>`` / ``start_indices_<fam>`` / ``end_indices_<fam>``.
+
+    Note: ``by`` and ``cz`` share the same shift and the oracle only emits three
+    families (``by``, ``bz``, ``cy``).
+    """
+    term = terminal_masses if remove_terminal_collisions else None
+    out: Dict[str, List] = {}
+    for it in ion_types:
+        m, s, e = compute_internal_fragment_masses(
+            residues,
+            it,
+            min_length=min_length,
+            modifications=modifications,
+            terminal_masses=term,
+            terminal_collision_ppm=terminal_collision_ppm,
+        )
+        out[f"fragment_masses_{it}"] = m
+        out[f"start_indices_{it}"] = s
+        out[f"end_indices_{it}"] = e
+    return out
+
+
 def get_theoretical_mass(sequence_str: str) -> float:
     """Calculate monoisotopic mass of a peptide sequence."""
     try:
@@ -369,6 +602,8 @@ class SequenceView:
         cache_path: str = ".",
         title: Optional[str] = None,
         height: int = 400,
+        internal_fragments: bool = False,
+        internal_fragment_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -398,6 +633,20 @@ class SequenceView:
             cache_path: Base path for cache storage.
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
+            internal_fragments: If True, also render an internal-fragment map
+                below the terminal sequence map. The theoretical internal
+                fragments are enumerated in Python (from the same ``sequence``
+                string) and matched against observed masses in Vue. This is
+                cache-invalidating config (like ``deconvolved``).
+            internal_fragment_config: Optional overrides for internal-fragment
+                enumeration/matching. Recognised keys (all optional):
+                - min_length: minimum internal length (default 5)
+                - ion_types: families to enumerate (default ["by", "bz", "cy"])
+                - tolerance: default match tolerance (default 10.0)
+                - tolerance_ppm: ppm (True) vs Da (False) default (default True)
+                - remove_terminal_collisions: drop internals colliding with a
+                  terminal b/c/x/y mass (default True, for parity)
+                - terminal_collision_ppm: ppm window for that filter (default 10.0)
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -417,6 +666,8 @@ class SequenceView:
             or annotation_config is not None
             or title is not None
             or height != 400
+            or internal_fragments is not False
+            or internal_fragment_config is not None
             or bool(kwargs)
         )
 
