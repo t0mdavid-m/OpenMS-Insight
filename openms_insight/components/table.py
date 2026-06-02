@@ -75,6 +75,7 @@ class Table(BaseComponent):
         data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
+        range_filters: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
@@ -105,6 +106,16 @@ class Table(BaseComponent):
             filter_defaults: Default values for filters when state is None.
                 Example: {'identification': -1}
                 When 'identification' selection is None, filter uses -1 instead.
+            range_filters: Mapping of identifier names to a (low_column, high_column)
+                pair for RANGE-CONTAINMENT filtering. When the named selection holds
+                a scalar value V (and is not None), the table is filtered to rows
+                where ``low_column <= V <= high_column`` (inclusive on both ends).
+                When the selection is None the range filter is a no-op (all rows
+                pass). This mirrors the legacy FLASHApp Tag-Table client-side filter
+                (``StartPos <= selectedAApos <= EndPos``) where clicking a sequence
+                residue narrows the tags to those spanning that residue.
+                Example: ``range_filters={'selectedAApos': ('StartPos', 'EndPos')}``.
+                Optional and fully backward-compatible (absent => no range filtering).
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {'peak': 'mass'}
                 When a row is clicked, sets 'peak' selection to that row's mass.
@@ -138,6 +149,11 @@ class Table(BaseComponent):
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
+        # Range-containment filters: {identifier: (low_column, high_column)}.
+        # Normalized to tuples; absent => empty dict (no range filtering).
+        self._range_filters: Dict[str, Any] = {
+            ident: tuple(cols) for ident, cols in (range_filters or {}).items()
+        }
         self._title = title
         self._index_field = index_field
         self._go_to_fields = go_to_fields
@@ -169,6 +185,7 @@ class Table(BaseComponent):
             pagination=pagination,
             page_size=page_size,
             pagination_identifier=self._pagination_identifier,
+            range_filters=self._range_filters,
             **kwargs,
         )
 
@@ -190,6 +207,10 @@ class Table(BaseComponent):
             "pagination": self._pagination,
             "page_size": self._page_size,
             "pagination_identifier": self._pagination_identifier,
+            # Stored as {identifier: [low_col, high_col]} (JSON-safe lists).
+            "range_filters": {
+                ident: list(cols) for ident, cols in self._range_filters.items()
+            },
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -206,6 +227,10 @@ class Table(BaseComponent):
         self._pagination_identifier = config.get(
             "pagination_identifier", f"{self._cache_id}_page"
         )
+        self._range_filters = {
+            ident: tuple(cols)
+            for ident, cols in (config.get("range_filters") or {}).items()
+        }
 
     def get_state_dependencies(self) -> List[str]:
         """
@@ -224,6 +249,10 @@ class Table(BaseComponent):
         # Include interactivity identifiers for page navigation
         if self._interactivity:
             deps.extend(self._interactivity.keys())
+        # Include range-filter identifiers so a change in the selected scalar
+        # (e.g. clicked residue position) re-renders the filtered table.
+        if self._range_filters:
+            deps.extend(self._range_filters.keys())
         return deps
 
     def get_initial_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -522,6 +551,12 @@ class Table(BaseComponent):
             for col in self._filters.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        # Include columns needed for range-containment filtering
+        if self._range_filters:
+            for low_col, high_col in self._range_filters.values():
+                for col in (low_col, high_col):
+                    if col not in columns_to_select:
+                        columns_to_select.append(col)
 
         return columns_to_select if columns_to_select else None
 
@@ -610,6 +645,22 @@ class Table(BaseComponent):
             if isinstance(selected_value, float) and selected_value.is_integer():
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
+
+        # Apply range-containment filters (from self._range_filters). When the
+        # named selection holds a scalar V, keep rows where
+        # low_col <= V <= high_col (legacy Tag-Table StartPos<=pos<=EndPos). A
+        # None selection is a no-op (all rows pass), matching the legacy behavior
+        # where no residue selected => unfiltered tags.
+        for identifier, (low_col, high_col) in self._range_filters.items():
+            selected_value = state.get(identifier)
+            if selected_value is None:
+                continue
+            # JS numbers arrive as floats; the position columns may be int or
+            # float, so compare numerically without forcing a cast on the column.
+            data = data.filter(
+                (pl.col(low_col) <= selected_value)
+                & (pl.col(high_col) >= selected_value)
+            )
 
         # Get pagination state
         pagination_state = state.get(self._pagination_identifier)

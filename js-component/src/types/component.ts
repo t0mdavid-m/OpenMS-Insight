@@ -81,6 +81,38 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
+  // --- Tagger extension (all optional; absent → single-series behavior) ---
+  x2Column?: string | null // Second overlaid series x column (e.g. MonoMass_Anno)
+  y2Column?: string | null // Second overlaid series y column (e.g. SumIntensity_Anno)
+  highlight2Column?: string | null // Second series highlight mask
+  annotation2Column?: string | null // Second series annotation text
+  hasSecondSeries?: boolean // True when both x2Column and y2Column are set
+  signalPeakColumn?: string | null // Boolean column flagging SignalPeaks membership
+  // Charge drill-down: per-row signal-peak arrays (lists per deconv-peak row)
+  signalMzColumn?: string | null // list[float] of signal-peak m/z per row
+  signalChargeColumn?: string | null // list[int] of signal-peak charges per row
+  signalIntensityColumn?: string | null // list[float] of signal-peak intensities per row
+  hasSignalDrilldown?: boolean // True when signalMz + signalCharge columns are wired
+  showSignalMarkers?: boolean // Draw signal-peak dot markers (default false, parity)
+  tagHighlightColumn?: string | null // Boolean column for tag-overlay highlight
+  tagAnnotationColumn?: string | null // Text column for tag-overlay labels
+  tagWalkEnabled?: boolean // True when a tag (residue) walk overlay is wired
+}
+
+/**
+ * Tag-walk (residue walk) payload sent at render time alongside plotData.
+ * Carries the selected tag's ordered fragment masses and the residue letter
+ * for each consecutive-mass gap. residues[i] labels the gap between masses[i]
+ * and masses[i+1]. Drawn as arrows + letters over the deconv sticks with the
+ * x-axis auto-zoomed to the tag's mass span (FLASHApp PlotlyLineplotTagger).
+ */
+export interface TagWalk {
+  masses: number[]
+  residues: string[]
+  /** OPTIONAL direction anchor (FLASHApp selectedTag.nTerminal). */
+  nTerminal?: boolean
+  /** OPTIONAL within-tag residue index the user selected (FLASHApp selectedAA). */
+  selectedAA?: number
 }
 
 export interface LinePlotStyling {
@@ -88,6 +120,10 @@ export interface LinePlotStyling {
   selectedColor?: string
   unhighlightedColor?: string
   highlightHiddenColor?: string
+  // Tagger extension colors
+  secondSeriesColor?: string
+  signalPeakColor?: string
+  tagHighlightColor?: string
   annotationColors?: {
     massButton?: string
     selectedMassButton?: string
@@ -104,6 +140,17 @@ export interface LinePlotConfig {
   enableManualZoom?: boolean
   showChargeLabels?: boolean
   minAnnotationWidth?: number
+  /**
+   * Legacy box-width scaling divisor used by the tag-walk / augmented-view paths
+   * (FLASHApp xPosScalingFactor = 27.5). Box half-width = rangeWidth / this value.
+   */
+  legacyXPosScalingFactor?: number
+  /**
+   * Legacy all-or-nothing annotation hide threshold (FLASHApp = 30). When the
+   * per-mass box half-width exceeds this (in legacy data units), ALL augmented-view
+   * mass annotations are suppressed.
+   */
+  legacyXPosScalingThreshold?: number
 }
 
 /**
@@ -199,6 +246,69 @@ export type HeatmapData = Record<string, unknown>
 export type VolcanoData = Record<string, unknown>
 
 /**
+ * DensityPlot data format.
+ * Each entry is a {x, y} row of the KDE grid (target or decoy series).
+ */
+export type DensityData = Record<string, unknown>
+
+/**
+ * DensityPlot component arguments.
+ * Static dual-KDE score-distribution plot (FLASHApp FDRPlotly port).
+ */
+export interface DensityPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyDensity'
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  /** Column name for x values in the {x,y} frames (default "x"). */
+  xColumn?: string
+  /** Column name for y (density) values (default "y"). */
+  yColumn?: string
+  /** Target trace legend name (default "Target QScores"). */
+  targetName?: string
+  /** Decoy trace legend name (default "Decoy QScores"). */
+  decoyName?: string
+  /** Target line/marker color (default "green"). */
+  targetColor?: string
+  /** Decoy line/marker color (default "red"). */
+  decoyColor?: string
+  interactivity?: InteractivityMapping
+  height?: number
+}
+
+/**
+ * Scatter3D component arguments.
+ * 3D precursor-signal scatter (FLASHApp Plotly3Dplot port).
+ */
+export interface Scatter3DComponentArgs extends BaseComponentArgs {
+  componentType: 'Plotly3DScatter'
+  title?: string
+  height?: number
+  interactivity?: InteractivityMapping
+}
+
+/**
+ * FeatureView component arguments.
+ * FLASHQuant feature-group table + 3D signal plot (FLASHApp FLASHQuantView port).
+ */
+export interface FeatureViewComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyFeatureView'
+  title?: string
+  height?: number
+}
+
+/**
+ * InternalFragmentMap component arguments.
+ * Per-ion-type internal-fragment matrix over a sequence (FLASHApp port).
+ */
+export interface InternalFragmentMapComponentArgs extends BaseComponentArgs {
+  componentType: 'InternalFragmentMap'
+  title?: string
+  height?: number
+  interactivity?: InteractivityMapping
+}
+
+/**
  * MirrorPlot component arguments.
  */
 export interface MirrorPlotComponentArgs extends BaseComponentArgs {
@@ -237,6 +347,10 @@ export type ComponentArgs =
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
+  | DensityPlotComponentArgs
+  | Scatter3DComponentArgs
+  | FeatureViewComponentArgs
+  | InternalFragmentMapComponentArgs
 
 /**
  * Component layout entry.
@@ -271,6 +385,18 @@ export interface PlotData {
   y_values: number[]
   highlight_mask?: boolean[]
   annotations?: string[]
+  // --- Tagger extension ---
+  x2_values?: number[] // Second overlaid series x values
+  y2_values?: number[] // Second overlaid series y values
+  highlight2_mask?: boolean[] // Second series highlight mask
+  annotations2?: string[] // Second series annotation text
+  signal_mask?: boolean[] // SignalPeaks membership flags (first series)
+  tag_mask?: boolean[] // Tag-overlay highlight flags (first series)
+  tag_annotations?: string[] // Tag-overlay labels (first series)
+  // Charge drill-down: per deconv-peak row, the signal-peak arrays composing it.
+  signal_mzs?: number[][] // signal-peak m/z values per row
+  signal_charges?: number[][] // signal-peak charges per row
+  signal_intensities?: number[][] // signal-peak intensities per row
   // Allow dynamic interactivity columns like interactivity_peak_id
   [key: string]: unknown[] | undefined
 }

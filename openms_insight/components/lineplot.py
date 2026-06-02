@@ -1,6 +1,6 @@
 """Line plot component using Plotly.js."""
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import polars as pl
 
@@ -61,6 +61,19 @@ class LinePlot(BaseComponent):
         y_label: Optional[str] = None,
         highlight_column: Optional[str] = None,
         annotation_column: Optional[str] = None,
+        # --- Tagger extension (all optional; defaults preserve single-series behavior) ---
+        x2_column: Optional[str] = None,
+        y2_column: Optional[str] = None,
+        highlight2_column: Optional[str] = None,
+        annotation2_column: Optional[str] = None,
+        signal_peak_column: Optional[str] = None,
+        signal_mz_column: Optional[str] = None,
+        signal_charge_column: Optional[str] = None,
+        signal_intensity_column: Optional[str] = None,
+        tag_filters: Optional[Dict[str, str]] = None,
+        tag_mass_column: Optional[str] = None,
+        tag_tolerance: float = 1e-5,
+        show_signal_markers: bool = False,
         styling: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
         **kwargs,
@@ -96,6 +109,70 @@ class LinePlot(BaseComponent):
                               indicating which points to highlight
             annotation_column: Optional column name containing text annotations
                                to display on highlighted points
+            x2_column: Optional column name for a SECOND overlaid series' x values
+                (e.g. annotated/raw peaks ``MonoMass_Anno``). When set, the plot
+                renders both series in one figure (tagger "Augmented" parity). The
+                second series is filtered by the SAME ``filters`` (same scan).
+            y2_column: Optional column name for the second series' y values
+                (e.g. ``SumIntensity_Anno``). Required when ``x2_column`` is set.
+            highlight2_column: Optional boolean column for highlighting the second
+                series' points.
+            annotation2_column: Optional text column for the second series' labels.
+            signal_peak_column: Optional boolean per-row column flagging which peaks
+                are signal peaks (``SignalPeaks`` membership after long-format
+                explosion). Flagged peaks get a distinct marker in Vue (only when
+                ``show_signal_markers=True``; the data always flows for the charge
+                drill-down regardless).
+            signal_mz_column: Optional column holding, PER deconv-peak row, the list
+                of signal-peak m/z values that compose that deconvolved mass
+                (FLASHApp ``SignalPeaks[i][:,1]``). Each cell is a ``list[float]``
+                aligned 1:1 with this row's signal peaks. Required (together with
+                ``signal_charge_column``) for the charge-state drill-down sub-view.
+            signal_charge_column: Optional column holding, PER deconv-peak row, the
+                list of signal-peak charges (FLASHApp ``SignalPeaks[i][:,3]``). Each
+                cell is a ``list[int]`` aligned 1:1 with ``signal_mz_column``.
+            signal_intensity_column: Optional column holding, PER deconv-peak row,
+                the list of signal-peak intensities (FLASHApp ``SignalPeaks[i][:,2]``).
+                Each cell is a ``list[float]`` aligned 1:1 with ``signal_mz_column``.
+                Used to weight the intensity-weighted center-of-gravity m/z per
+                charge in the drill-down. When omitted, the COG falls back to a plain
+                mean of the m/z values.
+            tag_filters: Optional mapping ``{identifier: column}`` selecting the tag
+                state. The selection VALUE for ``identifier`` must be a list of tag
+                masses (FLASHApp ``selectedTag.masses``). ``column`` is informational
+                (the per-row mass column used for matching is ``tag_mass_column`` or,
+                if omitted, ``x_column``).
+            tag_mass_column: Column whose per-row mass is matched against the selected
+                tag masses with ``abs(Δ) < tag_tolerance``. Defaults to ``x_column``.
+            tag_tolerance: Absolute mass tolerance for tag matching (default ``1e-5``,
+                matching FLASHApp ``PlotlyLineplotTagger``).
+
+                TAG WALK (residue walk overlay): the selection value for a
+                ``tag_filters`` identifier may ALSO be a dict carrying ordered tag
+                masses AND residue letters, e.g.
+                ``{"masses": [m0, m1, ...], "residues": ["H", "L", "L", "T"]}``.
+                When ``residues`` (or its alias ``sequence``) is present, the Vue
+                layer draws a residue-walk: consecutive tag masses are connected by
+                arrows and the residue letter for each gap is labelled above the
+                deconv sticks, and the x-axis auto-zooms to the tag's mass span
+                (FLASHApp ``Augmented Deconvolved Spectrum`` parity). The residue at
+                gap ``i`` (between ``masses[i]`` and ``masses[i+1]``) is
+                ``residues[i]``; supply them already ordered to match ``masses``.
+                When only a bare list / ``masses`` is given (no residues), behavior
+                is unchanged (highlight-only overlay).
+
+                TAG WALK direction/selection: the tag-walk dict may ALSO carry
+                ``nTerminal`` (bool) and ``selectedAA`` (int, the within-tag residue
+                index the user clicked). These are OPTIONAL and backward-compatible:
+                when present they are forwarded to Vue as part of the ``tagWalk``
+                payload so the residue-walk honors the requested direction and
+                highlights the selected residue (FLASHApp ``selectedTag.selectedAA`` /
+                terminal anchoring), instead of relying purely on the stored mass
+                order. When absent, behavior is unchanged.
+            show_signal_markers: When True, Vue draws ``signalPeakColor`` dot markers
+                on ``signal_peak_column`` peaks. Default False for FLASHApp parity
+                (the legacy renderer does NOT draw these). The underlying signal data
+                still flows to Vue for the charge drill-down regardless of this flag.
             styling: Style configuration dict with keys:
                 - highlightColor: Color for highlighted points (default: '#E4572E')
                 - selectedColor: Color for clicked/selected peak (default: '#F3A712')
@@ -111,6 +188,19 @@ class LinePlot(BaseComponent):
         self._y_label = y_label or y_column
         self._highlight_column = highlight_column
         self._annotation_column = annotation_column
+        # --- Tagger extension state ---
+        self._x2_column = x2_column
+        self._y2_column = y2_column
+        self._highlight2_column = highlight2_column
+        self._annotation2_column = annotation2_column
+        self._signal_peak_column = signal_peak_column
+        self._signal_mz_column = signal_mz_column
+        self._signal_charge_column = signal_charge_column
+        self._signal_intensity_column = signal_intensity_column
+        self._tag_filters = tag_filters or {}
+        self._tag_mass_column = tag_mass_column
+        self._tag_tolerance = tag_tolerance
+        self._show_signal_markers = show_signal_markers
         self._styling = styling or {}
         self._plot_config = config or {}
 
@@ -135,6 +225,18 @@ class LinePlot(BaseComponent):
             y_label=y_label,
             highlight_column=highlight_column,
             annotation_column=annotation_column,
+            x2_column=x2_column,
+            y2_column=y2_column,
+            highlight2_column=highlight2_column,
+            annotation2_column=annotation2_column,
+            signal_peak_column=signal_peak_column,
+            signal_mz_column=signal_mz_column,
+            signal_charge_column=signal_charge_column,
+            signal_intensity_column=signal_intensity_column,
+            tag_filters=tag_filters,
+            tag_mass_column=tag_mass_column,
+            tag_tolerance=tag_tolerance,
+            show_signal_markers=show_signal_markers,
             styling=styling,
             config=config,
             **kwargs,
@@ -152,6 +254,18 @@ class LinePlot(BaseComponent):
             "y_column": self._y_column,
             "highlight_column": self._highlight_column,
             "annotation_column": self._annotation_column,
+            "x2_column": self._x2_column,
+            "y2_column": self._y2_column,
+            "highlight2_column": self._highlight2_column,
+            "annotation2_column": self._annotation2_column,
+            "signal_peak_column": self._signal_peak_column,
+            "signal_mz_column": self._signal_mz_column,
+            "signal_charge_column": self._signal_charge_column,
+            "signal_intensity_column": self._signal_intensity_column,
+            "tag_filters": self._tag_filters,
+            "tag_mass_column": self._tag_mass_column,
+            "tag_tolerance": self._tag_tolerance,
+            "show_signal_markers": self._show_signal_markers,
             "title": self._title,
             "x_label": self._x_label,
             "y_label": self._y_label,
@@ -165,6 +279,18 @@ class LinePlot(BaseComponent):
         self._y_column = config.get("y_column", "y")
         self._highlight_column = config.get("highlight_column")
         self._annotation_column = config.get("annotation_column")
+        self._x2_column = config.get("x2_column")
+        self._y2_column = config.get("y2_column")
+        self._highlight2_column = config.get("highlight2_column")
+        self._annotation2_column = config.get("annotation2_column")
+        self._signal_peak_column = config.get("signal_peak_column")
+        self._signal_mz_column = config.get("signal_mz_column")
+        self._signal_charge_column = config.get("signal_charge_column")
+        self._signal_intensity_column = config.get("signal_intensity_column")
+        self._tag_filters = config.get("tag_filters") or {}
+        self._tag_mass_column = config.get("tag_mass_column")
+        self._tag_tolerance = config.get("tag_tolerance", 1e-5)
+        self._show_signal_markers = config.get("show_signal_markers", False)
         self._title = config.get("title")
         self._x_label = config.get("x_label", self._x_column)
         self._y_label = config.get("y_label", self._y_column)
@@ -173,6 +299,22 @@ class LinePlot(BaseComponent):
         # Initialize dynamic annotations (not cached)
         self._dynamic_annotations = None
         self._dynamic_title = None
+
+    def get_state_dependencies(self) -> List[str]:
+        """
+        State keys affecting this component's data.
+
+        Includes filter identifiers (base behavior) plus tag-selection
+        identifiers, because tag-driven highlighting is computed at render
+        time from the tag-mass selection value and must invalidate the cache
+        when the selected tag changes. When no ``tag_filters`` are configured
+        this returns exactly the base set (backward compatible).
+        """
+        deps = list(self._filters.keys())
+        for identifier in self._tag_filters.keys():
+            if identifier not in deps:
+                deps.append(identifier)
+        return deps
 
     def _get_row_group_size(self) -> int:
         """
@@ -220,6 +362,39 @@ class LinePlot(BaseComponent):
                 f"annotation_column '{self._annotation_column}' not found in data. "
                 f"Available columns: {column_names}"
             )
+
+        # Validate tagger-extension columns (all optional)
+        for col_attr, col_label in [
+            (self._x2_column, "x2_column"),
+            (self._y2_column, "y2_column"),
+            (self._highlight2_column, "highlight2_column"),
+            (self._annotation2_column, "annotation2_column"),
+            (self._signal_peak_column, "signal_peak_column"),
+            (self._signal_mz_column, "signal_mz_column"),
+            (self._signal_charge_column, "signal_charge_column"),
+            (self._signal_intensity_column, "signal_intensity_column"),
+        ]:
+            if col_attr and col_attr not in column_names:
+                raise ValueError(
+                    f"{col_label} '{col_attr}' not found in data. "
+                    f"Available columns: {column_names}"
+                )
+
+        # A second series needs both x2 and y2
+        if (self._x2_column is None) != (self._y2_column is None):
+            raise ValueError(
+                "Second series requires BOTH x2_column and y2_column "
+                f"(got x2_column={self._x2_column!r}, y2_column={self._y2_column!r})."
+            )
+
+        # Tag-mass column (defaults to x_column) must exist when tag overlay used
+        if self._tag_filters:
+            tag_col = self._tag_mass_column or self._x_column
+            if tag_col not in column_names:
+                raise ValueError(
+                    f"tag_mass_column '{tag_col}' not found in data. "
+                    f"Available columns: {column_names}"
+                )
 
     def _preprocess(self) -> None:
         """
@@ -289,6 +464,25 @@ class LinePlot(BaseComponent):
             for col in self._filters.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        # Include second-series columns (tagger extension)
+        for col in (
+            self._x2_column,
+            self._y2_column,
+            self._highlight2_column,
+            self._annotation2_column,
+            self._signal_peak_column,
+            # Charge drill-down: per-row signal-peak arrays
+            self._signal_mz_column,
+            self._signal_charge_column,
+            self._signal_intensity_column,
+        ):
+            if col and col not in columns_to_select:
+                columns_to_select.append(col)
+        # Include tag-mass column for tag-overlay matching
+        if self._tag_filters:
+            tag_col = self._tag_mass_column or self._x_column
+            if tag_col not in columns_to_select:
+                columns_to_select.append(tag_col)
 
         # Get cached data (DataFrame or LazyFrame)
         data = self._preprocessed_data.get("data")
@@ -358,13 +552,171 @@ class LinePlot(BaseComponent):
             ).hexdigest()[:8]
             data_hash = f"{data_hash}_{ann_hash}"
 
+        # --- Tagger extension: tag-mass overlay (computed at render time) ---
+        # When tag_filters are configured, read the selected tag masses from state
+        # and flag/annotate peaks whose tag-mass column matches within tolerance
+        # (abs(Δ) < tag_tolerance, matching FLASHApp PlotlyLineplotTagger).
+        tag_highlight_col = None
+        tag_annotation_col = None
+        tag_walk: Optional[Dict[str, Any]] = None
+        if self._tag_filters and len(df_pandas) > 0:
+            tag_masses, tag_residues, tag_meta = self._collect_tag_walk(state)
+            tag_col = self._tag_mass_column or self._x_column
+            if tag_masses and tag_col in df_pandas.columns:
+                df_pandas = df_pandas.copy()
+                tag_flags, tag_labels = self._compute_tag_overlay(
+                    df_pandas[tag_col].tolist(), tag_masses
+                )
+                df_pandas["_tag_highlight"] = tag_flags
+                df_pandas["_tag_annotation"] = tag_labels
+                tag_highlight_col = "_tag_highlight"
+                tag_annotation_col = "_tag_annotation"
+
+                # Residue-walk overlay: only when residue letters were supplied.
+                if tag_residues:
+                    tag_walk = {"masses": tag_masses, "residues": tag_residues}
+                    # Forward OPTIONAL anchoring hints verbatim (absent → unchanged).
+                    if "nTerminal" in tag_meta:
+                        tag_walk["nTerminal"] = tag_meta["nTerminal"]
+                    if "selectedAA" in tag_meta:
+                        tag_walk["selectedAA"] = tag_meta["selectedAA"]
+
+                # Fold tag selection into the hash so the cache tracks it
+                import hashlib
+
+                tag_key = str(
+                    [round(float(m), 6) for m in tag_masses]
+                    + list(tag_residues)
+                    + [tag_meta.get("nTerminal"), tag_meta.get("selectedAA")]
+                )
+                tag_hash = hashlib.md5(tag_key.encode()).hexdigest()[:8]
+                data_hash = f"{data_hash}_tag{tag_hash}"
+
         # Send as DataFrame for Arrow serialization (efficient binary transfer)
         # Vue will parse and extract columns using the config
-        return {
+        result: Dict[str, Any] = {
             "plotData": df_pandas,
             "_hash": data_hash,
-            "_plotConfig": self._build_plot_config(highlight_col, annotation_col),
+            "_plotConfig": self._build_plot_config(
+                highlight_col,
+                annotation_col,
+                tag_highlight_col=tag_highlight_col,
+                tag_annotation_col=tag_annotation_col,
+            ),
         }
+        # Top-level tag-walk payload (None when no residue walk is active → Vue
+        # renders exactly as today). Kept OUT of the DataFrame so it survives
+        # Arrow serialization as plain JSON and is trivial for Vue to read.
+        if tag_walk is not None:
+            result["tagWalk"] = tag_walk
+        return result
+
+    def _collect_tag_masses(self, state: Dict[str, Any]) -> list:
+        """
+        Resolve the selected tag masses from the current selection state.
+
+        Thin wrapper over :meth:`_collect_tag_walk` returning only the masses
+        (kept for backward compatibility).
+        """
+        return self._collect_tag_walk(state)[0]
+
+    @property
+    def _has_signal_drilldown(self) -> bool:
+        """True when the per-row signal arrays for the charge drill-down are wired."""
+        return bool(self._signal_mz_column and self._signal_charge_column)
+
+    def _collect_tag_walk(self, state: Dict[str, Any]):
+        """
+        Resolve the selected tag's ordered masses AND residue letters from state.
+
+        Reads each ``tag_filters`` identifier's value, accepting any of:
+          * a bare list/tuple of masses (FLASHApp ``selectedTag.masses``);
+          * a single numeric mass;
+          * a dict carrying a ``masses`` key, optionally with ``residues`` (or
+            its alias ``sequence``) — the tag-walk residue letters. This is the
+            FLASHApp ``selectedTag`` object shape and the API contract for the
+            residue-walk overlay. The dict may ALSO carry ``nTerminal`` (bool) and
+            ``selectedAA`` (int) for direction/selected-residue anchoring (forwarded
+            verbatim to Vue; OPTIONAL/backward-compatible).
+
+        Returns:
+            ``(masses: list[float], residues: list[str], meta: dict)`` where
+            ``meta`` holds any of ``nTerminal``/``selectedAA`` that were supplied.
+            ``residues`` is empty when no letters were supplied (→ highlight-only
+            overlay, no walk). None / empty selections yield ``([], [], {})``.
+        """
+        masses: list = []
+        residues: list = []
+        meta: Dict[str, Any] = {}
+        for identifier in self._tag_filters.keys():
+            value = state.get(identifier)
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                residue_val = value.get("residues")
+                if residue_val is None:
+                    residue_val = value.get("sequence")
+                if isinstance(residue_val, (list, tuple)):
+                    residues.extend(str(r) for r in residue_val)
+                elif isinstance(residue_val, str):
+                    residues.extend(list(residue_val))
+                # OPTIONAL anchoring hints (FLASHApp selectedTag fields).
+                if "nTerminal" in value and value["nTerminal"] is not None:
+                    meta["nTerminal"] = bool(value["nTerminal"])
+                if "selectedAA" in value and value["selectedAA"] is not None:
+                    try:
+                        meta["selectedAA"] = int(value["selectedAA"])
+                    except (TypeError, ValueError):
+                        pass
+                value = value.get("masses")
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                masses.extend(value)
+            else:
+                masses.append(value)
+        # Coerce masses to float, dropping anything non-numeric
+        result: list = []
+        for m in masses:
+            try:
+                result.append(float(m))
+            except (TypeError, ValueError):
+                continue
+        # Only return residues alongside a usable mass list
+        if not result:
+            return [], [], {}
+        return result, residues, meta
+
+    def _compute_tag_overlay(self, peak_masses: list, tag_masses: list):
+        """
+        Compute per-row tag highlight flags and annotation labels.
+
+        A peak is highlighted when its mass matches ANY tag mass within
+        ``abs(Δ) < tag_tolerance`` (the FLASHApp 1e-5 rule). The annotation is
+        the matched tag mass formatted to 2 decimals (parity with the mass
+        button label text).
+
+        Args:
+            peak_masses: per-row mass values (from ``tag_mass_column``).
+            tag_masses: selected tag masses.
+
+        Returns:
+            (flags: list[bool], labels: list[str])
+        """
+        tol = self._tag_tolerance
+        flags = [False] * len(peak_masses)
+        labels = [""] * len(peak_masses)
+        for i, pm in enumerate(peak_masses):
+            try:
+                pmf = float(pm)
+            except (TypeError, ValueError):
+                continue
+            for tm in tag_masses:
+                if abs(pmf - tm) < tol:
+                    flags[i] = True
+                    labels[i] = f"{tm:.2f}"
+                    break
+        return flags, labels
 
     def _get_component_args(self) -> Dict[str, Any]:
         """
@@ -379,6 +731,10 @@ class LinePlot(BaseComponent):
             "selectedColor": "#F3A712",
             "unhighlightedColor": "lightblue",
             "highlightHiddenColor": "#1f77b4",
+            # Tagger extension defaults
+            "secondSeriesColor": "#9ad1f0",
+            "signalPeakColor": "#2E86AB",
+            "tagHighlightColor": "#E4572E",
             "annotationColors": {
                 "massButton": "#E4572E",
                 "selectedMassButton": "#F3A712",
@@ -414,6 +770,28 @@ class LinePlot(BaseComponent):
             "yColumn": self._y_column,
             "highlightColumn": self._highlight_column,
             "annotationColumn": self._annotation_column,
+            # --- Tagger extension args (None/False when unused → no Vue change) ---
+            "x2Column": self._x2_column,
+            "y2Column": self._y2_column,
+            "highlight2Column": self._highlight2_column,
+            "annotation2Column": self._annotation2_column,
+            "hasSecondSeries": bool(self._x2_column and self._y2_column),
+            "signalPeakColumn": self._signal_peak_column,
+            # Charge drill-down: per-row signal arrays + parity flags
+            "signalMzColumn": self._signal_mz_column,
+            "signalChargeColumn": self._signal_charge_column,
+            "signalIntensityColumn": self._signal_intensity_column,
+            "hasSignalDrilldown": self._has_signal_drilldown,
+            # Signal-peak markers are OFF by default for legacy parity (P2).
+            "showSignalMarkers": bool(self._show_signal_markers),
+            # Tag-overlay output columns (Vue reads these from _plotConfig at render;
+            # advertised here so the front-end knows tag overlay is enabled).
+            "tagHighlightColumn": "_tag_highlight" if self._tag_filters else None,
+            "tagAnnotationColumn": "_tag_annotation" if self._tag_filters else None,
+            # Tag-walk (residue walk) is enabled whenever tag overlay is wired; the
+            # actual walk payload arrives at render time via the top-level
+            # ``tagWalk`` key (masses + residues), only when residues are supplied.
+            "tagWalkEnabled": bool(self._tag_filters),
         }
 
         # Add any extra config options
@@ -529,6 +907,8 @@ class LinePlot(BaseComponent):
         self,
         highlight_col: Optional[str],
         annotation_col: Optional[str],
+        tag_highlight_col: Optional[str] = None,
+        tag_annotation_col: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Build _plotConfig dict for Vue component.
@@ -536,6 +916,10 @@ class LinePlot(BaseComponent):
         Args:
             highlight_col: Column name for highlight values
             annotation_col: Column name for annotation text
+            tag_highlight_col: Column name for tag-overlay highlight flags
+                (``_tag_highlight``), or None when no tag overlay is active.
+            tag_annotation_col: Column name for tag-overlay labels
+                (``_tag_annotation``), or None.
 
         Returns:
             Config dict with column mappings for Vue
@@ -545,6 +929,33 @@ class LinePlot(BaseComponent):
             "yColumn": self._y_column,
             "highlightColumn": highlight_col,
             "annotationColumn": annotation_col,
+            # Tagger extension (None when unused → Vue ignores)
+            "x2Column": self._x2_column,
+            "y2Column": self._y2_column,
+            "highlight2Column": self._highlight2_column,
+            "annotation2Column": self._annotation2_column,
+            "hasSecondSeries": bool(self._x2_column and self._y2_column),
+            "signalPeakColumn": self._signal_peak_column,
+            # Charge drill-down: per-row signal arrays (lists per peak row).
+            "signalMzColumn": self._signal_mz_column,
+            "signalChargeColumn": self._signal_charge_column,
+            "signalIntensityColumn": self._signal_intensity_column,
+            "hasSignalDrilldown": self._has_signal_drilldown,
+            "showSignalMarkers": bool(self._show_signal_markers),
+            # When tag overlay is configured, the tag columns are baked into the
+            # cached DataFrame (keyed by the tag selection via get_state_dependencies).
+            # Default the config to those column names even when called with the
+            # 2-arg form (bridge.py cache-hit path), so tag highlights survive.
+            "tagHighlightColumn": (
+                tag_highlight_col
+                if tag_highlight_col is not None
+                else ("_tag_highlight" if self._tag_filters else None)
+            ),
+            "tagAnnotationColumn": (
+                tag_annotation_col
+                if tag_annotation_col is not None
+                else ("_tag_annotation" if self._tag_filters else None)
+            ),
             "interactivityColumns": {
                 col: col
                 for col in (self._interactivity.values() if self._interactivity else [])
@@ -570,7 +981,16 @@ class LinePlot(BaseComponent):
         df = vue_data.get("plotData")
 
         if df is not None and isinstance(df, pd.DataFrame):
-            dynamic_cols = ["_dynamic_highlight", "_dynamic_annotation"]
+            # Strip both sequence-view dynamic columns AND tag-overlay columns so
+            # the cached base does not carry stale render-time state. The
+            # dynamic-annotations cache path (bridge.py) recomputes from state on
+            # the next render.
+            dynamic_cols = [
+                "_dynamic_highlight",
+                "_dynamic_annotation",
+                "_tag_highlight",
+                "_tag_annotation",
+            ]
             cols_to_drop = [c for c in dynamic_cols if c in df.columns]
             if cols_to_drop:
                 vue_data["plotData"] = df.drop(columns=cols_to_drop)

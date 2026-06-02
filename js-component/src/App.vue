@@ -31,6 +31,10 @@ import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
 import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
 import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
+import PlotlyDensity from './components/plotly/PlotlyDensity.vue'
+import Plotly3DScatter from './components/plotly/Plotly3DScatter.vue'
+import PlotlyFeatureView from './components/plotly/PlotlyFeatureView.vue'
+import InternalFragmentMap from './components/sequence/InternalFragmentMap.vue'
 
 export default defineComponent({
   name: 'App',
@@ -41,6 +45,10 @@ export default defineComponent({
     PlotlyMirrorPlot,
     PlotlyVolcano,
     SequenceView,
+    PlotlyDensity,
+    Plotly3DScatter,
+    PlotlyFeatureView,
+    InternalFragmentMap,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -206,6 +214,14 @@ export default defineComponent({
           return PlotlyVolcano
         case 'SequenceView':
           return SequenceView
+        case 'PlotlyDensity':
+          return PlotlyDensity
+        case 'Plotly3DScatter':
+          return Plotly3DScatter
+        case 'PlotlyFeatureView':
+          return PlotlyFeatureView
+        case 'InternalFragmentMap':
+          return InternalFragmentMap
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null
