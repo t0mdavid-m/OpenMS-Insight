@@ -691,11 +691,18 @@ class Table(BaseComponent):
 
                 # Only search if we have a valid value (not already marked as not found)
                 if not go_to_not_found:
-                    # Find the row with row_number
+                    # Find the row with row_number, also pulling the interactivity
+                    # columns so we can propagate the cross-component selection to the
+                    # navigated row (parity with onRowClick / client-side go-to).
+                    interactivity_columns = (
+                        list(self._interactivity.values())
+                        if self._interactivity
+                        else []
+                    )
                     search_result = (
                         data.with_row_index("_row_num")
                         .filter(pl.col(go_to_field) == go_to_value)
-                        .select("_row_num")
+                        .select(["_row_num", *interactivity_columns])
                         .head(1)
                         .collect()
                     )
@@ -706,6 +713,31 @@ class Table(BaseComponent):
                         navigate_to_page = target_page
                         target_row_index = row_num % page_size
                         page = target_page  # Jump to target page
+
+                        # Propagate the cross-component selection to the target row.
+                        # Server-side go-to is authoritative for selection (Vue only
+                        # highlights the row), so without this downstream linked
+                        # components would not update to the navigated row.
+                        if self._interactivity:
+                            from openms_insight.core.state import (
+                                get_default_state_manager,
+                            )
+
+                            state_manager = get_default_state_manager()
+                            for identifier, column in self._interactivity.items():
+                                if column in search_result.columns:
+                                    target_value = search_result[column][0]
+                                    if hasattr(target_value, "item"):
+                                        target_value = target_value.item()
+                                    state_manager.set_selection(
+                                        identifier, target_value
+                                    )
+                                    # Keep the in-render state view consistent so the
+                                    # selection-navigation block below records this as
+                                    # the current selection. This prevents a spurious
+                                    # re-navigation (and a navigate<->select loop) on
+                                    # the next render once Vue clears go_to_request.
+                                    state[identifier] = target_value
                     else:
                         # Row not found - set flag for Vue to show "not found" feedback
                         go_to_not_found = True
