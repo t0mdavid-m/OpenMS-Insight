@@ -149,15 +149,13 @@ def cmd_report(args) -> int:
     rows = read_ledger(args.phase)
 
     rounds = sorted({r["round"] for r in rows if r.get("round") is not None})
-    review_status, gate_records, fstate = {}, {}, {}
+    review_status, gate_records = {}, {}
     for r in rows:
         rd = r.get("round")
         if r.get("kind") == "review":
             review_status[(rd, r.get("unit"))] = r.get("status")
         elif r.get("kind") == "gate":
             gate_records.setdefault(rd, []).append(r.get("status"))
-        for f in r.get("findings") or []:
-            fstate[f["id"]] = f.get("status", "open")
 
     def gate_ok(rd) -> bool:
         recs = gate_records.get(rd, [])
@@ -187,9 +185,18 @@ def cmd_report(args) -> int:
     for rd in rounds:
         streak = streak + 1 if round_clean(rd) else 0
     converged = streak >= conv
-    open_ids = sorted(fid for fid, st in fstate.items() if st == "open")
+    # Each round is a full re-review, so the CURRENT open set is the latest round's
+    # findings; prior rounds' findings are superseded by the latest verdict per unit.
+    latest = max(rounds) if rounds else None
+    open_ids = sorted(
+        f["id"]
+        for r in rows
+        if r.get("round") == latest and r.get("kind") == "review"
+        for f in (r.get("findings") or [])
+    )
 
-    print(f"\nOPEN FINDINGS: {len(open_ids)}" + (": " + ", ".join(open_ids) if open_ids else ""))
+    print(f"\nOPEN FINDINGS (round {latest}): {len(open_ids)}"
+          + (": " + ", ".join(open_ids) if open_ids else ""))
     print(f"CONSECUTIVE CLEAN ROUNDS: {streak} / {conv}")
     print("STATUS: " + ("CONVERGED" if converged else "NOT CONVERGED"))
 
