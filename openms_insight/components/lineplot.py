@@ -126,6 +126,20 @@ class LinePlot(BaseComponent):
                 tag masses with ``abs(Δ) < tag_tolerance``. Defaults to ``x_column``.
             tag_tolerance: Absolute mass tolerance for tag matching (default ``1e-5``,
                 matching FLASHApp ``PlotlyLineplotTagger``).
+
+                TAG WALK (residue walk overlay): the selection value for a
+                ``tag_filters`` identifier may ALSO be a dict carrying ordered tag
+                masses AND residue letters, e.g.
+                ``{"masses": [m0, m1, ...], "residues": ["H", "L", "L", "T"]}``.
+                When ``residues`` (or its alias ``sequence``) is present, the Vue
+                layer draws a residue-walk: consecutive tag masses are connected by
+                arrows and the residue letter for each gap is labelled above the
+                deconv sticks, and the x-axis auto-zooms to the tag's mass span
+                (FLASHApp ``Augmented Deconvolved Spectrum`` parity). The residue at
+                gap ``i`` (between ``masses[i]`` and ``masses[i+1]``) is
+                ``residues[i]``; supply them already ordered to match ``masses``.
+                When only a bare list / ``masses`` is given (no residues), behavior
+                is unchanged (highlight-only overlay).
             styling: Style configuration dict with keys:
                 - highlightColor: Color for highlighted points (default: '#E4572E')
                 - selectedColor: Color for clicked/selected peak (default: '#F3A712')
@@ -488,8 +502,9 @@ class LinePlot(BaseComponent):
         # (abs(Δ) < tag_tolerance, matching FLASHApp PlotlyLineplotTagger).
         tag_highlight_col = None
         tag_annotation_col = None
+        tag_walk: Optional[Dict[str, Any]] = None
         if self._tag_filters and len(df_pandas) > 0:
-            tag_masses = self._collect_tag_masses(state)
+            tag_masses, tag_residues = self._collect_tag_walk(state)
             tag_col = self._tag_mass_column or self._x_column
             if tag_masses and tag_col in df_pandas.columns:
                 df_pandas = df_pandas.copy()
@@ -501,17 +516,22 @@ class LinePlot(BaseComponent):
                 tag_highlight_col = "_tag_highlight"
                 tag_annotation_col = "_tag_annotation"
 
+                # Residue-walk overlay: only when residue letters were supplied.
+                if tag_residues:
+                    tag_walk = {"masses": tag_masses, "residues": tag_residues}
+
                 # Fold tag selection into the hash so the cache tracks it
                 import hashlib
 
-                tag_hash = hashlib.md5(
-                    str([round(float(m), 6) for m in tag_masses]).encode()
-                ).hexdigest()[:8]
+                tag_key = str(
+                    [round(float(m), 6) for m in tag_masses] + list(tag_residues)
+                )
+                tag_hash = hashlib.md5(tag_key.encode()).hexdigest()[:8]
                 data_hash = f"{data_hash}_tag{tag_hash}"
 
         # Send as DataFrame for Arrow serialization (efficient binary transfer)
         # Vue will parse and extract columns using the config
-        return {
+        result: Dict[str, Any] = {
             "plotData": df_pandas,
             "_hash": data_hash,
             "_plotConfig": self._build_plot_config(
@@ -521,22 +541,53 @@ class LinePlot(BaseComponent):
                 tag_annotation_col=tag_annotation_col,
             ),
         }
+        # Top-level tag-walk payload (None when no residue walk is active → Vue
+        # renders exactly as today). Kept OUT of the DataFrame so it survives
+        # Arrow serialization as plain JSON and is trivial for Vue to read.
+        if tag_walk is not None:
+            result["tagWalk"] = tag_walk
+        return result
 
     def _collect_tag_masses(self, state: Dict[str, Any]) -> list:
         """
         Resolve the selected tag masses from the current selection state.
 
-        Reads each ``tag_filters`` identifier's value. The value is expected to
-        be a list of masses (FLASHApp ``selectedTag.masses``). A dict carrying a
-        ``masses`` key (FLASHApp ``selectedTag`` object) is also accepted. None /
-        empty selections yield an empty list (→ no tag highlight).
+        Thin wrapper over :meth:`_collect_tag_walk` returning only the masses
+        (kept for backward compatibility).
+        """
+        return self._collect_tag_walk(state)[0]
+
+    def _collect_tag_walk(self, state: Dict[str, Any]):
+        """
+        Resolve the selected tag's ordered masses AND residue letters from state.
+
+        Reads each ``tag_filters`` identifier's value, accepting any of:
+          * a bare list/tuple of masses (FLASHApp ``selectedTag.masses``);
+          * a single numeric mass;
+          * a dict carrying a ``masses`` key, optionally with ``residues`` (or
+            its alias ``sequence``) — the tag-walk residue letters. This is the
+            FLASHApp ``selectedTag`` object shape and the API contract for the
+            residue-walk overlay.
+
+        Returns:
+            ``(masses: list[float], residues: list[str])``. ``residues`` is empty
+            when no letters were supplied (→ highlight-only overlay, no walk).
+            None / empty selections yield ``([], [])``.
         """
         masses: list = []
+        residues: list = []
         for identifier in self._tag_filters.keys():
             value = state.get(identifier)
             if value is None:
                 continue
             if isinstance(value, dict):
+                residue_val = value.get("residues")
+                if residue_val is None:
+                    residue_val = value.get("sequence")
+                if isinstance(residue_val, (list, tuple)):
+                    residues.extend(str(r) for r in residue_val)
+                elif isinstance(residue_val, str):
+                    residues.extend(list(residue_val))
                 value = value.get("masses")
             if value is None:
                 continue
@@ -544,14 +595,17 @@ class LinePlot(BaseComponent):
                 masses.extend(value)
             else:
                 masses.append(value)
-        # Coerce to float, dropping anything non-numeric
-        result = []
+        # Coerce masses to float, dropping anything non-numeric
+        result: list = []
         for m in masses:
             try:
                 result.append(float(m))
             except (TypeError, ValueError):
                 continue
-        return result
+        # Only return residues alongside a usable mass list
+        if not result:
+            return [], []
+        return result, residues
 
     def _compute_tag_overlay(self, peak_masses: list, tag_masses: list):
         """
@@ -647,6 +701,10 @@ class LinePlot(BaseComponent):
             # advertised here so the front-end knows tag overlay is enabled).
             "tagHighlightColumn": "_tag_highlight" if self._tag_filters else None,
             "tagAnnotationColumn": "_tag_annotation" if self._tag_filters else None,
+            # Tag-walk (residue walk) is enabled whenever tag overlay is wired; the
+            # actual walk payload arrives at render time via the top-level
+            # ``tagWalk`` key (masses + residues), only when residues are supplied.
+            "tagWalkEnabled": bool(self._tag_filters),
         }
 
         # Add any extra config options

@@ -259,6 +259,91 @@ def test_tag_selection_changes_hash(
 
 
 # ---------------------------------------------------------------------------
+# 4b. Tag WALK (residue walk overlay): masses + residue letters
+# ---------------------------------------------------------------------------
+
+
+def test_tag_walk_payload_from_dict(
+    mock_streamlit, temp_cache_dir, sample_combined_spectrum_data
+):
+    """selectedTag dict with residues yields a top-level tagWalk payload."""
+    plot = _tag_plot("tagger_walk", sample_combined_spectrum_data, temp_cache_dir)
+    result = _vue(
+        plot,
+        {
+            "scanIndex": 1,
+            "tag": {
+                "masses": [100.0, 200.0, 300.0, 400.0],
+                "residues": ["H", "L", "L"],
+            },
+        },
+    )
+    assert "tagWalk" in result
+    walk = result["tagWalk"]
+    assert walk["masses"] == [100.0, 200.0, 300.0, 400.0]
+    assert walk["residues"] == ["H", "L", "L"]
+    # Highlight columns still produced
+    assert result["plotData"]["_tag_highlight"].tolist() == [True, True, True, True]
+
+
+def test_tag_walk_accepts_sequence_alias_string(
+    mock_streamlit, temp_cache_dir, sample_combined_spectrum_data
+):
+    """`sequence` alias as a string is split into per-letter residues."""
+    plot = _tag_plot("tagger_walk_seq", sample_combined_spectrum_data, temp_cache_dir)
+    result = _vue(
+        plot,
+        {"scanIndex": 1, "tag": {"masses": [200.0, 400.0], "sequence": "HL"}},
+    )
+    assert result["tagWalk"]["residues"] == ["H", "L"]
+
+
+def test_tag_walk_absent_when_no_residues(
+    mock_streamlit, temp_cache_dir, sample_combined_spectrum_data
+):
+    """Bare mass list (highlight-only) must NOT produce a tagWalk payload."""
+    plot = _tag_plot("tagger_walk_none", sample_combined_spectrum_data, temp_cache_dir)
+    result = _vue(plot, {"scanIndex": 1, "tag": [200.0, 400.0]})
+    assert "tagWalk" not in result
+    # Highlight overlay still works
+    assert result["plotData"]["_tag_highlight"].tolist() == [False, True, False, True]
+
+
+def test_tag_walk_dict_without_residues_no_walk(
+    mock_streamlit, temp_cache_dir, sample_combined_spectrum_data
+):
+    """A dict carrying only `masses` (no residues) → highlight only, no walk."""
+    plot = _tag_plot(
+        "tagger_walk_nomass", sample_combined_spectrum_data, temp_cache_dir
+    )
+    result = _vue(plot, {"scanIndex": 1, "tag": {"masses": [200.0, 400.0]}})
+    assert "tagWalk" not in result
+
+
+def test_tag_walk_changes_hash(
+    mock_streamlit, temp_cache_dir, sample_combined_spectrum_data
+):
+    """Different residue walks over the same masses produce different hashes."""
+    plot = _tag_plot("tagger_walk_hash", sample_combined_spectrum_data, temp_cache_dir)
+    h_a = _vue(
+        plot,
+        {"scanIndex": 1, "tag": {"masses": [200.0, 400.0], "residues": ["H", "L"]}},
+    )["_hash"]
+    h_b = _vue(
+        plot,
+        {"scanIndex": 1, "tag": {"masses": [200.0, 400.0], "residues": ["T", "K"]}},
+    )["_hash"]
+    assert h_a != h_b
+
+
+def test_tag_walk_enabled_flag_in_args(
+    mock_streamlit, temp_cache_dir, sample_combined_spectrum_data
+):
+    plot = _tag_plot("tagger_walk_args", sample_combined_spectrum_data, temp_cache_dir)
+    assert plot._get_component_args()["tagWalkEnabled"] is True
+
+
+# ---------------------------------------------------------------------------
 # 5. Backward compatibility (HARD constraint: NO REGRESSION)
 # ---------------------------------------------------------------------------
 
@@ -301,6 +386,7 @@ def test_backward_compat_identical_output_when_unused(
     assert args["hasSecondSeries"] is False
     assert args["x2Column"] is None
     assert args["tagHighlightColumn"] is None
+    assert args["tagWalkEnabled"] is False
 
 
 def test_backward_compat_hash_stable_across_versions(

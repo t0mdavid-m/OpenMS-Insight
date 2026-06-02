@@ -90,6 +90,19 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   signalPeakColumn?: string | null // Boolean column flagging SignalPeaks membership
   tagHighlightColumn?: string | null // Boolean column for tag-overlay highlight
   tagAnnotationColumn?: string | null // Text column for tag-overlay labels
+  tagWalkEnabled?: boolean // True when a tag (residue) walk overlay is wired
+}
+
+/**
+ * Tag-walk (residue walk) payload sent at render time alongside plotData.
+ * Carries the selected tag's ordered fragment masses and the residue letter
+ * for each consecutive-mass gap. residues[i] labels the gap between masses[i]
+ * and masses[i+1]. Drawn as arrows + letters over the deconv sticks with the
+ * x-axis auto-zoomed to the tag's mass span (FLASHApp PlotlyLineplotTagger).
+ */
+export interface TagWalk {
+  masses: number[]
+  residues: string[]
 }
 
 export interface LinePlotStyling {

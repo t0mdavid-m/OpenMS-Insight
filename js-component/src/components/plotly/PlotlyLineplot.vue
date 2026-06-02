@@ -8,7 +8,7 @@ import Plotly from 'plotly.js-dist-min'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
-import type { LinePlotComponentArgs, PlotData } from '@/types/component'
+import type { LinePlotComponentArgs, PlotData, TagWalk } from '@/types/component'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -98,6 +98,48 @@ export default defineComponent({
      */
     plotConfig(): Record<string, unknown> | undefined {
       return this.streamlitDataStore.allDataForDrawing?._plotConfig as Record<string, unknown> | undefined
+    },
+
+    /**
+     * Tagger extension: the selected tag's residue WALK, sent at render time as a
+     * top-level `tagWalk` payload ({masses, residues}). Present only when Python
+     * resolved a selected tag that carries residue letters. When absent, the plot
+     * renders exactly as today (no walk, no auto-zoom) — guaranteeing no
+     * regression for plain LinePlot / highlight-only tagger usage.
+     */
+    tagWalk(): TagWalk | undefined {
+      const tw = this.streamlitDataStore.allDataForDrawing?.tagWalk as TagWalk | undefined
+      if (!tw || !Array.isArray(tw.masses) || tw.masses.length === 0) {
+        return undefined
+      }
+      return tw
+    },
+
+    /**
+     * Sorted unique tag masses for the walk, ascending in x. residues[i] labels
+     * the gap between walkMasses[i] and walkMasses[i+1]. The legacy tagger draws
+     * the same letters regardless of mass ordering; we sort ascending so the
+     * arrows always point left→right while keeping the residue alignment that
+     * Python sent (residues[i] ↔ gap i in the supplied mass order).
+     */
+    walkMasses(): number[] {
+      const tw = this.tagWalk
+      if (!tw) return []
+      return tw.masses.slice()
+    },
+
+    /**
+     * The tag's mass span [min, max] used for auto-zoom, with 2% padding on each
+     * side (mirrors FLASHApp PlotlyLineplotTagger xRange: min*0.98 .. max*1.02).
+     */
+    tagWalkSpan(): number[] | undefined {
+      const masses = this.walkMasses
+      if (masses.length === 0) return undefined
+      const lo = Math.min(...masses)
+      const hi = Math.max(...masses)
+      if (!isFinite(lo) || !isFinite(hi)) return undefined
+      // Match legacy multiplicative padding (0.98 / 1.02) around the span.
+      return [lo * 0.98, hi * 1.02]
     },
 
     /**
@@ -325,6 +367,14 @@ export default defineComponent({
       // Use manual range if set (from zoom)
       if (this.manualXRange) {
         return this.manualXRange
+      }
+
+      // Tagger extension: when a tag walk is present, auto-zoom to the tag's
+      // mass span (with padding). Matches FLASHApp PlotlyLineplotTagger, which
+      // ranges to [min(masses)*0.98, max(masses)*1.02] for the deconv view.
+      const span = this.tagWalkSpan
+      if (span) {
+        return span
       }
 
       if (!this.isDataReady || !this.plotData) return [0, 1]
@@ -602,6 +652,202 @@ export default defineComponent({
     },
 
     /**
+     * Tagger extension: invisible hover markers at each tag-walk mass (parity
+     * with the legacy buttonTraces) so the user can hover a mass to read it.
+     */
+    tagWalkTraces(): Plotly.Data[] {
+      const masses = this.walkMasses
+      if (masses.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+
+      return [
+        {
+          x: masses,
+          y: masses.map(() => ypos),
+          mode: 'markers',
+          type: 'scatter',
+          marker: { size: 20, opacity: 0 },
+          hoverinfo: 'text',
+          hovertext: masses.map((m) => m.toFixed(2)),
+        },
+      ]
+    },
+
+    /**
+     * Tagger extension: background rectangles for each tag-walk mass label,
+     * mirroring the legacy mass "buttons" (ypos_low..ypos_high band).
+     */
+    tagWalkShapes(): Partial<Plotly.Shape>[] {
+      const masses = this.walkMasses
+      if (masses.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos_low = ymax * 1.18
+      const ypos_high = ymax * 1.32
+
+      const xRange = this.xRange
+      // Legacy: xpos_scaling = (xRange[1]-xRange[0]) / xPosScalingFactor (27.5).
+      const xpos_scaling = (xRange[1] - xRange[0]) / 27.5
+
+      const color = this.styling.annotationColors?.massButton || this.styling.highlightColor
+
+      const shapes: Partial<Plotly.Shape>[] = []
+      for (const mass of masses) {
+        shapes.push({
+          type: 'rect',
+          x0: mass - xpos_scaling,
+          y0: ypos_low,
+          x1: mass + xpos_scaling,
+          y1: ypos_high,
+          fillcolor: color,
+          line: { width: 0 },
+        })
+      }
+      return shapes
+    },
+
+    /**
+     * Tagger extension: the residue-walk annotations — the mass labels above
+     * each tag stick PLUS the residue letter for each consecutive-mass gap.
+     * Geometry mirrors PlotlyLineplotTagger.annotationData (deconv branch):
+     *   - mass label at (mass, ypos=ymax*1.25)
+     *   - residue letter at (midpoint, yPosAA=ypos*0.6)
+     * residues[i] labels the gap between walkMasses[i] and walkMasses[i+1].
+     */
+    tagWalkAnnotations(): Partial<Plotly.Annotations>[] {
+      const tw = this.tagWalk
+      const masses = this.walkMasses
+      if (!tw || masses.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+      const yPosAA = ypos * 0.6
+
+      const color = this.styling.annotationColors?.massButton || this.styling.highlightColor
+      const arrowColor =
+        this.styling.annotationColors?.sequenceArrow || this.styling.highlightColor
+
+      const annotations: Partial<Plotly.Annotations>[] = []
+
+      // Mass labels (white text on the colored button band).
+      for (const mass of masses) {
+        annotations.push({
+          x: mass,
+          y: ypos,
+          xref: 'x',
+          yref: 'y',
+          text: mass.toFixed(2),
+          showarrow: false,
+          font: { size: 15, color: 'white' },
+        })
+      }
+
+      // Residue letters for each gap.
+      const residues = tw.residues || []
+      for (let i = 0; i < masses.length - 1; i++) {
+        const xMid = (masses[i] + masses[i + 1]) / 2
+        const aa = i < residues.length ? residues[i] : ''
+        const delta = Math.abs(masses[i + 1] - masses[i])
+        annotations.push({
+          x: xMid,
+          y: yPosAA,
+          xref: 'x',
+          yref: 'y',
+          text: aa,
+          hovertext: 'Δ=' + delta.toFixed(2) + ' Da',
+          showarrow: false,
+          font: { size: 15, color: arrowColor },
+        })
+      }
+
+      return annotations
+    },
+
+    /**
+     * Tagger extension: the connector ARROWS between consecutive tag masses,
+     * drawn as Plotly arrow-annotations. Mirrors the legacy two-segment arrow
+     * (head-less from midpoint to start, headed from midpoint to end) at
+     * yPosArrow = ypos*0.5, with the same inward-shrink (diff = |Δ|*0.9).
+     */
+    tagWalkArrows(): Partial<Plotly.Annotations>[] {
+      const masses = this.walkMasses
+      if (masses.length < 2) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+      const yPosArrow = ypos * 0.5
+
+      const arrowColor =
+        this.styling.annotationColors?.sequenceArrow || this.styling.highlightColor
+
+      const arrows: Partial<Plotly.Annotations>[] = []
+      for (let i = 0; i < masses.length - 1; i++) {
+        let xStart = masses[i]
+        let xEnd = masses[i + 1]
+        const xMid = (xStart + xEnd) / 2
+        let xMidStart = xMid
+        let xMidEnd = xMid
+        const diff = Math.abs(xStart - xEnd) * 0.9
+
+        if (xStart > xEnd) {
+          xStart -= diff
+          xMidStart += diff * 0.1
+          xEnd += diff
+          xMidEnd -= diff * 0.1
+        } else {
+          xStart += diff
+          xMidStart -= diff * 0.1
+          xEnd -= diff
+          xMidEnd += diff * 0.1
+        }
+
+        // Head-less segment (mid → start)
+        arrows.push({
+          ax: xMidStart,
+          ay: yPosArrow,
+          xref: 'x',
+          yref: 'y',
+          x: xStart,
+          y: yPosArrow,
+          axref: 'x',
+          ayref: 'y',
+          showarrow: true,
+          arrowhead: 0,
+          arrowsize: 1,
+          arrowwidth: 2,
+          arrowcolor: arrowColor,
+        })
+        // Headed segment (mid → end)
+        arrows.push({
+          ax: xMidEnd,
+          ay: yPosArrow,
+          xref: 'x',
+          yref: 'y',
+          x: xEnd,
+          y: yPosArrow,
+          axref: 'x',
+          ayref: 'y',
+          showarrow: true,
+          arrowhead: 2,
+          arrowsize: 1,
+          arrowwidth: 2,
+          arrowcolor: arrowColor,
+        })
+      }
+      return arrows
+    },
+
+    /**
      * Check if the selected peak is annotated but its annotation is currently hidden.
      */
     selectedAnnotationHidden(): boolean {
@@ -784,6 +1030,11 @@ export default defineComponent({
         }
       }
 
+      // --- Tagger extension: tag-walk hover markers (invisible, on top) ---
+      if (this.tagWalk) {
+        traces.push(...this.tagWalkTraces)
+      }
+
       // If no data was added (no highlight mask and no selection), show all as default
       if (traces.length === 0) {
         traces.push({
@@ -839,8 +1090,16 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
-        shapes: this.annotationShapes,
-        annotations: this.peakAnnotations,
+        shapes: this.tagWalk
+          ? [...this.annotationShapes, ...this.tagWalkShapes]
+          : this.annotationShapes,
+        annotations: this.tagWalk
+          ? [
+              ...this.peakAnnotations,
+              ...this.tagWalkAnnotations,
+              ...this.tagWalkArrows,
+            ]
+          : this.peakAnnotations,
       }
     },
 
@@ -885,6 +1144,20 @@ export default defineComponent({
     'streamlitDataStore.allDataForDrawing._plotConfig': {
       handler() {
         if (this.isInitialized) {
+          this.renderPlot()
+        }
+      },
+      deep: true,
+    },
+
+    // Re-render (and re-zoom) when the tag walk changes (tagger extension).
+    'streamlitDataStore.allDataForDrawing.tagWalk': {
+      handler() {
+        if (this.isInitialized) {
+          // A new tag walk owns the x-range; drop any stale manual zoom so the
+          // auto-zoom-to-tag-span takes effect.
+          this.manualXRange = undefined
+          this.lastAutoZoomedPeakIndex = undefined
           this.renderPlot()
         }
       },
