@@ -179,7 +179,13 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
   deconvolved?: boolean
   /** Max charge state to consider for fragment matching when deconvolved=false. */
   precursorCharge?: number
-  /** Interactivity mapping: identifier name -> column name for click handling. */
+  /**
+   * Interactivity mapping: identifier name -> column name for click handling.
+   * As a special case, mapping an identifier to the sentinel column value
+   * `"<position>"` makes a residue click emit that residue's 0-based index
+   * within the displayed sequence (e.g. `{ AApos: "<position>" }`), instead of
+   * the matched peak id. Other identifiers keep emitting the matched PeakId.
+   */
   interactivity?: InteractivityMapping
 }
 
@@ -337,6 +343,14 @@ export interface FeatureViewComponentArgs extends BaseComponentArgs {
   rtColumn?: string
   intensityColumn?: string
   isotopeColumn?: string | null
+  /**
+   * Optional column identifying the individual trace a point belongs to (e.g.
+   * an isotope-trace id). When set, the view inserts a z=-1000 sentinel break
+   * between consecutive points whose value differs within the same charge, so
+   * each trace is drawn as its own polyline. When omitted/null, all points of a
+   * charge form a single polyline (one leading + one trailing sentinel).
+   */
+  traceKeyColumn?: string | null
   traceColor?: string
   xLabel?: string
   yLabel?: string

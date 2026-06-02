@@ -177,6 +177,129 @@ class TestSequenceViewEmptyState:
         )
 
 
+class TestSequenceViewPositionInteractivity:
+    """Residue-position interactivity (``interactivity={"AApos": "<position>"}``).
+
+    The 0-based residue index is emitted by the Vue on a residue click; the
+    Python side advertises the identifier->sentinel mapping (so the bridge
+    forwards the emitted value) and must round-trip it through the cache. With
+    the sentinel mapping set, an emitted index round-trips via the StateManager;
+    without it, the component args/mapping are unchanged.
+    """
+
+    def test_position_sentinel_value(self):
+        from openms_insight.components.sequenceview import POSITION_SENTINEL
+
+        # The exact sentinel the caller uses and the Vue matches against.
+        assert POSITION_SENTINEL == "<position>"
+
+    def test_position_interactivity_in_component_args(
+        self, temp_cache_dir, sample_sequence_data, sample_peaks_data
+    ):
+        from openms_insight.components.sequenceview import (
+            POSITION_SENTINEL,
+            SequenceView,
+        )
+
+        sv = SequenceView(
+            cache_id="sv_aapos_args",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            filters={"spectrum": "scan_id"},
+            interactivity={"AApos": POSITION_SENTINEL},
+            cache_path=str(temp_cache_dir),
+        )
+        args = sv._get_component_args()
+        # Interactivity (incl. the position sentinel) reaches the Vue args.
+        assert args["interactivity"] == {"AApos": POSITION_SENTINEL}
+        assert sv.get_interactivity_mapping() == {"AApos": POSITION_SENTINEL}
+
+    def test_position_index_round_trips_via_state(
+        self, temp_cache_dir, sample_sequence_data, sample_peaks_data
+    ):
+        from openms_insight.components.sequenceview import (
+            POSITION_SENTINEL,
+            SequenceView,
+        )
+        from openms_insight.core.state import StateManager
+
+        sv = SequenceView(
+            cache_id="sv_aapos_roundtrip",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            filters={"spectrum": "scan_id"},
+            interactivity={"AApos": POSITION_SENTINEL},
+            cache_path=str(temp_cache_dir),
+        )
+        # AApos is an emitted (not a filter) identifier, so it must not appear in
+        # the data-affecting state dependencies (it does not refilter the view).
+        assert "AApos" not in sv.get_state_dependencies()
+
+        # Simulate the Vue emitting the clicked residue's 0-based index for the
+        # mapped identifier; it must round-trip unchanged through the state.
+        sm = StateManager()
+        for clicked_index in (0, 3, 7):
+            sm.set_selection("AApos", clicked_index)
+            assert sm.get_selection("AApos") == clicked_index
+
+    def test_position_interactivity_survives_cache_reconstruction(
+        self, temp_cache_dir, sample_sequence_data, sample_peaks_data
+    ):
+        from openms_insight.components.sequenceview import (
+            POSITION_SENTINEL,
+            SequenceView,
+        )
+
+        SequenceView(
+            cache_id="sv_aapos_recon",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            filters={"spectrum": "scan_id"},
+            interactivity={"AApos": POSITION_SENTINEL},
+            cache_path=str(temp_cache_dir),
+        )
+        sv2 = SequenceView(cache_id="sv_aapos_recon", cache_path=str(temp_cache_dir))
+        assert sv2.get_interactivity_mapping() == {"AApos": POSITION_SENTINEL}
+        assert sv2._get_component_args()["interactivity"] == {
+            "AApos": POSITION_SENTINEL
+        }
+
+    def test_without_position_interactivity_unchanged(
+        self, temp_cache_dir, sample_sequence_data, sample_peaks_data
+    ):
+        from openms_insight.components.sequenceview import SequenceView
+
+        # No interactivity configured -> args carry no interactivity key and the
+        # mapping stays empty (byte-identical to pre-feature behavior).
+        sv = SequenceView(
+            cache_id="sv_aapos_off",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            filters={"spectrum": "scan_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        args = sv._get_component_args()
+        assert "interactivity" not in args
+        assert sv.get_interactivity_mapping() == {}
+
+    def test_peak_interactivity_still_works(
+        self, temp_cache_dir, sample_sequence_data, sample_peaks_data
+    ):
+        from openms_insight.components.sequenceview import SequenceView
+
+        # Legacy peak-id interactivity is unaffected by the new feature: a
+        # non-sentinel column keeps mapping through to the Vue args as before.
+        sv = SequenceView(
+            cache_id="sv_peak_only",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            filters={"spectrum": "scan_id"},
+            interactivity={"peak": "peak_id"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert sv._get_component_args()["interactivity"] == {"peak": "peak_id"}
+
+
 class TestSequenceViewExtensions:
     """Tests for coverage coloring, fixed mods, and ion_types (FLASHApp parity)."""
 

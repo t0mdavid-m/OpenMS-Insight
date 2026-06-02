@@ -141,6 +141,7 @@
             :is-highlighted="selectedAAIndex === aaIndex"
             :modification="modifications[aaIndex] ?? null"
             :coverage-fraction="coverageFraction(aaIndex)"
+            :emit-on-any-click="hasPositionInteractivity"
             @selected="onAminoAcidSelected"
           />
 
@@ -199,6 +200,12 @@ import { extraFragmentTypeObject, type ExtraFragmentType } from './modification'
 
 // Proton mass for m/z calculations
 const PROTON_MASS = 1.007276
+
+// Sentinel interactivity column value meaning "emit the clicked residue's
+// 0-based index" instead of the matched peak id. Mirrors POSITION_SENTINEL in
+// sequenceview.py. e.g. interactivity={"AApos": "<position>"} emits AApos = the
+// clicked residue's 0-based position within the displayed sequence.
+const POSITION_SENTINEL = '<position>'
 
 // Superscript characters for charge display
 const SUPERSCRIPT_DIGITS: Record<string, string> = {
@@ -289,6 +296,19 @@ export default defineComponent({
     /** Interactivity mapping from component args */
     interactivity(): Record<string, string> {
       return (this.args.interactivity as Record<string, string>) ?? {}
+    },
+    /**
+     * Identifiers whose interactivity column is the POSITION_SENTINEL. A
+     * residue click emits its 0-based index under each of these identifiers.
+     */
+    positionInteractivityIdentifiers(): string[] {
+      return Object.entries(this.interactivity)
+        .filter(([, column]) => column === POSITION_SENTINEL)
+        .map(([identifier]) => identifier)
+    },
+    /** Whether any residue-position interactivity identifier is configured. */
+    hasPositionInteractivity(): boolean {
+      return this.positionInteractivityIdentifiers.length > 0
     },
     /** Whether data is deconvolved (neutral masses) or not (m/z values) */
     deconvolved(): boolean {
@@ -782,6 +802,13 @@ export default defineComponent({
     onAminoAcidSelected(aaIndex: number): void {
       this.selectedAAIndex = aaIndex
 
+      // Residue-position interactivity: emit the residue's 0-based index for
+      // every identifier mapped to POSITION_SENTINEL. The 0-based base matches
+      // the residue numbering used here (aaIndex) and FLASHApp StartPos/EndPos.
+      for (const identifier of this.positionInteractivityIdentifiers) {
+        this.selectionStore.updateSelection(identifier, aaIndex)
+      }
+
       // Find corresponding fragment in table
       const aaObj = this.sequenceObjects[aaIndex]
       let ionName = ''
@@ -812,9 +839,12 @@ export default defineComponent({
       }
 
       // Handle interactivity: update selection for each mapped identifier
-      // Uses the same pattern as other components (LinePlot, Table)
+      // Uses the same pattern as other components (LinePlot, Table).
+      // Identifiers mapped to POSITION_SENTINEL carry the residue index (set by
+      // onAminoAcidSelected), never a PeakId, so they are skipped here.
       if (item.PeakId !== undefined && Object.keys(this.interactivity).length > 0) {
-        for (const [identifier, _columnName] of Object.entries(this.interactivity)) {
+        for (const [identifier, columnName] of Object.entries(this.interactivity)) {
+          if (columnName === POSITION_SENTINEL) continue
           // For SequenceView, the interactivity maps to peak_id
           // The column name tells us what field in the data this maps to
           this.selectionStore.updateSelection(identifier, item.PeakId)

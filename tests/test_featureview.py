@@ -182,6 +182,163 @@ class TestFeatureViewExplodeTraces:
         assert mzs[1] == pytest.approx(500.1, abs=1e-3)
 
 
+def _count_break_sentinels(df, *, charge_column, trace_key_column):
+    """Reference implementation of the Vue's per-charge sentinel-break count.
+
+    Mirrors ``PlotlyFeatureView``'s ``data()``: within each charge the polyline
+    is bracketed by a leading + trailing ``z=-1000`` sentinel, and (when a
+    trace-key column is set) a 2-sentinel break is inserted between consecutive
+    points whose trace-key differs. Each consecutive trace-key run therefore
+    ends up bracketed like a standalone charge, giving exactly ``2`` sentinels
+    per run. With no trace-key column every charge is a single run -> 2.
+
+    Returns the total number of ``-1000`` z-values across all charge traces.
+
+    ``df`` is the pandas payload returned by ``_prepare_vue_data`` (the exact
+    rows, in order, handed to the Vue).
+    """
+    total = 0
+    # Preserve row order within each charge (Plotly consumes rows as ordered).
+    by_charge: dict = {}
+    charges = list(df[charge_column])
+    keys_col = (
+        list(df[trace_key_column])
+        if trace_key_column is not None
+        else [None] * len(charges)
+    )
+    for charge, key in zip(charges, keys_col):
+        by_charge.setdefault(charge, []).append(key)
+    for keys in by_charge.values():
+        if not keys:
+            continue
+        runs = 1
+        for i in range(1, len(keys)):
+            if trace_key_column is not None and keys[i] != keys[i - 1]:
+                runs += 1
+        total += 2 * runs
+    return total
+
+
+class TestFeatureViewTraceKeyColumn:
+    """Per-trace polyline breaks within a charge via ``trace_key_column``.
+
+    fg 0 has two charges; charge 2 carries TWO isotope traces (iso 0 then iso 1)
+    and charge 3 carries TWO isotope traces, so with a trace-key column the
+    breaks are inserted between the differing isotope runs within each charge.
+    """
+
+    @pytest.fixture
+    def traces_with_isotope_runs(self) -> pl.LazyFrame:
+        # Within fg 0 / charge 2: iso 0 (2 pts) then iso 1 (2 pts) -> 2 runs.
+        # Within fg 0 / charge 3: iso 0 (1 pt) then iso 1 (1 pt) -> 2 runs.
+        return pl.LazyFrame(
+            {
+                "feature_group": [0, 0, 0, 0, 0, 0],
+                "charge": [2, 2, 2, 2, 3, 3],
+                "isotope": [0, 0, 1, 1, 0, 1],
+                "mz": [500.0, 500.1, 500.5, 500.6, 333.3, 333.8],
+                "rt": [10.0, 11.0, 10.0, 11.0, 10.0, 10.0],
+                "intensity": [1000.0, 1200.0, 800.0, 900.0, 700.0, 600.0],
+            }
+        )
+
+    def test_trace_key_column_in_args(self, temp_cache_dir, traces_with_isotope_runs):
+        fv = FeatureView(
+            cache_id="fv_tk_args",
+            data=traces_with_isotope_runs,
+            filters={"featureGroup": "feature_group"},
+            isotope_column="isotope",
+            trace_key_column="isotope",
+            cache_path=str(temp_cache_dir),
+        )
+        args = fv._get_component_args()
+        assert args["traceKeyColumn"] == "isotope"
+        assert fv._trace_key_column == "isotope"
+
+    def test_trace_key_column_default_none(self, temp_cache_dir, sample_feature_traces):
+        fv = FeatureView(
+            cache_id="fv_tk_none",
+            data=sample_feature_traces,
+            filters={"featureGroup": "feature_group"},
+            cache_path=str(temp_cache_dir),
+        )
+        # Default no-op: arg is None and the trace-key column is absent.
+        assert fv._get_component_args()["traceKeyColumn"] is None
+        assert fv._trace_key_column is None
+
+    def test_missing_trace_key_column_raises(
+        self, temp_cache_dir, sample_feature_traces
+    ):
+        with pytest.raises(ValueError, match="not found in data"):
+            FeatureView(
+                cache_id="fv_tk_missing",
+                data=sample_feature_traces,
+                trace_key_column="nope",
+                cache_path=str(temp_cache_dir),
+            )
+
+    def test_trace_key_column_present_in_payload(
+        self, temp_cache_dir, traces_with_isotope_runs
+    ):
+        fv = FeatureView(
+            cache_id="fv_tk_payload",
+            data=traces_with_isotope_runs,
+            filters={"featureGroup": "feature_group"},
+            trace_key_column="isotope",
+            cache_path=str(temp_cache_dir),
+        )
+        df = fv._prepare_vue_data({"featureGroup": 0})["featureData"]
+        # The trace-key column must reach the Vue so it can break per trace.
+        assert "isotope" in df.columns
+
+    def test_break_sentinel_count_with_trace_key(
+        self, temp_cache_dir, traces_with_isotope_runs
+    ):
+        fv = FeatureView(
+            cache_id="fv_tk_count_on",
+            data=traces_with_isotope_runs,
+            filters={"featureGroup": "feature_group"},
+            trace_key_column="isotope",
+            cache_path=str(temp_cache_dir),
+        )
+        df = fv._prepare_vue_data({"featureGroup": 0})["featureData"]
+        # charge 2 -> 2 isotope runs -> 4 sentinels; charge 3 -> 2 runs -> 4.
+        n = _count_break_sentinels(
+            df, charge_column="charge", trace_key_column="isotope"
+        )
+        assert n == 8
+
+    def test_break_sentinel_count_without_trace_key_unchanged(
+        self, temp_cache_dir, traces_with_isotope_runs
+    ):
+        fv = FeatureView(
+            cache_id="fv_tk_count_off",
+            data=traces_with_isotope_runs,
+            filters={"featureGroup": "feature_group"},
+            cache_path=str(temp_cache_dir),
+        )
+        df = fv._prepare_vue_data({"featureGroup": 0})["featureData"]
+        # No trace-key column: one polyline per charge -> exactly 2 sentinels
+        # per charge (2 charges -> 4), regardless of isotope changes.
+        n = _count_break_sentinels(df, charge_column="charge", trace_key_column=None)
+        assert n == 4
+
+    def test_trace_key_column_survives_cache_reconstruction(
+        self, temp_cache_dir, traces_with_isotope_runs
+    ):
+        FeatureView(
+            cache_id="fv_tk_recon",
+            data=traces_with_isotope_runs,
+            filters={"featureGroup": "feature_group"},
+            isotope_column="isotope",
+            trace_key_column="isotope",
+            cache_path=str(temp_cache_dir),
+        )
+        fv2 = FeatureView(cache_id="fv_tk_recon", cache_path=str(temp_cache_dir))
+        assert fv2._trace_key_column == "isotope"
+        assert fv2._get_component_args()["traceKeyColumn"] == "isotope"
+
+
 class TestFeatureViewCacheReconstruction:
     def test_reconstruct(self, mock_streamlit, temp_cache_dir, sample_feature_traces):
         FeatureView(

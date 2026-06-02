@@ -17,6 +17,16 @@ PROTON_MASS = 1.007276
 # Cache version - increment when cache format changes
 CACHE_VERSION = 1
 
+# Sentinel column value for residue-position interactivity. When an
+# ``interactivity`` entry maps an identifier to this exact string (e.g.
+# ``interactivity={"AApos": "<position>"}``), a residue click emits that
+# residue's 0-based index within the displayed sequence under the identifier,
+# instead of the matched peak's id. The 0-based base matches how the Vue
+# numbers residues internally (``aaIndex`` in the sequence grid) and how
+# FLASHApp tags carry StartPos/EndPos so that ``StartPos <= AApos <= EndPos``
+# holds. Any other column value keeps the legacy peak-id emission.
+POSITION_SENTINEL = "<position>"
+
 
 def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
     """Parse OpenMS sequence format to extract residues and modification mass shifts.
@@ -366,6 +376,10 @@ class SequenceView:
     - Tolerance-based fragment matching (done in Vue)
     - Returns annotation dataframe for linked components
     - Supports filtering by spectrum and sequence identifiers
+    - Optional residue-position interactivity: with
+      ``interactivity={"AApos": "<position>"}`` a residue click emits the
+      residue's 0-based index under the chosen identifier (peak-id interactivity
+      for other identifiers is unaffected)
 
     Example:
         sequence_view = SequenceView(
@@ -419,6 +433,15 @@ class SequenceView:
                 Example: {"spectrum": "scan_id", "sequence": "sequence_id"}
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {"peak": "peak_id"} sets 'peak' selection to clicked peak's ID.
+                As a special case, mapping an identifier to the sentinel string
+                ``"<position>"`` (see ``POSITION_SENTINEL``) makes a residue click
+                ALSO emit that residue's 0-based index within the displayed
+                sequence under the identifier — e.g.
+                ``interactivity={"AApos": "<position>"}`` emits ``AApos`` = the
+                clicked residue's 0-based position. The base is 0-based to match
+                the Vue residue numbering and FLASHApp's StartPos/EndPos tag
+                filtering (``StartPos <= AApos <= EndPos``). Peak-id emission for
+                any other (non-sentinel) identifier keeps working unchanged.
             deconvolved: If False (default), peaks are m/z values and matching considers
                 charge states 1 to precursor_charge. If True, peaks are neutral masses.
             annotation_config: Configuration for fragment matching:

@@ -74,6 +74,7 @@ class FeatureView(BaseComponent):
         rt_column: str = "rt",
         intensity_column: str = "intensity",
         isotope_column: Optional[str] = None,
+        trace_key_column: Optional[str] = None,
         trace_color: str = "#3366CC",
         title: Optional[str] = None,
         x_label: str = "m/z",
@@ -101,6 +102,18 @@ class FeatureView(BaseComponent):
             rt_column: Column for the y-axis (retention time). Default "rt".
             intensity_column: Column for the z-axis (intensity). Default "intensity".
             isotope_column: Optional isotope-index column (kept for hover).
+            trace_key_column: Optional column whose value identifies the
+                individual trace (e.g. an isotope-trace id) a point belongs to.
+                When set, the frontend inserts a ``z=-1000`` sentinel break
+                between consecutive points whose ``trace_key_column`` value
+                differs WITHIN the same charge, so each isotope trace is drawn
+                as its own polyline (one charge becomes several disjoint lines,
+                matching the legacy per-trace break). Points must already be
+                ordered so that points of the same trace are contiguous within a
+                charge (the standard sort-by-filter + ``explode_traces`` output
+                satisfies this). When None (default), all points of a charge form
+                a SINGLE polyline (one leading + one trailing sentinel), i.e.
+                behavior is unchanged.
             trace_color: Default color for traces. Default "#3366CC".
             title: Plot title. Default "Feature group signals" when None at render.
             x_label: X-axis (scene) label. Default "m/z".
@@ -114,6 +127,7 @@ class FeatureView(BaseComponent):
         self._rt_column = rt_column
         self._intensity_column = intensity_column
         self._isotope_column = isotope_column
+        self._trace_key_column = trace_key_column
         self._trace_color = trace_color
         self._title = title
         self._x_label = x_label
@@ -135,6 +149,7 @@ class FeatureView(BaseComponent):
             rt_column=rt_column,
             intensity_column=intensity_column,
             isotope_column=isotope_column,
+            trace_key_column=trace_key_column,
             trace_color=trace_color,
             title=title,
             x_label=x_label,
@@ -151,6 +166,7 @@ class FeatureView(BaseComponent):
             "rt_column": self._rt_column,
             "intensity_column": self._intensity_column,
             "isotope_column": self._isotope_column,
+            "trace_key_column": self._trace_key_column,
             "trace_color": self._trace_color,
             "title": self._title,
             "x_label": self._x_label,
@@ -165,6 +181,7 @@ class FeatureView(BaseComponent):
         self._rt_column = config.get("rt_column", "rt")
         self._intensity_column = config.get("intensity_column", "intensity")
         self._isotope_column = config.get("isotope_column")
+        self._trace_key_column = config.get("trace_key_column")
         self._trace_color = config.get("trace_color", "#3366CC")
         self._title = config.get("title")
         self._x_label = config.get("x_label", "m/z")
@@ -188,6 +205,8 @@ class FeatureView(BaseComponent):
         ]
         if self._isotope_column:
             cols.append((self._isotope_column, "isotope_column"))
+        if self._trace_key_column:
+            cols.append((self._trace_key_column, "trace_key_column"))
         for col, label in cols:
             if col not in column_names:
                 raise ValueError(
@@ -219,6 +238,8 @@ class FeatureView(BaseComponent):
         ]
         if self._isotope_column:
             columns.append(self._isotope_column)
+        if self._trace_key_column and self._trace_key_column not in columns:
+            columns.append(self._trace_key_column)
         if self._filters:
             for col in self._filters.values():
                 if col not in columns:
@@ -248,6 +269,7 @@ class FeatureView(BaseComponent):
             "rtColumn": self._rt_column,
             "intensityColumn": self._intensity_column,
             "isotopeColumn": self._isotope_column,
+            "traceKeyColumn": self._trace_key_column,
             "traceColor": self._trace_color,
             "title": self._title or "Feature group signals",
             "xLabel": self._x_label,

@@ -19,6 +19,12 @@ import type { FeatureViewComponentArgs, FeatureData } from '@/types/component'
  * and draws one 3D line per charge state (m/z vs retention time vs intensity),
  * matching the original FLASHQuantView trace3Dplot. Charges are separated and
  * each trace is bracketed with a z-sentinel so Plotly draws disjoint lines.
+ *
+ * When `traceKeyColumn` is provided, the charge polyline is additionally broken
+ * (with the same z-sentinel) between consecutive points whose trace-key value
+ * differs, so each isotope trace within a charge is drawn as its own polyline
+ * (legacy per-trace break). Without it, every point of a charge forms a single
+ * polyline (behavior unchanged).
  */
 export default defineComponent({
   name: 'PlotlyFeatureView',
@@ -61,6 +67,14 @@ export default defineComponent({
     intensityColumn(): string {
       return this.args.intensityColumn || 'intensity'
     },
+    /**
+     * Optional column identifying the individual trace a point belongs to. When
+     * set, a z-sentinel break is inserted between consecutive points whose
+     * value differs within the same charge, so each trace is its own polyline.
+     */
+    traceKeyColumn(): string | null {
+      return this.args.traceKeyColumn ?? null
+    },
     points(): FeatureData[] {
       const data = this.streamlitDataStore.allDataForDrawing?.featureData
       return (data as FeatureData[]) || []
@@ -72,21 +86,27 @@ export default defineComponent({
       if (!this.isDataReady) return []
 
       const SENTINEL = -1000
+      const traceKeyColumn = this.traceKeyColumn
 
       // Group points by charge, preserving row order (already sorted by RT
-      // within a trace upstream).
-      const byCharge = new Map<number, { mz: number[]; rt: number[]; inty: number[] }>()
+      // within a trace upstream). When a trace-key column is configured, the
+      // per-point key lets us break the charge polyline between traces.
+      const byCharge = new Map<
+        number,
+        { mz: number[]; rt: number[]; inty: number[]; key: unknown[] }
+      >()
       for (const row of this.points) {
         const charge = Number(row[this.chargeColumn])
         const mz = Number(row[this.mzColumn])
         const rt = Number(row[this.rtColumn])
         const inty = Number(row[this.intensityColumn])
         if (!Number.isFinite(charge)) continue
-        if (!byCharge.has(charge)) byCharge.set(charge, { mz: [], rt: [], inty: [] })
+        if (!byCharge.has(charge)) byCharge.set(charge, { mz: [], rt: [], inty: [], key: [] })
         const entry = byCharge.get(charge)!
         entry.mz.push(mz)
         entry.rt.push(rt)
         entry.inty.push(inty)
+        entry.key.push(traceKeyColumn ? row[traceKeyColumn] : null)
       }
 
       let maxInty = 0
@@ -94,17 +114,35 @@ export default defineComponent({
       const charges = Array.from(byCharge.keys()).sort((a, b) => a - b)
       for (const charge of charges) {
         const entry = byCharge.get(charge)!
-        if (entry.mz.length === 0) continue
+        const n = entry.mz.length
+        if (n === 0) continue
 
-        // Bracket each trace with z-sentinels (matches original -1000 trick) so
-        // consecutive traces are not joined and baselines drop to the floor.
-        const xs = [entry.mz[0], ...entry.mz, entry.mz[entry.mz.length - 1]]
-        const ys = [entry.rt[0], ...entry.rt, entry.rt[entry.rt.length - 1]]
-        const zs = [SENTINEL, ...entry.inty, SENTINEL]
-
-        for (const v of entry.inty) {
-          if (v > maxInty) maxInty = v
+        // Bracket each charge with leading/trailing z-sentinels (original -1000
+        // trick) so consecutive charges are not joined and baselines drop to the
+        // floor. When a trace-key column is set, ALSO insert a sentinel break
+        // between consecutive points whose key differs, so each trace within the
+        // charge is its own polyline (legacy per-isotope-trace break). Each run
+        // ends up bracketed exactly like a standalone charge, so the charge
+        // carries 2 sentinels per trace run (2 with no key / one run).
+        const xs: number[] = [entry.mz[0]]
+        const ys: number[] = [entry.rt[0]]
+        const zs: number[] = [SENTINEL]
+        for (let i = 0; i < n; i++) {
+          if (traceKeyColumn && i > 0 && entry.key[i] !== entry.key[i - 1]) {
+            // Break between the previous trace's last point and this trace's
+            // first point: drop to the floor and lift back up.
+            xs.push(entry.mz[i - 1], entry.mz[i])
+            ys.push(entry.rt[i - 1], entry.rt[i])
+            zs.push(SENTINEL, SENTINEL)
+          }
+          xs.push(entry.mz[i])
+          ys.push(entry.rt[i])
+          zs.push(entry.inty[i])
+          if (entry.inty[i] > maxInty) maxInty = entry.inty[i]
         }
+        xs.push(entry.mz[n - 1])
+        ys.push(entry.rt[n - 1])
+        zs.push(SENTINEL)
 
         traces.push({
           x: xs,

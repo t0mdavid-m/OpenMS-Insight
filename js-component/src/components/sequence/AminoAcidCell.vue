@@ -123,6 +123,16 @@ export default defineComponent({
       type: Number,
       default: 0,
     },
+    /**
+     * When true, a click emits `selected` for ANY residue (not only ones with
+     * a matched fragment). Enabled when residue-position interactivity is
+     * configured so every residue can report its index. Default false keeps the
+     * legacy behavior (only fragment-bearing cells emit on click).
+     */
+    emitOnAnyClick: {
+      type: Boolean,
+      default: false,
+    },
   },
   emits: ['selected'],
   setup() {
@@ -206,7 +216,9 @@ export default defineComponent({
   },
   methods: {
     selectCell(): void {
-      if (this.hasMatchingFragments) {
+      // Emit when the residue carries a matched fragment (legacy behavior) or
+      // when position interactivity is active (every residue is selectable).
+      if (this.hasMatchingFragments || this.emitOnAnyClick) {
         this.$emit('selected', this.index)
       }
     },
