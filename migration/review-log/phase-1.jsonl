@@ -90,3 +90,26 @@
 {"ts": "2026-06-02T21:36:58", "phase": 1, "round": 4, "kind": "review", "unit": "quant-recipe", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-02T21:36:58", "phase": 1, "round": 4, "kind": "review", "unit": "lineplot:zoom", "status": "finding", "findings": [{"id": "P1-R4-LP-PAD-001", "severity": "low", "desc": "default xRange fallback uses additive padding +/-0.02*(max-min) vs oracle multiplicative [min*0.98,max*1.02]; different axis margins on mass spectra [PlotlyLineplot.vue:519-521]", "status": "open"}], "msg": ""}
 {"ts": "2026-06-02T21:36:58", "phase": 1, "round": 4, "kind": "review", "unit": "lineplot:tagger", "status": "finding", "findings": [{"id": "P1-R4-LP-PAD-001", "severity": "low", "desc": "SAME root cause: tagger no-tag x-range falls through to the additive-padding default instead of oracle multiplicative [min*0.98,max*1.02]", "status": "open"}], "msg": ""}
+{"ts": "2026-06-02T21:58:00", "phase": 1, "round": 5, "kind": "review", "unit": "heatmap:log", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:00", "phase": 1, "round": 5, "kind": "review", "unit": "heatmap:multi-res", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "heatmap:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "heatmap:categorical", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "heatmap:interactivity", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "table:formatters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "table:pagination", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "table:row-select", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "table:filters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:stick", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:highlight", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:annotation", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:svg", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:click", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:tagger", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "lineplot:density", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "sequenceview:coverage", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "sequenceview:terminal-frags", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "sequenceview:internal-frags", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:01", "phase": 1, "round": 5, "kind": "review", "unit": "quant-recipe", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-02T21:58:02", "phase": 1, "round": 5, "kind": "review", "unit": "table:go-to", "status": "finding", "findings": [{"id": "P1-R5-TBL-GOTO-001", "severity": "medium", "desc": "server-side go-to (default pagination) highlights row but does not propagate selection downstream; oracle go-to fires rowSelected; client-side path does update [table.py:676-711, TabulatorTable.vue:1002-1026]", "status": "open"}], "msg": ""}
