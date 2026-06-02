@@ -37,7 +37,9 @@ class TestFeatureViewInit:
         assert fv._get_vue_component_name() == "PlotlyFeatureView"
         assert fv._get_data_key() == "featureData"
 
-    def test_missing_column(self, mock_streamlit, temp_cache_dir, sample_feature_traces):
+    def test_missing_column(
+        self, mock_streamlit, temp_cache_dir, sample_feature_traces
+    ):
         with pytest.raises(ValueError, match="not found in data"):
             FeatureView(
                 cache_id="fv_missing",
@@ -108,9 +110,7 @@ class TestFeatureViewComponentArgs:
         assert args["yLabel"] == "retention time"
         assert args["zLabel"] == "intensity"
 
-    def test_default_title(
-        self, mock_streamlit, temp_cache_dir, sample_feature_traces
-    ):
+    def test_default_title(self, mock_streamlit, temp_cache_dir, sample_feature_traces):
         fv = FeatureView(
             cache_id="fv_deftitle",
             data=sample_feature_traces,
@@ -155,9 +155,7 @@ class TestFeatureViewExplodeTraces:
         assert c2["mz"].to_list() == [500.0, 500.1]
         assert c2["intensity"].to_list() == [1000.0, 1200.0]
 
-    def test_explode_then_filter_roundtrip(
-        self, mock_streamlit, temp_cache_dir
-    ):
+    def test_explode_then_filter_roundtrip(self, mock_streamlit, temp_cache_dir):
         quant_df = pl.DataFrame(
             {
                 "FeatureGroupIndex": [7],

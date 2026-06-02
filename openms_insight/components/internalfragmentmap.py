@@ -378,7 +378,11 @@ class InternalFragmentMap:
             cols = list(
                 dict.fromkeys(
                     filter_cols
-                    + ([self._sequence_column] if self._sequence_column in schema else [])
+                    + (
+                        [self._sequence_column]
+                        if self._sequence_column in schema
+                        else []
+                    )
                 )
             )
             lf = self._source_sequences.select(cols)
@@ -388,9 +392,9 @@ class InternalFragmentMap:
                 self._cache_dir / "sequences.parquet", compression="zstd"
             )
         elif self._static_sequence is not None:
-            pl.DataFrame({self._sequence_column: [self._static_sequence]}).write_parquet(
-                self._cache_dir / "sequences.parquet", compression="zstd"
-            )
+            pl.DataFrame(
+                {self._sequence_column: [self._static_sequence]}
+            ).write_parquet(self._cache_dir / "sequences.parquet", compression="zstd")
 
         # Peaks
         if self._source_peaks is not None:
@@ -468,7 +472,11 @@ class InternalFragmentMap:
                 else:
                     return []
         try:
-            return filtered.select(self._mass_column).collect()[self._mass_column].to_list()
+            return (
+                filtered.select(self._mass_column)
+                .collect()[self._mass_column]
+                .to_list()
+            )
         except Exception:
             return []
 
@@ -550,8 +558,7 @@ class InternalFragmentMap:
 
     def __repr__(self) -> str:
         return (
-            f"InternalFragmentMap(cache_id='{self._cache_id}', "
-            f"filters={self._filters})"
+            f"InternalFragmentMap(cache_id='{self._cache_id}', filters={self._filters})"
         )
 
 

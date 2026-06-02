@@ -852,9 +852,7 @@ class SequenceView:
         cov_sig = ""
         if coverage is not None:
             cov_sig = f"{len(coverage)}:{max_coverage}"
-        hash_input = (
-            f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}"
-        )
+        hash_input = f"{sequence_str}:{peaks_df.height}:{precursor_charge}:{cov_sig}"
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         result = {

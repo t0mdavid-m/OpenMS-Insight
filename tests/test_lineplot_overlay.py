@@ -49,9 +49,7 @@ class TestLinePlotOverlay:
         assert len(out["plotData"]) == 3  # scan 1 primary peaks
         assert len(out["plotDataOverlay"]) == 2  # scan 1 overlay peaks
 
-    def test_overlay_args(
-        self, mock_streamlit, temp_cache_dir, primary_df, overlay_df
-    ):
+    def test_overlay_args(self, mock_streamlit, temp_cache_dir, primary_df, overlay_df):
         lp = LinePlot(
             cache_id="lp_overlay_args",
             data=primary_df,
@@ -70,9 +68,7 @@ class TestLinePlotOverlay:
         assert args["overlayXColumn"] == "mass"
         assert args["overlayYColumn"] == "intensity"
 
-    def test_no_overlay_unaffected(
-        self, mock_streamlit, temp_cache_dir, primary_df
-    ):
+    def test_no_overlay_unaffected(self, mock_streamlit, temp_cache_dir, primary_df):
         """LinePlot without overlay behaves exactly as before."""
         lp = LinePlot(
             cache_id="lp_no_overlay",

@@ -94,7 +94,9 @@ class TestInternalFragmentMapComponent:
             }
         )
 
-    def test_init_and_names(self, mock_streamlit, temp_cache_dir, sequence_df, peaks_df):
+    def test_init_and_names(
+        self, mock_streamlit, temp_cache_dir, sequence_df, peaks_df
+    ):
         ifm = InternalFragmentMap(
             cache_id="ifm_init",
             sequence_data=sequence_df,

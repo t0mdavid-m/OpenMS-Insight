@@ -308,9 +308,7 @@ class DensityPlot(BaseComponent):
             {"series": series_names, "x": xs, "y": ys},
             schema={"series": pl.Utf8, "x": pl.Float64, "y": pl.Float64},
         )
-        non_empty_order = [
-            str(key) for key in order if str(key) in set(series_names)
-        ]
+        non_empty_order = [str(key) for key in order if str(key) in set(series_names)]
         self._preprocessed_data["densityData"] = density_df
         self._preprocessed_data["series_order"] = non_empty_order
 
@@ -330,15 +328,10 @@ class DensityPlot(BaseComponent):
 
         # Partition rows into series
         if self._series_column is not None:
-            series_values = (
-                df.select(pl.col(self._series_column))
-                .to_series()
-                .to_list()
-            )
+            series_values = df.select(pl.col(self._series_column)).to_series().to_list()
             order = self._series_order(series_values)
             groups = {
-                key: df.filter(pl.col(self._series_column) == key)
-                for key in order
+                key: df.filter(pl.col(self._series_column) == key) for key in order
             }
         else:
             order = [self._default_series_name]
@@ -368,9 +361,7 @@ class DensityPlot(BaseComponent):
 
         # Record the series draw order (after dropping empty ones) so the
         # frontend can color/label and order traces deterministically.
-        non_empty_order = [
-            str(key) for key in order if str(key) in set(series_names)
-        ]
+        non_empty_order = [str(key) for key in order if str(key) in set(series_names)]
 
         self._preprocessed_data["densityData"] = density_df
         self._preprocessed_data["series_order"] = non_empty_order
@@ -431,7 +422,9 @@ class DensityPlot(BaseComponent):
                 {
                     "name": name,
                     "label": cfg.get("label", name),
-                    "color": cfg.get("color", default_palette[idx % len(default_palette)]),
+                    "color": cfg.get(
+                        "color", default_palette[idx % len(default_palette)]
+                    ),
                 }
             )
         return presentation

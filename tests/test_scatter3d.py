@@ -1,6 +1,5 @@
 """Tests for Scatter3D component."""
 
-
 import polars as pl
 import pytest
 
@@ -229,4 +228,7 @@ class TestScatter3DOptionalFilters:
         )
         p2 = Scatter3D(cache_id="s3d_opt_recon", cache_path=str(temp_cache_dir))
         assert p2._optional_filters == {"massIndex": "mass_id"}
-        assert len(p2._prepare_vue_data({"scanIndex": 1, "massIndex": 0})["scatter3dData"]) == 3
+        assert (
+            len(p2._prepare_vue_data({"scanIndex": 1, "massIndex": 0})["scatter3dData"])
+            == 3
+        )
