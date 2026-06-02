@@ -357,13 +357,15 @@ def _terminal_collision_masses(
     """Build the sorted terminal-mass list for the collision filter.
 
     The oracle uses ``byp + bys + czp + czs`` (b/y prefix-suffix + c/z
-    prefix-suffix neutral masses for charge 0). Those four families correspond to
-    the terminal ``b, y, c, z`` neutral masses, which Insight already computes via
+    prefix-suffix neutral masses for charge 0; FLASHApp
+    ``src/render/sequence.py:213-215``). Those four families correspond to the
+    terminal ``b, y, c, z`` neutral masses, which Insight already computes via
     :func:`calculate_fragment_masses_pyopenms`. Flatten those per-position lists
-    and sort ascending.
+    and sort ascending. (Using ``x`` instead of ``z`` here would diverge by ~42 Da
+    — ``z`` ≈ ``y - NH3`` while ``x`` ≈ ``y + CO`` — so drop decisions could differ.)
     """
     masses: List[float] = []
-    for ion in ("b", "c", "x", "y"):
+    for ion in ("b", "y", "c", "z"):
         for per_pos in fragment_masses.get(f"fragment_masses_{ion}", []):
             masses.extend(per_pos)
     masses.sort()

@@ -12,11 +12,29 @@ import math
 from collections import Counter
 
 from openms_insight.components.sequenceview import (
+    calculate_fragment_masses_pyopenms,
     compute_internal_fragment_data,
     compute_internal_fragment_masses,
+    parse_openms_sequence,
+    _terminal_collision_masses,
 )
 
 NH3 = 17.0265491015
+
+
+def _collision_masses_from_families(fragment_masses, ions):
+    """Build a sorted terminal-collision list from explicit ion families.
+
+    Helper mirroring :func:`_terminal_collision_masses` but with a configurable
+    family tuple, so a test can contrast the oracle's ``b, y, c, z`` set against
+    the (incorrect) ``b, c, x, y`` set.
+    """
+    masses = []
+    for ion in ions:
+        for per_pos in fragment_masses.get(f"fragment_masses_{ion}", []):
+            masses.extend(per_pos)
+    masses.sort()
+    return masses
 
 
 def test_internal_fragment_golden_PEPTIDEK_no_mods_no_collision():
@@ -235,3 +253,81 @@ def test_internal_by_cz_same_family():
         residues, "cz", terminal_masses=None
     )
     assert by_m == cz_m
+
+
+def test_terminal_collision_masses_uses_b_y_c_z_not_b_c_x_y():
+    """The collision set is the oracle's b, y, c, z (byp+bys+czp+czs), not b,c,x,y.
+
+    Oracle FLASHApp/src/render/sequence.py:213-215 builds the terminal-collision
+    masses from ``byp + bys + czp + czs`` = the b/y prefix-suffix and c/z
+    prefix-suffix neutral masses (families b, y, c, z). Substituting ``x`` for
+    ``z`` (the prior Insight bug) shifts ~42 Da and changes drop decisions.
+
+    PEPTIDEK exercise: the production helper's list must contain every z neutral
+    mass and must NOT equal the x-substituted list.
+    """
+    fm = calculate_fragment_masses_pyopenms("PEPTIDEK")
+    produced = _terminal_collision_masses(fm)
+    expected = _collision_masses_from_families(fm, ("b", "y", "c", "z"))
+    wrong = _collision_masses_from_families(fm, ("b", "c", "x", "y"))
+
+    assert produced == expected
+    # The two family sets must actually differ (z vs x are ~42 Da apart).
+    assert produced != wrong
+    # Every z terminal neutral mass is present in the collision set.
+    z_masses = [m for sub in fm["fragment_masses_z"] for m in sub]
+    for zm in z_masses:
+        assert any(math.isclose(zm, pm, abs_tol=1e-6) for pm in produced)
+
+
+def test_internal_terminal_collision_z_vs_x_changes_drop():
+    """A by-internal that collides with a z terminal (not x) is dropped via b,y,c,z.
+
+    For RDDMTSELVLE the internal 'by' fragment at (start=3, end=10) has neutral
+    mass 773.3993, which is within 10 ppm of a terminal **z** mass (773.3933) but
+    of NO terminal **x** mass. So:
+      * the oracle's b, y, c, z set (now used by ``_terminal_collision_masses``)
+        DROPS (3, 10);
+      * the incorrect b, c, x, y set would KEEP it.
+    This pins that the family substitution is correct.
+    """
+    seq = "RDDMTSELVLE"
+    residues, _ = parse_openms_sequence(seq)
+    fm = calculate_fragment_masses_pyopenms(seq)
+
+    term_correct = _terminal_collision_masses(fm)  # b, y, c, z (production)
+    term_wrong = _collision_masses_from_families(fm, ("b", "c", "x", "y"))
+
+    correct = compute_internal_fragment_data(
+        residues,
+        terminal_masses=term_correct,
+        remove_terminal_collisions=True,
+        terminal_collision_ppm=10.0,
+    )
+    wrong = compute_internal_fragment_data(
+        residues,
+        terminal_masses=term_wrong,
+        remove_terminal_collisions=True,
+        terminal_collision_ppm=10.0,
+    )
+
+    correct_pairs = set(
+        zip(correct["start_indices_by"], correct["end_indices_by"])
+    )
+    wrong_pairs = set(zip(wrong["start_indices_by"], wrong["end_indices_by"]))
+
+    # (3, 10) is dropped by the correct set, kept by the wrong set.
+    assert (3, 10) not in correct_pairs
+    assert (3, 10) in wrong_pairs
+    # And the correct set yields exactly one fewer 'by' internal fragment.
+    assert len(correct["fragment_masses_by"]) == len(
+        wrong["fragment_masses_by"]
+    ) - 1
+
+    # Confirm the divergence is specifically z (within 10 ppm) and not x.
+    dropped_mass = 773.399327  # by-internal (3,10) neutral mass, pre-shift net 0
+    z_masses = [m for sub in fm["fragment_masses_z"] for m in sub]
+    x_masses = [m for sub in fm["fragment_masses_x"] for m in sub]
+    tol = dropped_mass * 10.0 / 1e6
+    assert any(abs(m - dropped_mass) <= tol for m in z_masses)
+    assert not any(abs(m - dropped_mass) <= tol for m in x_masses)

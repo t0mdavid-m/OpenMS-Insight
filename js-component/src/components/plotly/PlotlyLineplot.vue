@@ -718,6 +718,49 @@ export default defineComponent({
     },
 
     /**
+     * Tagger level-0 mass-badge invisible hover points. The oracle draws, for
+     * every highlighted mass badge, an invisible marker (size 20, opacity 0)
+     * carrying `hovertext = String(mass)` so hovering the badge reveals the full
+     * mass value (oracle PlotlyLineplotTagger.vue:406-417, Unified:937-948). The
+     * visible label is `mass.toFixed(2)` (the `mass_label` column) but the hover
+     * shows the full-precision mass. Gated to tagger level 0 so default mode is
+     * unaffected. `box.x` is the deconvolved mass (level-0 x = MonoMass).
+     */
+    taggerMassBadgeHoverTrace(): Plotly.Data[] {
+      if (this.mode !== 'tagger' || this.level !== 'deconvolved') return []
+      const boxes = this.annotationBoxData
+      if (boxes.length === 0) return []
+
+      const yRange = this.yRange
+      if (yRange[1] <= 0) return []
+      const ymax = yRange[1] / 1.8
+      const ypos = ymax * 1.25
+
+      const xs: number[] = []
+      const ys: number[] = []
+      const texts: string[] = []
+      for (const box of boxes) {
+        if (!box.visible) continue
+        xs.push(box.x)
+        ys.push(ypos)
+        texts.push(String(box.x))
+      }
+      if (xs.length === 0) return []
+      return [
+        {
+          x: xs,
+          y: ys,
+          mode: 'markers',
+          type: 'scatter',
+          marker: { size: 20, opacity: 0 },
+          text: texts,
+          hoverinfo: 'text',
+          showlegend: false,
+        },
+      ]
+    },
+
+    /**
      * Tagger level-0 sequence arrows + residue letters (from precomputed
      * `plotDataTaggerSegments`). Two arrow annotations + a residue-letter
      * annotation (hover `Δ=<delta> Da`) per adjacent highlighted-mass pair.
@@ -869,8 +912,9 @@ export default defineComponent({
           yref: 'y',
           text: p.charge_label,
           showarrow: false,
-          // Charge-badge font size 15 (oracle Tagger.vue:369-372 / Unified:896-898).
-          font: { size: 15, color: 'white' },
+          // Charge-badge font: size 15 only, no color (oracle Tagger.vue:369-372 /
+          // Unified:896-898 set `font:{size:15}` so Plotly uses the theme text color).
+          font: { size: 15 },
         })
       }
       return annotations
@@ -1018,8 +1062,9 @@ export default defineComponent({
           yref: 'y',
           text: box.text,
           showarrow: false,
-          // Charge-badge font size 15 (oracle default; Unified:896-898).
-          font: { size: 15, color: 'white' },
+          // Charge-badge font: size 15 only, no color (oracle Unified:896-898 set
+          // `font:{size:15}` => Plotly uses the theme text color, not white).
+          font: { size: 15 },
         })
       }
       return annotations
@@ -1182,6 +1227,9 @@ export default defineComponent({
 
       // Append invisible hover points for generic per-peak descriptors (Item B).
       for (const t of this.descriptorHoverTrace) traces.push(t)
+      // Append invisible hover points for tagger level-0 mass badges (oracle
+      // mass-button hover; full-precision mass value).
+      for (const t of this.taggerMassBadgeHoverTrace) traces.push(t)
 
       return traces
     },
