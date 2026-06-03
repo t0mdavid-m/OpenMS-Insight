@@ -136,3 +136,26 @@
 {"ts": "2026-06-02T22:15:41", "phase": 1, "round": 6, "kind": "review", "unit": "quant-recipe", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-02T22:15:41", "phase": 1, "round": 6, "kind": "review", "unit": "heatmap:multi-res", "status": "finding", "findings": [{"id": "P1-R6-HM-MR-001", "severity": "low", "desc": "no-zoom render returns ~2x min_points cached level without final downsample to min_points (zoom path+docstring+oracle reduce to target) [heatmap.py:1022]", "status": "open"}], "msg": ""}
 {"ts": "2026-06-02T22:15:41", "phase": 1, "round": 6, "kind": "review", "unit": "table:go-to", "status": "finding", "findings": [{"id": "P1-R6-TBL-GOTO-001", "severity": "low", "desc": "go_to_fields excluded from _get_columns_to_select -> ColumnNotFoundError on auto-detected go-to column absent from explicit column_definitions; oracle silently returns -1 [table.py:706]", "status": "open"}], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "heatmap:log", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "heatmap:multi-res", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "heatmap:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "heatmap:categorical", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "heatmap:interactivity", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "table:formatters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "table:pagination", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "table:row-select", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "table:go-to", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "table:filters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:stick", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:highlight", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:annotation", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:svg", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:click", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:tagger", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "lineplot:density", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:12", "phase": 1, "round": 7, "kind": "review", "unit": "sequenceview:coverage", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:13", "phase": 1, "round": 7, "kind": "review", "unit": "sequenceview:terminal-frags", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:13", "phase": 1, "round": 7, "kind": "review", "unit": "plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:13", "phase": 1, "round": 7, "kind": "review", "unit": "quant-recipe", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:16:13", "phase": 1, "round": 7, "kind": "review", "unit": "sequenceview:internal-frags", "status": "finding", "findings": [{"id": "P1-R7-SV-KEY-001", "severity": "low", "desc": "InternalFragmentMap row :key composite vs oracle :key=fragmentData.mass; same-mass bars render separately (6) instead of oracle collapse (5); user chose bug-for-bug parity -> reproduce oracle collapse", "status": "open"}], "msg": ""}
