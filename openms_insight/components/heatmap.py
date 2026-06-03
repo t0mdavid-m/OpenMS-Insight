@@ -1149,6 +1149,7 @@ class Heatmap(BaseComponent):
             intensity_column=self._intensity_column,
             x_bins=render_x_bins,
             y_bins=render_y_bins,
+            descending=not self._low_values_on_top,
         ).collect()
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
