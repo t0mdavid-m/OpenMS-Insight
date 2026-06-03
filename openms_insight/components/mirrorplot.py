@@ -741,7 +741,6 @@ class MirrorPlot(BaseComponent):
                     result[peak_id] = {
                         "highlight": True,
                         "annotation": row.get("annotation", ""),
-                        "color": row.get("highlight_color", "#E4572E"),
                     }
             return result
 
