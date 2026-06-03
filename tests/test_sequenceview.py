@@ -5,6 +5,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from openms_insight.core.cache import CacheMissError
+
 
 class TestSequenceViewEmptyState:
     """Tests for SequenceView empty state handling."""
@@ -372,7 +374,7 @@ class TestSequenceViewInternalFragments:
         """internal_fragments=True without sequence_data raises (has_config gate)."""
         from openms_insight.components.sequenceview import SequenceView
 
-        with pytest.raises(ValueError):
+        with pytest.raises(CacheMissError):
             SequenceView(
                 cache_id="test_sv_internal_no_data",
                 cache_path=str(temp_cache_dir),
@@ -386,7 +388,7 @@ class TestSequenceViewInternalFragments:
         """internal_fragment_config without sequence_data also raises."""
         from openms_insight.components.sequenceview import SequenceView
 
-        with pytest.raises(ValueError):
+        with pytest.raises(CacheMissError):
             SequenceView(
                 cache_id="test_sv_internal_cfg_no_data",
                 cache_path=str(temp_cache_dir),
@@ -639,7 +641,7 @@ class TestSequenceViewCoverage:
         """coverage_column without sequence_data raises (has_config gate)."""
         from openms_insight.components.sequenceview import SequenceView
 
-        with pytest.raises(ValueError):
+        with pytest.raises(CacheMissError):
             SequenceView(
                 cache_id="test_sv_cov_no_data",
                 cache_path=str(temp_cache_dir),
@@ -793,7 +795,7 @@ class TestSequenceViewTerminals:
         """Terminal columns without sequence_data raise (has_config gate)."""
         from openms_insight.components.sequenceview import SequenceView
 
-        with pytest.raises(ValueError):
+        with pytest.raises(CacheMissError):
             SequenceView(
                 cache_id="test_sv_term_no_data",
                 cache_path=str(temp_cache_dir),

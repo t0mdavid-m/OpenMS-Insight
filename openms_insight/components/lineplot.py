@@ -272,7 +272,10 @@ class LinePlot(BaseComponent):
 
     def _get_cache_config(self) -> Dict[str, Any]:
         """
-        Get configuration that affects cache validity.
+        Get HASH-AFFECTING (data-shaping) configuration.
+
+        Presentation labels (title/x_label/y_label) are render-time and live in
+        ``_get_render_config()`` so changing a label does not rebuild the cache.
 
         Returns:
             Dict of config values that affect preprocessing
@@ -282,9 +285,6 @@ class LinePlot(BaseComponent):
             "y_column": self._y_column,
             "highlight_column": self._highlight_column,
             "annotation_column": self._annotation_column,
-            "title": self._title,
-            "x_label": self._x_label,
-            "y_label": self._y_label,
             "styling": self._styling,
             "plot_config": self._plot_config,
             # Mode + per-mode config
@@ -306,15 +306,20 @@ class LinePlot(BaseComponent):
             "x_pos_scaling_factor": self._x_pos_scaling_factor,
         }
 
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation labels: stored for reconstruction, excluded from hash."""
+        return {
+            "title": self._title,
+            "x_label": self._x_label,
+            "y_label": self._y_label,
+        }
+
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._x_column = config.get("x_column", "x")
         self._y_column = config.get("y_column", "y")
         self._highlight_column = config.get("highlight_column")
         self._annotation_column = config.get("annotation_column")
-        self._title = config.get("title")
-        self._x_label = config.get("x_label", self._x_column)
-        self._y_label = config.get("y_label", self._y_column)
         self._styling = config.get("styling", {})
         self._plot_config = config.get("plot_config", {})
         # Mode + per-mode config
@@ -338,6 +343,16 @@ class LinePlot(BaseComponent):
         self._dynamic_annotations = None
         self._dynamic_title = None
         self._peak_annotations = None
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation labels from cached config.
+
+        Runs after ``_restore_cache_config`` so ``_x_column``/``_y_column`` (used
+        as the label fallbacks) are already set.
+        """
+        self._title = config.get("title")
+        self._x_label = config.get("x_label", self._x_column)
+        self._y_label = config.get("y_label", self._y_column)
 
     def _get_row_group_size(self) -> int:
         """

@@ -146,12 +146,19 @@ class TestVolcanoPlotThresholds:
             cache_path=str(temp_cache_dir),
         )
 
-        # Get config hash inputs
-        hash_inputs = volcano1._get_component_config_hash_inputs()
+        # Get the hash-affecting (data-shaping) cache config
+        cache_config = volcano1._get_cache_config()
 
         # Verify thresholds are not in the hash inputs
-        assert "fc_threshold" not in hash_inputs
-        assert "p_threshold" not in hash_inputs
+        assert "fc_threshold" not in cache_config
+        assert "p_threshold" not in cache_config
+
+        # Presentation params are render-time too: they must NOT affect the hash
+        # (they live in _get_render_config instead).
+        render_config = volcano1._get_render_config()
+        for key in ("title", "x_label", "y_label", "up_color", "down_color", "ns_color"):
+            assert key not in cache_config, f"{key} must not be hash-affecting"
+            assert key in render_config, f"{key} must be in render config"
 
     def test_call_with_thresholds(
         self,

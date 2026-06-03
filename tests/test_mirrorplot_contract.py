@@ -31,7 +31,9 @@ class TestMirrorPlotContract:
             styling={"unhighlightedColor": "#1f77b4"},
             config={"displayModeBar": True},
         )
-        config = original._get_cache_config()
+        # The full (union) config persisted to the manifest holds both the
+        # hash-affecting (data-shaping) config and the presentation config.
+        config = original._get_stored_config()
 
         # Every constructor field that affects rendering must round-trip
         assert config["filters_top"] == {"spectrum_top": "scan_id"}
@@ -50,7 +52,12 @@ class TestMirrorPlotContract:
         assert config["styling"] == {"unhighlightedColor": "#1f77b4"}
         assert config["plot_config"] == {"displayModeBar": True}
 
-        # Restore on a fresh instance
+        # Titles/labels are presentation params: render-time, NOT hash-affecting
+        cache_config = original._get_cache_config()
+        for key in ("title", "title_top", "title_bottom", "x_label", "y_label"):
+            assert key not in cache_config, f"{key} must not be hash-affecting"
+
+        # Restore on a fresh instance (both hooks, as _load_from_cache does)
         restored = MirrorPlot(
             cache_id="test_roundtrip_target",
             data=sample_lineplot_data,
@@ -61,6 +68,7 @@ class TestMirrorPlotContract:
             y_column="intensity",
         )
         restored._restore_cache_config(config)
+        restored._restore_render_config(config)
 
         assert restored._filters_top == {"spectrum_top": "scan_id"}
         assert restored._filters_bottom == {"spectrum_bottom": "scan_id"}

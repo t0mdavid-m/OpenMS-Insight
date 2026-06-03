@@ -87,8 +87,9 @@ class Heatmap(BaseComponent):
         y_label: Optional[str] = None,
         colorscale: str = "Portland",
         reversescale: bool = False,
-        use_simple_downsample: bool = False,
-        use_streaming: bool = True,
+        downsample: str = "streaming",
+        use_simple_downsample: Optional[bool] = None,
+        use_streaming: Optional[bool] = None,
         categorical_filters: Optional[List[str]] = None,
         category_column: Optional[str] = None,
         category_colors: Optional[Dict[str, str]] = None,
@@ -130,10 +131,18 @@ class Heatmap(BaseComponent):
             x_label: X-axis label (defaults to x_column)
             y_label: Y-axis label (defaults to y_column)
             colorscale: Plotly colorscale name (default: 'Portland')
-            use_simple_downsample: If True, use simple top-N downsampling instead
-                of spatial binning (doesn't require scipy)
-            use_streaming: If True (default), use streaming downsampling that
-                stays lazy until render time. Reduces memory on init.
+            downsample: Downsampling strategy, one of:
+                - "streaming" (default): lazy cascading downsampling that stays
+                  lazy until render time (lowest init memory).
+                - "eager": levels computed upfront (more init memory, faster
+                  render) using scipy-based spatial binning.
+                - "simple": simple top-N downsampling instead of spatial binning
+                  (does not require scipy).
+            use_simple_downsample: DEPRECATED — use ``downsample="simple"``.
+                When explicitly set, overrides ``downsample`` for back-compat.
+            use_streaming: DEPRECATED — use ``downsample="streaming"`` /
+                ``"eager"``. When explicitly set, overrides ``downsample`` for
+                back-compat.
             categorical_filters: List of filter identifiers that should have
                 per-value compression levels. This ensures constant point counts
                 are sent to the client regardless of filter selection. Should be
@@ -171,13 +180,19 @@ class Heatmap(BaseComponent):
         self._y_label = y_label or y_column
         self._colorscale = colorscale
         self._reversescale = reversescale
-        self._use_simple_downsample = use_simple_downsample
+        # Resolve the single downsample-strategy enum into the two internal
+        # dispatch booleans, honoring the deprecated explicit booleans when set.
+        self._downsample = self._resolve_downsample_name(
+            downsample, use_streaming, use_simple_downsample
+        )
+        self._use_streaming, self._use_simple_downsample = (
+            self._downsample_to_booleans(self._downsample)
+        )
         self._category_column = category_column
         self._category_colors = category_colors or {}
         self._log_scale = log_scale
         self._low_values_on_top = low_values_on_top
         self._intensity_label = intensity_label
-        self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
 
         super().__init__(
@@ -189,7 +204,10 @@ class Heatmap(BaseComponent):
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
-            # Pass component-specific params for subprocess recreation
+            # Pass component-specific params for subprocess recreation.
+            # Presentation params (title/labels/colorscale/reversescale/
+            # intensity_label) are forwarded too so a data_path subprocess build
+            # writes them into the manifest's render config.
             x_column=x_column,
             y_column=y_column,
             intensity_column=intensity_column,
@@ -202,17 +220,65 @@ class Heatmap(BaseComponent):
             x_label=x_label,
             y_label=y_label,
             colorscale=colorscale,
-            use_simple_downsample=use_simple_downsample,
-            use_streaming=use_streaming,
+            reversescale=reversescale,
+            downsample=self._downsample,
             categorical_filters=categorical_filters,
             category_column=category_column,
             category_colors=category_colors,
+            log_scale=log_scale,
+            low_values_on_top=low_values_on_top,
+            intensity_label=intensity_label,
             **kwargs,
         )
 
+    @staticmethod
+    def _resolve_downsample_name(
+        downsample: str,
+        use_streaming: Optional[bool],
+        use_simple_downsample: Optional[bool],
+    ) -> str:
+        """Resolve the downsample-strategy enum from the new + deprecated params.
+
+        The deprecated explicit booleans win when set (back-compat). Their
+        legacy precedence is preserved: ``use_simple_downsample=True`` -> simple;
+        otherwise ``use_streaming`` toggles streaming vs eager.
+        """
+        if use_simple_downsample is True:
+            return "simple"
+        if use_streaming is not None or use_simple_downsample is not None:
+            # An explicit (deprecated) boolean was passed; honor the old matrix.
+            return "streaming" if use_streaming else "eager"
+        if downsample not in ("streaming", "eager", "simple"):
+            raise ValueError(
+                f"downsample must be 'streaming', 'eager' or 'simple', "
+                f"got {downsample!r}"
+            )
+        return downsample
+
+    @staticmethod
+    def _downsample_to_booleans(downsample: str) -> Tuple[bool, bool]:
+        """Map the strategy enum to (use_streaming, use_simple_downsample).
+
+        Keeps the existing internal dispatch (which reads the two booleans)
+        byte-identical:
+        - "streaming" -> (True, False): cascading streaming path.
+        - "eager"     -> (False, False): eager scipy-binning path.
+        - "simple"    -> (False, True): eager path using simple top-N.
+        """
+        if downsample == "simple":
+            return False, True
+        if downsample == "eager":
+            return False, False
+        return True, False
+
     def _get_cache_config(self) -> Dict[str, Any]:
         """
-        Get configuration that affects cache validity.
+        Get HASH-AFFECTING (data-shaping) configuration.
+
+        Only params that shape the cached multi-resolution levels appear here.
+        Presentation params (title/labels/colorscale/reversescale/intensity_label)
+        are render-time and live in ``_get_render_config()`` so retuning them does
+        NOT rebuild the (potentially million-point) cache.
 
         Returns:
             Dict of config values that affect preprocessing
@@ -225,23 +291,33 @@ class Heatmap(BaseComponent):
             "display_aspect_ratio": self._display_aspect_ratio,
             "x_bins": self._x_bins,
             "y_bins": self._y_bins,
-            "use_simple_downsample": self._use_simple_downsample,
-            "use_streaming": self._use_streaming,
+            "downsample": self._downsample,
             "categorical_filters": sorted(self._categorical_filters),
             "zoom_identifier": self._zoom_identifier,
+            "category_column": self._category_column,
+            "log_scale": self._log_scale,
+            "low_values_on_top": self._low_values_on_top,
+        }
+
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation config: stored for reconstruction, excluded from hash.
+
+        ``reversescale`` is included here (it was previously dropped entirely on
+        reconstruction-from-cache, silently reverting to False — a parity bug for
+        the e-value / ``low_values_on_top`` "bright = best" recipe).
+        """
+        return {
             "title": self._title,
             "x_label": self._x_label,
             "y_label": self._y_label,
             "colorscale": self._colorscale,
-            "category_column": self._category_column,
-            "log_scale": self._log_scale,
-            "low_values_on_top": self._low_values_on_top,
+            "reversescale": self._reversescale,
             "intensity_label": self._intensity_label,
             # Note: category_colors is render-time styling, doesn't affect cache
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._x_column = config.get("x_column")
         self._y_column = config.get("y_column")
         self._intensity_column = config.get("intensity_column", "intensity")
@@ -251,17 +327,33 @@ class Heatmap(BaseComponent):
         # Fallback to old defaults for backward compatibility with old caches
         self._x_bins = config.get("x_bins", 400)
         self._y_bins = config.get("y_bins", 50)
-        self._use_simple_downsample = config.get("use_simple_downsample", False)
-        self._use_streaming = config.get("use_streaming", True)
+        # Downsample strategy: prefer the new enum; fall back to the deprecated
+        # boolean keys for back-compat with caches written before the rename.
+        if "downsample" in config:
+            self._downsample = config["downsample"]
+        else:
+            self._downsample = self._resolve_downsample_name(
+                "streaming",
+                config.get("use_streaming"),
+                config.get("use_simple_downsample"),
+            )
+        self._use_streaming, self._use_simple_downsample = (
+            self._downsample_to_booleans(self._downsample)
+        )
         self._categorical_filters = config.get("categorical_filters", [])
         self._zoom_identifier = config.get("zoom_identifier", "heatmap_zoom")
+        self._category_column = config.get("category_column")
+        self._log_scale = config.get("log_scale", True)
+        self._low_values_on_top = config.get("low_values_on_top", False)
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation configuration from cached config."""
         self._title = config.get("title")
         self._x_label = config.get("x_label", self._x_column)
         self._y_label = config.get("y_label", self._y_column)
         self._colorscale = config.get("colorscale", "Portland")
-        self._category_column = config.get("category_column")
-        self._log_scale = config.get("log_scale", True)
-        self._low_values_on_top = config.get("low_values_on_top", False)
+        # BUG FIX: reversescale must round-trip on reconstruction (was lost).
+        self._reversescale = config.get("reversescale", False)
         self._intensity_label = config.get("intensity_label")
         # category_colors is not stored in cache (render-time styling)
 

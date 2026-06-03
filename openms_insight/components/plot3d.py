@@ -202,11 +202,12 @@ class Plot3D(BaseComponent):
                 )
 
     def _get_cache_config(self) -> Dict[str, Any]:
-        """Get configuration that affects cache validity.
+        """Get HASH-AFFECTING (data-shaping) configuration.
 
-        Includes data-shaping config (columns, drop/log transforms, hover) plus
-        presentational config so reconstruction-from-cache restores the full look
-        without re-passing kwargs.
+        Only the columns and the drop/log transforms affect the cached point
+        set / geometry. Presentational config (labels, colors, stem framing,
+        camera) is render-time and lives in ``_get_render_config()`` so changing
+        it does not invalidate the cached points.
         """
         return {
             # Data-shaping (affects cached point set / geometry)
@@ -217,7 +218,12 @@ class Plot3D(BaseComponent):
             "drop_nonpositive_z": self._drop_nonpositive_z,
             "log_z": self._log_z,
             "hover_columns": self._hover_columns,
-            # Presentational (stored to keep reconstruction faithful)
+            # Note: mode is NOT included - it's a render-time param
+        }
+
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation config: stored for reconstruction, excluded from hash."""
+        return {
             "title": self._title,
             "x_label": self._x_label,
             "y_label": self._y_label,
@@ -228,11 +234,10 @@ class Plot3D(BaseComponent):
             "y_dtick": self._y_dtick,
             "y_tick0": self._y_tick0,
             "camera_eye": self._camera_eye,
-            # Note: mode is NOT included - it's a render-time param
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._x_column = config.get("x_column", "mass")
         self._y_column = config.get("y_column", "charge")
         self._z_column = config.get("z_column", "intensity")
@@ -240,6 +245,9 @@ class Plot3D(BaseComponent):
         self._drop_nonpositive_z = config.get("drop_nonpositive_z", True)
         self._log_z = config.get("log_z", False)
         self._hover_columns = config.get("hover_columns", [])
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation configuration from cached config."""
         self._title = config.get("title")
         self._x_label = config.get("x_label", "Mass")
         self._y_label = config.get("y_label", "Charge")

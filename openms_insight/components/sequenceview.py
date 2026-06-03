@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
+from ..core.cache import CacheMissError
 from ..core.registry import register_component
 from ..preprocessing.filtering import optimize_for_transfer
 
@@ -648,6 +649,7 @@ class SequenceView:
         peaks_data: Optional[pl.LazyFrame] = None,
         peaks_data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         deconvolved: bool = False,
         annotation_config: Optional[Dict[str, Any]] = None,
@@ -675,6 +677,10 @@ class SequenceView:
             peaks_data_path: Path to parquet file with peaks data.
             filters: Mapping of identifier names to column names for filtering.
                 Example: {"spectrum": "scan_id", "sequence": "sequence_id"}
+            filter_defaults: Optional default values for filter identifiers when
+                no selection is present in state. Mirrors the canonical
+                ``filter_defaults`` of the other components. Any filter identifier
+                not present here defaults to ``None`` (the historical behavior).
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {"peak": "peak_id"} sets 'peak' selection to clicked peak's ID.
             deconvolved: If False (default), peaks are m/z values and matching considers
@@ -727,16 +733,18 @@ class SequenceView:
         # Determine if data is provided (creation mode vs reconstruction mode)
         has_sequence_data = sequence_data is not None or sequence_data_path is not None
 
-        # Check if any configuration arguments were provided
+        # Check if any DATA-SHAPING configuration arguments were provided.
+        # title/height are render-time (presentation) params and intentionally
+        # NOT part of this guard — passing them does not require data, mirroring
+        # how BaseComponent treats presentation params.
         has_config = (
             peaks_data is not None
             or peaks_data_path is not None
             or filters is not None
+            or filter_defaults is not None
             or interactivity is not None
             or deconvolved is not False
             or annotation_config is not None
-            or title is not None
-            or height != 400
             or internal_fragments is not False
             or internal_fragment_config is not None
             or coverage_column is not None
@@ -748,12 +756,12 @@ class SequenceView:
         if not has_sequence_data:
             # Reconstruction mode - only cache_id and cache_path allowed
             if has_config:
-                raise ValueError(
+                raise CacheMissError(
                     "Configuration arguments require sequence_data= or sequence_data_path= to be provided. "
                     "For reconstruction from cache, use only cache_id and cache_path."
                 )
             if not self._cache_exists():
-                raise ValueError(
+                raise CacheMissError(
                     f"Cache not found at '{self._cache_dir}'. "
                     f"Provide sequence_data= or sequence_data_path= to create the cache."
                 )
@@ -778,9 +786,14 @@ class SequenceView:
             self._proteoform_start_column = proteoform_start_column
             self._proteoform_end_column = proteoform_end_column
             self._filters = filters or {}
+            # filter_defaults: caller-supplied overrides; any filter identifier
+            # not listed defaults to None (historical behavior).
+            provided_defaults = filter_defaults or {}
             self._filter_defaults = {}
             for identifier in self._filters.keys():
-                self._filter_defaults[identifier] = None
+                self._filter_defaults[identifier] = provided_defaults.get(
+                    identifier, None
+                )
             self._interactivity = interactivity or {}
 
             # Store annotation config with defaults
@@ -839,10 +852,16 @@ class SequenceView:
             )
 
     def _get_cache_config(self) -> Dict[str, Any]:
-        """Get all configuration to store in cache."""
+        """Get all configuration to store in cache.
+
+        ``title``/``height`` are render-time presentation params but are still
+        persisted here so a cache-only reconstruction restores them faithfully
+        (they are simply not part of the ``has_config`` reconstruction guard).
+        """
         return {
             "version": CACHE_VERSION,
             "filters": self._filters,
+            "filter_defaults": self._filter_defaults,
             "interactivity": self._interactivity,
             "title": self._title,
             "height": self._height,
@@ -880,9 +899,13 @@ class SequenceView:
 
         # Restore all configuration
         self._filters = config.get("filters", {})
+        # Restore caller-supplied filter defaults (falling back to None for any
+        # filter identifier not present, preserving historical behavior and
+        # back-compat with caches written before filter_defaults was stored).
+        stored_defaults = config.get("filter_defaults") or {}
         self._filter_defaults = {}
         for identifier in self._filters.keys():
-            self._filter_defaults[identifier] = None
+            self._filter_defaults[identifier] = stored_defaults.get(identifier, None)
         self._interactivity = config.get("interactivity", {})
         self._title = config.get("title")
         self._height = config.get("height", 400)

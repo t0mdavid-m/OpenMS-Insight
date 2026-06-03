@@ -186,18 +186,62 @@ class BaseComponent(ABC):
 
     def _get_cache_config(self) -> Dict[str, Any]:
         """
-        Get configuration that affects cache validity.
+        Get configuration that affects cache validity (the HASH-AFFECTING config).
 
-        Override in subclasses to include component-specific config.
-        Config changes will invalidate the cache.
+        Override in subclasses to include component-specific *data-shaping* config
+        (columns, transforms, downsampling, binning, ...). Changes to any value
+        returned here invalidate the on-disk cache and re-run preprocessing.
+
+        Presentation-only parameters (titles, axis labels, colorscales/colors and
+        other pure Vue passthrough) must NOT live here — put them in
+        ``_get_render_config()`` so they are persisted for reconstruction but do
+        not invalidate the cache when changed.
 
         Returns:
             Dict of config values that affect preprocessing
         """
         return {}
 
+    def _get_render_config(self) -> Dict[str, Any]:
+        """
+        Get presentation configuration that is STORED but NOT hashed.
+
+        These values (titles, axis/colorbar labels, colorscales, colors, camera
+        framing, ...) are pure passthrough to ``_get_component_args()`` — they
+        never affect the preprocessed data. They ARE persisted in the cache
+        manifest so reconstruction-from-cache (``cache_id``/``cache_path`` only)
+        faithfully restores the look, but they are deliberately excluded from the
+        cache-key hash so changing a label/color does not invalidate a (possibly
+        million-point) on-disk cache.
+
+        Mirrors the proven render-time pattern already used by ``VolcanoPlot``
+        (thresholds) and ``Plot3D`` (``mode``).
+
+        Override in subclasses to surface presentation params. Subclasses that do
+        so should restore them in ``_restore_render_config()``.
+
+        Returns:
+            Dict of presentation values (stored in manifest, excluded from hash)
+        """
+        return {}
+
+    def _get_stored_config(self) -> Dict[str, Any]:
+        """Full config persisted to the manifest (hash-affecting + presentation).
+
+        The manifest stores the union so reconstruction can restore both the
+        data-shaping config and the presentation config from a single ``config``
+        section. Only ``_get_cache_config()`` feeds the cache-key hash.
+        """
+        return {**self._get_cache_config(), **self._get_render_config()}
+
     def _compute_config_hash(self) -> str:
-        """Compute hash of configuration for cache validation."""
+        """Compute hash of configuration for cache validation.
+
+        Only HASH-AFFECTING (data-shaping) config participates: ``filters``,
+        ``interactivity`` and ``_get_cache_config()``. Presentation config
+        (``_get_render_config()``) is intentionally excluded so changing a
+        label/color/title does not invalidate the cache.
+        """
         config_dict = {
             "filters": self._filters,
             "interactivity": self._interactivity,
@@ -268,8 +312,12 @@ class BaseComponent(ABC):
         self._interactivity = manifest.get("interactivity", {})
         self._config = manifest.get("config", {})
 
-        # Restore component-specific configuration
-        self._restore_cache_config(manifest.get("config", {}))
+        # Restore component-specific configuration. The manifest "config" holds
+        # both the hash-affecting (data-shaping) config and the presentation
+        # (render) config; restore each from the same merged dict.
+        config = manifest.get("config", {})
+        self._restore_cache_config(config)
+        self._restore_render_config(config)
 
         # Load preprocessed data files
         data_files = manifest.get("data_files", {})
@@ -286,13 +334,31 @@ class BaseComponent(ABC):
     @abstractmethod
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
         """
-        Restore component-specific configuration from cached config dict.
+        Restore component-specific (data-shaping) configuration from cache.
 
-        Called during reconstruction mode to restore all component attributes
-        that were stored in the manifest's config section.
+        Called during reconstruction mode to restore the hash-affecting
+        attributes that were stored in the manifest's config section.
 
         Args:
-            config: The config dict from manifest (result of _get_cache_config())
+            config: The merged config dict from manifest (union of
+                _get_cache_config() and _get_render_config()). Implementations
+                should read only the keys they own.
+        """
+        pass
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """
+        Restore presentation (render-time) configuration from cache.
+
+        Called during reconstruction mode alongside ``_restore_cache_config``.
+        Default is a no-op; override in subclasses that surface presentation
+        params via ``_get_render_config()`` so a cache-only reconstruction
+        restores titles/labels/colors faithfully.
+
+        Args:
+            config: The merged config dict from manifest (union of
+                _get_cache_config() and _get_render_config()). Implementations
+                should read only the keys they own.
         """
         pass
 
@@ -308,13 +374,17 @@ class BaseComponent(ABC):
         preprocessed_dir = self._get_preprocessed_dir()
         preprocessed_dir.mkdir(parents=True, exist_ok=True)
 
-        # Prepare manifest
+        # Prepare manifest.
+        # "config" stores the UNION of hash-affecting (data-shaping) config and
+        # presentation (render) config so reconstruction restores both. Only
+        # _get_cache_config() feeds config_hash (presentation does NOT invalidate
+        # the cache).
         manifest = {
             "version": CACHE_VERSION,
             "component_type": self._component_type,
             "created_at": datetime.now().isoformat(),
             "config_hash": self._compute_config_hash(),
-            "config": self._get_cache_config(),
+            "config": self._get_stored_config(),
             "filters": self._filters,
             "filter_defaults": self._filter_defaults,
             "interactivity": self._interactivity,

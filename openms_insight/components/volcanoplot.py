@@ -154,21 +154,23 @@ class VolcanoPlot(BaseComponent):
                 f"Available columns: {sorted(available)}"
             )
 
-    def _get_component_config_hash_inputs(self) -> Dict[str, Any]:
-        """Get inputs for component config hash (cache invalidation)."""
+    def _get_cache_config(self) -> Dict[str, Any]:
+        """Get HASH-AFFECTING (data-shaping) configuration.
+
+        Only the column roles affect the cached -log10(p) frame. Presentation
+        params (title/labels/colors/threshold-line styling) are render-time and
+        live in ``_get_render_config()`` so changing them does not rebuild the
+        cache.
+        """
         return {
             "log2fc_column": self._log2fc_column,
             "pvalue_column": self._pvalue_column,
             "label_column": self._label_column,
-            # Note: thresholds are NOT included - they're render-time params
         }
 
-    def _get_cache_config(self) -> Dict[str, Any]:
-        """Get configuration that affects cache validity."""
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation config: stored for reconstruction, excluded from hash."""
         return {
-            "log2fc_column": self._log2fc_column,
-            "pvalue_column": self._pvalue_column,
-            "label_column": self._label_column,
             "title": self._title,
             "x_label": self._x_label,
             "y_label": self._y_label,
@@ -180,10 +182,13 @@ class VolcanoPlot(BaseComponent):
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._log2fc_column = config.get("log2fc_column", "log2FC")
         self._pvalue_column = config.get("pvalue_column", "pvalue")
         self._label_column = config.get("label_column")
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation configuration from cached config."""
         self._title = config.get("title")
         self._x_label = config.get("x_label", "log2 Fold Change")
         self._y_label = config.get("y_label", "-log10(p-value)")
