@@ -94,3 +94,11 @@
 {"ts": "2026-06-03T09:15:03", "phase": 2, "round": 11, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T09:15:03", "phase": 2, "round": 11, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T09:15:03", "phase": 2, "round": 11, "kind": "review", "unit": "api:lineplot", "status": "finding", "findings": [{"id": "P2-R11-LP-DEAD-001", "severity": "low", "desc": "from_sequence_view sets dead _linked_sequence_view_key (lineplot.py:1705) never read; vestigial; delete the line", "status": "open"}], "msg": ""}
+{"ts": "2026-06-03T09:31:19", "phase": 2, "round": 12, "kind": "review", "unit": "api:table", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:31:19", "phase": 2, "round": 12, "kind": "review", "unit": "api:heatmap", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:31:19", "phase": 2, "round": 12, "kind": "review", "unit": "api:surface", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:31:20", "phase": 2, "round": 12, "kind": "review", "unit": "api:lineplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:31:20", "phase": 2, "round": 12, "kind": "review", "unit": "api:plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:31:20", "phase": 2, "round": 12, "kind": "review", "unit": "api:sequenceview", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:31:20", "phase": 2, "round": 12, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:31:20", "phase": 2, "round": 12, "kind": "review", "unit": "api:volcanoplot", "status": "finding", "findings": [{"id": "P2-R12-VOLC-DOC-001", "severity": "low", "desc": "_prepare_vue_data docstring (volcanoplot.py:253) claims 'Uses shared prepare_scatter_data' but hand-rolls inline (correctly, to keep raw pvalue col); fix docstring", "status": "open"}], "msg": ""}
