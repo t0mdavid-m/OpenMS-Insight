@@ -101,6 +101,20 @@ class TestTaggerFrameResolve:
         assert "tag" in deps  # tag selection drives a re-render
         assert "aa" in deps   # residue selection drives a re-render (gold)
 
+    def test_managed_tag_keys_do_not_leak_into_args(
+        self, mock_streamlit, temp_cache_dir, sample_tagger_data, tmp_path
+    ):
+        """The tag-resolution config keys (incl. an absolute tag_data_path) are
+        managed config for subprocess recreation and must NOT leak into the Vue
+        component args as snake_case top-level keys."""
+        comp = self._resolved_tagger(temp_cache_dir, sample_tagger_data, tmp_path)
+        args = comp._get_component_args()
+        for key in (
+            "tag_data_path", "tag_id_column", "tag_sequence_column",
+            "tag_masses_column", "tag_start_column", "selected_aa_identifier",
+        ):
+            assert key not in args, key
+
 
 class TestTaggerPrepareVueData:
     def test_prepare_vue_data_returns_dict_with_hash(

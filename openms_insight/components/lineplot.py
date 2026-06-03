@@ -1255,8 +1255,12 @@ class LinePlot(BaseComponent):
             "xPosScalingFactor": self._x_pos_scaling_factor,
             "config": self._plot_config,
         }
+        # Mirror the default path: structured constructor params (incl. the tagger
+        # tag-resolution keys like tag_data_path, which can be an absolute fs path)
+        # are stored in self._config for subprocess recreation and must NOT leak
+        # into the Vue args as snake_case top-level keys.
         for key, val in self._config.items():
-            if key not in args:
+            if key not in _MANAGED_CONFIG_KEYS and key not in args:
                 args[key] = val
         return args
 
