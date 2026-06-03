@@ -1,0 +1,8 @@
+{"ts": "2026-06-03T07:59:03", "phase": 2, "round": 1, "kind": "review", "unit": "api:heatmap", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T07:59:03", "phase": 2, "round": 1, "kind": "review", "unit": "api:lineplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T07:59:04", "phase": 2, "round": 1, "kind": "review", "unit": "api:plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T07:59:04", "phase": 2, "round": 1, "kind": "review", "unit": "api:sequenceview", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T07:59:04", "phase": 2, "round": 1, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T07:59:04", "phase": 2, "round": 1, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T07:59:04", "phase": 2, "round": 1, "kind": "review", "unit": "api:table", "status": "finding", "findings": [{"id": "P2-R1-TBL-TITLE-001", "severity": "low", "desc": "Table title still cache-keyed (only BaseComponent subclass without _get_render_config); D1 holdout -> make render-time", "status": "open"}], "msg": ""}
+{"ts": "2026-06-03T07:59:04", "phase": 2, "round": 1, "kind": "review", "unit": "api:surface", "status": "finding", "findings": [{"id": "P2-R1-SURF-001", "severity": "med", "desc": "Table title D1 holdout (same root as api:table) + minor heatmap zoom_identifier shared-literal default (C5 footgun)", "status": "open"}], "msg": ""}
