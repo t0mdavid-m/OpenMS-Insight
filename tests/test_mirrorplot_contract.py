@@ -387,3 +387,85 @@ class TestMirrorPlotBridgeIntegration:
         assert "_dynamic_highlight" not in refreshed["plotDataBottom"].columns
         # _plotConfig rebuilt
         assert "_plotConfig" in refreshed
+
+    def test_per_side_annotations_apply_on_cache_hit(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        """BUG FIX: per-side annotations must render through the bridge cache HIT.
+
+        The bridge gated _apply_fresh_annotations on _has_render_time_annotations,
+        which only detected the singular _dynamic_annotations / _peak_annotations.
+        MirrorPlot stores per-side state in _top_dynamic_annotations /
+        _bottom_dynamic_annotations and never sets the singular attr, so on a cache
+        HIT the gate returned False and SequenceView-pushed annotations silently
+        didn't render. The 46 cache-MISS tests masked this because they hit
+        _prepare_vue_data / _apply_fresh_annotations directly.
+
+        Here we go through the real bridge path: warm the cache (MISS, no
+        annotations), then set a top annotation and assert the next cached call is
+        a HIT that still carries the annotation (_dynamic_highlight column +
+        annotation label).
+        """
+        from openms_insight.rendering import bridge
+
+        # mock_streamlit patches streamlit.session_state, which bridge reads as
+        # st.session_state for its per-component runtime cache.
+        comp = self._make(temp_cache_dir, sample_lineplot_data)
+        component_id = "PlotlyMirrorPlot:test_cache_hit"
+        # peak_id 10 belongs to scan_id 1 -> lands on the top side (spectrum_top=1)
+        state = {"spectrum_top": 1, "spectrum_bottom": 2}
+        filter_state_hashable = (("spectrum_bottom", 2), ("spectrum_top", 1))
+
+        # Warm cache: cache MISS, no annotations -> stores stripped base data
+        warm_data, _ = bridge._prepare_vue_data_cached(
+            comp, component_id, filter_state_hashable, state
+        )
+        assert "_dynamic_highlight" not in warm_data["plotDataTop"].columns
+
+        # Now an annotation arrives (e.g. from a linked SequenceView)
+        comp.set_top_dynamic_annotations({10: {"highlight": True, "annotation": "b1"}})
+
+        # Next call is a cache HIT (same filter state). With the fix, the gate
+        # now detects the per-side annotation and re-applies it to cached data.
+        hit_data, _ = bridge._prepare_vue_data_cached(
+            comp, component_id, filter_state_hashable, state
+        )
+
+        df_top = hit_data["plotDataTop"]
+        assert "_dynamic_highlight" in df_top.columns, (
+            "per-side annotation did not render on cache HIT"
+        )
+        assert "_dynamic_annotation" in df_top.columns
+        assert df_top["_dynamic_annotation"].tolist().count("b1") == 1
+        assert bool(df_top["_dynamic_highlight"].any())
+        # _plotConfig must point the top side at the dynamic columns
+        assert hit_data["_plotConfig"]["topHighlightColumn"] == "_dynamic_highlight"
+        assert hit_data["_plotConfig"]["topAnnotationColumn"] == "_dynamic_annotation"
+
+    def test_per_side_annotation_change_alters_cache_hit_hash(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        """A changed per-side annotation must change the bridge annotation hash.
+
+        _compute_annotation_hash feeds the cache-validity check in render_component;
+        if it ignored per-side annotations, a changed annotation would not force a
+        re-render on a HIT. The hash must differ between no-annotation, an
+        annotated top side, and a different top annotation.
+        """
+        from openms_insight.rendering import bridge
+
+        comp = self._make(temp_cache_dir, sample_lineplot_data)
+
+        none_hash = bridge._compute_annotation_hash(comp)
+        assert none_hash is None
+
+        comp.set_top_dynamic_annotations({10: {"highlight": True, "annotation": "b1"}})
+        top_hash = bridge._compute_annotation_hash(comp)
+        assert top_hash is not None
+        assert top_hash != none_hash
+
+        comp.set_top_dynamic_annotations(
+            {10: {"highlight": True, "annotation": "b1"}, 20: {"highlight": True}}
+        )
+        changed_hash = bridge._compute_annotation_hash(comp)
+        assert changed_hash != top_hash

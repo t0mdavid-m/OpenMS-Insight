@@ -254,6 +254,65 @@ class TestHeatmapReversescaleRoundtrip:
         assert reconstructed._get_component_args()["reversescale"] is True
 
 
+class TestHeatmapCategoryColorsRoundtrip:
+    """BUG FIX: category_colors must round-trip through cache reconstruction.
+
+    category_colors is render-time styling (correctly excluded from the cache
+    hash), but it was neither stored in ``_get_render_config()`` nor restored in
+    ``_restore_render_config()``, so a heatmap built with a custom categorical
+    palette silently reverted to default Plotly colors (``_category_colors={}``)
+    when later reconstructed from cache only (cache_id/cache_path) — the same
+    parity-break class as the reversescale bug. Mirrors Plot3D, which stores +
+    restores category_colors.
+    """
+
+    def test_category_colors_roundtrips_through_reconstruction(
+        self, mock_streamlit, temp_cache_dir, sample_categorical_heatmap_data
+    ):
+        cache_id = "test_heatmap_category_colors_roundtrip"
+        custom_colors = {
+            "Control": "#0000FF",
+            "Treatment_A": "#FF0000",
+            "Treatment_B": "#00FF00",
+        }
+
+        # Create with a custom categorical palette (non-default)
+        original = Heatmap(
+            cache_id=cache_id,
+            data=sample_categorical_heatmap_data,
+            cache_path=str(temp_cache_dir),
+            x_column="retention_time",
+            y_column="mz",
+            intensity_column="intensity",
+            category_column="sample_group",
+            category_colors=custom_colors,
+            min_points=100,
+        )
+        assert original._category_colors == custom_colors
+        assert original._get_component_args()["categoryColors"] == custom_colors
+
+        # category_colors lives in render config (persisted), NOT cache config.
+        assert "category_colors" not in original._get_cache_config()
+        assert original._get_render_config()["category_colors"] == custom_colors
+
+        # The manifest must persist category_colors so reconstruction can restore it
+        manifest_path = temp_cache_dir / cache_id / "manifest.json"
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        assert manifest["config"]["category_colors"] == custom_colors
+
+        # Reconstruct from ONLY cache_id + cache_path (no data, no config)
+        reconstructed = Heatmap(cache_id=cache_id, cache_path=str(temp_cache_dir))
+
+        # Bug fix: category_colors survives reconstruction (no revert to {})
+        assert reconstructed._category_colors == custom_colors, (
+            "category_colors lost on cache reconstruction"
+        )
+        assert (
+            reconstructed._get_component_args()["categoryColors"] == custom_colors
+        )
+
+
 class TestHeatmapDownsampleEnum:
     """The downsample enum collapses the two legacy strategy booleans.
 

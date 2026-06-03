@@ -319,7 +319,12 @@ class Heatmap(BaseComponent):
             "colorscale": self._colorscale,
             "reversescale": self._reversescale,
             "intensity_label": self._intensity_label,
-            # Note: category_colors is render-time styling, doesn't affect cache
+            # category_colors is render-time styling (excluded from the hash) but
+            # MUST be stored/restored here so a cache-only reconstruction keeps the
+            # categorical palette instead of silently reverting to default Plotly
+            # colors. Mirrors Plot3D._get_render_config; same parity-break class as
+            # the reversescale fix above.
+            "category_colors": self._category_colors,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -365,7 +370,9 @@ class Heatmap(BaseComponent):
         # BUG FIX: reversescale must round-trip on reconstruction (was lost).
         self._reversescale = config.get("reversescale", False)
         self._intensity_label = config.get("intensity_label")
-        # category_colors is not stored in cache (render-time styling)
+        # BUG FIX: category_colors must round-trip on a cache-only reconstruction
+        # (was dropped, reverting categorical mode to default Plotly colors).
+        self._category_colors = config.get("category_colors", {})
 
     def get_state_dependencies(self) -> list:
         """

@@ -148,11 +148,23 @@ def _has_render_time_annotations(component: "BaseComponent") -> bool:
     """
     Whether a component carries render-time annotation state.
 
-    Covers both the legacy keyed ``_dynamic_annotations`` and the generic
-    descriptor-based ``_peak_annotations`` (LinePlot.set_peak_annotations).
-    Either kind must be re-applied to cached base data on a cache hit.
+    Covers the legacy keyed ``_dynamic_annotations``, the generic descriptor-based
+    ``_peak_annotations`` (LinePlot.set_peak_annotations), and per-side
+    ``_top_dynamic_annotations`` / ``_bottom_dynamic_annotations`` (MirrorPlot).
+    Any of these must be re-applied to cached base data on a cache hit; without
+    detecting the per-side attrs, MirrorPlot annotations silently vanished on a
+    cache HIT (cache MISS worked, masking the break). Kept generic/attribute-based
+    rather than MirrorPlot-type-specific.
     """
     if getattr(component, "_dynamic_annotations", None) is not None:
+        return True
+    # Per-side annotations (MirrorPlot) are dicts keyed by interactivity value;
+    # require a real dict (not just non-None) so mock/uninitialized attributes —
+    # e.g. a MagicMock component — don't spuriously flag render-time state, the
+    # same guard rationale as _peak_annotations below.
+    if isinstance(getattr(component, "_top_dynamic_annotations", None), dict):
+        return True
+    if isinstance(getattr(component, "_bottom_dynamic_annotations", None), dict):
         return True
     # Peak annotations are a list of descriptors; require a real list so that
     # mock/uninitialized attributes don't spuriously flag render-time state.
@@ -163,9 +175,10 @@ def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
     """
     Compute hash of component's render-time annotations, if any.
 
-    Includes both the keyed ``_dynamic_annotations`` and the generic
-    descriptor-based ``_peak_annotations`` so a cache entry is invalidated when
-    either changes.
+    Includes the keyed ``_dynamic_annotations``, the per-side
+    ``_top_dynamic_annotations`` / ``_bottom_dynamic_annotations`` (MirrorPlot),
+    and the generic descriptor-based ``_peak_annotations`` so a cache entry is
+    invalidated when any of them changes.
 
     Args:
         component: The component to check for annotations
@@ -177,6 +190,15 @@ def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
     annotations = getattr(component, "_dynamic_annotations", None)
     if annotations is not None:
         parts.append(str(sorted(annotations.keys())))
+    # Per-side annotations (MirrorPlot): hash each side independently so a change
+    # on either side invalidates the cache entry on a HIT and forces a re-render.
+    # isinstance(dict) guard mirrors _has_render_time_annotations (mock-safe).
+    top_annotations = getattr(component, "_top_dynamic_annotations", None)
+    if isinstance(top_annotations, dict):
+        parts.append("top:" + str(sorted(top_annotations.keys())))
+    bottom_annotations = getattr(component, "_bottom_dynamic_annotations", None)
+    if isinstance(bottom_annotations, dict):
+        parts.append("bottom:" + str(sorted(bottom_annotations.keys())))
     peak_annotations = getattr(component, "_peak_annotations", None)
     if isinstance(peak_annotations, list):
         parts.append(json.dumps(peak_annotations, sort_keys=True, default=str))
