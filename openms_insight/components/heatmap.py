@@ -801,6 +801,7 @@ class Heatmap(BaseComponent):
                         current,
                         max_points=size,
                         intensity_column=self._intensity_column,
+                        descending=not self._low_values_on_top,
                     )
                 else:
                     downsampled = downsample_2d(
@@ -811,6 +812,7 @@ class Heatmap(BaseComponent):
                         intensity_column=self._intensity_column,
                         x_bins=self._x_bins,
                         y_bins=self._y_bins,
+                        descending=not self._low_values_on_top,
                     )
                 # Sort by x, y for efficient range query predicate pushdown
                 if isinstance(downsampled, pl.LazyFrame):
@@ -1039,6 +1041,7 @@ class Heatmap(BaseComponent):
                                 filtered.lazy(),
                                 max_points=self._min_points,
                                 intensity_column=self._intensity_column,
+                                descending=not self._low_values_on_top,
                             ).collect()
                         else:
                             return downsample_2d_streaming(
@@ -1051,6 +1054,7 @@ class Heatmap(BaseComponent):
                                 y_bins=render_y_bins,
                                 x_range=zoom_x_range,
                                 y_range=zoom_y_range,
+                                descending=not self._low_values_on_top,
                             ).collect()
                     else:
                         return downsample_2d(
@@ -1061,6 +1065,7 @@ class Heatmap(BaseComponent):
                             intensity_column=self._intensity_column,
                             x_bins=render_x_bins,
                             y_bins=render_y_bins,
+                            descending=not self._low_values_on_top,
                         ).collect()
                 return filtered
 

@@ -50,3 +50,11 @@
 {"ts": "2026-06-03T08:37:55", "phase": 2, "round": 6, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T08:37:55", "phase": 2, "round": 6, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T08:37:55", "phase": 2, "round": 6, "kind": "review", "unit": "api:surface", "status": "finding", "findings": [{"id": "P2-R6-DOC-001", "severity": "low", "desc": "__init__.py module docstring still 'Streamlit Vue Components' (old name) vs product 'OpenMS-Insight'; S1 MUST, missed in Pass 3", "status": "open"}], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:table", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:surface", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:lineplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:sequenceview", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:heatmap", "status": "finding", "findings": [{"id": "P2-R7-HM-ZOOM-001", "severity": "med", "desc": "_select_level_for_zoom render-downsample omits descending=not low_values_on_top (3 calls), so zoom+low_values_on_top keeps high-intensity points; no-zoom path honors it -> asymmetry", "status": "open"}], "msg": ""}
