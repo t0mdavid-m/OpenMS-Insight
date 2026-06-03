@@ -96,6 +96,7 @@ class Plot3D(BaseComponent):
         camera_eye: Optional[Dict[str, float]] = None,
         log_z: bool = False,
         hover_columns: Optional[List[str]] = None,
+        optional_filters: Optional[List[str]] = None,
         **kwargs,
     ):
         """
@@ -166,6 +167,11 @@ class Plot3D(BaseComponent):
         self._camera_eye = camera_eye or dict(DEFAULT_CAMERA_EYE)
         self._log_z = log_z
         self._hover_columns = hover_columns or []
+        # Identifiers (subset of filters) skipped when their selection is None, so
+        # the plot shows all rows for the required filters and only narrows when the
+        # optional selection is set (e.g. show all of a scan's masses until a mass
+        # is clicked). Not hash-affecting (the full point set is still cached).
+        self._optional_filters = optional_filters or []
 
         # Render-time trace-mode value (set in __call__). Default = oracle "lines".
         self._current_trace_mode = trace_mode
@@ -240,6 +246,7 @@ class Plot3D(BaseComponent):
             "y_dtick": self._y_dtick,
             "y_tick0": self._y_tick0,
             "camera_eye": self._camera_eye,
+            "optional_filters": self._optional_filters,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -266,6 +273,7 @@ class Plot3D(BaseComponent):
         self._y_dtick = config.get("y_dtick", 1.0)
         self._y_tick0 = config.get("y_tick0", 0.0)
         self._camera_eye = config.get("camera_eye", dict(DEFAULT_CAMERA_EYE))
+        self._optional_filters = config.get("optional_filters", [])
 
     def _select_columns(self) -> List[str]:
         """Build the de-duplicated list of tidy columns to keep."""
@@ -333,6 +341,7 @@ class Plot3D(BaseComponent):
                 state,
                 columns=columns,
                 filter_defaults=self._filter_defaults,
+                optional_filters=self._optional_filters,
             )
             return {"plot3dData": df_pandas, "_hash": data_hash}
 

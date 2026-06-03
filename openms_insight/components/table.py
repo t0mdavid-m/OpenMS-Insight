@@ -76,6 +76,7 @@ class Table(BaseComponent):
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
+        interval_filters: Optional[Dict[str, Any]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
         column_definitions: Optional[List[Dict[str, Any]]] = None,
@@ -138,6 +139,12 @@ class Table(BaseComponent):
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
+        # Interval (containment) filters: identifier -> (low_col, high_col). When
+        # the identifier's selection is present, keep rows where
+        # low_col <= value <= high_col; skipped when the selection is None (show
+        # all). Complements the equality ``filters`` for range/span narrowing
+        # (e.g. show tags spanning a clicked sequence residue).
+        self._interval_filters = interval_filters or {}
         self._title = title
         self._index_field = index_field
         self._go_to_fields = go_to_fields
@@ -159,6 +166,7 @@ class Table(BaseComponent):
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
             # Pass component-specific params for subprocess recreation
+            interval_filters=self._interval_filters,
             column_definitions=column_definitions,
             title=title,
             index_field=index_field,
@@ -186,6 +194,7 @@ class Table(BaseComponent):
         """
         return {
             "column_definitions": self._column_definitions,
+            "interval_filters": self._interval_filters,
             "index_field": self._index_field,
             "go_to_fields": self._go_to_fields,
             "layout": self._layout,
@@ -205,6 +214,7 @@ class Table(BaseComponent):
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
         """Restore data-shaping configuration from cached config."""
         self._column_definitions = config.get("column_definitions")
+        self._interval_filters = config.get("interval_filters", {})
         self._index_field = config.get("index_field", "id")
         self._go_to_fields = config.get("go_to_fields")
         self._layout = config.get("layout", "fitDataFill")
@@ -237,6 +247,9 @@ class Table(BaseComponent):
         # Include interactivity identifiers for page navigation
         if self._interactivity:
             deps.extend(self._interactivity.keys())
+        # Interval-filter selections change which rows are shown
+        if self._interval_filters:
+            deps.extend(self._interval_filters.keys())
         return deps
 
     def get_initial_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -535,6 +548,12 @@ class Table(BaseComponent):
             for col in self._filters.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        # Include the low/high columns needed for interval filtering
+        if self._interval_filters:
+            for bounds in self._interval_filters.values():
+                for col in (bounds[0], bounds[1]):
+                    if col not in columns_to_select:
+                        columns_to_select.append(col)
 
         return columns_to_select if columns_to_select else None
 
@@ -623,6 +642,20 @@ class Table(BaseComponent):
             if isinstance(selected_value, float) and selected_value.is_integer():
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
+
+        # Apply interval (containment) filters: keep rows where
+        # low_col <= value <= high_col. Skipped when the selection is None (show
+        # all), so this is an optional narrowing on top of the equality filters.
+        for identifier, bounds in self._interval_filters.items():
+            value = state.get(identifier)
+            if value is None:
+                continue
+            low_col, high_col = bounds[0], bounds[1]
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            data = data.filter(
+                (pl.col(low_col) <= value) & (pl.col(high_col) >= value)
+            )
 
         # Get pagination state
         pagination_state = state.get(self._pagination_identifier)

@@ -188,6 +188,40 @@ class TestStreamingTableFilters:
         assert result["_pagination"]["total_pages"] == 2
         assert len(result["tableData"]) == 50
 
+    def test_interval_filter_span_narrowing(
+        self, mock_streamlit, temp_cache_dir
+    ):
+        """An interval filter keeps rows where low_col <= value <= high_col, and is
+        skipped (shows all) when the selection is None."""
+        data = pl.LazyFrame(
+            {
+                "tag_id": [0, 1, 2, 3],
+                "StartPos": [0, 3, 0, 5],
+                "EndPos": [2, 5, 8, 7],
+            }
+        )
+        table = Table(
+            cache_id="test_interval_filter",
+            data=data,
+            cache_path=str(temp_cache_dir),
+            index_field="tag_id",
+            interval_filters={"aa": ("StartPos", "EndPos")},
+            pagination=False,
+        )
+        # "aa" drives a re-render and is a dependency.
+        assert "aa" in table.get_state_dependencies()
+
+        # No residue selected -> all tags shown.
+        assert len(table._prepare_vue_data({})["tableData"]) == 4
+
+        # Residue 4 is spanned by tag 1 (3..5) and tag 2 (0..8) only.
+        df = table._prepare_vue_data({"aa": 4})["tableData"]
+        assert sorted(df["tag_id"].tolist()) == [1, 2]
+
+        # Residue 6 is spanned by tag 2 (0..8) and tag 3 (5..7).
+        df2 = table._prepare_vue_data({"aa": 6})["tableData"]
+        assert sorted(df2["tag_id"].tolist()) == [2, 3]
+
     def test_column_filter_categorical(
         self, mock_streamlit, temp_cache_dir, large_table_data
     ):

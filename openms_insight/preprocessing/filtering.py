@@ -194,6 +194,7 @@ def _filter_and_collect(
     filters_tuple: Tuple[Tuple[str, str], ...],
     state_tuple: Tuple[Tuple[str, Any], ...],
     columns_tuple: Optional[Tuple[str, ...]] = None,
+    optional_filters_tuple: Tuple[str, ...] = (),
 ) -> Tuple[pd.DataFrame, str]:
     """
     Filter data and collect.
@@ -215,6 +216,7 @@ def _filter_and_collect(
     """
     filters = dict(filters_tuple)
     state = dict(state_tuple)  # Already has defaults applied
+    optional = set(optional_filters_tuple)
 
     # Apply column projection FIRST (before filters) for efficiency
     # This ensures we only read needed columns from disk
@@ -222,12 +224,18 @@ def _filter_and_collect(
         data = data.select(list(columns_tuple))
 
     # Apply filters
-    # If ANY filter has no selection (and no default), return empty DataFrame
-    # This prevents loading millions of rows when no spectrum is selected
+    # A REQUIRED filter with no selection (and no default) returns an empty
+    # DataFrame (prevents loading millions of rows when no spectrum is selected).
+    # An OPTIONAL filter with no selection is SKIPPED (pass-through), so the view
+    # shows all rows for the required filters and only narrows when the optional
+    # selection is present (e.g. a 3D plot: all of a scan's masses until one mass
+    # is clicked).
     for identifier, column in filters.items():
         selected_value = state.get(identifier)
         if selected_value is None:
-            # No selection for this filter - return empty DataFrame
+            if identifier in optional:
+                continue
+            # No selection for this required filter - return empty DataFrame
             # Collect with limit 0 to get schema without data
             df_polars = data.head(0).collect()
             data_hash = compute_dataframe_hash(df_polars)
@@ -260,6 +268,7 @@ def filter_and_collect_cached(
     state: Dict[str, Any],
     columns: Optional[List[str]] = None,
     filter_defaults: Optional[Dict[str, Any]] = None,
+    optional_filters: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, str]:
     """
     Filter data based on selection state and collect, with caching.
@@ -280,6 +289,11 @@ def filter_and_collect_cached(
         filter_defaults: Optional default values for filters when state is None.
             When a filter's state value is None, the default is used instead.
             Example: {"identification": -1} means None → -1 for identification filter.
+        optional_filters: Identifiers (a subset of ``filters``) that are SKIPPED
+            when their state is None instead of emptying the result. Use for a
+            narrowing selection that should show everything until chosen (e.g. a
+            mass selection that isolates one mass within an already-scan-filtered
+            3D plot). Their state is still part of the cache key.
 
     Returns:
         Tuple of (pandas DataFrame, hash string) with filters and projection applied
@@ -298,6 +312,7 @@ def filter_and_collect_cached(
         filters_tuple,
         state_tuple,
         columns_tuple,
+        tuple(sorted(optional_filters)) if optional_filters else (),
     )
 
 

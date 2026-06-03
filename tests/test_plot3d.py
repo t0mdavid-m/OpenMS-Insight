@@ -208,6 +208,42 @@ class TestPlot3DPrepareVueData:
         )
         assert len(df) == expected
 
+    def test_optional_filter_shows_all_until_selected(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_plot3d_data: pl.LazyFrame,
+    ):
+        """An optional filter is skipped when unset (show all rows for the required
+        filters) and narrows only when its selection is present."""
+        plot = Plot3D(
+            cache_id="test_plot3d_optional",
+            data=sample_plot3d_data,
+            x_column="mass",
+            y_column="charge",
+            z_column="intensity",
+            filters={"spectrum": "scan", "mass": "mass_index"},
+            filter_defaults={"spectrum": -1},
+            optional_filters=["mass"],
+            cache_path=str(temp_cache_dir),
+        )
+
+        # scan selected, mass UNSET -> all of scan 200's positive-intensity rows
+        # (mass filter skipped), not an empty frame.
+        all_masses = plot._prepare_vue_data({"spectrum": 200})["plot3dData"]
+        assert set(all_masses["scan"].tolist()) == {200}
+        assert len(all_masses) == 3
+
+        # scan + mass selected -> narrowed to that mass ordinal.
+        one_mass = plot._prepare_vue_data(
+            {"spectrum": 200, "mass": 1}
+        )["plot3dData"]
+        assert set(one_mass["mass_index"].tolist()) == {1}
+        assert len(one_mass) == 2
+
+        # required filter (spectrum) still empties when unset.
+        assert len(plot._prepare_vue_data({})["plot3dData"]) == 0
+
 
 class TestPlot3DComponentArgs:
     """Tests for component args generation."""
