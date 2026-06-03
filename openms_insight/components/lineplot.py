@@ -1701,9 +1701,6 @@ class LinePlot(BaseComponent):
             **kwargs,
         )
 
-        # Store reference to sequence view key for annotation lookup
-        plot._linked_sequence_view_key: Optional[str] = None
-
         return plot
 
     def __call__(

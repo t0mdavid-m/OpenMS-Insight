@@ -764,4 +764,4 @@ class MirrorPlot(BaseComponent):
 
 
 if TYPE_CHECKING:
-    from ..core.state import StateManager  # noqa: F401
+    from ..core.state import StateManager

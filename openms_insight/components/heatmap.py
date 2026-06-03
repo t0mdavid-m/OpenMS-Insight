@@ -17,19 +17,6 @@ from ..preprocessing.compression import (
 from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
 
 
-# Cache key only includes zoom state (not other selections)
-def _make_zoom_cache_key(zoom: Optional[Dict[str, Any]]) -> tuple:
-    """Create hashable cache key from zoom state."""
-    if zoom is None:
-        return (None,)
-    return (
-        ("x0", zoom.get("xRange", [-1, -1])[0]),
-        ("x1", zoom.get("xRange", [-1, -1])[1]),
-        ("y0", zoom.get("yRange", [-1, -1])[0]),
-        ("y1", zoom.get("yRange", [-1, -1])[1]),
-    )
-
-
 @register_component("heatmap")
 class Heatmap(BaseComponent):
     """
@@ -436,8 +423,6 @@ class Heatmap(BaseComponent):
         Returns:
             Dict with level LazyFrames keyed by "{prefix}_{idx}" and "num_levels"
         """
-        import sys
-
         result = {}
         num_compressed = len(level_sizes)
 
@@ -448,10 +433,6 @@ class Heatmap(BaseComponent):
         full_res_path = cache_dir / f"{prefix}_{num_compressed}.parquet"
         full_res = source_data.sort([self._x_column, self._y_column])
         full_res.sink_parquet(full_res_path, compression="zstd")
-        print(
-            f"[HEATMAP] Saved {prefix}_{num_compressed} ({total:,} pts)",
-            file=sys.stderr,
-        )
 
         # Start cascading from full resolution
         current_source = pl.scan_parquet(full_res_path)
@@ -490,11 +471,6 @@ class Heatmap(BaseComponent):
             level = level.sort([self._x_column, self._y_column])
             level.sink_parquet(level_path, compression="zstd")
 
-            print(
-                f"[HEATMAP] Saved {prefix}_{level_idx} (target {target_size:,} pts)",
-                file=sys.stderr,
-            )
-
             # Next iteration uses this level as source (cascading)
             current_source = pl.scan_parquet(level_path)
             current_size = target_size
@@ -527,8 +503,6 @@ class Heatmap(BaseComponent):
         - cat_level_im_dimension_0_1: 20K points with im_id=1
         - etc.
         """
-        import sys
-
         # Get data ranges (for the full dataset)
         # These ranges are used for ALL levels to ensure consistent binning
         x_range, y_range = get_data_range(
@@ -549,12 +523,6 @@ class Heatmap(BaseComponent):
                 (0, self._display_aspect_ratio),  # Fake x_range matching aspect
                 (0, 1.0),  # Fake y_range
             )
-            print(
-                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
-                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
-                f"display aspect: {self._display_aspect_ratio:.2f})",
-                file=sys.stderr,
-            )
 
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
@@ -571,10 +539,6 @@ class Heatmap(BaseComponent):
         # Process each categorical filter
         for filter_id in self._categorical_filters:
             if filter_id not in self._filters:
-                print(
-                    f"[HEATMAP] Warning: categorical_filter '{filter_id}' not in filters, skipping",
-                    file=sys.stderr,
-                )
                 continue
 
             column_name = self._filters[filter_id]
@@ -591,11 +555,6 @@ class Heatmap(BaseComponent):
                 [v for v in unique_values if v is not None and v >= 0]
             )
 
-            print(
-                f"[HEATMAP] Categorical filter '{filter_id}' ({column_name}): {len(unique_values)} unique values",
-                file=sys.stderr,
-            )
-
             self._preprocessed_data["categorical_filter_values"][filter_id] = (
                 unique_values
             )
@@ -610,11 +569,6 @@ class Heatmap(BaseComponent):
 
                 # Compute level sizes for this filtered subset (2× for cache buffer)
                 level_sizes = compute_compression_levels(cache_target, filtered_total)
-
-                print(
-                    f"[HEATMAP]   Value {filter_value}: {filtered_total:,} pts → levels {level_sizes}",
-                    file=sys.stderr,
-                )
 
                 # Store level sizes for this filter value
                 self._preprocessed_data[
@@ -682,8 +636,6 @@ class Heatmap(BaseComponent):
 
         Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
-        import sys
-
         # Get data ranges (minimal collect - just 4 values)
         # These ranges are used for ALL levels to ensure consistent binning
         x_range, y_range = get_data_range(
@@ -704,12 +656,6 @@ class Heatmap(BaseComponent):
                 cache_target,
                 (0, self._display_aspect_ratio),  # Fake x_range matching aspect
                 (0, 1.0),  # Fake y_range
-            )
-            print(
-                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
-                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
-                f"display aspect: {self._display_aspect_ratio:.2f})",
-                file=sys.stderr,
             )
 
         # Get total count
@@ -752,8 +698,6 @@ class Heatmap(BaseComponent):
         downsampling for better spatial distribution.
         Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
-        import sys
-
         # Get data ranges
         x_range, y_range = get_data_range(
             self._raw_data,
@@ -772,12 +716,6 @@ class Heatmap(BaseComponent):
                 cache_target,
                 (0, self._display_aspect_ratio),  # Fake x_range matching aspect
                 (0, 1.0),  # Fake y_range
-            )
-            print(
-                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
-                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
-                f"display aspect: {self._display_aspect_ratio:.2f})",
-                file=sys.stderr,
             )
 
         # Get total count
@@ -974,8 +912,6 @@ class Heatmap(BaseComponent):
         Returns:
             Filtered Polars DataFrame at appropriate resolution
         """
-        import sys
-
         x0, x1 = zoom["xRange"]
         y0, y1 = zoom["yRange"]
 
@@ -986,7 +922,7 @@ class Heatmap(BaseComponent):
 
         last_filtered = None
 
-        for level_idx, level_data in enumerate(all_levels):
+        for level_data in all_levels:
             # Ensure we have a LazyFrame for filtering
             if isinstance(level_data, pl.DataFrame):
                 level_data = level_data.lazy()
@@ -1015,10 +951,6 @@ class Heatmap(BaseComponent):
 
             count = len(filtered)
             last_filtered = filtered
-            print(
-                f"[HEATMAP] Level {level_idx}: {count} pts in zoom range",
-                file=sys.stderr,
-            )
 
             if count >= self._min_points:
                 # This level has enough detail
@@ -1029,11 +961,6 @@ class Heatmap(BaseComponent):
                     zoom_y_range = (y0, y1)
                     render_x_bins, render_y_bins = compute_optimal_bins(
                         self._min_points, zoom_x_range, zoom_y_range
-                    )
-                    print(
-                        f"[HEATMAP] Render downsample: {count:,} → {self._min_points:,} pts "
-                        f"(bins: {render_x_bins}x{render_y_bins})",
-                        file=sys.stderr,
                     )
                     if self._use_streaming or self._use_simple_downsample:
                         if self._use_simple_downsample:
@@ -1168,8 +1095,6 @@ class Heatmap(BaseComponent):
         Returns:
             Dict with heatmapData (pandas DataFrame) and _hash for change detection
         """
-        import sys
-
         zoom = state.get(self._zoom_identifier)
 
         # Build columns to select (filter out None values)
@@ -1194,9 +1119,6 @@ class Heatmap(BaseComponent):
 
         # Get levels based on current state (may use per-filter levels)
         levels, filtered_raw = self._get_levels_for_state(state)
-        level_sizes = [
-            len(lvl) if isinstance(lvl, pl.DataFrame) else "?" for lvl in levels
-        ]
 
         # Determine which filters still need to be applied at render time
         # (filters not in categorical_filters need runtime application)
@@ -1210,15 +1132,9 @@ class Heatmap(BaseComponent):
             # No zoom - use smallest level
             if not levels:
                 # No levels available
-                print("[HEATMAP] No levels available", file=sys.stderr)
                 return {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}
 
             data = levels[0]
-            using_cat = self._preprocessed_data.get("has_categorical_filters", False)
-            print(
-                f"[HEATMAP] No zoom → level 0 ({level_sizes[0]} pts), levels={level_sizes}, categorical={using_cat}",
-                file=sys.stderr,
-            )
 
             # Ensure we have a LazyFrame
             if isinstance(data, pl.DataFrame):
@@ -1257,7 +1173,6 @@ class Heatmap(BaseComponent):
             df_pandas = df_polars.to_pandas()
         else:
             # Zoomed - select appropriate level
-            print(f"[HEATMAP] Zoom {zoom} → selecting level...", file=sys.stderr)
             df_polars = self._select_level_for_zoom(
                 zoom, state, levels, filtered_raw, non_categorical_filters
             )
@@ -1270,10 +1185,6 @@ class Heatmap(BaseComponent):
                 df_polars = df_polars.sort(
                     self._intensity_column, descending=self._low_values_on_top
                 )
-            print(
-                f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}",
-                file=sys.stderr,
-            )
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 
