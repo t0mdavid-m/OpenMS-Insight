@@ -66,3 +66,11 @@
 {"ts": "2026-06-03T08:49:43", "phase": 2, "round": 8, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T08:49:44", "phase": 2, "round": 8, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T08:49:44", "phase": 2, "round": 8, "kind": "review", "unit": "api:heatmap", "status": "finding", "findings": [{"id": "P2-R8-HM-EAGER-001", "severity": "high", "desc": "REGRESSION from round-7 fix: downsample_2d has no 'descending' param but heatmap.py:815/1068 now pass it -> TypeError on eager path with downsampling (tests missed it: default is streaming). Fix: add descending to downsample_2d + thread into sorts", "status": "open"}], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:table", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:surface", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:lineplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:sequenceview", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T09:07:15", "phase": 2, "round": 9, "kind": "review", "unit": "api:heatmap", "status": "finding", "findings": [{"id": "P2-R9-HM-EAGER-002", "severity": "med", "desc": "_downsample_to_min_points eager branch (heatmap.py:1144) was the last downsample call missing descending=not low_values_on_top (no-zoom eager render); FIXED -> all 10 calls now consistent", "status": "open"}], "msg": ""}
