@@ -1,8 +1,9 @@
 """
-Streamlit Vue Components - Interactive visualization components for Streamlit.
+OpenMS-Insight - Interactive mass-spectrometry visualization components for Streamlit.
 
 This package provides reusable, interactive Streamlit components backed by Vue.js
-visualizations with cross-component selection state management.
+visualizations with cross-component selection state management, designed for large
+mass-spectrometry datasets (mass spectra, peak maps, sequence/fragment views, 3D plots).
 """
 
 from .components.heatmap import Heatmap
