@@ -273,7 +273,7 @@ def _calculate_fragment_masses_simple(
 #   * ambiguous (partially overlapping) modifications fork into TWO candidates at
 #     the same (start, end); fully-contained mods add once to the single candidate
 #   * the per-candidate terminal-collision filter drops internals matching any
-#     terminal b/c/x/y neutral mass within `terminal_collision_ppm` (default ON)
+#     terminal b/y/c/z neutral mass within `terminal_collision_ppm` (default ON)
 # ---------------------------------------------------------------------------
 
 # Oracle constants (kept as separate literals to match the oracle arithmetic;
@@ -706,7 +706,7 @@ class SequenceView:
                 - tolerance: default match tolerance (default 10.0)
                 - tolerance_ppm: ppm (True) vs Da (False) default (default True)
                 - remove_terminal_collisions: drop internals colliding with a
-                  terminal b/c/x/y mass (default True, for parity)
+                  terminal b/y/c/z mass (default True, for parity)
                 - terminal_collision_ppm: ppm window for that filter (default 10.0)
             coverage_column: Optional name of a column in the sequence frame that
                 holds a per-residue coverage list (one numeric entry per residue

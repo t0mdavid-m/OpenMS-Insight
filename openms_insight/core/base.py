@@ -215,7 +215,7 @@ class BaseComponent(ABC):
         million-point) on-disk cache.
 
         Mirrors the proven render-time pattern already used by ``VolcanoPlot``
-        (thresholds) and ``Plot3D`` (``mode``).
+        (thresholds) and ``Plot3D`` (``trace_mode``).
 
         Override in subclasses to surface presentation params. Subclasses that do
         so should restore them in ``_restore_render_config()``.

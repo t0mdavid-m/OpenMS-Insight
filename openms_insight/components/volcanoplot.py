@@ -250,7 +250,12 @@ class VolcanoPlot(BaseComponent):
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare filtered data for Vue component.
 
-        Uses shared prepare_scatter_data for filtering and conversion.
+        Filters via ``filter_and_collect_cached`` (or a no-filter branch that
+        just selects columns and hashes with ``compute_dataframe_hash``), sorts
+        by significance (-log10 p ascending so the most significant points draw
+        on top), and returns ``{"volcanoData": df, "_hash": data_hash}``. Done
+        inline rather than via ``prepare_scatter_data`` so the raw p-value column
+        is retained for hover.
         """
         if self._preprocessed_data is None or not self._preprocessed_data:
             self._load_preprocessed_data()
