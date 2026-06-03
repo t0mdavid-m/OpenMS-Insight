@@ -100,9 +100,12 @@
         </div>
       </div>
       <div :style="fragmentTypeContainerStyle">
+        <!-- :key is the bare mass, matching the oracle InternalFragmentMap exactly:
+             two internal fragments sharing a theoretical mass collapse into one bar
+             (bug-for-bug parity with FLASHApp; do NOT make this key unique). -->
         <div
-          v-for="(fragmentData, fragIndex) in byData"
-          :key="`by-${fragIndex}-${fragmentData.mass}`"
+          v-for="fragmentData in byData"
+          :key="fragmentData.mass"
           class="d-flex"
           :style="fragmentTypeOverlayStyle"
         >
@@ -117,8 +120,8 @@
       </div>
       <div :style="fragmentTypeContainerStyle">
         <div
-          v-for="(fragmentData, fragIndex) in cyData"
-          :key="`cy-${fragIndex}-${fragmentData.mass}`"
+          v-for="fragmentData in cyData"
+          :key="fragmentData.mass"
           class="d-flex"
           :style="fragmentTypeOverlayStyle"
         >
@@ -133,8 +136,8 @@
       </div>
       <div :style="fragmentTypeContainerStyle">
         <div
-          v-for="(fragmentData, fragIndex) in bzData"
-          :key="`bz-${fragIndex}-${fragmentData.mass}`"
+          v-for="fragmentData in bzData"
+          :key="fragmentData.mass"
           class="d-flex"
           :style="fragmentTypeOverlayStyle"
         >
