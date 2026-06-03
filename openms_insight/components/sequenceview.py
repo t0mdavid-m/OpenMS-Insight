@@ -651,6 +651,7 @@ class SequenceView:
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
+        residue_identifier: Optional[str] = None,
         deconvolved: bool = False,
         annotation_config: Optional[Dict[str, Any]] = None,
         cache_path: str = ".",
@@ -795,6 +796,9 @@ class SequenceView:
                     identifier, None
                 )
             self._interactivity = interactivity or {}
+            # Identifier emitted when a sequence residue is clicked (0-based residue
+            # index). Lets a downstream tagger derive the tag-relative selectedAA.
+            self._residue_identifier = residue_identifier
 
             # Store annotation config with defaults
             self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
@@ -863,6 +867,7 @@ class SequenceView:
             "filters": self._filters,
             "filter_defaults": self._filter_defaults,
             "interactivity": self._interactivity,
+            "residue_identifier": self._residue_identifier,
             "title": self._title,
             "height": self._height,
             "deconvolved": self._deconvolved,
@@ -907,6 +912,7 @@ class SequenceView:
         for identifier in self._filters.keys():
             self._filter_defaults[identifier] = stored_defaults.get(identifier, None)
         self._interactivity = config.get("interactivity", {})
+        self._residue_identifier = config.get("residue_identifier")
         self._title = config.get("title")
         self._height = config.get("height", 400)
         self._deconvolved = config.get("deconvolved", False)
@@ -1194,10 +1200,16 @@ class SequenceView:
                         schema={"peak_id": pl.Int64, "mass": pl.Float64}
                     )
 
-        # Select available columns
+        # Select available columns: the required peak_id/mass (+ optional intensity)
+        # plus any interactivity columns present, so a fragment click can emit the
+        # mapped column's value (e.g. a per-scan mass ordinal) rather than only the
+        # global peak_id.
         cols = ["peak_id", "mass"]
         if "intensity" in schema.names():
             cols.append("intensity")
+        for column in self._interactivity.values():
+            if column in schema.names() and column not in cols:
+                cols.append(column)
 
         try:
             return filtered.select(cols).collect()
@@ -1299,10 +1311,27 @@ class SequenceView:
         observed_masses: List[float] = []
         peak_ids: List[int] = []
         precursor_mass: float = 0.0
+        # peak_id -> {column: value} for any configured interactivity columns, so a
+        # fragment click can emit the mapped column's value (e.g. a per-scan mass
+        # ordinal) instead of only the global peak_id.
+        peak_interactivity: Dict[int, Dict[str, Any]] = {}
 
         if peaks_df.height > 0:
             observed_masses = peaks_df["mass"].to_list()
             peak_ids = peaks_df["peak_id"].to_list()
+            interactivity_cols = [
+                col
+                for col in self._interactivity.values()
+                if col in peaks_df.columns and col != "peak_id"
+            ]
+            if interactivity_cols:
+                for record in peaks_df.select(
+                    ["peak_id", *interactivity_cols]
+                ).to_dicts():
+                    pid = record["peak_id"]
+                    peak_interactivity[pid] = {
+                        col: record[col] for col in interactivity_cols
+                    }
 
         # Create hash for change detection. Fold the internal-fragments flag and
         # the coverage flag in so flipping either re-renders (both ride
@@ -1322,6 +1351,7 @@ class SequenceView:
             "sequenceData": sequence_data,
             "observedMasses": observed_masses,
             "peakIds": peak_ids,
+            "peakInteractivity": peak_interactivity,
             "precursorMass": precursor_mass,
             "annotationConfig": self._annotation_config,
             "precursorCharge": precursor_charge,
@@ -1351,6 +1381,9 @@ class SequenceView:
 
         if self._interactivity:
             args["interactivity"] = self._interactivity
+
+        if self._residue_identifier:
+            args["residueIdentifier"] = self._residue_identifier
 
         # Internal-fragment args only when on, so existing callers are unaffected.
         if self._internal_fragments:

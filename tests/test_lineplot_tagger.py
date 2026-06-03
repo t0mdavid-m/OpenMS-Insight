@@ -37,6 +37,71 @@ def _make(temp_cache_dir, data, **overrides):
     return LinePlot.tagger(**defaults)
 
 
+class TestTaggerFrameResolve:
+    """Value-based tag resolution: a scalar ``tag`` id (e.g. a Table row click) is
+    resolved to a TagData payload via a side frame, equivalent to the opaque dict.
+    """
+
+    def _tag_data_path(self, tmp_dir):
+        import polars as pl
+
+        path = str(tmp_dir / "tag_data.parquet")
+        # mzs as a comma-separated STRING (oracle tag-table column); start=0.
+        pl.DataFrame(
+            {
+                "tag_id": [10, 20],
+                "sequence": ["ABC", "XY"],
+                "mzs": ["350.0,250.0,150.0", "0,0"],
+                "start": [0, 0],
+            }
+        ).write_parquet(path)
+        return path
+
+    def _resolved_tagger(self, temp_cache_dir, data, tmp_path):
+        return _make(
+            temp_cache_dir,
+            data,
+            tag_data_path=self._tag_data_path(tmp_path),
+            tag_id_column="tag_id",
+            tag_sequence_column="sequence",
+            tag_masses_column="mzs",
+            tag_start_column="start",
+            selected_aa_identifier="aa",
+        )
+
+    def test_scalar_tag_matches_dict_payload(
+        self, mock_streamlit, temp_cache_dir, sample_tagger_data, TAG_PAYLOAD, tmp_path
+    ):
+        comp = self._resolved_tagger(temp_cache_dir, sample_tagger_data, tmp_path)
+        # scalar tag id 10 + residue pos 1 (=> selectedAA = 1 - start(0) = 1, the
+        # same as TAG_PAYLOAD["selectedAA"]) must reproduce the dict-payload result.
+        result = comp._prepare_vue_data({"spectrum": 1, "tag": 10, "aa": 1})
+        df = result["plotData"]
+        assert df["highlight"].tolist() == [True, True, True]
+        assert df["mass_label"].tolist() == ["150.00", "250.00", "350.00"]
+        # selectedAA gold matches the opaque-payload gold (reversedSelectedAA rule).
+        assert df["selected_gold"].tolist() == [True, True, False]
+
+    def test_unknown_or_cleared_tag_yields_no_highlight(
+        self, mock_streamlit, temp_cache_dir, sample_tagger_data, tmp_path
+    ):
+        comp = self._resolved_tagger(temp_cache_dir, sample_tagger_data, tmp_path)
+        # No tag selected -> nothing highlighted.
+        r_none = comp._prepare_vue_data({"spectrum": 1, "tag": None})
+        assert r_none["plotData"]["highlight"].tolist() == [False, False, False]
+        # Stale id with no matching row -> nothing highlighted (no crash).
+        r_missing = comp._prepare_vue_data({"spectrum": 1, "tag": 999})
+        assert r_missing["plotData"]["highlight"].tolist() == [False, False, False]
+
+    def test_tag_and_residue_are_state_dependencies(
+        self, mock_streamlit, temp_cache_dir, sample_tagger_data, tmp_path
+    ):
+        comp = self._resolved_tagger(temp_cache_dir, sample_tagger_data, tmp_path)
+        deps = comp.get_state_dependencies()
+        assert "tag" in deps  # tag selection drives a re-render
+        assert "aa" in deps   # residue selection drives a re-render (gold)
+
+
 class TestTaggerPrepareVueData:
     def test_prepare_vue_data_returns_dict_with_hash(
         self, mock_streamlit, temp_cache_dir, sample_tagger_data, TAG_PAYLOAD

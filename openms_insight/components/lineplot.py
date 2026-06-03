@@ -56,6 +56,12 @@ _MANAGED_CONFIG_KEYS = frozenset(
         "title_level1",
         "x_label_level1",
         "x_pos_scaling_factor",
+        "tag_data_path",
+        "tag_id_column",
+        "tag_sequence_column",
+        "tag_masses_column",
+        "tag_start_column",
+        "selected_aa_identifier",
         "plot_config",
     }
 )
@@ -82,6 +88,18 @@ _TAGGER_PARAM_DEFAULTS: Dict[str, Any] = {
     "title_level1": None,
     "x_label_level1": None,
     "x_pos_scaling_factor": 27.5,
+    # Value-based tag resolution: when the ``tag_identifier`` selection carries a
+    # scalar id (e.g. a Table row click) rather than an opaque TagData dict, the
+    # payload is resolved from this side frame (one row per tag) by ``tag_id_column``.
+    # ``tag_masses_column`` may be a list column or a comma-separated string.
+    # ``selected_aa_identifier`` (+ ``tag_start_column``) maps a residue-position
+    # selection to the tag-relative ``selectedAA`` (gold highlight).
+    "tag_data_path": None,
+    "tag_id_column": "tag_id",
+    "tag_sequence_column": "sequence",
+    "tag_masses_column": "masses",
+    "tag_start_column": None,
+    "selected_aa_identifier": None,
 }
 
 
@@ -237,6 +255,18 @@ class LinePlot(BaseComponent):
         self._title_level1 = tagger_params["title_level1"]
         self._x_label_level1 = tagger_params["x_label_level1"]
         self._x_pos_scaling_factor = tagger_params["x_pos_scaling_factor"]
+        # Value-based tag-payload resolution (scalar tag id -> TagData side frame).
+        self._tag_data_path = tagger_params["tag_data_path"]
+        self._tag_id_column = tagger_params["tag_id_column"]
+        self._tag_sequence_column = tagger_params["tag_sequence_column"]
+        self._tag_masses_column = tagger_params["tag_masses_column"]
+        self._tag_start_column = tagger_params["tag_start_column"]
+        self._selected_aa_identifier = tagger_params["selected_aa_identifier"]
+        self._tag_data = (
+            pl.scan_parquet(self._tag_data_path)
+            if self._tag_data_path is not None
+            else None
+        )
 
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: Optional[Dict[str, Any]] = None
@@ -304,6 +334,12 @@ class LinePlot(BaseComponent):
             "title_level1": self._title_level1,
             "x_label_level1": self._x_label_level1,
             "x_pos_scaling_factor": self._x_pos_scaling_factor,
+            "tag_data_path": self._tag_data_path,
+            "tag_id_column": self._tag_id_column,
+            "tag_sequence_column": self._tag_sequence_column,
+            "tag_masses_column": self._tag_masses_column,
+            "tag_start_column": self._tag_start_column,
+            "selected_aa_identifier": self._selected_aa_identifier,
         }
 
     def _get_render_config(self) -> Dict[str, Any]:
@@ -339,6 +375,17 @@ class LinePlot(BaseComponent):
         self._title_level1 = config.get("title_level1")
         self._x_label_level1 = config.get("x_label_level1")
         self._x_pos_scaling_factor = config.get("x_pos_scaling_factor", 27.5)
+        self._tag_data_path = config.get("tag_data_path")
+        self._tag_id_column = config.get("tag_id_column", "tag_id")
+        self._tag_sequence_column = config.get("tag_sequence_column", "sequence")
+        self._tag_masses_column = config.get("tag_masses_column", "masses")
+        self._tag_start_column = config.get("tag_start_column")
+        self._selected_aa_identifier = config.get("selected_aa_identifier")
+        self._tag_data = (
+            pl.scan_parquet(self._tag_data_path)
+            if self._tag_data_path is not None
+            else None
+        )
         # Initialize dynamic annotations (not cached)
         self._dynamic_annotations = None
         self._dynamic_title = None
@@ -591,9 +638,11 @@ class LinePlot(BaseComponent):
         Return list of state keys that affect this component's data.
 
         - density: static plot, no dependencies (cached once per dataset).
-        - tagger: ``spectrum`` (filter), ``tag`` (filter, TagData payload) and
-          ``tagger_mass`` (interactivity drill-down) all change the emitted
-          frames, so all three are dependencies.
+        - tagger: the ``spectrum`` filter, the ``tag`` selection (TagData payload
+          or a scalar id resolved via the side frame), the ``tagger_mass``
+          interactivity drill-down, and the optional residue
+          ``selected_aa_identifier`` all change the emitted frames, so each is a
+          dependency.
         - default: base behavior (filter identifiers).
         """
         if self._mode == "density":
@@ -602,6 +651,11 @@ class LinePlot(BaseComponent):
             deps = list(self._filters.keys())
             for ident in self._interactivity.keys():
                 if ident not in deps:
+                    deps.append(ident)
+            # The tag selection and residue selection are read directly from state
+            # (not via filters/interactivity column matching), so register them too.
+            for ident in (self._tag_identifier, self._selected_aa_identifier):
+                if ident and ident not in deps:
                     deps.append(ident)
             return deps
         return list(self._filters.keys())
@@ -771,6 +825,56 @@ class LinePlot(BaseComponent):
             },
         }
 
+    def _resolve_tag_payload(
+        self, tag_id: Any, state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve a scalar tag id to a TagData payload via the side frame.
+
+        Looks up the row whose ``tag_id_column`` equals ``tag_id`` and builds the
+        ``{sequence, masses, selectedAA}`` dict the tagger consumes. ``masses`` may
+        be stored as a list column or a comma-separated string. ``selectedAA`` (the
+        tag-relative residue index used for the gold highlight) is derived from a
+        residue-position selection (``selected_aa_identifier``) minus the tag's
+        start (``tag_start_column``) when both are available. Returns ``None`` when
+        the id has no matching row (selection cleared / stale).
+        """
+        if self._tag_data is None or tag_id is None:
+            return None
+        # Tolerate float ids coming back from JSON (e.g. 3.0 -> 3).
+        if isinstance(tag_id, float) and tag_id.is_integer():
+            tag_id = int(tag_id)
+        try:
+            row = (
+                self._tag_data.filter(pl.col(self._tag_id_column) == tag_id)
+                .head(1)
+                .collect()
+            )
+        except Exception:
+            return None
+        if row.height == 0:
+            return None
+        r = row.row(0, named=True)
+
+        raw_masses = r.get(self._tag_masses_column)
+        if isinstance(raw_masses, str):
+            masses = [float(x) for x in raw_masses.split(",") if x.strip() != ""]
+        elif raw_masses is None:
+            masses = []
+        else:
+            masses = [float(x) for x in raw_masses]
+
+        payload: Dict[str, Any] = {
+            "sequence": r.get(self._tag_sequence_column),
+            "masses": masses,
+        }
+        # Optional gold-residue selection: tag-relative AA = residue pos - tag start.
+        if self._selected_aa_identifier and self._tag_start_column:
+            aa_pos = state.get(self._selected_aa_identifier)
+            start = r.get(self._tag_start_column)
+            if aa_pos is not None and start is not None:
+                payload["selectedAA"] = int(aa_pos) - int(start)
+        return payload
+
     def _prepare_vue_data_tagger(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Tagger payload: explode the selected scan row into tidy frames.
@@ -808,8 +912,12 @@ class LinePlot(BaseComponent):
             filter_defaults=self._filter_defaults,
         )
 
-        # Extract the tag payload (opaque dict carried by the 'tag' selection).
+        # Extract the tag payload. The 'tag' selection may carry an opaque TagData
+        # dict directly, OR a scalar tag id (e.g. from a Table row click) that we
+        # resolve to a TagData payload via the configured side frame.
         tag = state.get(self._tag_identifier)
+        if tag is not None and not isinstance(tag, dict) and self._tag_data is not None:
+            tag = self._resolve_tag_payload(tag, state)
         tag_masses, sequence, selected_aa = _parse_tag_payload(tag)
 
         # Pull the single scan row's list columns.

@@ -311,12 +311,21 @@ export default defineComponent({
     peakIds(): number[] | undefined {
       return this.streamlitDataStore.allDataForDrawing.peakIds as number[] | undefined
     },
+    /** Per-peak interactivity column values, keyed by peak id ({col: value}). */
+    peakInteractivity(): Record<string, Record<string, unknown>> {
+      const v = this.streamlitDataStore.allDataForDrawing.peakInteractivity
+      return (v as Record<string, Record<string, unknown>>) ?? {}
+    },
     precursorMass(): number {
       return (this.streamlitDataStore.allDataForDrawing.precursorMass as number) ?? 0
     },
     /** Interactivity mapping from component args */
     interactivity(): Record<string, string> {
       return (this.args.interactivity as Record<string, string>) ?? {}
+    },
+    /** Identifier emitted when a residue is clicked (0-based residue index). */
+    residueIdentifier(): string | undefined {
+      return this.args.residueIdentifier as string | undefined
     },
     /** Whether data is deconvolved (neutral masses) or not (m/z values) */
     deconvolved(): boolean {
@@ -846,6 +855,12 @@ export default defineComponent({
           this.selectedFragmentRowIndex = rowIndex
         }
       }
+
+      // Emit the residue position (0-based) as a cross-component selection so a
+      // downstream tagger can derive the tag-relative selectedAA (gold highlight).
+      if (this.residueIdentifier) {
+        this.selectionStore.updateSelection(this.residueIdentifier, aaIndex)
+      }
     },
     onFragmentTableRowClick(_event: Event, { item }: { item: FragmentTableRow }): void {
       // Find the amino acid index from the fragment
@@ -858,13 +873,16 @@ export default defineComponent({
         this.selectedAAIndex = aaIndex
       }
 
-      // Handle interactivity: update selection for each mapped identifier
-      // Uses the same pattern as other components (LinePlot, Table)
+      // Handle interactivity: update selection for each mapped identifier.
+      // Emit the MAPPED column's value for the clicked peak when available (e.g. a
+      // per-scan mass ordinal that other panels consume), falling back to the
+      // global peak id when the column was not sent.
       if (item.PeakId !== undefined && Object.keys(this.interactivity).length > 0) {
-        for (const [identifier, _columnName] of Object.entries(this.interactivity)) {
-          // For SequenceView, the interactivity maps to peak_id
-          // The column name tells us what field in the data this maps to
-          this.selectionStore.updateSelection(identifier, item.PeakId)
+        const values = this.peakInteractivity[item.PeakId as unknown as string]
+        for (const [identifier, columnName] of Object.entries(this.interactivity)) {
+          const value =
+            values && columnName in values ? values[columnName] : item.PeakId
+          this.selectionStore.updateSelection(identifier, value)
         }
       }
     },
