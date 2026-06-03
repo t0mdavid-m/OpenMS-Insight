@@ -294,9 +294,64 @@ class TestHeatmapStreamlitConstruction:
             min_points=100,
         )
 
-        # Get state dependencies - should include zoom
+        # Get state dependencies - should include the per-instance zoom key
+        # (auto-derived from cache_id as "{cache_id}_zoom").
         deps = heatmap.get_state_dependencies()
-        assert "heatmap_zoom" in deps
+        assert "test_heatmap_zoom_zoom" in deps
+
+    def test_heatmap_zoom_identifier_auto_derived_from_cache_id(
+        self, mock_streamlit, temp_cache_dir: Path, sample_heatmap_data: pl.LazyFrame
+    ):
+        """Default zoom_identifier is derived per-instance from cache_id.
+
+        Two heatmaps on one page must NOT collide on shared zoom state, so the
+        default is "{cache_id}_zoom" (mirrors Table.pagination_identifier),
+        not the old shared literal "heatmap_zoom".
+        """
+        hm_a = Heatmap(
+            cache_id="hm_zoom_a",
+            data=sample_heatmap_data,
+            cache_path=str(temp_cache_dir),
+            x_column="retention_time",
+            y_column="mz",
+            intensity_column="intensity",
+            min_points=100,
+        )
+        hm_b = Heatmap(
+            cache_id="hm_zoom_b",
+            data=sample_heatmap_data,
+            cache_path=str(temp_cache_dir),
+            x_column="retention_time",
+            y_column="mz",
+            intensity_column="intensity",
+            min_points=100,
+        )
+
+        assert hm_a._zoom_identifier == "hm_zoom_a_zoom"
+        assert hm_b._zoom_identifier == "hm_zoom_b_zoom"
+        # Distinct per-instance keys => no zoom-state collision on one page
+        assert hm_a._zoom_identifier != hm_b._zoom_identifier
+        # Surfaced to Vue and to state dependencies
+        assert hm_a._get_component_args()["zoomIdentifier"] == "hm_zoom_a_zoom"
+        assert "hm_zoom_a_zoom" in hm_a.get_state_dependencies()
+
+    def test_heatmap_explicit_zoom_identifier_override(
+        self, mock_streamlit, temp_cache_dir: Path, sample_heatmap_data: pl.LazyFrame
+    ):
+        """An explicit zoom_identifier still overrides the auto-derived default."""
+        heatmap = Heatmap(
+            cache_id="hm_zoom_explicit",
+            data=sample_heatmap_data,
+            cache_path=str(temp_cache_dir),
+            x_column="retention_time",
+            y_column="mz",
+            intensity_column="intensity",
+            min_points=100,
+            zoom_identifier="shared_zoom",
+        )
+        assert heatmap._zoom_identifier == "shared_zoom"
+        assert heatmap._get_component_args()["zoomIdentifier"] == "shared_zoom"
+        assert "shared_zoom" in heatmap.get_state_dependencies()
 
     def test_heatmap_get_data_key(
         self, mock_streamlit, temp_cache_dir: Path, sample_heatmap_data: pl.LazyFrame

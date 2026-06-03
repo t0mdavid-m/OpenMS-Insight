@@ -174,7 +174,12 @@ class Table(BaseComponent):
 
     def _get_cache_config(self) -> Dict[str, Any]:
         """
-        Get configuration that affects cache validity.
+        Get HASH-AFFECTING (data-shaping) configuration.
+
+        ``title`` is presentation-only (pure Vue passthrough) and lives in
+        ``_get_render_config()`` so retuning it does NOT invalidate the
+        (potentially large) table cache — consistent with the other plot
+        components (heatmap/mirrorplot/volcanoplot).
 
         Returns:
             Dict of config values that affect preprocessing
@@ -182,7 +187,6 @@ class Table(BaseComponent):
         return {
             "column_definitions": self._column_definitions,
             "index_field": self._index_field,
-            "title": self._title,
             "go_to_fields": self._go_to_fields,
             "layout": self._layout,
             "default_row": self._default_row,
@@ -192,11 +196,16 @@ class Table(BaseComponent):
             "pagination_identifier": self._pagination_identifier,
         }
 
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation config: stored for reconstruction, excluded from hash."""
+        return {
+            "title": self._title,
+        }
+
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._column_definitions = config.get("column_definitions")
         self._index_field = config.get("index_field", "id")
-        self._title = config.get("title")
         self._go_to_fields = config.get("go_to_fields")
         self._layout = config.get("layout", "fitDataFill")
         self._default_row = config.get("default_row", 0)
@@ -206,6 +215,10 @@ class Table(BaseComponent):
         self._pagination_identifier = config.get(
             "pagination_identifier", f"{self._cache_id}_page"
         )
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation configuration from cached config."""
+        self._title = config.get("title", self._title)
 
     def get_state_dependencies(self) -> List[str]:
         """

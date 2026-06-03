@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from openms_insight import Heatmap
+from openms_insight import Heatmap, Table
 
 
 class TestHeatmapCacheConfig:
@@ -335,6 +335,10 @@ class TestPresentationParamsDoNotInvalidateCache:
             y_column="mz",
             intensity_column="intensity",
             min_points=100,
+            # Pin the state-routing zoom_identifier so the two instances differ
+            # ONLY in presentation params. (The default is auto-derived from
+            # cache_id — a per-instance state key, not a data-shaping param.)
+            zoom_identifier="shared_zoom",
         )
 
         plain = Heatmap(cache_id="test_hm_hash_plain", **base_kwargs)
@@ -362,3 +366,101 @@ class TestPresentationParamsDoNotInvalidateCache:
         assert plain._compute_config_hash() != reshaped._compute_config_hash(), (
             "data-shaping change must alter the cache-key hash"
         )
+
+
+class TestTableTitleRenderConfig:
+    """Table ``title`` is presentation-only — render config, not hash-affecting.
+
+    Previously ``title`` lived in Table's ``_get_cache_config()`` (the lone D1
+    holdout among the plot components), so changing it needlessly invalidated the
+    potentially large table cache. It now lives in ``_get_render_config()``
+    (stored in the manifest, excluded from the cache-key hash) — mirroring
+    heatmap/mirrorplot/volcanoplot.
+    """
+
+    def test_title_is_render_config_not_cache_config(
+        self, mock_streamlit, temp_cache_dir, sample_table_data
+    ):
+        """title is in the render config, NOT the hash-affecting cache config."""
+        table = Table(
+            cache_id="test_table_title_render_config",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            title="Peaks",  # Non-default (default is None)
+        )
+
+        render_config = table._get_render_config()
+        assert "title" in render_config
+        assert render_config["title"] == "Peaks"
+        # Must NOT be hash-affecting
+        assert "title" not in table._get_cache_config()
+        # But IS in the stored (union) config persisted to the manifest
+        assert table._get_stored_config()["title"] == "Peaks"
+
+    def test_title_change_keeps_same_config_hash(
+        self, mock_streamlit, temp_cache_dir, sample_table_data
+    ):
+        """Two tables differing ONLY in title share the same cache-key hash."""
+        base_kwargs = dict(
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            # Pin the state-routing pagination_identifier so the two instances
+            # differ ONLY in title. (Its default is auto-derived from cache_id —
+            # a per-instance state key, not a data-shaping param.)
+            pagination_identifier="shared_page",
+        )
+
+        plain = Table(cache_id="test_table_hash_plain", title="A", **base_kwargs)
+        retitled = Table(cache_id="test_table_hash_retitled", title="B", **base_kwargs)
+
+        assert plain._compute_config_hash() == retitled._compute_config_hash(), (
+            "title-only change must not alter the cache-key hash"
+        )
+
+        # Sanity: a data-shaping change DOES alter the hash
+        reshaped = Table(
+            cache_id="test_table_hash_reshaped",
+            title="A",
+            page_size=50,
+            **base_kwargs,
+        )
+        assert plain._compute_config_hash() != reshaped._compute_config_hash(), (
+            "data-shaping change must alter the cache-key hash"
+        )
+
+    def test_title_reaches_vue_via_component_args(
+        self, mock_streamlit, temp_cache_dir, sample_table_data
+    ):
+        """The camelCase 'title' arg still reaches Vue via _get_component_args."""
+        table = Table(
+            cache_id="test_table_title_args",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            title="Peaks",
+        )
+        assert table._get_component_args()["title"] == "Peaks"
+
+    def test_title_roundtrips_through_reconstruction(
+        self, mock_streamlit, temp_cache_dir, sample_table_data
+    ):
+        """title survives a cache-only (cache_id/cache_path) reconstruction."""
+        cache_id = "test_table_title_roundtrip"
+
+        original = Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            title="Peaks",
+        )
+        assert original._title == "Peaks"
+
+        # The manifest must persist title so reconstruction can restore it
+        manifest_path = temp_cache_dir / cache_id / "manifest.json"
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        assert manifest["config"]["title"] == "Peaks"
+
+        # Reconstruct from ONLY cache_id + cache_path (no data, no config)
+        reconstructed = Table(cache_id=cache_id, cache_path=str(temp_cache_dir))
+        assert reconstructed._title == "Peaks", "title lost on cache reconstruction"
+        assert reconstructed._get_component_args()["title"] == "Peaks"

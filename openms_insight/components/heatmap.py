@@ -81,7 +81,7 @@ class Heatmap(BaseComponent):
         display_aspect_ratio: float = 16 / 9,
         x_bins: Optional[int] = None,
         y_bins: Optional[int] = None,
-        zoom_identifier: str = "heatmap_zoom",
+        zoom_identifier: Optional[str] = None,
         title: Optional[str] = None,
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
@@ -126,7 +126,10 @@ class Heatmap(BaseComponent):
                 x_bins × y_bins ≈ 2×min_points with even spatial distribution.
             y_bins: Number of bins along y-axis for downsampling. If None
                 (default), auto-computed from display_aspect_ratio.
-            zoom_identifier: State key for storing zoom range (default: 'heatmap_zoom')
+            zoom_identifier: State key for storing the zoom range. Default:
+                "{cache_id}_zoom", derived per-instance so two heatmaps on one
+                page do not collide on shared zoom state. Pass an explicit value
+                to override (e.g. to deliberately share zoom across plots).
             title: Heatmap title displayed above the plot
             x_label: X-axis label (defaults to x_column)
             y_label: Y-axis label (defaults to y_column)
@@ -174,7 +177,10 @@ class Heatmap(BaseComponent):
         self._display_aspect_ratio = display_aspect_ratio
         self._x_bins = x_bins
         self._y_bins = y_bins
-        self._zoom_identifier = zoom_identifier
+        # Default zoom identifier derived per-instance from cache_id so two
+        # heatmaps on one page do not collide on shared zoom state (mirrors the
+        # Table.pagination_identifier auto-derive). An explicit value overrides.
+        self._zoom_identifier = zoom_identifier or f"{cache_id}_zoom"
         self._title = title
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
@@ -215,7 +221,7 @@ class Heatmap(BaseComponent):
             display_aspect_ratio=display_aspect_ratio,
             x_bins=x_bins,
             y_bins=y_bins,
-            zoom_identifier=zoom_identifier,
+            zoom_identifier=self._zoom_identifier,
             title=title,
             x_label=x_label,
             y_label=y_label,
@@ -341,7 +347,11 @@ class Heatmap(BaseComponent):
             self._downsample_to_booleans(self._downsample)
         )
         self._categorical_filters = config.get("categorical_filters", [])
-        self._zoom_identifier = config.get("zoom_identifier", "heatmap_zoom")
+        # Fallback (very old caches lacking the key) mirrors the per-instance
+        # auto-derive rather than the shared literal it used to default to.
+        self._zoom_identifier = config.get(
+            "zoom_identifier", f"{self._cache_id}_zoom"
+        )
         self._category_column = config.get("category_column")
         self._log_scale = config.get("log_scale", True)
         self._low_values_on_top = config.get("low_values_on_top", False)
