@@ -8,8 +8,19 @@
 
 | Phase | Description | Converged? |
 |------:|-------------|:----------:|
-| 1 | Parity — port every FLASHApp visualization onto Insight | ⏳ not started |
+| 1 | Parity — port every FLASHApp visualization onto Insight | ✅ **CONVERGED** (11 rounds; rounds 9–11 clean + gate green) |
 | 2 | Simplification & generalization of the public surface | ⏳ not started |
+
+### Phase 1 — CONVERGED
+
+All 23 parity units pass 3 consecutive fix-free full re-reviews (rounds 9, 10, 11),
+each with a green machine gate (pytest 530/1-skip + `npm run build` + parity_diff +
+vitest). New code delivered: `Plot3D` component; `LinePlot` `tagger`/`density` modes +
+generic per-peak charge-annotation API; `Table` `fixed`/`placeholder` formatters;
+`SequenceView` `internal_fragments` (ported `by/bz/cy` math) + per-residue coverage +
+truncated/undetermined terminals; 5 ported Vue sources. 18 findings found & fixed across
+rounds 1–8 (incl. tagger Level-1 content/zoom, heatmap categorical click routing, table
+server-side go-to selection, charge-annotation geometry, internal-frag bug-for-bug parity).
 
 Convergence target: **≥3 consecutive clean rounds** (every unit clean + machine gate green).
 
