@@ -363,8 +363,21 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
   zColumn: string
   /** Categorical column mapping each point to a category (e.g. Signal/Noise) */
   categoryColumn?: string
+  /**
+   * Column identifying sub-traces WITHIN each category (e.g. isotope index
+   * within a charge). When set, the line breaks (NaN gap) between consecutive
+   * distinct series values inside the same category, while still emitting one
+   * trace per category. Default undefined (one continuous polyline per category).
+   */
+  seriesColumn?: string
   /** Map of category value -> color (default Signal #3366CC / Noise #DC3912) */
   categoryColors?: Record<string, string>
+  /**
+   * Template for the trace legend name. When set, a trace's name is
+   * `categoryNameTemplate.replace('{}', category)` (e.g. `'Charge: {}'` ->
+   * `'Charge: 2'`). Default undefined (legend shows the bare category value).
+   */
+  categoryNameTemplate?: string
   /** Plotly trace mode (render-time switch) */
   traceMode?: 'lines' | 'markers' | 'lines+markers'
   /** Render each point as a vertical stem (drop line) */

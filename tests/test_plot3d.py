@@ -368,3 +368,216 @@ class TestPlot3DCacheReconstruction:
         assert args["xLabel"] == "Mass"
         assert args["yLabel"] == "Charge"
         assert args["zLabel"] == "Intensity"
+
+
+@pytest.fixture
+def sample_quant_trace_data() -> pl.LazyFrame:
+    """Tidy feature-trace data for the FLASHQuant case: one charge with two
+    isotope series, the rows interleaved across series and intentionally NOT in
+    series order, so a stable group-by-series sort is observable.
+
+    Rows (RT order WITHIN each series is preserved):
+        charge 2, isotope 0: mz 1000.0 (rt 10) , 1000.1 (rt 11)
+        charge 2, isotope 1: mz 1000.5 (rt 10) , 1000.6 (rt 11)
+    """
+    return pl.LazyFrame(
+        {
+            "mz": [1000.0, 1000.5, 1000.1, 1000.6],
+            "rt": [10.0, 10.0, 11.0, 11.0],
+            "intensity": [500.0, 400.0, 600.0, 450.0],
+            "charge": [2, 2, 2, 2],
+            "isotope": [0, 1, 0, 1],
+        }
+    )
+
+
+class TestPlot3DSeriesColumn:
+    """Tests for the additive series_column sub-trace-break enhancement."""
+
+    def test_series_column_sorts_series_contiguous(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_quant_trace_data: pl.LazyFrame,
+    ):
+        """series_column stably groups each series' rows contiguously within its
+        category, WITHOUT reordering within-series rows (RT order preserved)."""
+        plot = Plot3D(
+            cache_id="test_plot3d_series_sort",
+            data=sample_quant_trace_data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            category_column="charge",
+            series_column="isotope",
+            cache_path=str(temp_cache_dir),
+        )
+
+        df = plot._prepare_vue_data({})["plot3dData"]
+
+        # All four positive-intensity rows kept.
+        assert len(df) == 4
+        # Series are contiguous (isotope 0 rows then isotope 1 rows, or vice
+        # versa) — NOT interleaved as in the raw input.
+        isotopes = df["isotope"].tolist()
+        assert isotopes in ([0, 0, 1, 1], [1, 1, 0, 0])
+        # Within each series, the original RT order is preserved (stable sort).
+        first_series = isotopes[0]
+        rt_first = df[df["isotope"] == first_series]["rt"].tolist()
+        assert rt_first == [10.0, 11.0]
+
+    def test_series_column_in_cache_config_and_roundtrips(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_quant_trace_data: pl.LazyFrame,
+    ):
+        """series_column is data-shaping: in the cache config, projected, and
+        reconstructed from cache."""
+        plot = Plot3D(
+            cache_id="test_plot3d_series_cfg",
+            data=sample_quant_trace_data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            category_column="charge",
+            series_column="isotope",
+            cache_path=str(temp_cache_dir),
+        )
+
+        # Data-shaping -> hash config, and surfaced in the column projection.
+        assert plot._get_cache_config()["series_column"] == "isotope"
+        assert "isotope" in plot._select_columns()
+        assert plot._get_component_args()["seriesColumn"] == "isotope"
+
+        # Reconstruct from cache only.
+        plot2 = Plot3D(
+            cache_id="test_plot3d_series_cfg",
+            cache_path=str(temp_cache_dir),
+        )
+        assert plot2._series_column == "isotope"
+        assert plot2._get_component_args()["seriesColumn"] == "isotope"
+
+    def test_series_column_default_off_unchanged(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_quant_trace_data: pl.LazyFrame,
+    ):
+        """Default (series_column=None) leaves geometry/ordering and args
+        exactly as before: no sort, seriesColumn None."""
+        plot = Plot3D(
+            cache_id="test_plot3d_series_off",
+            data=sample_quant_trace_data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            category_column="charge",
+            cache_path=str(temp_cache_dir),
+        )
+
+        assert plot._series_column is None
+        assert plot._get_cache_config()["series_column"] is None
+        assert plot._get_component_args()["seriesColumn"] is None
+        # series_column unset -> isotope is NOT projected (unchanged behavior).
+        assert "isotope" not in plot._select_columns()
+
+        # No reordering: rows stay in raw input order (mz reflects the original,
+        # series-interleaved row order — no stable group-by-series sort). Values
+        # compared approximately (cache applies a Float64->Float32 optimization).
+        df = plot._prepare_vue_data({})["plot3dData"]
+        actual = df["mz"].tolist()
+        expected = [1000.0, 1000.5, 1000.1, 1000.6]
+        assert all(abs(a - e) < 1e-3 for a, e in zip(actual, expected))
+
+    def test_series_column_validation(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_quant_trace_data: pl.LazyFrame,
+    ):
+        """A missing series_column is rejected at init."""
+        with pytest.raises(ValueError, match="Series column 'nope' not found"):
+            Plot3D(
+                cache_id="test_plot3d_series_bad",
+                data=sample_quant_trace_data,
+                x_column="mz",
+                y_column="rt",
+                z_column="intensity",
+                category_column="charge",
+                series_column="nope",
+                cache_path=str(temp_cache_dir),
+            )
+
+
+class TestPlot3DCategoryNameTemplate:
+    """Tests for the additive category_name_template legend-label enhancement."""
+
+    def test_template_in_component_args(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_quant_trace_data: pl.LazyFrame,
+    ):
+        """category_name_template is presentation config carried to Vue."""
+        plot = Plot3D(
+            cache_id="test_plot3d_tmpl",
+            data=sample_quant_trace_data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            category_column="charge",
+            category_name_template="Charge: {}",
+            cache_path=str(temp_cache_dir),
+        )
+
+        args = plot._get_component_args()
+        assert args["categoryNameTemplate"] == "Charge: {}"
+        # Templating the category value reproduces the oracle legend label.
+        assert args["categoryNameTemplate"].replace("{}", "2") == "Charge: 2"
+        # Presentation, NOT data-shaping -> excluded from the hash config.
+        assert "category_name_template" not in plot._get_cache_config()
+
+    def test_template_roundtrips_via_render_config(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_quant_trace_data: pl.LazyFrame,
+    ):
+        """The template is restored from cache via the render-config path."""
+        Plot3D(
+            cache_id="test_plot3d_tmpl_rt",
+            data=sample_quant_trace_data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            category_column="charge",
+            category_name_template="Charge: {}",
+            cache_path=str(temp_cache_dir),
+        )
+
+        plot2 = Plot3D(
+            cache_id="test_plot3d_tmpl_rt",
+            cache_path=str(temp_cache_dir),
+        )
+        assert plot2._category_name_template == "Charge: {}"
+        assert plot2._get_component_args()["categoryNameTemplate"] == "Charge: {}"
+
+    def test_template_default_none(
+        self,
+        mock_streamlit,
+        temp_cache_dir: Path,
+        sample_quant_trace_data: pl.LazyFrame,
+    ):
+        """Default None -> bare category name (current behavior unchanged)."""
+        plot = Plot3D(
+            cache_id="test_plot3d_tmpl_off",
+            data=sample_quant_trace_data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            category_column="charge",
+            cache_path=str(temp_cache_dir),
+        )
+        assert plot._category_name_template is None
+        assert plot._get_component_args()["categoryNameTemplate"] is None

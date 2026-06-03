@@ -29,6 +29,15 @@ const FALLBACK_CATEGORY = 'Signal'
  * stem (drop line) using the oracle stem-triplet construction
  * (baseline -> peak -> baseline). The huge negative baseline is clipped off-view
  * by the z-axis range `[0, maxIntensity]`, so each stick visually rises from 0.
+ *
+ * Optional additive behaviors (default off, current behavior unchanged):
+ *  - `seriesColumn`: within each category trace, the line breaks (a NaN gap is
+ *    inserted) between consecutive distinct series values (e.g. isotopes within
+ *    a charge), so independent sub-traces do not connect — while staying one
+ *    trace per category. Rows are pre-sorted Python-side so each series is
+ *    contiguous in within-series (RT) order.
+ *  - `categoryNameTemplate`: legend name = `template.replace('{}', category)`
+ *    (e.g. `'Charge: {}'` -> `'Charge: 2'`), else the bare category value.
  */
 export default defineComponent({
   name: 'Plotly3D',
@@ -89,6 +98,8 @@ export default defineComponent({
       const yCol = this.args.yColumn
       const zCol = this.args.zColumn
       const categoryCol = this.args.categoryColumn
+      const seriesCol = this.args.seriesColumn
+      const categoryNameTemplate = this.args.categoryNameTemplate
       const stemBaseline = this.args.stemBaseline ?? DEFAULT_STEM_BASELINE
       const interactivityCols = Object.values(this.args.interactivity || {})
       const hoverCols = this.args.hoverColumns || []
@@ -108,16 +119,37 @@ export default defineComponent({
       const traces: Plotly.Data[] = []
       for (const category of order) {
         const groupRows = groups[category]
-        const xs: number[] = []
-        const ys: number[] = []
-        const zs: number[] = []
+        const xs: (number | null)[] = []
+        const ys: (number | null)[] = []
+        const zs: (number | null)[] = []
         const customdata: unknown[] = []
         const text: string[] = []
 
+        // Tracks the previous row's series value within this category so a NaN
+        // gap can be inserted at each series boundary (off when seriesCol unset).
+        let prevSeries: string | undefined
+        let seenSeries = false
         for (const row of groupRows) {
           const x = Number(row[xCol])
           const y = Number(row[yCol])
           const z = Number(row[zCol])
+
+          // Break the line between consecutive distinct series within this
+          // category by pushing a null gap (Plotly breaks mode:lines at null).
+          // Never before the first series, and category boundaries are already
+          // separate traces. customdata/text get aligned null/empty entries.
+          if (seriesCol) {
+            const series = String(row[seriesCol])
+            if (seenSeries && series !== prevSeries) {
+              xs.push(null)
+              ys.push(null)
+              zs.push(null)
+              customdata.push(null)
+              text.push('')
+            }
+            prevSeries = series
+            seenSeries = true
+          }
 
           const hover = this.buildHoverText(row, x, y, z, hoverCols)
           // customdata packs interactivity column values for click routing.
@@ -142,13 +174,18 @@ export default defineComponent({
 
         const color =
           this.categoryColors[category] || DEFAULT_CATEGORY_COLORS[category] || '#3366CC'
+        // Templated legend label (e.g. "Charge: 2") when a template is set,
+        // else the bare category value (unchanged default behavior).
+        const name = categoryNameTemplate
+          ? categoryNameTemplate.replace('{}', category)
+          : category
         traces.push({
-          name: category,
+          name,
           type: 'scatter3d',
           mode: this.traceMode,
-          x: xs,
-          y: ys,
-          z: zs,
+          x: xs as Plotly.Datum[],
+          y: ys as Plotly.Datum[],
+          z: zs as unknown as Plotly.Datum[],
           line: { color },
           marker: { color },
           customdata: customdata as Plotly.Datum[],

@@ -77,6 +77,8 @@ class Plot3D(BaseComponent):
         data: Optional[pl.LazyFrame] = None,
         data_path: Optional[str] = None,
         category_column: Optional[str] = None,
+        series_column: Optional[str] = None,
+        category_name_template: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
@@ -115,6 +117,21 @@ class Plot3D(BaseComponent):
                 category ("Signal"/"Noise"). One scatter3d trace is drawn per
                 distinct value, colored via ``category_colors``. Same
                 categorical-coloring vocabulary as Heatmap.
+            series_column: Optional column identifying sub-traces WITHIN each
+                category (e.g. isotope index within a charge). Default None
+                (current behavior: one continuous polyline per category). When
+                set, the line BREAKS between consecutive distinct series values
+                within the same category (a NaN gap is inserted) so independent
+                sub-traces do not connect — while still emitting ONE trace per
+                category (legend/color stay per-category). The data is stably
+                sorted by ``[category_column, series_column]`` so each series'
+                points are contiguous, without disturbing within-series order.
+                Data-shaping (affects the emitted geometry/ordering).
+            category_name_template: Optional template for the trace legend name.
+                Default None (legend shows the bare category value). When set,
+                each trace's name is ``category_name_template.replace("{}",
+                category)`` (e.g. ``"Charge: {}"`` -> ``"Charge: 2"``).
+                Presentation config (not hash-affecting).
             filters: Mapping of identifier names to column names for filtering.
                 Example: {'spectrum': 'scan', 'mass': 'mass_index'}.
             filter_defaults: Default values for filters when no selection is
@@ -154,6 +171,8 @@ class Plot3D(BaseComponent):
         self._y_column = y_column
         self._z_column = z_column
         self._category_column = category_column
+        self._series_column = series_column
+        self._category_name_template = category_name_template
         self._title = title
         self._x_label = x_label or "Mass"
         self._y_label = y_label or "Charge"
@@ -206,6 +225,12 @@ class Plot3D(BaseComponent):
                 f"Available columns: {sorted(available)}"
             )
 
+        if self._series_column and self._series_column not in available:
+            raise ValueError(
+                f"Series column '{self._series_column}' not found. "
+                f"Available columns: {sorted(available)}"
+            )
+
         for col in self._hover_columns:
             if col not in available:
                 raise ValueError(
@@ -227,6 +252,7 @@ class Plot3D(BaseComponent):
             "y_column": self._y_column,
             "z_column": self._z_column,
             "category_column": self._category_column,
+            "series_column": self._series_column,
             "drop_nonpositive_z": self._drop_nonpositive_z,
             "log_z": self._log_z,
             "hover_columns": self._hover_columns,
@@ -241,6 +267,7 @@ class Plot3D(BaseComponent):
             "y_label": self._y_label,
             "z_label": self._z_label,
             "category_colors": self._category_colors,
+            "category_name_template": self._category_name_template,
             "stem": self._stem,
             "stem_baseline": self._stem_baseline,
             "y_dtick": self._y_dtick,
@@ -255,6 +282,7 @@ class Plot3D(BaseComponent):
         self._y_column = config.get("y_column", "charge")
         self._z_column = config.get("z_column", "intensity")
         self._category_column = config.get("category_column")
+        self._series_column = config.get("series_column")
         self._drop_nonpositive_z = config.get("drop_nonpositive_z", True)
         self._log_z = config.get("log_z", False)
         self._hover_columns = config.get("hover_columns", [])
@@ -268,6 +296,7 @@ class Plot3D(BaseComponent):
         self._category_colors = config.get(
             "category_colors", dict(DEFAULT_CATEGORY_COLORS)
         )
+        self._category_name_template = config.get("category_name_template")
         self._stem = config.get("stem", True)
         self._stem_baseline = config.get("stem_baseline", -100000.0)
         self._y_dtick = config.get("y_dtick", 1.0)
@@ -280,6 +309,8 @@ class Plot3D(BaseComponent):
         cols = [self._x_column, self._y_column, self._z_column]
         if self._category_column:
             cols.append(self._category_column)
+        if self._series_column:
+            cols.append(self._series_column)
         cols += list((self._interactivity or {}).values())
         cols += list((self._filters or {}).values())
         cols += self._hover_columns
@@ -309,6 +340,21 @@ class Plot3D(BaseComponent):
             lf = lf.with_columns(
                 pl.col(self._z_column).log(10).alias(self._z_column)
             )
+
+        # When sub-trace breaks are requested, stably sort so each series' points
+        # are contiguous within its category, WITHOUT disturbing within-series
+        # order (RT order from the schema explode). Only the category/series keys
+        # are sort keys; ``maintain_order=True`` keeps equal-key rows in their
+        # existing order. The Vue trace loop then inserts a NaN gap at each
+        # series boundary (within a category) to break the line. Sorting here
+        # bakes the ordering into the cache (and round-trips via series_column in
+        # the cache config); polars filter/select preserve row order downstream.
+        if self._series_column:
+            sort_keys = []
+            if self._category_column:
+                sort_keys.append(self._category_column)
+            sort_keys.append(self._series_column)
+            lf = lf.sort(sort_keys, maintain_order=True)
 
         self._preprocessed_data = {"plot3dData": lf.collect()}
 
@@ -358,7 +404,9 @@ class Plot3D(BaseComponent):
             "yColumn": self._y_column,
             "zColumn": self._z_column,
             "categoryColumn": self._category_column,
+            "seriesColumn": self._series_column,
             "categoryColors": self._category_colors,
+            "categoryNameTemplate": self._category_name_template,
             "traceMode": self._current_trace_mode,
             "stem": self._stem,
             "stemBaseline": self._stem_baseline,
