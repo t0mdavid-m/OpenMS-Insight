@@ -12,12 +12,23 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Memory-efficient preprocessing** via subprocess isolation
 - **Automatic disk caching** with config-based invalidation
 - **Cache reconstruction** - components can be restored from cache without re-specifying configuration
-- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV export
-- **Line plot component** (Plotly.js) with highlighting, annotations, zoom
-- **Mirror plot component** for paired-spectrum comparison with independent per-side filtering and shared click selection
-- **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
-- **Volcano plot component** for differential expression visualization with significance thresholds
-- **Sequence view component** for peptide visualization with fragment ion matching and auto-zoom
+- **Render-time presentation** - titles/labels/colors are passed at render time and do **not** rebuild the cache
+
+The public surface is **seven visualization components** plus a `StateManager`
+for cross-component state:
+
+| Component | Backend | Purpose |
+|-----------|---------|---------|
+| `Table` | Tabulator.js | Server-side pagination, filtering, sorting, go-to, CSV export, custom formatters |
+| `LinePlot` | Plotly.js | Stick-style mass spectra with highlighting, annotations, zoom (+ `density` / `tagger` modes) |
+| `MirrorPlot` | Plotly.js | Paired-spectrum comparison with independent per-side filtering and shared click selection |
+| `Heatmap` | Plotly scattergl | 2D scatter with multi-resolution downsampling for millions of points |
+| `VolcanoPlot` | Plotly.js | Differential expression with render-time significance thresholds |
+| `SequenceView` | Vue | Peptide/protein view with fragment-ion matching, coverage, internal fragments, auto-zoom |
+| `Plot3D` | Plotly scatter3d | 3D scatter / stem plot with categorical coloring and a render-time trace mode |
+
+`StateManager`, `SequenceViewResult`, `get_component_annotations` /
+`clear_component_annotations` round out the import surface.
 
 ## Installation
 
@@ -29,7 +40,10 @@ pip install openms-insight
 
 ```python
 import streamlit as st
-from openms_insight import Table, LinePlot, Heatmap, VolcanoPlot, StateManager
+from openms_insight import (
+    Table, LinePlot, MirrorPlot, Heatmap, VolcanoPlot, SequenceView, Plot3D,
+    StateManager,
+)
 
 # Create state manager for cross-component linking
 state_manager = StateManager()
@@ -102,11 +116,126 @@ annotations = Table(
 
 ---
 
+## Config vs. Render-Time Parameters
+
+Component parameters fall into two classes:
+
+- **Data-shaping (cache-keyed) config** - columns, transforms, downsampling,
+  binning, mode selection, etc. These determine the *preprocessed data on disk*.
+  Changing any of them **invalidates the on-disk cache and re-runs
+  preprocessing**.
+- **Render-time (presentation) config** - titles, axis/colorbar labels, colors
+  and colorscales, `VolcanoPlot` thresholds, `Plot3D` `trace_mode`, and `height`.
+  These are pure passthrough to the Vue layer. Changing them does **not** rebuild
+  the cache (they are still persisted in the cache manifest so a cache-only
+  reconstruction restores the look).
+
+Render-time values can be supplied either at construction (they are simply not
+hashed) or, for the per-render switches, via the component's `__call__`:
+
+```python
+# Construction-time presentation (not cache-keyed): retuning a label/color is free
+heatmap = Heatmap(cache_id="h", data_path="peaks.parquet",
+                  x_column='rt', y_column='mz', intensity_column='intensity',
+                  colorscale='Viridis', title="Peak Map")   # no cache rebuild on change
+
+# Per-render switches via __call__ (the reference pattern):
+volcano(state_manager=sm, fc_threshold=1.0, p_threshold=0.05, max_labels=20)  # thresholds
+plot3d(state_manager=sm, trace_mode='markers', height=800)                    # 3D trace mode
+component(state_manager=sm, height=500)                                       # height (all components)
+```
+
+`VolcanoPlot.__call__(fc_threshold=, p_threshold=, max_labels=)` and
+`Plot3D.__call__(trace_mode=)` are the reference implementations - they let you
+adjust a slider instantly with no preprocessing.
+
+> Note: `Table` is the one component whose `title` (and remaining table config)
+> is still cache-keyed - it has no separate render-time presentation surface.
+
+---
+
+## Reusable Generic Interfaces
+
+These cross-component patterns are MS-agnostic plumbing that any viewer built on
+this library can reuse.
+
+### Value-based cross-linking (`filters` / `interactivity` + `StateManager`)
+
+Every component speaks the same identifier->column vocabulary:
+`interactivity` is the OUTPUT (a click writes a selection), `filters` is the
+INPUT (filter this component by a selection), and `filter_defaults` supplies a
+value when a selection is `None`. A shared `StateManager` routes selections
+between components by identifier name. (`MirrorPlot` is the one intentional
+variation - it takes per-side `filters_top` / `filters_bottom` with a single
+shared `interactivity`.) See
+[Cross-Component Linking](#cross-component-linking).
+
+### Per-peak annotation overlay (`LinePlot.set_peak_annotations`)
+
+A flat list of self-describing label descriptors in data coordinates -
+`{x, text, color?, hover?, group?, y?}` - drawn independently of the per-row
+`annotation_column`. Generic enough for any "multiple labeled overlays" need; the
+MS-specific `compute_charge_annotations` producer layers charge math on top. See
+[LinePlot](#per-peak-annotation-overlay-generic).
+
+### Categorical coloring (`category_column` / `category_colors`)
+
+One vocabulary for "discrete category column -> color map", shared by `Heatmap`
+and `Plot3D` (one trace/color per distinct value). The `Table` `badge` formatter
+is the table-cell equivalent (category -> colored pill).
+
+### Table formatter chain (`with_fixed_format` / `with_placeholder` / ...)
+
+Chainable `with_*` helpers (`with_money_format`, `with_fixed_format`,
+`with_placeholder`, `with_progress_bar`) attach reusable cell formatters to a
+`Table` without hand-writing `formatterParams`. See
+[Table](#table).
+
+### Fragment-map -> spectrum annotation bridge
+
+`SequenceView` returns a `SequenceViewResult` whose `.annotations` DataFrame
+(`peak_id, highlight_color, annotation`) is published under the component's render
+key. A linked plot consumes it by key - no shared data plumbing required:
+
+```python
+sv = SequenceView(cache_id="seq", sequence_data=seqs_df, peaks_data=peaks_df,
+                  filters={'spectrum': 'scan_id'}, interactivity={'peak': 'peak_id'})
+plot = LinePlot.from_sequence_view(sv, cache_id="spectrum", title="Annotated Spectrum")
+
+sv(key="sv", state_manager=sm)                                   # produces annotations
+plot(key="plot", state_manager=sm, sequence_view_key="sv")       # consumes them by key
+```
+
+The same bridge feeds `MirrorPlot` per side via
+`MirrorPlot.__call__(sequence_view_top_key=, sequence_view_bottom_key=)`. The
+transport functions `get_component_annotations(key)` /
+`clear_component_annotations()` are the public consumer half (exported from the
+package); `SequenceView` is the producer. The "compute annotations in one
+component, render them in another via a shared key" pattern is itself generic -
+it carries no MS-specific assumptions.
+
+The `SequenceView` coverage gradient (`coverage_column`), internal-fragment map
+(`internal_fragments`), and proteoform terminal markers
+(`proteoform_start_column` / `proteoform_end_column`) are general top-down /
+proteomics concepts surfaced as opt-in features (see
+[SequenceView](#sequenceview)).
+
+---
+
 ## Components
 
 ### Table
 
 Interactive table using Tabulator.js with filtering dialogs, sorting, pagination, and CSV export.
+
+Minimal "hello world" - a cache id and data are the only required arguments
+(columns auto-generate from the data schema):
+
+```python
+Table(cache_id="spectra_table", data_path="spectra.parquet")
+```
+
+Common extensions (cross-linking, explicit columns, navigation, pagination):
 
 ```python
 Table(
@@ -151,21 +280,52 @@ column_definitions=[
 ]
 ```
 
+The `badge` formatter is the canonical "categorical coloring in a table" answer
+(a category->color pill), mirroring `category_colors` in Heatmap/Plot3D.
+
+**Chainable formatter helpers:**
+The same formatters are reachable as a chainable Python API on a `Table`
+instance (each returns `self`), so you can attach formatters without hand-writing
+`formatterParams`:
+
+```python
+table = (
+    Table(cache_id="results", data_path="results.parquet")
+    .with_money_format('rt', precision=2)             # currency/money formatter
+    .with_fixed_format('mass', precision=4, min_length=4)  # fixed decimals, length-guarded
+    .with_placeholder('id_idx', sentinels=(-1,), text='-')  # sentinel -> placeholder text
+    .with_progress_bar('coverage', min_val=0, max_val=100)  # progress bar
+)
+```
+
 ### LinePlot
 
 Stick-style line plot using Plotly.js for mass spectra visualization.
+
+Minimal "hello world" - just a cache id, data, and the x/y columns:
 
 ```python
 LinePlot(
     cache_id="spectrum_plot",
     data_path="peaks.parquet",
-    filters={'spectrum': 'scan_id'},
-    interactivity={'peak': 'peak_id'},
     x_column='mass',
     y_column='intensity',
-    highlight_column='is_annotated',
-    annotation_column='ion_label',
-    title="MS/MS Spectrum",
+)
+```
+
+Common extensions (cross-linking, highlights, labels, styling):
+
+```python
+LinePlot(
+    cache_id="spectrum_plot",
+    data_path="peaks.parquet",
+    filters={'spectrum': 'scan_id'},        # follow the selected spectrum
+    interactivity={'peak': 'peak_id'},      # click a peak -> sets 'peak'
+    x_column='mass',
+    y_column='intensity',
+    highlight_column='is_annotated',        # bool/int column: which peaks to highlight
+    annotation_column='ion_label',          # text column: label on highlighted peaks
+    title="MS/MS Spectrum",                 # title/labels are render-time (not cached)
     x_label="m/z",
     y_label="Intensity",
     styling={
@@ -177,10 +337,77 @@ LinePlot(
 ```
 
 **Key parameters:**
-- `x_column`, `y_column`: Column names for x/y values
+- `x_column`, `y_column`: Column names for x/y values (default `'x'` / `'y'`)
 - `highlight_column`: Boolean/int column indicating which points to highlight
 - `annotation_column`: Text column for labels on highlighted points
-- `styling`: Color configuration dict
+- `styling`: Color configuration dict (`highlightColor`, `selectedColor`, `unhighlightedColor`, `annotationBackground`)
+- `title`, `x_label`, `y_label`: Render-time labels (axis labels default to the column name)
+
+#### LinePlot modes
+
+`LinePlot` carries three modes. The default `LinePlot(...)` constructor is the
+generic stick spectrum; the two specialized modes have their own grouped
+parameters and are best constructed via factory classmethods (equivalent to
+passing `mode=...` to the constructor). `mode` is **cache-keyed** (each mode
+preprocesses differently).
+
+- **`LinePlot(...)`** (default, `mode="default"`) - classic stick spectrum (above).
+
+- **`LinePlot.density(...)`** - two-series target/decoy KDE / FDR plot:
+
+  ```python
+  LinePlot.density(
+      cache_id="qscore_density",
+      data=density_df,                  # tidy {x, y, category}
+      x_column='qscore',
+      y_column='density',
+      category_column='group',          # column holding the target/decoy label
+      target_value='target',
+      decoy_value='decoy',              # decoy series may be absent
+      kde_from={'score': 'qscore', 'label': 'group'},  # optional: build KDE from raw scores
+      kde_points=200,
+      title="Q-score Density",
+  )
+  ```
+
+- **`LinePlot.tagger(...)`** - sequence-tag overlay with drill-down (top-down
+  proteomics recipe; quarantines the FLASHApp-flavored params):
+
+  ```python
+  LinePlot.tagger(
+      cache_id="augmented_spectrum",
+      data=per_scan_df,                 # per-scan list-column frame
+      filters={'spectrum': 'scan_id'},
+      interactivity={'tagger_mass': 'peak_id'},  # drill-down selection
+      x_column='MonoMass',              # list-column of deconvolved masses
+      y_column='SumIntensity',          # list-column of intensities
+      signal_peaks_column='SignalPeaks',# list[mass][peak] = [peak_index, mz, intensity, charge]
+      mz_column='Mzs',
+      mz_intensity_column='MzIntensities',
+      tag_identifier='tag',             # selection key carrying the opaque TagData payload
+  )
+  ```
+
+#### Per-peak annotation overlay (generic)
+
+`set_peak_annotations([...])` draws **multiple** labels at arbitrary x positions
+in data coordinates, independent of the per-row `annotation_column` model. Each
+descriptor is `{x, text, color?, hover?, group?, y?}`. This is generic MS-agnostic
+plumbing - any viewer can use it for labeled overlays:
+
+```python
+plot = LinePlot(cache_id="spectrum", data=peaks_df, x_column='mz', y_column='intensity')
+plot.set_peak_annotations([
+    {'x': 802.5, 'text': 'z=12', 'color': '#E4572E', 'group': 'charge'},
+    {'x': 968.1, 'text': 'z=10', 'color': '#E4572E', 'group': 'charge'},
+])
+plot(state_manager=state_manager)
+```
+
+The MS-specific *producer* `compute_charge_annotations(signal_peaks_for_mass, color=...)`
+(in `openms_insight.components.lineplot`) groups a mass's raw signal peaks by
+charge and emits one intensity-weighted center-of-gravity label per charge - layer
+it on top of the generic descriptor API when you need the charge math.
 
 ### MirrorPlot
 
@@ -213,7 +440,7 @@ mirror(state_manager=state_manager, height=600)
 - `interactivity`: Shared across both halves — a click in either half writes the same identifier
 - `x_column`, `y_column`: Shared schema. Provide y values as positive numbers; the bottom half is flipped at render time
 - `highlight_column`, `annotation_column`: Shared schema for highlights and label text
-- `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
+- `title`, `title_top`, `title_bottom`, `x_label`, `y_label`: **Render-time presentation** (not cache-keyed). `title_top`/`title_bottom` are in-figure labels for each half (rendered inside the plot, not above it); `title` is the overall plot title.
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
 
 **Behavior:**
@@ -226,6 +453,20 @@ mirror(state_manager=state_manager, height=600)
 
 2D scatter heatmap using Plotly scattergl with multi-resolution downsampling for large datasets (millions of points).
 
+Minimal "hello world" - a cache id, data, and the three columns:
+
+```python
+Heatmap(
+    cache_id="peaks_heatmap",
+    data_path="all_peaks.parquet",
+    x_column='retention_time',
+    y_column='mass',
+    intensity_column='intensity',
+)
+```
+
+Common extensions (cross-linking, binning, presentation):
+
 ```python
 Heatmap(
     cache_id="peaks_heatmap",
@@ -237,7 +478,7 @@ Heatmap(
     min_points=30000,
     x_bins=400,
     y_bins=50,
-    title="Peak Map",
+    title="Peak Map",                       # title/labels/colorscale are render-time
     x_label="Retention Time (min)",
     y_label="m/z",
     colorscale='Portland',
@@ -246,13 +487,22 @@ Heatmap(
 
 **Key parameters:**
 - `x_column`, `y_column`, `intensity_column`: Column names for axes and color
-- `min_points`: Target size for downsampling (default: 20000)
-- `x_bins`, `y_bins`: Grid resolution for spatial binning
-- `colorscale`: Plotly colorscale name (default: 'Portland')
-- `reversescale`: Invert colorscale direction (default: False)
-- `log_scale`: Use log10 color mapping (default: True). Set to False for linear.
-- `low_values_on_top`: Prioritize low values during downsampling and display them on top (default: False). Use for scores where lower = better (e.g., e-values, PEP, q-values).
-- `intensity_label`: Custom colorbar label (default: 'Intensity')
+- `min_points`: Target number of points to display (default: 10000). Cache levels are built at 2x this value; the final downsample at render time reduces to `min_points`.
+- `downsample`: Downsampling strategy, one of `"streaming"` (default, lowest init memory), `"eager"` (levels computed upfront), or `"simple"` (top-N, no scipy). Data-shaping (cache-keyed).
+- `x_bins`, `y_bins`: Advanced binning. Grid resolution for spatial binning; auto-computed from `display_aspect_ratio` when left as `None`.
+- `categorical_filters`: List of filter identifiers that get per-value compression levels, so a constant point count is sent to the browser regardless of the filter selection. Use for small-cardinality facets (<20 unique values, e.g. an ion-mobility bin, sample group, or charge). Example: `['im_dimension']`.
+- `log_scale`: Use log10 color mapping (default: True). Set to False for linear. **Data-shaping (cache-keyed).**
+- `low_values_on_top`: Prioritize low values during downsampling and display them on top (default: False). Use for scores where lower = better (e.g., e-values, PEP, q-values). **Data-shaping (cache-keyed).**
+
+**Render-time (presentation) parameters** - changing these does *not* rebuild the cache:
+- `title`, `x_label`, `y_label`: Plot/axis labels (axis labels default to the column name).
+- `colorscale`: Plotly colorscale name (default: 'Portland').
+- `reversescale`: Invert colorscale direction (default: False).
+- `intensity_label`: Custom colorbar label (default: 'Intensity').
+
+> Note: `use_streaming` / `use_simple_downsample` are deprecated booleans kept for back-compat; prefer the single `downsample=` enum.
+
+> Footgun: `zoom_identifier` defaults to the shared literal `"heatmap_zoom"`. Two heatmaps on one page with the default will share zoom state — set a distinct `zoom_identifier` per heatmap if you render more than one.
 
 **Linear scale example:**
 ```python
@@ -335,14 +585,13 @@ VolcanoPlot(
 ```
 
 **Key parameters:**
-- `log2fc_column`: Column with log2 fold change values
-- `pvalue_column`: Column with p-values (automatically converted to -log10)
-- `label_column`: Optional column for point labels
-- `up_color`, `down_color`, `ns_color`: Colors for significance categories
-- `fc_threshold`, `p_threshold`: Significance thresholds (passed at render time, not cached)
-- `max_labels`: Maximum number of labels to display on significant points
+- `log2fc_column`: Column with log2 fold change values (default `'log2FC'`). **Data-shaping (cache-keyed).** Domain-named by design - a volcano plot *is* log2FC-vs-p-value.
+- `pvalue_column`: Column with p-values (default `'pvalue'`; automatically converted to -log10). **Data-shaping (cache-keyed).**
+- `label_column`: Optional column for point labels. **Data-shaping (cache-keyed).**
+- `title`, `x_label`, `y_label`, `up_color`, `down_color`, `ns_color`, `show_threshold_lines`, `threshold_line_style`: **Render-time presentation** (changing them does not rebuild the cache). Default colors are red `#E74C3C` / blue `#3498DB` / gray `#95A5A6`.
+- `fc_threshold`, `p_threshold`, `max_labels`: Significance thresholds and label cap, **passed via `__call__`** (defaults `1.0` / `0.05` / `10`).
 
-**Render-time thresholds:** The `fc_threshold` and `p_threshold` are passed via `__call__()`, not `__init__()`. This allows instant threshold adjustment without cache invalidation.
+**Render-time thresholds:** `fc_threshold`, `p_threshold`, and `max_labels` are passed via `__call__()`, not `__init__()`. This allows instant threshold adjustment without cache invalidation - the reference pattern for render-time parameters across the library.
 
 ### SequenceView
 
@@ -380,15 +629,79 @@ SequenceView(
 - `sequence_data_path`: Path to parquet with sequence data
 - `peaks_data` / `peaks_data_path`: Optional peak data for fragment matching
 - `deconvolved`: If False (default), peaks are m/z and matching considers charge states
-- `annotation_config`: Dict with ion_types, tolerance, neutral_losses settings
+- `annotation_config`: Dict with `ion_types` (default `["b", "y"]`), `tolerance` (default 20.0), `tolerance_ppm`, `neutral_losses`, `colors`
+- `filter_defaults`: Default values when a filter selection is None (matches the canonical `filter_defaults` of the other components; any unlisted filter identifier defaults to `None`)
+- `title`, `height`: Render-time presentation (passing them does not require data; they are not part of the reconstruction guard)
+
+**Generic proteoform/coverage extensions (off by default):**
+- `coverage_column`: Name of a column holding a per-residue coverage list (one numeric entry per residue). When set, the component normalises it (per residue / max) and renders a per-residue coverage gradient plus a coverage scale legend.
+- `internal_fragments`: If True, also render an internal-fragment map below the terminal map. Theoretical internals are enumerated in Python and matched in Vue. Cache-invalidating (like `deconvolved`).
+- `internal_fragment_config`: Optional overrides - `min_length` (5), `ion_types` (`["by", "bz", "cy"]`), `tolerance` (10.0), `tolerance_ppm`, `remove_terminal_collisions`, `terminal_collision_ppm`.
+- `proteoform_start_column` / `proteoform_end_column`: Columns holding 0-based proteoform terminal residue indices for truncated/undetermined N/C-termini (negative = undetermined, rendered as a "??" marker).
 
 **Features:**
 - Automatic fragment ion matching (a/b/c/x/y/z ions)
 - Configurable mass tolerance (ppm or Da)
 - Neutral loss support (-H2O, -NH3)
-- Auto-zoom for short sequences (≤20 amino acids)
+- Auto-zoom for short sequences (<=20 amino acids)
 - Fragment coverage statistics
 - Click-to-select peaks with cross-component linking
+- Returns a `SequenceViewResult` whose `.annotations` DataFrame is the source for the cross-component fragment-map -> spectrum annotation bridge (see [Reusable generic interfaces](#reusable-generic-interfaces))
+
+```python
+result = sequence_view(key="sv", state_manager=state_manager)
+# result.annotations -> Polars DataFrame (peak_id, highlight_color, annotation)
+```
+
+### Plot3D
+
+Generic 3D scatter / stem plot using Plotly scatter3d. Reproduces the
+top-down "precursor Signal/Noise 3D plot" in a generic, cache-first form: input
+is a tidy frame with **one row per plotted point**, and each point is drawn as a
+vertical stem. The mass/charge/intensity column defaults and the
+Signal/Noise category colors are an MS preset, not a contract - override them for
+any x/y/z scatter.
+
+Minimal "hello world":
+
+```python
+from openms_insight import Plot3D
+
+Plot3D(
+    cache_id="precursor_signals",
+    data=tidy_points_df,   # one row per point; defaults: x='mass', y='charge', z='intensity'
+)
+```
+
+With categorical coloring and selection-driven filtering:
+
+```python
+Plot3D(
+    cache_id="precursor_signals",
+    data=tidy_points_df,
+    x_column='mass',
+    y_column='charge',
+    z_column='intensity',
+    category_column='series',                 # one trace per category (e.g. Signal/Noise)
+    category_colors={'Signal': '#3366CC', 'Noise': '#DC3912'},
+    filters={'spectrum': 'scan', 'mass': 'mass_index'},
+    filter_defaults={'spectrum': -1},         # empty frame when no scan selected
+    title="Precursor Signals",
+)(
+    state_manager=state_manager,
+    trace_mode='lines',                       # render-time: 'lines'|'markers'|'lines+markers'
+    height=800,
+)
+```
+
+**Key parameters:**
+- `x_column`, `y_column`, `z_column`: Geometric axes (defaults `'mass'`, `'charge'`, `'intensity'`). **Data-shaping (cache-keyed).**
+- `category_column` / `category_colors`: Categorical coloring - one trace per distinct value, colored via the value->color map (same vocabulary as `Heatmap`). Default colors `{'Signal': '#3366CC', 'Noise': '#DC3912'}`.
+- `drop_nonpositive_z` (default True), `log_z` (default False), `hover_columns`: Data-shaping knobs.
+- `title`, `x_label`, `y_label`, `z_label`: Render-time labels (default "Mass" / "Charge" / "Intensity").
+- `trace_mode`: Plotly trace mode (`"lines"` default), **render-time**-overridable via `__call__` with no cache rebuild.
+- `stem`, `stem_baseline`, `y_dtick`, `y_tick0`, `camera_eye`: Advanced 3D-framing presets (render-time). Default camera eye `{'x': 2.5, 'y': 0, 'z': 0.2}`.
+- Default component height is **800** (not the global 400 default).
 
 ---
 
