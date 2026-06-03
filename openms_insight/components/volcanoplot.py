@@ -281,10 +281,7 @@ class VolcanoPlot(BaseComponent):
 
         # Apply filters if any
         if self._filters:
-            from ..preprocessing.filtering import (
-                compute_dataframe_hash,
-                filter_and_collect_cached,
-            )
+            from ..preprocessing.filtering import filter_and_collect_cached
 
             df_pandas, data_hash = filter_and_collect_cached(
                 df_polars.lazy(),
@@ -371,9 +368,5 @@ class VolcanoPlot(BaseComponent):
         self._current_fc_threshold = fc_threshold
         self._current_p_threshold = p_threshold
         self._current_max_labels = max_labels
-
-        # Update height if provided
-        if height is not None:
-            self._height = height
 
         return super().__call__(key=key, state_manager=state_manager, height=height)

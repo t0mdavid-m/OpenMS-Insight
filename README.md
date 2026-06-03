@@ -149,8 +149,10 @@ component(state_manager=sm, height=500)                                       # 
 `Plot3D.__call__(trace_mode=)` are the reference implementations - they let you
 adjust a slider instantly with no preprocessing.
 
-> Note: `Table` is the one component whose `title` (and remaining table config)
-> is still cache-keyed - it has no separate render-time presentation surface.
+> Note: `title` is render-time (a pure Vue passthrough) on **every** component,
+> `Table` included - it lives in `_get_render_config()`, so retuning it never
+> rebuilds the cache. The rest of `Table`'s config (column definitions,
+> pagination, etc.) remains data-shaping.
 
 ---
 
@@ -502,7 +504,7 @@ Heatmap(
 
 > Note: `use_streaming` / `use_simple_downsample` are deprecated booleans kept for back-compat; prefer the single `downsample=` enum.
 
-> Footgun: `zoom_identifier` defaults to the shared literal `"heatmap_zoom"`. Two heatmaps on one page with the default will share zoom state — set a distinct `zoom_identifier` per heatmap if you render more than one.
+> Note: `zoom_identifier` defaults to `f"{cache_id}_zoom"`, derived per-instance, so two heatmaps on one page have independent zoom state out of the box. Pass an explicit `zoom_identifier=` only when you deliberately want multiple heatmaps to *share* zoom state.
 
 **Linear scale example:**
 ```python
