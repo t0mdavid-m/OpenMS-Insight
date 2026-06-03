@@ -9,7 +9,20 @@
 | Phase | Description | Converged? |
 |------:|-------------|:----------:|
 | 1 | Parity — port every FLASHApp visualization onto Insight | ✅ **CONVERGED** (11 rounds; rounds 9–11 clean + gate green) |
-| 2 | Simplification & generalization of the public surface | ⏳ not started |
+| 2 | Simplification & generalization of the public surface | ✅ **CONVERGED** (15 rounds; rounds 13–15 clean + gate green) |
+
+### Phase 2 — CONVERGED
+
+All 8 API units pass 3 consecutive fix-free 3-critic (simplicity / feature-parity /
+reusability) rounds (13, 14, 15) with a green gate. Delivered: `base.py` render-config
+split (S4 — presentation params render-time, not cache-invalidating); cross-component
+naming convergence (`category_column`/`category_colors`, `trace_mode`, `tag_identifier`);
+`LinePlot.density()/.tagger()` factories (minimal default signature); heatmap `downsample`
+enum; docs for the 7-component surface + reusable generic interfaces; dead-code + docstring
+sweeps. **3 genuine cache/correctness bugs fixed** (heatmap `reversescale` + `category_colors`
+lost on reconstruction; MirrorPlot per-side annotations broken on the cache-hit path) plus a
+regression the loop caught and fixed (`downsample_2d` `descending` TypeError), and
+`low_values_on_top` now honored across all 10 downsample paths.
 
 ### Phase 1 — CONVERGED
 
