@@ -12,14 +12,14 @@ from openms_insight import LinePlot
 
 
 def _make(temp_cache_dir, data, **overrides):
+    """Construct a density LinePlot via the grouped ``.density(...)`` factory."""
     defaults = {
         "cache_id": "test_density",
         "data": data,
         "cache_path": str(temp_cache_dir),
-        "mode": "density",
     }
     defaults.update(overrides)
-    return LinePlot(**defaults)
+    return LinePlot.density(**defaults)
 
 
 class TestDensityPrepareVueData:
@@ -77,7 +77,7 @@ class TestDensityPrepareVueData:
         assert cfg["mode"] == "density"
         assert cfg["xColumn"] == "x"
         assert cfg["yColumn"] == "y"
-        assert cfg["groupColumn"] == "group"
+        assert cfg["categoryColumn"] == "group"
         assert cfg["targetValue"] == "target"
         assert cfg["decoyValue"] == "decoy"
 
@@ -142,7 +142,7 @@ class TestDensityComponentArgs:
         assert args["yLabel"] == "Density"
         assert args["styling"]["targetColor"] == "green"
         assert args["styling"]["decoyColor"] == "red"
-        assert args["groupColumn"] == "group"
+        assert args["categoryColumn"] == "group"
         assert args["targetValue"] == "target"
         assert args["decoyValue"] == "decoy"
         assert args["scoreLabel"] == "QScore"
@@ -172,7 +172,7 @@ class TestDensityCacheConfig:
         comp = _make(
             temp_cache_dir,
             sample_density_data,
-            group_column="group",
+            category_column="group",
             target_value="tgt",
             decoy_value="dcy",
             kde_points=123,
@@ -182,7 +182,7 @@ class TestDensityCacheConfig:
         comp._kde_from = {"score": "s", "label": "l"}
         config = comp._get_cache_config()
         assert config["mode"] == "density"
-        assert config["group_column"] == "group"
+        assert config["category_column"] == "group"
         assert config["target_value"] == "tgt"
         assert config["decoy_value"] == "dcy"
         assert config["kde_from"] == {"score": "s", "label": "l"}
@@ -195,7 +195,7 @@ class TestDensityCacheConfig:
         )
         restored._restore_cache_config(config)
         assert restored._mode == "density"
-        assert restored._group_column == "group"
+        assert restored._category_column == "group"
         assert restored._target_value == "tgt"
         assert restored._decoy_value == "dcy"
         assert restored._kde_from == {"score": "s", "label": "l"}

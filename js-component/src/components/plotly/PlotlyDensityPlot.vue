@@ -85,7 +85,7 @@ export default defineComponent({
 
       const xCol = this.args.xColumn || 'x'
       const yCol = this.args.yColumn || 'y'
-      const groupCol = this.args.groupColumn || 'group'
+      const groupCol = this.args.categoryColumn || 'group'
 
       const xs = (data[xCol] as number[]) || []
       const ys = (data[yCol] as number[]) || []

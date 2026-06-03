@@ -43,7 +43,7 @@ _MANAGED_CONFIG_KEYS = frozenset(
         "styling",
         "config",
         "mode",
-        "group_column",
+        "category_column",
         "target_value",
         "decoy_value",
         "kde_from",
@@ -51,7 +51,7 @@ _MANAGED_CONFIG_KEYS = frozenset(
         "signal_peaks_column",
         "mz_column",
         "mz_intensity_column",
-        "tag_payload_key",
+        "tag_identifier",
         "mass_match_tol",
         "title_level1",
         "x_label_level1",
@@ -59,6 +59,30 @@ _MANAGED_CONFIG_KEYS = frozenset(
         "plot_config",
     }
 )
+
+# Per-mode constructor parameters (and their defaults) that are accepted by
+# ``LinePlot.__init__`` via **kwargs but are NOT part of the small generic
+# signature. The ``.density(...)`` / ``.tagger(...)`` factory classmethods are the
+# ergonomic way to supply them; they map 1:1 to these keys. Keeping them as the
+# single source of truth means the manifest/_config round-trip stays byte-identical
+# regardless of whether a caller used a factory or passed the keys directly.
+_DENSITY_PARAM_DEFAULTS: Dict[str, Any] = {
+    "category_column": "group",
+    "target_value": "target",
+    "decoy_value": "decoy",
+    "kde_from": None,
+    "kde_points": 200,
+}
+_TAGGER_PARAM_DEFAULTS: Dict[str, Any] = {
+    "signal_peaks_column": None,
+    "mz_column": None,
+    "mz_intensity_column": None,
+    "tag_identifier": "tag",
+    "mass_match_tol": 1e-5,
+    "title_level1": None,
+    "x_label_level1": None,
+    "x_pos_scaling_factor": 27.5,
+}
 
 
 @register_component("lineplot")
@@ -118,27 +142,21 @@ class LinePlot(BaseComponent):
         annotation_column: Optional[str] = None,
         styling: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
-        # Mode selector (config-time, cache-affecting)
+        # Mode selector (config-time, cache-affecting). The per-mode params for
+        # ``"density"`` / ``"tagger"`` are supplied via the ``.density(...)`` /
+        # ``.tagger(...)`` factory classmethods (or, equivalently, as keyword
+        # arguments captured below) so the default signature stays minimal.
         mode: str = "default",
-        # --- density-mode params (config-time) ---
-        group_column: str = "group",
-        target_value: str = "target",
-        decoy_value: str = "decoy",
-        kde_from: Optional[Dict[str, str]] = None,
-        kde_points: int = 200,
-        # --- tagger-mode params (config-time) ---
-        signal_peaks_column: Optional[str] = None,
-        mz_column: Optional[str] = None,
-        mz_intensity_column: Optional[str] = None,
-        tag_payload_key: str = "tag",
-        mass_match_tol: float = 1e-5,
-        title_level1: Optional[str] = None,
-        x_label_level1: Optional[str] = None,
-        x_pos_scaling_factor: float = 27.5,
         **kwargs,
     ):
         """
         Initialize the LinePlot component.
+
+        The default (``mode="default"``) signature is intentionally small. The
+        ``"density"`` and ``"tagger"`` modes carry extra, mode-specific
+        parameters; construct those via :meth:`LinePlot.density` and
+        :meth:`LinePlot.tagger` rather than passing the keys here. (The factory
+        keyword arguments are documented on those classmethods.)
 
         Args:
             cache_id: Unique identifier for this component's cache (MANDATORY).
@@ -176,30 +194,22 @@ class LinePlot(BaseComponent):
             config: Additional Plotly config options
             mode: Rendering mode — ``"default"`` (classic stick spectrum),
                 ``"density"`` (two-series target/decoy KDE plot), or ``"tagger"``
-                (sequence-tag overlay with drill-down). Cache-affecting.
-            group_column: (density) Column holding the ``target``/``decoy`` label.
-            target_value: (density) Value in ``group_column`` mapping to the target
-                series. Default ``"target"``.
-            decoy_value: (density) Value mapping to the decoy series. Default
-                ``"decoy"``. The decoy series may be absent (target-only plot).
-            kde_from: (density) Optional ``{"score": <col>, "label": <col>}`` to
-                build the KDE from raw scores at preprocess time. Requires scipy to
-                be installed (lazily imported); omit to pass a precomputed frame.
-            kde_points: (density) Number of ``linspace`` points per series (200).
-            signal_peaks_column: (tagger) Column of per-mass raw signal peaks,
-                ``list[mass][peak] = [peak_index, mz, intensity, charge]``.
-            mz_column: (tagger) Column with the annotated (m/z) spectrum masses.
-            mz_intensity_column: (tagger) Column with the annotated spectrum
-                intensities.
-            tag_payload_key: (tagger) Selection identifier carrying the opaque
-                ``TagData`` payload. Default ``"tag"``.
-            mass_match_tol: (tagger) Mass-match tolerance for highlighting tag
-                fragment masses against the deconvolved masses. Default ``1e-5``.
-            title_level1: (tagger) Title shown at the annotated (level-1) drill-down.
-            x_label_level1: (tagger) X-axis label at level 1 (default ``"m/z"``).
-            x_pos_scaling_factor: (tagger) Oracle level-1 charge-label scaling (27.5).
-            **kwargs: Additional configuration options
+                (sequence-tag overlay with drill-down). Cache-affecting. Prefer the
+                :meth:`density` / :meth:`tagger` factories for the latter two.
+            **kwargs: The mode-specific parameters (see :meth:`density` /
+                :meth:`tagger`) plus any extra Plotly pass-through config.
         """
+        # Pull the mode-specific params out of **kwargs (defaults from the single
+        # source of truth). Whatever remains in `kwargs` is genuine extra config.
+        density_params = {
+            key: kwargs.pop(key, default)
+            for key, default in _DENSITY_PARAM_DEFAULTS.items()
+        }
+        tagger_params = {
+            key: kwargs.pop(key, default)
+            for key, default in _TAGGER_PARAM_DEFAULTS.items()
+        }
+
         self._x_column = x_column
         self._y_column = y_column
         self._title = title
@@ -213,20 +223,20 @@ class LinePlot(BaseComponent):
         # Mode + per-mode config
         self._mode = mode or "default"
         # density
-        self._group_column = group_column
-        self._target_value = target_value
-        self._decoy_value = decoy_value
-        self._kde_from = kde_from
-        self._kde_points = kde_points
+        self._category_column = density_params["category_column"]
+        self._target_value = density_params["target_value"]
+        self._decoy_value = density_params["decoy_value"]
+        self._kde_from = density_params["kde_from"]
+        self._kde_points = density_params["kde_points"]
         # tagger
-        self._signal_peaks_column = signal_peaks_column
-        self._mz_column = mz_column
-        self._mz_intensity_column = mz_intensity_column
-        self._tag_payload_key = tag_payload_key
-        self._mass_match_tol = mass_match_tol
-        self._title_level1 = title_level1
-        self._x_label_level1 = x_label_level1
-        self._x_pos_scaling_factor = x_pos_scaling_factor
+        self._signal_peaks_column = tagger_params["signal_peaks_column"]
+        self._mz_column = tagger_params["mz_column"]
+        self._mz_intensity_column = tagger_params["mz_intensity_column"]
+        self._tag_identifier = tagger_params["tag_identifier"]
+        self._mass_match_tol = tagger_params["mass_match_tol"]
+        self._title_level1 = tagger_params["title_level1"]
+        self._x_label_level1 = tagger_params["x_label_level1"]
+        self._x_pos_scaling_factor = tagger_params["x_pos_scaling_factor"]
 
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: Optional[Dict[str, Any]] = None
@@ -254,19 +264,9 @@ class LinePlot(BaseComponent):
             styling=styling,
             config=config,
             mode=mode,
-            group_column=group_column,
-            target_value=target_value,
-            decoy_value=decoy_value,
-            kde_from=kde_from,
-            kde_points=kde_points,
-            signal_peaks_column=signal_peaks_column,
-            mz_column=mz_column,
-            mz_intensity_column=mz_intensity_column,
-            tag_payload_key=tag_payload_key,
-            mass_match_tol=mass_match_tol,
-            title_level1=title_level1,
-            x_label_level1=x_label_level1,
-            x_pos_scaling_factor=x_pos_scaling_factor,
+            # Per-mode params (round-tripped verbatim for subprocess recreation).
+            **density_params,
+            **tagger_params,
             **kwargs,
         )
 
@@ -290,7 +290,7 @@ class LinePlot(BaseComponent):
             # Mode + per-mode config
             "mode": self._mode,
             # density
-            "group_column": self._group_column,
+            "category_column": self._category_column,
             "target_value": self._target_value,
             "decoy_value": self._decoy_value,
             "kde_from": self._kde_from,
@@ -299,7 +299,7 @@ class LinePlot(BaseComponent):
             "signal_peaks_column": self._signal_peaks_column,
             "mz_column": self._mz_column,
             "mz_intensity_column": self._mz_intensity_column,
-            "tag_payload_key": self._tag_payload_key,
+            "tag_identifier": self._tag_identifier,
             "mass_match_tol": self._mass_match_tol,
             "title_level1": self._title_level1,
             "x_label_level1": self._x_label_level1,
@@ -325,7 +325,7 @@ class LinePlot(BaseComponent):
         # Mode + per-mode config
         self._mode = config.get("mode", "default")
         # density
-        self._group_column = config.get("group_column", "group")
+        self._category_column = config.get("category_column", "group")
         self._target_value = config.get("target_value", "target")
         self._decoy_value = config.get("decoy_value", "decoy")
         self._kde_from = config.get("kde_from")
@@ -334,7 +334,7 @@ class LinePlot(BaseComponent):
         self._signal_peaks_column = config.get("signal_peaks_column")
         self._mz_column = config.get("mz_column")
         self._mz_intensity_column = config.get("mz_intensity_column")
-        self._tag_payload_key = config.get("tag_payload_key", "tag")
+        self._tag_identifier = config.get("tag_identifier", "tag")
         self._mass_match_tol = config.get("mass_match_tol", 1e-5)
         self._title_level1 = config.get("title_level1")
         self._x_label_level1 = config.get("x_label_level1")
@@ -452,7 +452,7 @@ class LinePlot(BaseComponent):
             for col_name, col_label in [
                 (self._x_column, "x_column"),
                 (self._y_column, "y_column"),
-                (self._group_column, "group_column"),
+                (self._category_column, "category_column"),
             ]:
                 if col_name not in column_names:
                     raise ValueError(
@@ -522,7 +522,7 @@ class LinePlot(BaseComponent):
         """
         if not self._kde_from:
             # Project to the tidy schema (defensive: keep just x/y/group).
-            return data.select([self._x_column, self._y_column, self._group_column])
+            return data.select([self._x_column, self._y_column, self._category_column])
 
         score_col = self._kde_from["score"]
         label_col = self._kde_from["label"]
@@ -557,7 +557,7 @@ class LinePlot(BaseComponent):
                     {
                         self._x_column: grid,
                         self._y_column: density,
-                        self._group_column: [group_value] * len(grid),
+                        self._category_column: [group_value] * len(grid),
                     }
                 )
             )
@@ -569,7 +569,7 @@ class LinePlot(BaseComponent):
             schema={
                 self._x_column: pl.Float64,
                 self._y_column: pl.Float64,
-                self._group_column: pl.Utf8,
+                self._category_column: pl.Utf8,
             }
         ).lazy()
 
@@ -733,14 +733,14 @@ class LinePlot(BaseComponent):
             data = data.lazy()
 
         # Project to the tidy columns (ignore selection state — static plot).
-        columns = [self._x_column, self._y_column, self._group_column]
+        columns = [self._x_column, self._y_column, self._category_column]
         df_polars = data.select(columns).collect()
         df_pandas = df_polars.to_pandas()
 
         # Stable hash: data does not depend on state. Include row count + the
         # observed target/decoy value set + mode/columns.
         value_set = sorted(
-            set(df_polars[self._group_column].to_list())
+            set(df_polars[self._category_column].to_list())
             if len(df_polars) > 0
             else []
         )
@@ -749,7 +749,7 @@ class LinePlot(BaseComponent):
                 "density",
                 self._x_column,
                 self._y_column,
-                self._group_column,
+                self._category_column,
                 str(len(df_polars)),
                 str(value_set),
                 str(self._target_value),
@@ -765,7 +765,7 @@ class LinePlot(BaseComponent):
                 "mode": "density",
                 "xColumn": self._x_column,
                 "yColumn": self._y_column,
-                "groupColumn": self._group_column,
+                "categoryColumn": self._category_column,
                 "targetValue": self._target_value,
                 "decoyValue": self._decoy_value,
             },
@@ -798,7 +798,7 @@ class LinePlot(BaseComponent):
         row_filters = {
             ident: col
             for ident, col in self._filters.items()
-            if ident != self._tag_payload_key
+            if ident != self._tag_identifier
         }
         filtered, _ = filter_and_collect_cached(
             data,
@@ -809,7 +809,7 @@ class LinePlot(BaseComponent):
         )
 
         # Extract the tag payload (opaque dict carried by the 'tag' selection).
-        tag = state.get(self._tag_payload_key)
+        tag = state.get(self._tag_identifier)
         tag_masses, sequence, selected_aa = _parse_tag_payload(tag)
 
         # Pull the single scan row's list columns.
@@ -956,7 +956,7 @@ class LinePlot(BaseComponent):
         # which is captured separately via tag_digest below).
         spectrum_value = None
         for ident in self._filters.keys():
-            if ident == self._tag_payload_key:
+            if ident == self._tag_identifier:
                 continue
             spectrum_value = state.get(ident)
             break
@@ -1107,7 +1107,7 @@ class LinePlot(BaseComponent):
             "yLabel": self._y_label if self._y_label != self._y_column else "Density",
             "xColumn": self._x_column,
             "yColumn": self._y_column,
-            "groupColumn": self._group_column,
+            "categoryColumn": self._category_column,
             "targetValue": self._target_value,
             "decoyValue": self._decoy_value,
             "scoreLabel": self._plot_config.get("scoreLabel", "QScore"),
@@ -1433,6 +1433,179 @@ class LinePlot(BaseComponent):
         # Re-attach generic per-peak annotations from the live instance.
         self._attach_peak_annotations(vue_data)
         return vue_data
+
+    @classmethod
+    def density(
+        cls,
+        cache_id: str,
+        data: Optional[pl.LazyFrame] = None,
+        data_path: Optional[str] = None,
+        *,
+        x_column: str = "x",
+        y_column: str = "y",
+        category_column: str = "group",
+        target_value: str = "target",
+        decoy_value: str = "decoy",
+        kde_from: Optional[Dict[str, str]] = None,
+        kde_points: int = 200,
+        title: Optional[str] = None,
+        x_label: Optional[str] = None,
+        y_label: Optional[str] = None,
+        styling: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
+        cache_path: str = ".",
+        regenerate_cache: bool = False,
+        **kwargs,
+    ) -> "LinePlot":
+        """
+        Build a ``mode="density"`` LinePlot (two-series target/decoy KDE / FDR plot).
+
+        Groups the mode-specific density parameters out of the generic ``LinePlot``
+        signature. Behavior is identical to ``LinePlot(mode="density", ...)``.
+
+        Args:
+            cache_id: Unique cache identifier (MANDATORY).
+            data: Tidy long ``{x, y, category}`` frame. Optional if cache exists.
+            data_path: Path to parquet file (preferred for large datasets).
+            x_column / y_column: Tidy frame x/y columns.
+            category_column: Column holding the ``target``/``decoy`` label
+                (the categorical grouping; matches Heatmap/Plot3D ``category_column``).
+            target_value: Value in ``category_column`` mapping to the target series.
+                Default ``"target"``.
+            decoy_value: Value mapping to the decoy series. Default ``"decoy"``.
+                The decoy series may be absent (target-only plot).
+            kde_from: Optional ``{"score": <col>, "label": <col>}`` to build the
+                KDE from raw scores at preprocess time (lazily imports scipy);
+                omit to pass a precomputed frame.
+            kde_points: Number of ``linspace`` points per series (default 200).
+            title / x_label / y_label: Presentation labels.
+            styling: Style dict (``targetColor`` / ``decoyColor`` overrides).
+            config: Extra Plotly config (e.g. ``{"scoreLabel": ...}``).
+            cache_path: Base path for cache storage. Default "." (current dir).
+            regenerate_cache: If True, regenerate even if a valid cache exists.
+            **kwargs: Additional pass-through config.
+
+        Returns:
+            A configured ``LinePlot`` in density mode.
+        """
+        return cls(
+            cache_id=cache_id,
+            data=data,
+            data_path=data_path,
+            cache_path=cache_path,
+            regenerate_cache=regenerate_cache,
+            mode="density",
+            x_column=x_column,
+            y_column=y_column,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            styling=styling,
+            config=config,
+            category_column=category_column,
+            target_value=target_value,
+            decoy_value=decoy_value,
+            kde_from=kde_from,
+            kde_points=kde_points,
+            **kwargs,
+        )
+
+    @classmethod
+    def tagger(
+        cls,
+        cache_id: str,
+        data: Optional[pl.LazyFrame] = None,
+        data_path: Optional[str] = None,
+        *,
+        filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
+        interactivity: Optional[Dict[str, str]] = None,
+        x_column: str = "x",
+        y_column: str = "y",
+        signal_peaks_column: Optional[str] = None,
+        mz_column: Optional[str] = None,
+        mz_intensity_column: Optional[str] = None,
+        tag_identifier: str = "tag",
+        mass_match_tol: float = 1e-5,
+        title: Optional[str] = None,
+        title_level1: Optional[str] = None,
+        x_label: Optional[str] = None,
+        x_label_level1: Optional[str] = None,
+        y_label: Optional[str] = None,
+        x_pos_scaling_factor: float = 27.5,
+        styling: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
+        cache_path: str = ".",
+        regenerate_cache: bool = False,
+        **kwargs,
+    ) -> "LinePlot":
+        """
+        Build a ``mode="tagger"`` LinePlot (sequence-tag overlay + drill-down).
+
+        Groups the mode-specific tagger parameters (including the FLASHApp-flavored
+        ``signal_peaks_column`` layout and the oracle ``x_pos_scaling_factor``
+        magic number) out of the generic ``LinePlot`` signature. Behavior is
+        identical to ``LinePlot(mode="tagger", ...)``.
+
+        Args:
+            cache_id: Unique cache identifier (MANDATORY).
+            data: Per-scan list-column frame. Optional if cache exists.
+            data_path: Path to parquet file (preferred for large datasets).
+            filters: Identifier->column filter mapping. The ``tag_identifier`` key
+                (default ``"tag"``) carries the opaque ``TagData`` payload and is
+                excluded from row filtering.
+            filter_defaults: Default filter values (e.g. ``{"tagger_mass": None}``).
+            interactivity: Drill-down mapping (e.g. ``{"tagger_mass": "peak_id"}``).
+            x_column / y_column: List-columns of deconvolved masses / intensities.
+            signal_peaks_column: Column of per-mass raw signal peaks,
+                ``list[mass][peak] = [peak_index, mz, intensity, charge]``
+                (FLASHApp layout).
+            mz_column: Column with the annotated (m/z) spectrum masses.
+            mz_intensity_column: Column with the annotated spectrum intensities.
+            tag_identifier: Selection identifier carrying the opaque ``TagData``
+                payload. Default ``"tag"``.
+            mass_match_tol: Mass-match tolerance for highlighting tag fragment
+                masses against the deconvolved masses. Default ``1e-5``.
+            title / title_level1: Level-0 / level-1 drill-down titles.
+            x_label / x_label_level1: Level-0 / level-1 x-axis labels.
+            y_label: Y-axis label.
+            x_pos_scaling_factor: Oracle level-1 charge-label scaling (27.5).
+            styling: Style configuration dict.
+            config: Extra Plotly config.
+            cache_path: Base path for cache storage. Default "." (current dir).
+            regenerate_cache: If True, regenerate even if a valid cache exists.
+            **kwargs: Additional pass-through config.
+
+        Returns:
+            A configured ``LinePlot`` in tagger mode.
+        """
+        return cls(
+            cache_id=cache_id,
+            data=data,
+            data_path=data_path,
+            cache_path=cache_path,
+            regenerate_cache=regenerate_cache,
+            mode="tagger",
+            filters=filters,
+            filter_defaults=filter_defaults,
+            interactivity=interactivity,
+            x_column=x_column,
+            y_column=y_column,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            styling=styling,
+            config=config,
+            signal_peaks_column=signal_peaks_column,
+            mz_column=mz_column,
+            mz_intensity_column=mz_intensity_column,
+            tag_identifier=tag_identifier,
+            mass_match_tol=mass_match_tol,
+            title_level1=title_level1,
+            x_label_level1=x_label_level1,
+            x_pos_scaling_factor=x_pos_scaling_factor,
+            **kwargs,
+        )
 
     @classmethod
     def from_sequence_view(

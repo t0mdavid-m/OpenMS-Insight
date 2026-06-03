@@ -19,11 +19,11 @@ from openms_insight.components.lineplot import (
 
 
 def _make(temp_cache_dir, data, **overrides):
+    """Construct a tagger LinePlot via the grouped ``.tagger(...)`` factory."""
     defaults = {
         "cache_id": "test_tagger",
         "data": data,
         "cache_path": str(temp_cache_dir),
-        "mode": "tagger",
         "filters": {"spectrum": "scan_id", "tag": "tag_id"},
         "filter_defaults": {"tagger_mass": None},
         "interactivity": {"tagger_mass": "peak_id"},
@@ -34,7 +34,7 @@ def _make(temp_cache_dir, data, **overrides):
         "mz_intensity_column": "SumIntensity_Anno",
     }
     defaults.update(overrides)
-    return LinePlot(**defaults)
+    return LinePlot.tagger(**defaults)
 
 
 class TestTaggerPrepareVueData:
@@ -285,7 +285,7 @@ class TestTaggerCacheConfig:
         assert config["signal_peaks_column"] == "SignalPeaks"
         assert config["mz_column"] == "MonoMass_Anno"
         assert config["mz_intensity_column"] == "SumIntensity_Anno"
-        assert config["tag_payload_key"] == "tag"
+        assert config["tag_identifier"] == "tag"
         assert config["mass_match_tol"] == 1e-5
 
         restored = _make(
@@ -296,7 +296,7 @@ class TestTaggerCacheConfig:
         assert restored._signal_peaks_column == "SignalPeaks"
         assert restored._mz_column == "MonoMass_Anno"
         assert restored._mz_intensity_column == "SumIntensity_Anno"
-        assert restored._tag_payload_key == "tag"
+        assert restored._tag_identifier == "tag"
         assert restored._mass_match_tol == 1e-5
 
 

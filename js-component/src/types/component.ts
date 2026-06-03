@@ -129,10 +129,10 @@ export interface DensityPlotComponentArgs extends BaseComponentArgs {
   /** Column names in the tidy long frame. */
   xColumn: string
   yColumn: string
-  groupColumn: string
-  /** Value in groupColumn that maps to the target (green) series. */
+  categoryColumn: string
+  /** Value in categoryColumn that maps to the target (green) series. */
   targetValue: string
-  /** Value in groupColumn that maps to the decoy (red) series. */
+  /** Value in categoryColumn that maps to the decoy (red) series. */
   decoyValue: string
   /** Legend noun, e.g. "QScore" (default) or "ProteoformLevelQvalue". */
   scoreLabel?: string
@@ -361,12 +361,12 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
   yColumn: string
   /** Column name for the z-axis (intensity) */
   zColumn: string
-  /** Categorical column mapping each point to a series (e.g. Signal/Noise) */
-  seriesColumn?: string
-  /** Map of series value -> color (default Signal #3366CC / Noise #DC3912) */
-  seriesColors?: Record<string, string>
+  /** Categorical column mapping each point to a category (e.g. Signal/Noise) */
+  categoryColumn?: string
+  /** Map of category value -> color (default Signal #3366CC / Noise #DC3912) */
+  categoryColors?: Record<string, string>
   /** Plotly trace mode (render-time switch) */
-  mode?: 'lines' | 'markers' | 'lines+markers'
+  traceMode?: 'lines' | 'markers' | 'lines+markers'
   /** Render each point as a vertical stem (drop line) */
   stem?: boolean
   /** Baseline z value for stem triplets (clipped by z-axis range) */

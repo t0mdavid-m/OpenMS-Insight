@@ -11,21 +11,21 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { Plot3DComponentArgs, Plot3DData } from '@/types/component'
 
-const DEFAULT_SERIES_COLORS: Record<string, string> = {
+const DEFAULT_CATEGORY_COLORS: Record<string, string> = {
   Signal: '#3366CC',
   Noise: '#DC3912',
 }
 const DEFAULT_CAMERA_EYE = { x: 2.5, y: 0, z: 0.2 }
 const DEFAULT_STEM_BASELINE = -100000
 const DEFAULT_HEIGHT = 800
-const FALLBACK_SERIES = 'Signal'
+const FALLBACK_CATEGORY = 'Signal'
 
 /**
  * Plotly scatter3d component reproducing FLASHApp's precursor Signal/Noise
  * 3D stem plot in a generic, tidy-long form.
  *
  * Reads one row per point from `allDataForDrawing.plot3dData`, groups rows by
- * `seriesColumn` (one trace per series), and draws each point as a vertical
+ * `categoryColumn` (one trace per category), and draws each point as a vertical
  * stem (drop line) using the oracle stem-triplet construction
  * (baseline -> peak -> baseline). The huge negative baseline is clipped off-view
  * by the z-axis range `[0, maxIntensity]`, so each stick visually rises from 0.
@@ -67,18 +67,18 @@ export default defineComponent({
       const data = this.streamlitDataStore.allDataForDrawing?.plot3dData
       return (data as Plot3DData[]) || []
     },
-    seriesColors(): Record<string, string> {
-      return this.args.seriesColors || DEFAULT_SERIES_COLORS
+    categoryColors(): Record<string, string> {
+      return this.args.categoryColors || DEFAULT_CATEGORY_COLORS
     },
-    mode(): Plot3DComponentArgs['mode'] {
-      return this.args.mode || 'lines'
+    traceMode(): Plot3DComponentArgs['traceMode'] {
+      return this.args.traceMode || 'lines'
     },
     useStem(): boolean {
       const stem = this.args.stem !== false
-      return stem && (this.mode === 'lines' || this.mode === 'lines+markers')
+      return stem && (this.traceMode === 'lines' || this.traceMode === 'lines+markers')
     },
     /**
-     * Build one scatter3d trace per distinct series value.
+     * Build one scatter3d trace per distinct category value.
      *
      * Stem mode expands each point into the contiguous triplet
      * `z:[baseline, z, baseline]`, `x:[x,x,x]`, `y:[y,y,y]` — reproducing the
@@ -88,26 +88,26 @@ export default defineComponent({
       const xCol = this.args.xColumn
       const yCol = this.args.yColumn
       const zCol = this.args.zColumn
-      const seriesCol = this.args.seriesColumn
+      const categoryCol = this.args.categoryColumn
       const stemBaseline = this.args.stemBaseline ?? DEFAULT_STEM_BASELINE
       const interactivityCols = Object.values(this.args.interactivity || {})
       const hoverCols = this.args.hoverColumns || []
 
-      // Preserve first-seen series order so trace/legend ordering is stable.
+      // Preserve first-seen category order so trace/legend ordering is stable.
       const order: string[] = []
       const groups: Record<string, Plot3DData[]> = {}
       for (const row of this.rows) {
-        const series = seriesCol ? String(row[seriesCol]) : FALLBACK_SERIES
-        if (!(series in groups)) {
-          groups[series] = []
-          order.push(series)
+        const category = categoryCol ? String(row[categoryCol]) : FALLBACK_CATEGORY
+        if (!(category in groups)) {
+          groups[category] = []
+          order.push(category)
         }
-        groups[series].push(row)
+        groups[category].push(row)
       }
 
       const traces: Plotly.Data[] = []
-      for (const series of order) {
-        const groupRows = groups[series]
+      for (const category of order) {
+        const groupRows = groups[category]
         const xs: number[] = []
         const ys: number[] = []
         const zs: number[] = []
@@ -140,11 +140,12 @@ export default defineComponent({
           }
         }
 
-        const color = this.seriesColors[series] || DEFAULT_SERIES_COLORS[series] || '#3366CC'
+        const color =
+          this.categoryColors[category] || DEFAULT_CATEGORY_COLORS[category] || '#3366CC'
         traces.push({
-          name: series,
+          name: category,
           type: 'scatter3d',
-          mode: this.mode,
+          mode: this.traceMode,
           x: xs,
           y: ys,
           z: zs,
@@ -198,8 +199,8 @@ export default defineComponent({
       },
       deep: true,
     },
-    // Re-render when render-time mode changes (sticks <-> marker cloud).
-    mode() {
+    // Re-render when render-time trace mode changes (sticks <-> marker cloud).
+    traceMode() {
       if (this.isInitialized) {
         this.renderPlot()
       }

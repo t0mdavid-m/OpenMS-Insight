@@ -25,7 +25,7 @@ class TestPlot3DInit:
             x_column="mass",
             y_column="charge",
             z_column="intensity",
-            series_column="series",
+            category_column="series",
             cache_path=str(temp_cache_dir),
         )
 
@@ -33,9 +33,9 @@ class TestPlot3DInit:
         assert plot._x_column == "mass"
         assert plot._y_column == "charge"
         assert plot._z_column == "intensity"
-        assert plot._series_column == "series"
+        assert plot._category_column == "series"
         # Default series colors (oracle)
-        assert plot._series_colors == {"Signal": "#3366CC", "Noise": "#DC3912"}
+        assert plot._category_colors == {"Signal": "#3366CC", "Noise": "#DC3912"}
 
     def test_init_missing_column(
         self,
@@ -89,7 +89,7 @@ class TestPlot3DPreprocessing:
             x_column="mass",
             y_column="charge",
             z_column="intensity",
-            series_column="series",
+            category_column="series",
             cache_path=str(temp_cache_dir),
         )
 
@@ -142,7 +142,7 @@ class TestPlot3DPrepareVueData:
             x_column="mass",
             y_column="charge",
             z_column="intensity",
-            series_column="series",
+            category_column="series",
             cache_path=str(temp_cache_dir),
         )
 
@@ -225,7 +225,7 @@ class TestPlot3DComponentArgs:
             x_column="mass",
             y_column="charge",
             z_column="intensity",
-            series_column="series",
+            category_column="series",
             cache_path=str(temp_cache_dir),
         )
 
@@ -235,7 +235,7 @@ class TestPlot3DComponentArgs:
         assert args["xColumn"] == "mass"
         assert args["yColumn"] == "charge"
         assert args["zColumn"] == "intensity"
-        assert args["seriesColors"] == {"Signal": "#3366CC", "Noise": "#DC3912"}
+        assert args["categoryColors"] == {"Signal": "#3366CC", "Noise": "#DC3912"}
         assert args["cameraEye"] == {"x": 2.5, "y": 0, "z": 0.2}
         assert args["yDtick"] == 1
         assert args["yTick0"] == 0
@@ -264,15 +264,15 @@ class TestPlot3DComponentArgs:
 
 
 class TestPlot3DRenderTimeMode:
-    """Tests for render-time mode behavior."""
+    """Tests for render-time trace_mode behavior."""
 
-    def test_mode_is_render_time(
+    def test_trace_mode_is_render_time(
         self,
         mock_streamlit,
         temp_cache_dir: Path,
         sample_plot3d_data: pl.LazyFrame,
     ):
-        """mode is render-time: not in cache config, settable without rebuild."""
+        """trace_mode is render-time: not in cache config, settable w/o rebuild."""
         plot = Plot3D(
             cache_id="test_plot3d_mode",
             data=sample_plot3d_data,
@@ -282,15 +282,15 @@ class TestPlot3DRenderTimeMode:
             cache_path=str(temp_cache_dir),
         )
 
-        # mode must NOT participate in cache invalidation
-        assert "mode" not in plot._get_cache_config()
+        # trace_mode must NOT participate in cache invalidation
+        assert "trace_mode" not in plot._get_cache_config()
 
-        # Default mode (oracle) is "lines"
-        assert plot._get_component_args()["mode"] == "lines"
+        # Default trace_mode (oracle) is "lines"
+        assert plot._get_component_args()["traceMode"] == "lines"
 
-        # Setting render-time mode reflects in component args
-        plot._current_mode = "markers"
-        assert plot._get_component_args()["mode"] == "markers"
+        # Setting render-time trace_mode reflects in component args
+        plot._current_trace_mode = "markers"
+        assert plot._get_component_args()["traceMode"] == "markers"
 
 
 class TestPlot3DCacheReconstruction:
@@ -309,7 +309,7 @@ class TestPlot3DCacheReconstruction:
             x_column="mass",
             y_column="charge",
             z_column="intensity",
-            series_column="series",
+            category_column="series",
             title="Precursor Signals",
             cache_path=str(temp_cache_dir),
         )
@@ -323,11 +323,11 @@ class TestPlot3DCacheReconstruction:
         assert plot2._x_column == "mass"
         assert plot2._y_column == "charge"
         assert plot2._z_column == "intensity"
-        assert plot2._series_column == "series"
+        assert plot2._category_column == "series"
         assert plot2._title == "Precursor Signals"
 
         args = plot2._get_component_args()
-        assert args["seriesColors"] == {"Signal": "#3366CC", "Noise": "#DC3912"}
+        assert args["categoryColors"] == {"Signal": "#3366CC", "Noise": "#DC3912"}
         assert args["cameraEye"] == {"x": 2.5, "y": 0, "z": 0.2}
         assert args["xLabel"] == "Mass"
         assert args["yLabel"] == "Charge"
