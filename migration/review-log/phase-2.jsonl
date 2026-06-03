@@ -58,3 +58,11 @@
 {"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T08:42:53", "phase": 2, "round": 7, "kind": "review", "unit": "api:heatmap", "status": "finding", "findings": [{"id": "P2-R7-HM-ZOOM-001", "severity": "med", "desc": "_select_level_for_zoom render-downsample omits descending=not low_values_on_top (3 calls), so zoom+low_values_on_top keeps high-intensity points; no-zoom path honors it -> asymmetry", "status": "open"}], "msg": ""}
+{"ts": "2026-06-03T08:49:43", "phase": 2, "round": 8, "kind": "review", "unit": "api:table", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:49:43", "phase": 2, "round": 8, "kind": "review", "unit": "api:surface", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:49:43", "phase": 2, "round": 8, "kind": "review", "unit": "api:lineplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:49:43", "phase": 2, "round": 8, "kind": "review", "unit": "api:plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:49:43", "phase": 2, "round": 8, "kind": "review", "unit": "api:sequenceview", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:49:43", "phase": 2, "round": 8, "kind": "review", "unit": "api:mirrorplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:49:44", "phase": 2, "round": 8, "kind": "review", "unit": "api:volcanoplot", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T08:49:44", "phase": 2, "round": 8, "kind": "review", "unit": "api:heatmap", "status": "finding", "findings": [{"id": "P2-R8-HM-EAGER-001", "severity": "high", "desc": "REGRESSION from round-7 fix: downsample_2d has no 'descending' param but heatmap.py:815/1068 now pass it -> TypeError on eager path with downsampling (tests missed it: default is streaming). Fix: add descending to downsample_2d + thread into sorts", "status": "open"}], "msg": ""}
