@@ -159,3 +159,26 @@
 {"ts": "2026-06-03T06:16:13", "phase": 1, "round": 7, "kind": "review", "unit": "plot3d", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T06:16:13", "phase": 1, "round": 7, "kind": "review", "unit": "quant-recipe", "status": "clean", "findings": [], "msg": ""}
 {"ts": "2026-06-03T06:16:13", "phase": 1, "round": 7, "kind": "review", "unit": "sequenceview:internal-frags", "status": "finding", "findings": [{"id": "P1-R7-SV-KEY-001", "severity": "low", "desc": "InternalFragmentMap row :key composite vs oracle :key=fragmentData.mass; same-mass bars render separately (6) instead of oracle collapse (5); user chose bug-for-bug parity -> reproduce oracle collapse", "status": "open"}], "msg": ""}
+{"ts": "2026-06-03T06:29:26", "phase": 1, "round": 8, "kind": "review", "unit": "heatmap:multi-res", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "heatmap:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "heatmap:categorical", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "heatmap:interactivity", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "table:formatters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "table:pagination", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "table:row-select", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "table:go-to", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "table:filters", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:stick", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:highlight", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:annotation", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:zoom", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:svg", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:click", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:tagger", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "lineplot:density", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "sequenceview:coverage", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:27", "phase": 1, "round": 8, "kind": "review", "unit": "sequenceview:terminal-frags", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:28", "phase": 1, "round": 8, "kind": "review", "unit": "plot3d", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:28", "phase": 1, "round": 8, "kind": "review", "unit": "quant-recipe", "status": "clean", "findings": [], "msg": ""}
+{"ts": "2026-06-03T06:29:28", "phase": 1, "round": 8, "kind": "review", "unit": "heatmap:log", "status": "clean", "findings": [], "msg": "reviewer flagged degenerate empty-data colorbar guard ([0] tick vs oracle NaN/empty); obvious-improvement (robustness, no normal-use change) per maintainer guidance -> clean"}
+{"ts": "2026-06-03T06:29:28", "phase": 1, "round": 8, "kind": "review", "unit": "sequenceview:internal-frags", "status": "finding", "findings": [{"id": "P1-R8-SV-LEG-001", "severity": "low", "desc": "InternalFragmentMap legend swatches add aspect-ratio:1 (10px square) vs oracle ~0-width (Less :extend non-transitive); spec 5.1 verbatim -> reproduced oracle", "status": "open"}], "msg": ""}

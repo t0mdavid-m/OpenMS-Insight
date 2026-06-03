@@ -325,7 +325,8 @@ export default defineComponent({
 }
 
 .by-fragment-legend {
-  aspect-ratio: 1;
+  /* No aspect-ratio: match the oracle's swatch (Less :extend is non-transitive,
+     so oracle legend swatches inherit only {background; height:10px}). */
   background: #f0a441;
   height: 10px;
 }
@@ -342,7 +343,6 @@ export default defineComponent({
 }
 
 .cy-fragment-legend {
-  aspect-ratio: 1;
   background: #12871d;
   height: 10px;
 }
@@ -359,7 +359,6 @@ export default defineComponent({
 }
 
 .bz-fragment-legend {
-  aspect-ratio: 1;
   background: #7831cc;
   height: 10px;
 }
