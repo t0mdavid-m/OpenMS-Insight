@@ -133,6 +133,7 @@ def downsample_2d(
     intensity_column: str = "intensity",
     x_bins: int = 400,
     y_bins: int = 50,
+    descending: bool = True,
 ) -> pl.LazyFrame:
     """
     Downsample 2D scatter data while preserving high-intensity points.
@@ -149,6 +150,9 @@ def downsample_2d(
         intensity_column: Name of intensity/value column for ranking
         x_bins: Number of bins along x-axis
         y_bins: Number of bins along y-axis
+        descending: If True (default), keep highest intensity per bin.
+            If False, keep lowest intensity per bin (matches
+            ``low_values_on_top=True``). Mirrors ``downsample_2d_streaming``.
 
     Returns:
         Downsampled data as Polars LazyFrame
@@ -172,11 +176,14 @@ def downsample_2d(
     if isinstance(data, pl.DataFrame):
         data = data.lazy()
 
-    # Sort by intensity (descending) to prioritize high-intensity points
+    # Sort by intensity to prioritize the points to keep (highest when
+    # descending=True, lowest when descending=False). The intensity ordering
+    # determines which points the per-bin .head() retains, so it must honor
+    # `descending` exactly like downsample_2d_streaming does.
     sorted_data = (
-        data.sort([x_column, intensity_column], descending=[False, True])
+        data.sort([x_column, intensity_column], descending=[False, descending])
         .with_columns([pl.int_range(pl.len()).over(x_column).alias("_rank")])
-        .sort(["_rank", intensity_column], descending=[False, True])
+        .sort(["_rank", intensity_column], descending=[False, descending])
     )
 
     # Collect for scipy binning (requires numpy arrays)
@@ -227,7 +234,7 @@ def downsample_2d(
     result = (
         binned_data.group_by(["_x_bin", "_y_bin"])
         .head(max_peaks_per_bin)
-        .sort(intensity_column)
+        .sort(intensity_column, descending=descending)
         .drop(["_rank", "_x_bin", "_y_bin"])
     )
 
