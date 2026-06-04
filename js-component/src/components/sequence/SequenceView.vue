@@ -135,10 +135,13 @@
             :sequence-length="sequence.length"
             :fixed-modification="isFixedModification(aaObj.aminoAcid)"
             :show-fragments="showFragments"
+            :show-tags="coverageShown"
             :font-size="fontSize"
             :is-highlighted="selectedAAIndex === aaIndex"
             :modification="modifications[aaIndex] ?? null"
             @selected="onAminoAcidSelected"
+            @tag-selected="onResidueTagSelected"
+            @clear-tag-selection="onClearResidueSelection"
           />
 
           <!-- Row number (right) -->
@@ -327,6 +330,27 @@ export default defineComponent({
     residueIdentifier(): string | undefined {
       return this.args.residueIdentifier as string | undefined
     },
+    /**
+     * Identifier the matched fragment's mass selection is published to on a
+     * residue click (PATH 2). Maps the oracle `updateMassTableFromFragmentMass`
+     * -> `updateSelectedMass(massIndex)`: when set, clicking a residue with a
+     * matching fragment publishes that fragment peak's mass-selection value
+     * (resolved via the `interactivity` column of the same name when present,
+     * else the peak id). Undefined -> PATH 2 off (back-compatible).
+     */
+    fragmentMassIdentifier(): string | undefined {
+      return this.args.fragmentMassIdentifier as string | undefined
+    },
+    /**
+     * Whether the per-residue coverage / sequence-tag layer is active (real
+     * coverage range supplied). This is Insight's analog of the oracle
+     * `showTags`: PATH 1 (coverage-gated aa toggle) is only live when coverage is
+     * shown. When OFF, the residue click keeps its legacy fragment-gated
+     * `residueIdentifier` publication (back-compat for callers without coverage).
+     */
+    coverageShown(): boolean {
+      return this.maxCoverage > 0
+    },
     /** Whether data is deconvolved (neutral masses) or not (m/z values) */
     deconvolved(): boolean {
       return (this.args.deconvolved as boolean) ?? true
@@ -487,6 +511,14 @@ export default defineComponent({
         const oldSeq = oldData?.sequence?.join('') ?? ''
         if (newSeq !== oldSeq) {
           this.autoZoomApplied = false
+          // Oracle SequenceView.vue sequence watch (~632): clear the residue
+          // (aa-position) selection when the sequence changes. Scoped to PATH-1
+          // callers (residueIdentifier configured) so non-coverage callers are
+          // unaffected.
+          if (this.residueIdentifier) {
+            this.selectedAAIndex = undefined
+            this.selectionStore.updateSelection(this.residueIdentifier, null)
+          }
         }
 
         this.initializeSequenceObjects()
@@ -835,8 +867,26 @@ export default defineComponent({
     isFixedModification(aminoAcid: string): boolean {
       return this.fixedModificationSites.includes(aminoAcid)
     },
+    /**
+     * PATH 2 (mass / fragment selection): a residue with a matching FRAGMENT ion
+     * was clicked. Reproduces the oracle `aminoAcidSelected` ->
+     * `updateMassTableFromFragmentMass` -> `updateSelectedMass`: find the matched
+     * fragment table row, highlight it, and publish that fragment peak's
+     * mass-selection value to `fragmentMassIdentifier`.
+     *
+     * Back-compat: when coverage (PATH 1) is NOT shown, this also keeps the legacy
+     * fragment-gated `residueIdentifier` publication so existing callers (no
+     * coverage configured) behave exactly as before. When coverage IS shown the
+     * aa-position publication is owned by PATH 1 (`onResidueTagSelected`).
+     */
     onAminoAcidSelected(aaIndex: number): void {
-      this.selectedAAIndex = aaIndex
+      // Legacy highlight-on-fragment-click only when coverage (PATH 1) is OFF.
+      // When coverage is shown the gold highlight follows the PATH-1 toggle
+      // (oracle: aminoAcidSelected does NOT touch selectedAApos), so a
+      // fragment-only residue click does not move the highlight.
+      if (!this.coverageShown) {
+        this.selectedAAIndex = aaIndex
+      }
 
       // Find corresponding fragment in table
       const aaObj = this.sequenceObjects[aaIndex]
@@ -853,13 +903,84 @@ export default defineComponent({
         const rowIndex = this.fragmentTableData.findIndex((row) => row.Name === ionName)
         if (rowIndex >= 0) {
           this.selectedFragmentRowIndex = rowIndex
+          // PATH 2: publish ONLY the mass selection (oracle
+          // updateMassTableFromFragmentMass -> updateSelectedMass updates just the
+          // mass), gated on fragmentMassIdentifier (default-OFF).
+          if (this.fragmentMassIdentifier) {
+            this.publishFragmentMassSelection(this.fragmentTableData[rowIndex], [
+              this.fragmentMassIdentifier,
+            ])
+          }
         }
       }
 
-      // Emit the residue position (0-based) as a cross-component selection so a
-      // downstream tagger can derive the tag-relative selectedAA (gold highlight).
-      if (this.residueIdentifier) {
+      // Legacy PATH 1 (back-compat only): emit the residue position (0-based) as a
+      // cross-component selection. Only when coverage is NOT shown — otherwise the
+      // coverage-gated toggle path (onResidueTagSelected) owns this identifier.
+      if (this.residueIdentifier && !this.coverageShown) {
         this.selectionStore.updateSelection(this.residueIdentifier, aaIndex)
+      }
+    },
+    /**
+     * PATH 1 (aa / sequence-tag selection): a residue with sequence-tag coverage
+     * was clicked while tags are shown. Reproduces the oracle TOGGLE on
+     * `selectedAApos` (re-clicking the currently-selected residue clears it) and
+     * publishes the residue index to `residueIdentifier`.
+     */
+    onResidueTagSelected(aaIndex: number): void {
+      if (!this.residueIdentifier) return
+      if (this.selectedAAIndex === aaIndex) {
+        // Toggle off (oracle updateSelectedAA(undefined) -> store unset sentinel).
+        // The gold highlight follows selectedAAIndex (oracle selectedAApos).
+        this.selectedAAIndex = undefined
+        this.selectionStore.updateSelection(this.residueIdentifier, null)
+      } else {
+        this.selectedAAIndex = aaIndex
+        this.selectionStore.updateSelection(this.residueIdentifier, aaIndex)
+      }
+    },
+    /**
+     * showTags-off auto-clear (oracle AminoAcidCell watch + SequenceView sequence
+     * watch): clear the residue (aa-position) selection. Wired only when PATH 1 is
+     * configured (a residueIdentifier exists).
+     */
+    onClearResidueSelection(): void {
+      if (!this.residueIdentifier) return
+      this.selectedAAIndex = undefined
+      this.selectionStore.updateSelection(this.residueIdentifier, null)
+    },
+    /**
+     * Publish the interactivity selection(s) for a matched fragment row's peak —
+     * shared by PATH 2 (residue click) and the fragment-table row click. Emits the
+     * MAPPED column's value for the peak when available (e.g. a per-scan mass
+     * ordinal = the oracle massIndex), falling back to the global peak id.
+     *
+     * @param item the matched fragment row (carrying PeakId).
+     * @param identifiers restrict to these identifiers (PATH 2 publishes only
+     *   `fragmentMassIdentifier`); omitted -> all configured interactivity.
+     */
+    publishFragmentMassSelection(
+      item: FragmentTableRow,
+      identifiers?: string[],
+    ): void {
+      if (item.PeakId === undefined) return
+      const values = this.peakInteractivity[item.PeakId as unknown as string]
+      // Resolve one identifier's value: the mapped interactivity column's value
+      // for this peak when present, else the global peak id.
+      const resolve = (identifier: string): unknown => {
+        const columnName = this.interactivity[identifier]
+        if (columnName && values && columnName in values) {
+          return values[columnName]
+        }
+        return item.PeakId
+      }
+      // Restricted set (PATH 2): publish exactly the requested identifiers (even
+      // those without an interactivity column -> peak-id fallback, so PATH 2 always
+      // publishes). Unrestricted (fragment-row click): publish every configured
+      // interactivity identifier.
+      const ids = identifiers ?? Object.keys(this.interactivity)
+      for (const identifier of ids) {
+        this.selectionStore.updateSelection(identifier, resolve(identifier))
       }
     },
     onFragmentTableRowClick(_event: Event, { item }: { item: FragmentTableRow }): void {
@@ -873,18 +994,9 @@ export default defineComponent({
         this.selectedAAIndex = aaIndex
       }
 
-      // Handle interactivity: update selection for each mapped identifier.
-      // Emit the MAPPED column's value for the clicked peak when available (e.g. a
-      // per-scan mass ordinal that other panels consume), falling back to the
-      // global peak id when the column was not sent.
-      if (item.PeakId !== undefined && Object.keys(this.interactivity).length > 0) {
-        const values = this.peakInteractivity[item.PeakId as unknown as string]
-        for (const [identifier, columnName] of Object.entries(this.interactivity)) {
-          const value =
-            values && columnName in values ? values[columnName] : item.PeakId
-          this.selectionStore.updateSelection(identifier, value)
-        }
-      }
+      // Handle interactivity: update selection for each mapped identifier
+      // (publishes the per-peak mapped value, falling back to the peak id).
+      this.publishFragmentMassSelection(item)
     },
     getRowProps({ index }: { index: number }) {
       return {

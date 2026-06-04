@@ -652,6 +652,7 @@ class SequenceView:
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
         residue_identifier: Optional[str] = None,
+        fragment_mass_identifier: Optional[str] = None,
         deconvolved: bool = False,
         annotation_config: Optional[Dict[str, Any]] = None,
         cache_path: str = ".",
@@ -684,6 +685,27 @@ class SequenceView:
                 not present here defaults to ``None`` (the historical behavior).
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {"peak": "peak_id"} sets 'peak' selection to clicked peak's ID.
+            residue_identifier: Optional selection identifier published when a
+                sequence residue is clicked (0-based residue index). This is the
+                oracle's TWO-PATH PATH 1 (aa / sequence-tag selection):
+                - When ``coverage_column`` is configured (coverage shown), only
+                  residues with sequence-tag coverage (coverage > 0) publish, the
+                  selection TOGGLES (re-clicking the selected residue clears it),
+                  and it auto-clears when the sequence changes (oracle parity).
+                - When no coverage is configured (back-compat), a residue with a
+                  matching fragment publishes its index on click (no toggle), the
+                  historical Insight behavior. ``None`` (default) -> not published.
+            fragment_mass_identifier: Optional selection identifier for the
+                oracle's PATH 2 (mass / fragment selection). When set, clicking a
+                residue that has a matching FRAGMENT ion publishes that fragment
+                peak's mass-selection value to this identifier — reproducing the
+                oracle ``updateMassTableFromFragmentMass`` -> ``updateSelectedMass``.
+                The value is resolved via the ``interactivity`` column of the same
+                name when present (e.g. ``interactivity={"mass": "mass_in_scan"}``
+                with ``fragment_mass_identifier="mass"`` publishes the matched
+                peak's ``mass_in_scan`` = the deconvolved-mass index), else the
+                global peak id. ``None`` (default) -> PATH 2 off (back-compatible).
+                PATH 1 and PATH 2 fire INDEPENDENTLY on a single residue click.
             deconvolved: If False (default), peaks are m/z values and matching considers
                 charge states 1 to precursor_charge. If True, peaks are neutral masses.
             annotation_config: Configuration for fragment matching:
@@ -744,6 +766,8 @@ class SequenceView:
             or filters is not None
             or filter_defaults is not None
             or interactivity is not None
+            or residue_identifier is not None
+            or fragment_mass_identifier is not None
             or deconvolved is not False
             or annotation_config is not None
             or internal_fragments is not False
@@ -799,6 +823,11 @@ class SequenceView:
             # Identifier emitted when a sequence residue is clicked (0-based residue
             # index). Lets a downstream tagger derive the tag-relative selectedAA.
             self._residue_identifier = residue_identifier
+            # PATH 2 identifier: when set, clicking a residue with a matching
+            # fragment publishes that fragment peak's mass-selection value to this
+            # identifier (resolved via the same-named interactivity column when
+            # present, else the peak id). None -> PATH 2 off (back-compatible).
+            self._fragment_mass_identifier = fragment_mass_identifier
 
             # Store annotation config with defaults
             self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
@@ -868,6 +897,7 @@ class SequenceView:
             "filter_defaults": self._filter_defaults,
             "interactivity": self._interactivity,
             "residue_identifier": self._residue_identifier,
+            "fragment_mass_identifier": self._fragment_mass_identifier,
             "title": self._title,
             "height": self._height,
             "deconvolved": self._deconvolved,
@@ -913,6 +943,7 @@ class SequenceView:
             self._filter_defaults[identifier] = stored_defaults.get(identifier, None)
         self._interactivity = config.get("interactivity", {})
         self._residue_identifier = config.get("residue_identifier")
+        self._fragment_mass_identifier = config.get("fragment_mass_identifier")
         self._title = config.get("title")
         self._height = config.get("height", 400)
         self._deconvolved = config.get("deconvolved", False)
@@ -1384,6 +1415,10 @@ class SequenceView:
 
         if self._residue_identifier:
             args["residueIdentifier"] = self._residue_identifier
+
+        # PATH 2 mass identifier — emitted only when configured (default-OFF).
+        if self._fragment_mass_identifier:
+            args["fragmentMassIdentifier"] = self._fragment_mass_identifier
 
         # Internal-fragment args only when on, so existing callers are unaffected.
         if self._internal_fragments:

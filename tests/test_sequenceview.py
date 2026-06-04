@@ -824,3 +824,106 @@ class TestSequenceViewTerminals:
         assert seq["sequence"] == []
         assert "proteoform_start" not in seq
         assert "proteoform_end" not in seq
+
+
+class TestSequenceViewResidueClick:
+    """Config/contract tests for the two-path residue-click model.
+
+    PATH 1 is the ``residue_identifier`` publication (coverage-gated toggle on the
+    Vue side); PATH 2 is the new ``fragment_mass_identifier`` mass publication.
+    These tests cover the Python surface: arg emission (default-OFF/ON), cache
+    roundtrip, and the reconstruction guard. The Vue store-write behavior (toggle,
+    mass mapping, back-compat) is covered by the vitest spec
+    ``SequenceView.residueClick.spec.ts``.
+    """
+
+    def test_identifiers_in_args_when_set(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """residue_identifier + fragment_mass_identifier flow into Vue args."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_resclick_on",
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"protein": "scan_id"},
+            interactivity={"mass": "peak_id"},
+            residue_identifier="aa",
+            fragment_mass_identifier="mass",
+            coverage_column="cov",
+        )
+        args = sv._get_component_args()
+        assert args["residueIdentifier"] == "aa"
+        assert args["fragmentMassIdentifier"] == "mass"
+
+    def test_fragment_mass_identifier_absent_by_default(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Default-OFF: no fragment_mass_identifier -> arg not emitted (back-compat)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_resclick_off",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            residue_identifier="aa",
+        )
+        args = sv._get_component_args()
+        # PATH-1 residue identifier still emitted (existing behavior)...
+        assert args["residueIdentifier"] == "aa"
+        # ...but PATH-2 mass identifier is OFF by default.
+        assert "fragmentMassIdentifier" not in args
+
+    def test_identifiers_cache_roundtrip(
+        self,
+        temp_cache_dir: Path,
+        coverage_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Reconstruction from cache restores both residue-click identifiers."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        cache_id = "test_sv_resclick_cache"
+        SequenceView(
+            cache_id=cache_id,
+            sequence_data=coverage_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"protein": "scan_id"},
+            interactivity={"mass": "peak_id"},
+            residue_identifier="aa",
+            fragment_mass_identifier="mass",
+            coverage_column="cov",
+        )
+
+        restored = SequenceView(cache_id=cache_id, cache_path=str(temp_cache_dir))
+        assert restored._residue_identifier == "aa"
+        assert restored._fragment_mass_identifier == "mass"
+        args = restored._get_component_args()
+        assert args["residueIdentifier"] == "aa"
+        assert args["fragmentMassIdentifier"] == "mass"
+
+    def test_fragment_mass_identifier_requires_sequence_data(
+        self,
+        temp_cache_dir: Path,
+    ):
+        """fragment_mass_identifier is a config arg -> guarded in reconstruction mode."""
+        from openms_insight.components.sequenceview import SequenceView
+        from openms_insight.core.cache import CacheMissError
+
+        with pytest.raises(CacheMissError):
+            SequenceView(
+                cache_id="test_sv_resclick_guard",
+                cache_path=str(temp_cache_dir),
+                fragment_mass_identifier="mass",
+            )
