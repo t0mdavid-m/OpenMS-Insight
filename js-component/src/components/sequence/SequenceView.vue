@@ -6,6 +6,18 @@
         <h4>Sequence View</h4>
       </div>
 
+      <!-- Mass-info header (oracle preparePrecursorInfo; 3-seqview-004). Gated on
+           an observed mass supplied by Python (observed_mass_column); hidden
+           otherwise so existing callers are byte-unchanged. -->
+      <div v-if="showMassHeader" class="d-flex justify-space-evenly align-center mb-2 mass-info-header">
+        <h3>{{ massHeaderTitle }}</h3>
+        <v-divider :vertical="true"></v-divider>
+        <template v-for="(field, fieldIndex) in massHeaderFields" :key="fieldIndex">
+          <span>{{ field }}</span>
+          <v-divider :vertical="true"></v-divider>
+        </template>
+      </div>
+
       <!-- Toolbar -->
       <div class="d-flex justify-end px-4 mb-4">
         <v-btn variant="text" icon size="small" :disabled="sequence.length === 0" @click="copySequence">
@@ -446,6 +458,64 @@ export default defineComponent({
     theoreticalMass(): number {
       return this.sequenceData?.theoretical_mass ?? 0
     },
+    /**
+     * Per-row OBSERVED mass for the mass-info header. Undefined when Python did
+     * not attach `observed_mass` (no `observed_mass_column` configured) -> the
+     * header is hidden (back-compatible).
+     */
+    observedMass(): number | undefined {
+      return this.sequenceData?.observed_mass
+    },
+    /** Title shown to the left of the mass-info header (oracle massTitle). */
+    massHeaderTitle(): string {
+      return this.sequenceData?.mass_header_title ?? 'Proteoform'
+    },
+    /**
+     * Whether the mass-info header is shown (3-seqview-004). Gated on Python
+     * having supplied an observed mass; off otherwise so existing callers render
+     * byte-unchanged.
+     */
+    showMassHeader(): boolean {
+      return this.observedMass !== undefined
+    },
+    /**
+     * The three mass-info header fields, mirroring the oracle
+     * `preparePrecursorInfo` proteoform branch: Theoretical mass / Observed mass /
+     * Δ Mass (Da). A non-positive observed mass renders observed + delta as "-"
+     * (oracle parity for `computedMass <= 0`).
+     */
+    massHeaderFields(): string[] {
+      if (this.observedMass === undefined) return []
+      const theo = this.theoreticalMass
+      let observedStr = '-'
+      let deltaStr = '-'
+      if (this.observedMass > 0) {
+        observedStr = this.observedMass.toFixed(2)
+        deltaStr = Math.abs(theo - this.observedMass).toFixed(2)
+      }
+      return [
+        `Theoretical mass : ${theo.toFixed(2)}`,
+        `Observed mass : ${observedStr}`,
+        `Δ Mass (Da) : ${deltaStr}`,
+      ]
+    },
+    /**
+     * Identifier the component LISTENS to for the inbound mass -> fragment-row
+     * highlight (3-seqview-003). Undefined -> inbound highlight off
+     * (back-compatible).
+     */
+    massSelectionIdentifier(): string | undefined {
+      return this.args.massSelectionIdentifier as string | undefined
+    },
+    /**
+     * The currently-selected inbound mass value (from the selection store at the
+     * configured identifier), or undefined when no inbound identifier is set /
+     * nothing is selected. Drives `updateFragmentTableFromMassSelection`.
+     */
+    selectedInboundMass(): unknown {
+      if (!this.massSelectionIdentifier) return undefined
+      return this.selectionStore.$state[this.massSelectionIdentifier]
+    },
     fixedModificationSites(): string[] {
       return this.sequenceData?.fixed_modifications ?? []
     },
@@ -580,6 +650,26 @@ export default defineComponent({
     useExternalAnnotations() {
       this.resetFragmentMarkers()
       this.matchFragments()
+    },
+    /**
+     * INBOUND mass selection (3-seqview-003): when the externally-published mass
+     * selection changes, re-highlight the matching fragment-table row. Gated on a
+     * configured `massSelectionIdentifier` (the computed returns undefined and the
+     * watcher no-ops otherwise -> back-compatible).
+     */
+    selectedInboundMass(newValue: unknown) {
+      this.updateFragmentTableFromMassSelection(newValue)
+    },
+    /**
+     * Re-apply the inbound highlight after the fragment table is rebuilt (a new
+     * sequence/scan shifts row indices). No-op when the inbound identifier is
+     * unset. The outbound paths set `selectedFragmentRowIndex` directly, so only
+     * re-derive from the inbound selection when one is configured.
+     */
+    fragmentTableData() {
+      if (this.massSelectionIdentifier) {
+        this.updateFragmentTableFromMassSelection(this.selectedInboundMass)
+      }
     },
   },
   methods: {
@@ -1002,6 +1092,46 @@ export default defineComponent({
       return {
         class: index === this.selectedFragmentRowIndex ? 'bg-amber-lighten-4' : '',
       }
+    },
+    /**
+     * INBOUND mass -> fragment-row highlight (3-seqview-003). Reproduces the
+     * oracle `updateFragmentTableFromMassSelection`: when the shared mass
+     * selection changes EXTERNALLY (e.g. a mass-table / spectrum click elsewhere
+     * publishes to `massSelectionIdentifier`), highlight the fragment-table row
+     * whose matched peak corresponds to that selection. Local visual only — it
+     * does NOT re-publish any selection (so no cross-component feedback loop).
+     *
+     * The published selection value is the interactivity-mapped value of a peak
+     * (e.g. a per-scan mass ordinal), the SAME value `publishFragmentMassSelection`
+     * emits outbound. We therefore resolve it back through the same mapping: the
+     * matching fragment row is the one whose `PeakId`'s interactivity value (or the
+     * raw peak id when no column is mapped) equals the selection. Default-OFF: a
+     * null/undefined selection or no configured identifier clears the highlight
+     * iff it was set by this path.
+     */
+    updateFragmentTableFromMassSelection(selectionValue: unknown): void {
+      if (!this.massSelectionIdentifier) return
+      if (selectionValue === undefined || selectionValue === null) {
+        this.selectedFragmentRowIndex = undefined
+        return
+      }
+      // Column the inbound identifier maps to (e.g. "mass_in_scan"); when absent
+      // the selection value is the raw peak id (matches the outbound fallback).
+      const columnName = this.interactivity[this.massSelectionIdentifier]
+      const rowIndex = this.fragmentTableData.findIndex((row) => {
+        if (row.PeakId === undefined) return false
+        let peakValue: unknown = row.PeakId
+        if (columnName) {
+          const values = this.peakInteractivity[row.PeakId as unknown as string]
+          if (values && columnName in values) {
+            peakValue = values[columnName]
+          }
+        }
+        // Loose compare so numeric ids that arrive as strings still match.
+        // eslint-disable-next-line eqeqeq
+        return peakValue == selectionValue
+      })
+      this.selectedFragmentRowIndex = rowIndex >= 0 ? rowIndex : undefined
     },
     async copySequence(): Promise<void> {
       try {

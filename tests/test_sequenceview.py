@@ -927,3 +927,280 @@ class TestSequenceViewResidueClick:
                 cache_path=str(temp_cache_dir),
                 fragment_mass_identifier="mass",
             )
+
+
+# ---------------------------------------------------------------------------
+# Mass-info header (3-seqview-004) + inbound mass->fragment-row highlight
+# (3-seqview-003).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def observed_mass_sequence_data() -> pl.LazyFrame:
+    """Sequence frame carrying a per-row observed (proteoform) mass.
+
+    scan 1: PEPTIDER with an observed mass; scan 2: a non-positive observed mass
+    (-1) -> the header shows observed/delta as "-"; scan 3: no observed mass
+    column issue tested separately.
+    """
+    return pl.DataFrame(
+        {
+            "scan_id": [1, 2, 3],
+            "sequence": ["PEPTIDER", "ACDEFGHK", "MNPQRST"],
+            "precursor_charge": [2, 3, 1],
+            "obs_mass": [955.45, -1.0, 800.0],
+        }
+    ).lazy()
+
+
+class TestSequenceViewMassHeader:
+    """Contract tests for the mass-info header payload + args wiring."""
+
+    def test_observed_mass_in_vue_data(
+        self,
+        temp_cache_dir: Path,
+        observed_mass_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """observed_mass_column attaches `observed_mass` + `mass_header_title`."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_obsmass_on",
+            sequence_data=observed_mass_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            observed_mass_column="obs_mass",
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert seq["observed_mass"] == pytest.approx(955.45)
+        # theoretical_mass is always present; the Vue side derives the delta.
+        assert "theoretical_mass" in seq
+        assert seq["mass_header_title"] == "Proteoform"
+
+    def test_custom_mass_header_title(
+        self,
+        temp_cache_dir: Path,
+        observed_mass_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """mass_header_title overrides the oracle default massTitle."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_obsmass_title",
+            sequence_data=observed_mass_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            observed_mass_column="obs_mass",
+            mass_header_title="Precursor",
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert seq["mass_header_title"] == "Precursor"
+
+    def test_negative_observed_mass_still_emitted(
+        self,
+        temp_cache_dir: Path,
+        observed_mass_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """A non-positive observed mass is still emitted (Vue renders '-')."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_obsmass_neg",
+            sequence_data=observed_mass_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            observed_mass_column="obs_mass",
+        )
+        seq = sv._prepare_vue_data({"spectrum": 2})["sequenceData"]
+        assert seq["observed_mass"] == pytest.approx(-1.0)
+
+    def test_no_observed_mass_when_unconfigured(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Back-compat: no observed_mass_column -> no header keys in payload."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_obsmass_off",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert "observed_mass" not in seq
+        assert "mass_header_title" not in seq
+
+    def test_observed_mass_changes_hash(
+        self,
+        temp_cache_dir: Path,
+        observed_mass_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Different observed mass per state -> different data hash (re-render)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_obsmass_hash",
+            sequence_data=observed_mass_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            observed_mass_column="obs_mass",
+        )
+        h1 = sv._prepare_vue_data({"spectrum": 1})["_hash"]
+        h3 = sv._prepare_vue_data({"spectrum": 3})["_hash"]
+        assert h1 != h3
+
+    def test_get_observed_mass_for_state_unmatched(
+        self,
+        temp_cache_dir: Path,
+        observed_mass_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """None-default filter with no selection -> None observed mass."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_obsmass_unmatched",
+            sequence_data=observed_mass_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            observed_mass_column="obs_mass",
+        )
+        assert sv._get_observed_mass_for_state({"spectrum": None}) is None
+
+    def test_observed_mass_cache_roundtrip(
+        self,
+        temp_cache_dir: Path,
+        observed_mass_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Reconstruction restores observed_mass_column + mass_header_title."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        cache_id = "test_sv_obsmass_cache"
+        SequenceView(
+            cache_id=cache_id,
+            sequence_data=observed_mass_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            observed_mass_column="obs_mass",
+            mass_header_title="Precursor",
+        )
+        restored = SequenceView(cache_id=cache_id, cache_path=str(temp_cache_dir))
+        assert restored._observed_mass_column == "obs_mass"
+        assert restored._mass_header_title == "Precursor"
+        seq = restored._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert seq["observed_mass"] == pytest.approx(955.45)
+        assert seq["mass_header_title"] == "Precursor"
+
+    def test_observed_mass_column_requires_sequence_data(
+        self,
+        temp_cache_dir: Path,
+    ):
+        """observed_mass_column is a config arg -> guarded in reconstruction mode."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        with pytest.raises(CacheMissError):
+            SequenceView(
+                cache_id="test_sv_obsmass_guard",
+                cache_path=str(temp_cache_dir),
+                observed_mass_column="obs_mass",
+            )
+
+
+class TestSequenceViewInboundMassHighlight:
+    """Args/contract tests for the inbound mass->fragment-row highlight identifier.
+
+    The Vue store-listening behavior (resolve selection -> highlight row, default-
+    OFF, no re-publish) is covered by the vitest spec
+    ``SequenceView.massHeader.spec.ts``; here we cover the Python arg surface.
+    """
+
+    def test_mass_selection_identifier_in_args_when_set(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """mass_selection_identifier flows into Vue args as massSelectionIdentifier."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_inbound_on",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            interactivity={"mass": "peak_id"},
+            mass_selection_identifier="mass",
+        )
+        args = sv._get_component_args()
+        assert args["massSelectionIdentifier"] == "mass"
+
+    def test_mass_selection_identifier_absent_by_default(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Default-OFF: no mass_selection_identifier -> arg not emitted (back-compat)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sv = SequenceView(
+            cache_id="test_sv_inbound_off",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+        )
+        args = sv._get_component_args()
+        assert "massSelectionIdentifier" not in args
+
+    def test_mass_selection_identifier_cache_roundtrip(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Reconstruction from cache restores the inbound identifier."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        cache_id = "test_sv_inbound_cache"
+        SequenceView(
+            cache_id=cache_id,
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            mass_selection_identifier="mass",
+        )
+        restored = SequenceView(cache_id=cache_id, cache_path=str(temp_cache_dir))
+        assert restored._mass_selection_identifier == "mass"
+        assert restored._get_component_args()["massSelectionIdentifier"] == "mass"
+
+    def test_mass_selection_identifier_requires_sequence_data(
+        self,
+        temp_cache_dir: Path,
+    ):
+        """mass_selection_identifier is a config arg -> guarded in reconstruction."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        with pytest.raises(CacheMissError):
+            SequenceView(
+                cache_id="test_sv_inbound_guard",
+                cache_path=str(temp_cache_dir),
+                mass_selection_identifier="mass",
+            )

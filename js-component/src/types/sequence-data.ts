@@ -87,6 +87,14 @@ export interface SequenceData {
    * C-terminus. Optional; absent -> full determined terminus.
    */
   proteoform_end?: number
+  /**
+   * Per-row OBSERVED mass (e.g. the proteoform's measured/computed mass).
+   * Present only when an `observed_mass_column` is configured in Python; drives
+   * the mass-info header. Absent otherwise (no header, back-compatible).
+   */
+  observed_mass?: number
+  /** Title shown to the left of the mass-info header fields (oracle massTitle). */
+  mass_header_title?: string
   /** External peak annotations from search engine (optional) */
   external_annotations?: ExternalAnnotation[]
   /** Fragment tolerance value from search parameters (optional) */

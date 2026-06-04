@@ -624,6 +624,10 @@ class SequenceView:
     - Amino acid grid display with configurable row width
     - Fragment ion markers (a, b, c, x, y, z) with configurable colors
     - Tolerance-based fragment matching (done in Vue)
+    - Optional mass-info header (theoretical / observed / delta mass) when an
+      ``observed_mass_column`` is supplied (oracle ``preparePrecursorInfo`` parity)
+    - Optional inbound mass -> fragment-table-row highlight via
+      ``mass_selection_identifier`` (oracle ``updateFragmentTableFromMassSelection``)
     - Returns annotation dataframe for linked components
     - Supports filtering by spectrum and sequence identifiers
 
@@ -663,6 +667,9 @@ class SequenceView:
         coverage_column: Optional[str] = None,
         proteoform_start_column: Optional[str] = None,
         proteoform_end_column: Optional[str] = None,
+        observed_mass_column: Optional[str] = None,
+        mass_header_title: str = "Proteoform",
+        mass_selection_identifier: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -747,6 +754,28 @@ class SequenceView:
                 proteoform C-terminus residue index. A NEGATIVE value marks an
                 UNDETERMINED C-terminus; a value < length-1 marks a truncated
                 C-terminus. ``None`` (default) -> full determined C-terminus.
+            observed_mass_column: Optional name of a column holding the per-row
+                OBSERVED mass (e.g. the proteoform's measured/computed mass). When
+                provided, the component renders the oracle's MASS-INFO HEADER above
+                the sequence grid (3-seqview-004): ``massTitle`` plus three fields
+                ``Theoretical mass`` (from the computed ``theoretical_mass``),
+                ``Observed mass`` (this column) and ``Δ Mass (Da)``
+                (``|theoretical - observed|``). This reproduces the oracle
+                ``preparePrecursorInfo`` proteoform branch. A NEGATIVE / null value
+                renders the observed + delta fields as "-" (oracle parity for a
+                non-positive computed mass). ``None`` (default) -> no header
+                (back-compatible: existing callers render byte-unchanged).
+            mass_header_title: Title shown to the LEFT of the mass-info header
+                fields (oracle ``massTitle``; defaults to "Proteoform"). Only used
+                when ``observed_mass_column`` is configured.
+            mass_selection_identifier: Optional selection identifier the component
+                LISTENS to for the INBOUND mass -> fragment-table-row highlight
+                (3-seqview-003, oracle ``updateFragmentTableFromMassSelection``).
+                When set, an external change to this selection (the same slot
+                ``fragment_mass_identifier`` publishes to, e.g. ``"mass"``) finds
+                the matched peak whose interactivity value equals the selection and
+                highlights the corresponding fragment-table row locally. ``None``
+                (default) -> no inbound highlight (back-compatible).
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -775,6 +804,9 @@ class SequenceView:
             or coverage_column is not None
             or proteoform_start_column is not None
             or proteoform_end_column is not None
+            or observed_mass_column is not None
+            or mass_header_title != "Proteoform"
+            or mass_selection_identifier is not None
             or bool(kwargs)
         )
 
@@ -810,6 +842,13 @@ class SequenceView:
             # N/C terminals; off when None).
             self._proteoform_start_column = proteoform_start_column
             self._proteoform_end_column = proteoform_end_column
+            # Optional per-row observed mass -> drives the mass-info header
+            # (off when None). mass_header_title is the oracle massTitle.
+            self._observed_mass_column = observed_mass_column
+            self._mass_header_title = mass_header_title
+            # Optional inbound mass-selection identifier -> drives the inbound
+            # fragment-row highlight in Vue (off when None).
+            self._mass_selection_identifier = mass_selection_identifier
             self._filters = filters or {}
             # filter_defaults: caller-supplied overrides; any filter identifier
             # not listed defaults to None (historical behavior).
@@ -907,6 +946,9 @@ class SequenceView:
             "coverage_column": self._coverage_column,
             "proteoform_start_column": self._proteoform_start_column,
             "proteoform_end_column": self._proteoform_end_column,
+            "observed_mass_column": self._observed_mass_column,
+            "mass_header_title": self._mass_header_title,
+            "mass_selection_identifier": self._mass_selection_identifier,
         }
 
     def _cache_exists(self) -> bool:
@@ -958,6 +1000,9 @@ class SequenceView:
         self._coverage_column = config.get("coverage_column")
         self._proteoform_start_column = config.get("proteoform_start_column")
         self._proteoform_end_column = config.get("proteoform_end_column")
+        self._observed_mass_column = config.get("observed_mass_column")
+        self._mass_header_title = config.get("mass_header_title", "Proteoform")
+        self._mass_selection_identifier = config.get("mass_selection_identifier")
         self._config = {}
 
         # Load cached LazyFrames
@@ -1000,6 +1045,8 @@ class SequenceView:
                 optional.append(self._proteoform_start_column)
             if self._proteoform_end_column is not None:
                 optional.append(self._proteoform_end_column)
+            if self._observed_mass_column is not None:
+                optional.append(self._observed_mass_column)
             cols = list(
                 dict.fromkeys(
                     filter_cols
@@ -1202,6 +1249,52 @@ class SequenceView:
 
         return start_val, end_val
 
+    def _get_observed_mass_for_state(
+        self, state: Dict[str, Any]
+    ) -> Optional[float]:
+        """Get the per-row observed mass for the current state (mass header).
+
+        Reads ``self._observed_mass_column`` from cached sequences.parquet with the
+        same predicate-pushdown / None-default semantics as
+        :meth:`_get_sequence_for_state`. Returns ``None`` when the column is not
+        configured / absent / unmatched (so the mass header stays off and
+        back-compat is preserved).
+
+        Returns:
+            The observed mass as a float, or ``None``.
+        """
+        if self._observed_mass_column is None:
+            return None
+
+        filtered = self._cached_sequences
+        schema = filtered.collect_schema()
+        if self._observed_mass_column not in schema.names():
+            return None
+
+        # Apply filters (matching _get_sequence_for_state behaviour exactly).
+        for identifier, column in self._filters.items():
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    return None
+
+        try:
+            df = filtered.select([self._observed_mass_column]).head(1).collect()
+            if df.height > 0:
+                value = df[self._observed_mass_column][0]
+                if value is None:
+                    return None
+                return float(value)
+        except Exception:
+            pass
+
+        return None
+
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
 
@@ -1334,6 +1427,16 @@ class SequenceView:
             if end_val is not None:
                 sequence_data["proteoform_end"] = end_val
 
+        # Optional observed mass -> mass-info header (3-seqview-004). Emit
+        # `observed_mass` (+ the header title) alongside the always-present
+        # `theoretical_mass`; the Vue side derives the delta. Absent when no
+        # observed_mass_column is configured (back-compatible: no header).
+        if self._observed_mass_column is not None:
+            observed_mass = self._get_observed_mass_for_state(state)
+            if observed_mass is not None:
+                sequence_data["observed_mass"] = observed_mass
+                sequence_data["mass_header_title"] = self._mass_header_title
+
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
 
@@ -1370,11 +1473,13 @@ class SequenceView:
         coverage_in_payload = int("coverage" in sequence_data)
         term_start = sequence_data.get("proteoform_start", "")
         term_end = sequence_data.get("proteoform_end", "")
+        observed_mass_in_payload = sequence_data.get("observed_mass", "")
         hash_input = (
             f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
             f":{int(self._internal_fragments)}"
             f":{int(self._coverage_column is not None)}:{coverage_in_payload}"
             f":{term_start}:{term_end}"
+            f":{observed_mass_in_payload}"
         )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
@@ -1419,6 +1524,11 @@ class SequenceView:
         # PATH 2 mass identifier — emitted only when configured (default-OFF).
         if self._fragment_mass_identifier:
             args["fragmentMassIdentifier"] = self._fragment_mass_identifier
+
+        # Inbound mass->fragment-row highlight identifier (3-seqview-003) — emitted
+        # only when configured (default-OFF), so existing callers are unaffected.
+        if self._mass_selection_identifier:
+            args["massSelectionIdentifier"] = self._mass_selection_identifier
 
         # Internal-fragment args only when on, so existing callers are unaffected.
         if self._internal_fragments:
