@@ -1084,11 +1084,14 @@ export default defineComponent({
       const suffixNumber = this.fragmentGridSuffixEnd - aaIndex + 1
       let ionName = ''
 
-      if (aaObj.bIon) ionName = `b${prefixNumber}`
-      else if (aaObj.aIon) ionName = `a${prefixNumber}`
+      // Ion-name priority a->b->c->x->y->z matches the oracle aminoAcidSelected
+      // (3-seqview-012): when a residue carries multiple overlapping prefix/suffix
+      // ions, publish the same fragment the oracle would.
+      if (aaObj.aIon) ionName = `a${prefixNumber}`
+      else if (aaObj.bIon) ionName = `b${prefixNumber}`
       else if (aaObj.cIon) ionName = `c${prefixNumber}`
-      else if (aaObj.yIon) ionName = `y${suffixNumber}`
       else if (aaObj.xIon) ionName = `x${suffixNumber}`
+      else if (aaObj.yIon) ionName = `y${suffixNumber}`
       else if (aaObj.zIon) ionName = `z${suffixNumber}`
 
       if (ionName) {
