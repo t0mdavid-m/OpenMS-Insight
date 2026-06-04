@@ -19,6 +19,32 @@ PROTON_MASS = 1.007276
 CACHE_VERSION = 1
 
 
+def _has_ambiguous_x(sequence_str: str) -> bool:
+    """True if the sequence carries an AMBIGUOUS residue ('X' or 'x').
+
+    Used to gate the oracle's ``remove_ambigious`` handling: only X-containing
+    sequences take the special path, so every X-free sequence stays on the
+    byte-unchanged pyOpenMS path.
+    """
+    return "X" in sequence_str or "x" in sequence_str
+
+
+def _remove_ambiguous_x(aa_seq: "AASequence") -> "AASequence":
+    """Strip AMBIGUOUS 'X'/'x' residues from an AASequence (oracle parity).
+
+    Exact port of FLASHApp ``src/render/sequence.py:remove_ambigious`` — round-trip
+    through ``toUniModString()`` and delete every ``X``/``x`` (and ONLY those;
+    modifications and all other residues, incl. B/Z/J/U/O, are preserved). The
+    result is a SHORTER sequence whose monoisotopic / fragment masses are then
+    computed by pyOpenMS exactly as the oracle does.
+    """
+    from pyopenms import AASequence
+
+    return AASequence.fromString(
+        aa_seq.toUniModString().replace("X", "").replace("x", "")
+    )
+
+
 def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
     """Parse OpenMS sequence format to extract residues and modification mass shifts.
 
@@ -88,9 +114,23 @@ def calculate_fragment_masses_pyopenms(
     Returns:
         Dict with fragment_masses_a, fragment_masses_b, etc.
         Each is a list of lists (one per position, supporting multiple masses).
+
+    AMBIGUOUS-residue handling (oracle parity): when the sequence contains an
+    ``X``/``x``, ``TheoreticalSpectrumGenerator`` raises ("unknown AA 'X'"), so
+    instead the terminal fragment masses are computed the oracle way — per
+    prefix/suffix with the X stripped first (see
+    :func:`_calculate_fragment_masses_oracle_x`, an exact port of FLASHApp
+    ``getFragmentMassesWithSeq`` + ``remove_ambigious``). X-free sequences take
+    the byte-unchanged TSG path below.
     """
     try:
         from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
+
+        # X-containing sequences: TSG cannot handle 'X'. Reproduce the oracle's
+        # per-prefix / per-suffix X-stripped masses on the FULL-length grid so the
+        # ion numbering still aligns 1:1 with the displayed residues.
+        if _has_ambiguous_x(sequence_str):
+            return _calculate_fragment_masses_oracle_x(sequence_str)
 
         aa_seq = AASequence.fromString(sequence_str)
         n = aa_seq.size()
@@ -174,6 +214,69 @@ def calculate_fragment_masses_pyopenms(
     except Exception as e:
         print(f"Error calculating fragments for {sequence_str}: {e}")
         return {f"fragment_masses_{ion}": [] for ion in ["a", "b", "c", "x", "y", "z"]}
+
+
+def _calculate_fragment_masses_oracle_x(
+    sequence_str: str,
+) -> Dict[str, List[List[float]]]:
+    """Terminal fragment masses for an X-containing sequence (oracle parity).
+
+    Exact port of FLASHApp ``getFragmentMassesWithSeq`` (run for each of the
+    oracle's ``ax``/``by``/``cz`` ion families) combined with the per-prefix /
+    per-suffix ``remove_ambigious`` strip. For a sequence of length ``n`` (the
+    FULL length, INCLUDING the ambiguous X positions, so ion numbering stays
+    aligned 1:1 with the displayed residue grid):
+
+      * prefix ion at position ``i`` (a/b/c) = monoweight of the X-STRIPPED
+        ``getPrefix(i+1)`` for the matching prefix ResidueType (AIon/BIon/CIon);
+      * suffix ion at position ``i`` (x/y/z) = monoweight of the X-STRIPPED
+        ``getSuffix(i+1)`` for the matching suffix ResidueType (XIon/YIon/ZIon).
+
+    Because removing an X SHORTENS the sub-sequence, the X position reproduces
+    its neighbour's mass (e.g. ``PEPTX`` -> ``PEPT``), exactly as the oracle
+    yields. Every position (incl. the full-length terminal ion) is populated,
+    matching ``getFragmentMassesWithSeq`` (the TSG path omits the full-length
+    ion; the X path follows the oracle and keeps it). Returns the per-position
+    ``number[][]`` shape (one mass per position) the Vue side consumes.
+
+    Modifications embedded in ``sequence_str`` are preserved through the
+    ``toUniModString()`` round-trip, so a modified X-sequence still gets the
+    correct shifted fragment masses.
+    """
+    from pyopenms import AASequence, Residue
+
+    aa_seq = AASequence.fromString(sequence_str)
+    n = aa_seq.size()
+
+    result: Dict[str, List[List[float]]] = {
+        f"fragment_masses_{ion}": [[] for _ in range(n)]
+        for ion in ("a", "b", "c", "x", "y", "z")
+    }
+
+    RT = Residue.ResidueType
+    # Oracle ion-family map: prefix ResidueType -> key, suffix ResidueType -> key
+    # ('ax' -> a/x, 'by' -> b/y, 'cz' -> c/z), matching getFragmentMassesWithSeq.
+    families = (
+        (RT.AIon, "a", RT.XIon, "x"),
+        (RT.BIon, "b", RT.YIon, "y"),
+        (RT.CIon, "c", RT.ZIon, "z"),
+    )
+
+    for prefix_type, prefix_key, suffix_type, suffix_key in families:
+        # Prefix ions (oracle: per aa_index, X-stripped getPrefix(i+1) monoweight).
+        for i in range(n):
+            prefix_mass = _remove_ambiguous_x(aa_seq.getPrefix(i + 1)).getMonoWeight(
+                prefix_type, 0
+            )
+            result[f"fragment_masses_{prefix_key}"][i] = [prefix_mass]
+        # Suffix ions (oracle: per aa_index, X-stripped getSuffix(i+1) monoweight).
+        for i in range(n):
+            suffix_mass = _remove_ambiguous_x(aa_seq.getSuffix(i + 1)).getMonoWeight(
+                suffix_type, 0
+            )
+            result[f"fragment_masses_{suffix_key}"][i] = [suffix_mass]
+
+    return result
 
 
 def _calculate_fragment_masses_simple(
@@ -491,11 +594,23 @@ def compute_internal_fragment_data(
 
 
 def get_theoretical_mass(sequence_str: str) -> float:
-    """Calculate monoisotopic mass of a peptide sequence."""
+    """Calculate monoisotopic mass of a peptide sequence.
+
+    AMBIGUOUS-residue handling (oracle parity, FLASHApp
+    ``getFragmentDataFromSeq`` -> ``remove_ambigious``): when the sequence
+    contains an ``X``/``x``, the X residues are STRIPPED before the pyOpenMS
+    ``getMonoWeight`` call (an X-containing proteoform like ``PEPTXIDEK`` yields
+    the X-stripped mass ``PEPTIDEK`` ~927.45, NOT pyOpenMS' "unknown AA" error
+    that would otherwise fall through to 0.0). X-free sequences take the
+    byte-unchanged path. Only ``X``/``x`` are stripped — every other residue
+    (incl. B/Z/J/U/O) passes through to pyOpenMS exactly as before.
+    """
     try:
         from pyopenms import AASequence
 
         aa_seq = AASequence.fromString(sequence_str)
+        if _has_ambiguous_x(sequence_str):
+            aa_seq = _remove_ambiguous_x(aa_seq)
         return aa_seq.getMonoWeight()
     except ImportError:
         # Fallback

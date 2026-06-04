@@ -1204,3 +1204,238 @@ class TestSequenceViewInboundMassHighlight:
                 cache_path=str(temp_cache_dir),
                 mass_selection_identifier="mass",
             )
+
+
+# ---------------------------------------------------------------------------
+# AMBIGUOUS residue (X) handling in the theoretical-mass + terminal-fragment
+# computation (round-15 finding 3-seqview-007).
+#
+# The oracle FLASHApp strips X/x (`remove_ambigious`) before EVERY pyOpenMS mass
+# call: once for the whole-sequence theoretical mass, and once PER prefix/suffix
+# fragment (`getFragmentMassesWithSeq`). These tests reproduce the oracle
+# numerically (independent verbatim port below) and assert the Insight
+# theoretical mass + terminal fragments now MATCH the oracle exactly for an
+# X-containing proteoform — while a clean control stays byte-unchanged.
+# ---------------------------------------------------------------------------
+
+pyopenms = pytest.importorskip("pyopenms")
+
+
+def _oracle_remove_ambigious(protein):
+    """Verbatim port of FLASHApp/src/render/sequence.py:remove_ambigious."""
+    from pyopenms import AASequence
+
+    return AASequence.fromString(
+        protein.toUniModString().replace("X", "").replace("x", "")
+    )
+
+
+def _oracle_fragment_masses_with_seq(protein, res_type):
+    """Verbatim port of FLASHApp getFragmentMassesWithSeq (one ion family)."""
+    from pyopenms import Residue
+
+    protein_length = protein.size()
+    prefix_mass_list = [0.0] * protein_length
+    suffix_mass_list = [0.0] * protein_length
+    prefix_ion_type, suffix_ion_type = {
+        "ax": (Residue.ResidueType.AIon, Residue.ResidueType.XIon),
+        "by": (Residue.ResidueType.BIon, Residue.ResidueType.YIon),
+        "cz": (Residue.ResidueType.CIon, Residue.ResidueType.ZIon),
+    }[res_type]
+    for aa_index in range(protein_length):
+        prefix_mass_list[aa_index] = _oracle_remove_ambigious(
+            protein.getPrefix(aa_index + 1)
+        ).getMonoWeight(prefix_ion_type, 0)
+    for aa_index in reversed(range(protein_length)):
+        suffix_mass_list[aa_index] = _oracle_remove_ambigious(
+            protein.getSuffix(aa_index + 1)
+        ).getMonoWeight(suffix_ion_type, 0)
+    return prefix_mass_list, suffix_mass_list
+
+
+def _oracle_theoretical_mass(seq):
+    """Oracle whole-sequence theoretical mass (remove_ambigious -> monoweight)."""
+    from pyopenms import AASequence
+
+    return _oracle_remove_ambigious(AASequence.fromString(seq)).getMonoWeight()
+
+
+def _oracle_fragment_grid(seq):
+    """Build the oracle per-position a/b/c/x/y/z grid for a sequence.
+
+    Mirrors the Insight ``calculate_fragment_masses_pyopenms`` output shape
+    (per-position ``number[][]``) so the two can be compared directly.
+    """
+    from pyopenms import AASequence
+
+    p = AASequence.fromString(seq)
+    grid = {}
+    for it in ("ax", "by", "cz"):
+        pre, suf = _oracle_fragment_masses_with_seq(p, it)
+        grid[f"fragment_masses_{it[0]}"] = [[v] for v in pre]
+        grid[f"fragment_masses_{it[1]}"] = [[v] for v in suf]
+    return grid
+
+
+class TestSequenceViewAmbiguousX:
+    """X-residue handling: Insight must match the oracle's X-stripped masses."""
+
+    def test_theoretical_mass_x_matches_oracle(self):
+        """PEPTXIDEK theoretical mass == oracle (X-stripped PEPTIDEK), not 0.0."""
+        from openms_insight.components.sequenceview import get_theoretical_mass
+
+        got = get_theoretical_mass("PEPTXIDEK")
+        oracle = _oracle_theoretical_mass("PEPTXIDEK")
+        # Bug repro guard: the old code returned 0.0 here.
+        assert got != 0.0
+        assert got == oracle
+        # X-stripped PEPTXIDEK is mass-equivalent to PEPTIDEK.
+        assert got == get_theoretical_mass("PEPTIDEK")
+
+    def test_fragment_masses_x_match_oracle_exact(self):
+        """PEPTXIDEK terminal fragments == oracle getFragmentMassesWithSeq, exact."""
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+
+        got = calculate_fragment_masses_pyopenms("PEPTXIDEK")
+        oracle = _oracle_fragment_grid("PEPTXIDEK")
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            key = f"fragment_masses_{ion}"
+            assert got[key] == oracle[key], f"{key} diverges from oracle"
+
+    def test_fragment_grid_is_full_length(self):
+        """The X grid keeps one entry per residue (full-length, X positions kept)."""
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+
+        got = calculate_fragment_masses_pyopenms("PEPTXIDEK")
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            # 9 residues -> 9 positions, each a single-mass list.
+            assert len(got[f"fragment_masses_{ion}"]) == 9
+            assert all(len(p) == 1 for p in got[f"fragment_masses_{ion}"])
+
+    def test_x_position_duplicates_neighbor_mass(self):
+        """At the X position, the X-stripped prefix == its neighbour's prefix.
+
+        For PEPTXIDEK the b-ion at the T (index 3) and at the X (index 4) are
+        equal because removing X from 'PEPTX' yields 'PEPT' (oracle behaviour).
+        """
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+
+        b = calculate_fragment_masses_pyopenms("PEPTXIDEK")["fragment_masses_b"]
+        assert b[3] == b[4]
+
+    def test_modified_x_sequence_matches_oracle(self):
+        """A modification before X is preserved through the X-strip (oracle parity)."""
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+            get_theoretical_mass,
+        )
+
+        seq = "PEPT(Phospho)XIDEK"
+        assert get_theoretical_mass(seq) == _oracle_theoretical_mass(seq)
+        got = calculate_fragment_masses_pyopenms(seq)
+        oracle = _oracle_fragment_grid(seq)
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            assert got[f"fragment_masses_{ion}"] == oracle[f"fragment_masses_{ion}"]
+
+    @pytest.mark.parametrize(
+        "seq",
+        ["XPEPTIDEK", "PEPTIDEKX", "PXEPTXIDEXK", "XXPEPTIDEK", "PEPTXBIDEK"],
+    )
+    def test_x_variants_match_oracle(self, seq):
+        """Leading/trailing/multi-X (and X+B) all match the oracle exactly.
+
+        Leading/trailing X strips to an empty terminal sub-sequence whose
+        getMonoWeight returns 0.0 (same as the oracle) — no exception, no
+        all-empty degradation.
+        """
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+            get_theoretical_mass,
+        )
+
+        assert get_theoretical_mass(seq) == _oracle_theoretical_mass(seq)
+        got = calculate_fragment_masses_pyopenms(seq)
+        oracle = _oracle_fragment_grid(seq)
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            assert got[f"fragment_masses_{ion}"] == oracle[f"fragment_masses_{ion}"]
+
+    def test_clean_control_unchanged_vs_oracle_grid(self):
+        """Clean PEPTIDEK: populated positions equal the oracle grid.
+
+        The TSG path omits the FULL-length terminal ion (last position empty),
+        which is a pre-existing structural choice for clean sequences; every
+        POPULATED position still equals the oracle's getMonoWeight value.
+        """
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+
+        got = calculate_fragment_masses_pyopenms("PEPTIDEK")
+        oracle = _oracle_fragment_grid("PEPTIDEK")
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            ins = got[f"fragment_masses_{ion}"]
+            orc = oracle[f"fragment_masses_{ion}"]
+            assert len(ins) == len(orc)
+            for pos_ins, pos_orc in zip(ins, orc):
+                if pos_ins:  # populated position
+                    assert pos_ins[0] == pytest.approx(pos_orc[0], abs=1e-5)
+
+
+class TestSequenceViewNonAmbiguousResidues:
+    """Edge sweep: the oracle strips ONLY X/x; B/Z/J/U/O must pass through.
+
+    The oracle's ``remove_ambigious`` deletes nothing but X/x, so B (Asx), Z
+    (Glx), J (Leu/Ile), U (Sec) and O (Pyl) are left for pyOpenMS to weigh. They
+    contain no X, so the Insight code takes the byte-unchanged pyOpenMS path; the
+    theoretical mass must match the oracle's (no over-stripping).
+    """
+
+    @pytest.mark.parametrize(
+        "seq",
+        ["PEPTBIDEK", "PEPTZIDEK", "PEPTJIDEK", "PEPTUIDEK", "PEPTOIDEK"],
+    )
+    def test_non_x_residue_theoretical_matches_oracle(self, seq):
+        from openms_insight.components.sequenceview import get_theoretical_mass
+
+        got = get_theoretical_mass(seq)
+        oracle = _oracle_theoretical_mass(seq)
+        # pyOpenMS accepts these residues -> a real (non-zero) mass, == oracle.
+        assert got != 0.0
+        assert got == oracle
+
+    @pytest.mark.parametrize(
+        "seq",
+        ["PEPTBIDEK", "PEPTJIDEK", "PEPTUIDEK", "PEPTOIDEK"],
+    )
+    def test_non_x_residue_fragments_match_oracle_populated(self, seq):
+        """Populated terminal positions equal the oracle for B/J/U/O too."""
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+
+        got = calculate_fragment_masses_pyopenms(seq)
+        oracle = _oracle_fragment_grid(seq)
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            ins = got[f"fragment_masses_{ion}"]
+            orc = oracle[f"fragment_masses_{ion}"]
+            for pos_ins, pos_orc in zip(ins, orc):
+                if pos_ins:
+                    assert pos_ins[0] == pytest.approx(pos_orc[0], abs=1e-5)
+
+    def test_empty_sequence_safe(self):
+        """Empty sequence -> 0.0 theoretical + all-empty fragments (no error)."""
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+            get_theoretical_mass,
+        )
+
+        assert get_theoretical_mass("") == 0.0
+        frags = calculate_fragment_masses_pyopenms("")
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            assert frags[f"fragment_masses_{ion}"] == []
