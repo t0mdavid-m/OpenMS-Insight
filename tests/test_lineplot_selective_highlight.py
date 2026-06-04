@@ -223,6 +223,35 @@ class TestMatchColumnSelectiveHighlight:
         if "_dynamic_highlight" in df.columns:
             assert not any(df["_dynamic_highlight"])
 
+    def test_value_label_on_matched_stick(
+        self, mock_streamlit, tmp_path, deconv_base
+    ):
+        # round-9 finding 3-deconv-001: the selected mass's MonoMass VALUE LABEL
+        # (oracle mass.toFixed(2)) rides the peakAnnotations channel via
+        # highlight_value_column + highlight_value_template.
+        comp = self._make(
+            tmp_path,
+            deconv_base,
+            highlight_value_column="mass",
+            highlight_value_template="{:.2f}",
+        )
+        res = comp._prepare_vue_data({"spectrum": 1, "mass": 250.0})
+        # still highlights ONLY the matched stick
+        assert list(res["plotData"]["_dynamic_highlight"]) == [False, True, False]
+        anns = res["peakAnnotations"]
+        assert len(anns) == 1  # exactly one label, for the selected mass
+        assert anns[0]["x"] == 250.0  # at the stick's x (MonoMass)
+        assert anns[0]["text"] == "250.00"  # 2-decimal MonoMass value
+
+    def test_no_value_label_without_value_column(
+        self, mock_streamlit, tmp_path, deconv_base
+    ):
+        # Without highlight_value_column the match path emits no value label
+        # (back-compat; the highlight still works).
+        comp = self._make(tmp_path, deconv_base)
+        res = comp._prepare_vue_data({"spectrum": 1, "mass": 250.0})
+        assert "peakAnnotations" not in res
+
 
 # --------------------------------------------------------------------- DEFAULT OFF
 class TestSelectiveHighlightDefaultOff:

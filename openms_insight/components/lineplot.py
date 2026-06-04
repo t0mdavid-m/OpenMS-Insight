@@ -74,6 +74,8 @@ _MANAGED_CONFIG_KEYS = frozenset(
         "highlight_charge_column",
         "highlight_annotation_template",
         "deconv_peaks_toggle",
+        "highlight_value_column",
+        "highlight_value_template",
     }
 )
 
@@ -136,6 +138,12 @@ _TAGGER_PARAM_DEFAULTS: Dict[str, Any] = {
 # - highlight_annotation_template: charge-label text; template.format(charge).
 # - deconv_peaks_toggle: enable the "Show Deconvolved Peaks" modebar button (the
 #   annotated spectrum); default OFF.
+# - highlight_value_column: MATCH-COLUMN path only -- when set, draw a single
+#   floating value label above each selected (matched) stick, e.g. the selected
+#   mass's MonoMass value on the deconvolved spectrum (oracle parity). The label
+#   text is highlight_value_template.format(base[highlight_value_column]) at the
+#   stick's x position. None (default) => no value label.
+# - highlight_value_template: value-label text format (e.g. "{:.2f}").
 _HIGHLIGHT_PARAM_DEFAULTS: Dict[str, Any] = {
     "highlight_selection": None,
     "highlight_match_column": None,
@@ -145,6 +153,8 @@ _HIGHLIGHT_PARAM_DEFAULTS: Dict[str, Any] = {
     "highlight_charge_column": "charge",
     "highlight_annotation_template": "z={}",
     "deconv_peaks_toggle": False,
+    "highlight_value_column": None,
+    "highlight_value_template": "{}",
 }
 
 
@@ -329,6 +339,8 @@ class LinePlot(BaseComponent):
             "highlight_annotation_template"
         ]
         self._deconv_peaks_toggle = highlight_params["deconv_peaks_toggle"]
+        self._highlight_value_column = highlight_params["highlight_value_column"]
+        self._highlight_value_template = highlight_params["highlight_value_template"]
         # Lazy handle to the highlight linkage frame (annotated spectrum).
         self._highlight_link = (
             pl.scan_parquet(self._highlight_link_path)
@@ -418,6 +430,8 @@ class LinePlot(BaseComponent):
             "highlight_charge_column": self._highlight_charge_column,
             "highlight_annotation_template": self._highlight_annotation_template,
             "deconv_peaks_toggle": self._deconv_peaks_toggle,
+            "highlight_value_column": self._highlight_value_column,
+            "highlight_value_template": self._highlight_value_template,
         }
 
     def _get_render_config(self) -> Dict[str, Any]:
@@ -479,6 +493,8 @@ class LinePlot(BaseComponent):
             "highlight_annotation_template", "z={}"
         )
         self._deconv_peaks_toggle = config.get("deconv_peaks_toggle", False)
+        self._highlight_value_column = config.get("highlight_value_column")
+        self._highlight_value_template = config.get("highlight_value_template", "{}")
         self._highlight_link = (
             pl.scan_parquet(self._highlight_link_path)
             if self._highlight_link_path is not None
@@ -812,6 +828,13 @@ class LinePlot(BaseComponent):
         if self._highlight_selection and self._highlight_match_column:
             if self._highlight_match_column not in columns_to_select:
                 columns_to_select.append(self._highlight_match_column)
+            # The optional match-column value label (deconv MonoMass) needs its
+            # source column in the projection too.
+            if (
+                self._highlight_value_column
+                and self._highlight_value_column not in columns_to_select
+            ):
+                columns_to_select.append(self._highlight_value_column)
 
         # Get cached data (DataFrame or LazyFrame)
         data = self._preprocessed_data.get("data")
@@ -989,6 +1012,14 @@ class LinePlot(BaseComponent):
         # ---- MATCH-COLUMN path (deconvolved spectrum) ----
         if self._highlight_link is None and self._highlight_match_column:
             selective: Dict[Any, Dict[str, Any]] = {}
+            # Optional value label above each matched stick (e.g. the selected
+            # mass's MonoMass value on the deconvolved spectrum -- oracle parity).
+            want_label = (
+                self._highlight_value_column is not None
+                and self._highlight_value_column in df_pandas.columns
+                and self._x_column in df_pandas.columns
+            )
+            value_descriptors: Optional[List[Dict[str, Any]]] = None
             if (
                 sel is not None
                 and id_column is not None
@@ -997,11 +1028,31 @@ class LinePlot(BaseComponent):
             ):
                 match_vals = df_pandas[self._highlight_match_column].tolist()
                 key_vals = df_pandas[id_column].tolist()
-                for key, mval in zip(key_vals, match_vals):
+                x_vals = df_pandas[self._x_column].tolist() if want_label else None
+                val_vals = (
+                    df_pandas[self._highlight_value_column].tolist()
+                    if want_label
+                    else None
+                )
+                color = self._styling.get("highlightColor", "#E4572E")
+                descriptors: List[Dict[str, Any]] = []
+                for i, (key, mval) in enumerate(zip(key_vals, match_vals)):
                     if self._values_match(mval, sel):
                         selective[key] = {"highlight": True}
-            # No link frame => no all-signal toggle, no z=N labels (deconv parity).
-            return selective, None, None
+                        if want_label:
+                            try:
+                                text = self._highlight_value_template.format(val_vals[i])
+                            except (ValueError, KeyError, IndexError):
+                                text = str(val_vals[i])
+                            descriptors.append(
+                                {"x": float(x_vals[i]), "text": text, "color": color}
+                            )
+                if descriptors:
+                    value_descriptors = descriptors
+            # No link frame => no all-signal toggle / z=N labels (deconv parity);
+            # the optional value label rides the same peak-annotation channel as the
+            # link path's z=N labels (3rd return).
+            return selective, None, value_descriptors
 
         # ---- LINK path (annotated spectrum) ----
         if self._highlight_link is not None:
