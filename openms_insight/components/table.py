@@ -31,6 +31,18 @@ _LAST_SELECTION_KEY = "_svc_table_last_selection"
 # Session state key for tracking last sort/filter state per table component
 _LAST_SORT_FILTER_KEY = "_svc_table_last_sort_filter"
 
+# Structured constructor params stored in self._config (for subprocess
+# recreation / cache round-trip) that must NOT leak into _get_component_args as
+# stray snake_case top-level args — they are surfaced via dedicated camelCase
+# args instead. (Mirrors LinePlot._MANAGED_CONFIG_KEYS.) Only NEW params are
+# listed here; the pre-existing snake_case passthrough keys are intentionally
+# left untouched to keep the existing args contract byte-identical.
+_MANAGED_CONFIG_KEYS = frozenset(
+    {
+        "clears_selections",
+    }
+)
+
 
 @register_component("table")
 class Table(BaseComponent):
@@ -89,6 +101,7 @@ class Table(BaseComponent):
         pagination: bool = True,
         page_size: int = 100,
         pagination_identifier: Optional[str] = None,
+        clears_selections: Optional[List[str]] = None,
         **kwargs,
     ):
         """
@@ -136,6 +149,15 @@ class Table(BaseComponent):
             pagination_identifier: State key for storing pagination state (page, sort,
                 filters). Default: "{cache_id}_page". Used by StateManager to track
                 pagination state across reruns.
+            clears_selections: Optional list of selection IDENTIFIER names to RESET
+                to the store's "unset" sentinel (None/undefined) whenever THIS
+                component's interactivity fires (a row is clicked). Default None =>
+                no-op (existing behavior byte-identical). Use this so clicking a row
+                also clears stale DEPENDENT selections published by other components
+                (e.g. a protein-row click clearing the residue/tag selections so the
+                downstream tag table / tagger overlay aren't left stale). The
+                identifiers this component itself sets via ``interactivity`` are never
+                cleared even if listed.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -155,6 +177,10 @@ class Table(BaseComponent):
         self._page_size = page_size
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
+        # Dependent selection identifiers to reset to "unset" (None) on every
+        # row click (in addition to the interactivity selections this table sets).
+        # Default empty => no-op.
+        self._clears_selections = list(clears_selections) if clears_selections else []
 
         super().__init__(
             cache_id=cache_id,
@@ -177,6 +203,7 @@ class Table(BaseComponent):
             pagination=pagination,
             page_size=page_size,
             pagination_identifier=self._pagination_identifier,
+            clears_selections=self._clears_selections,
             **kwargs,
         )
 
@@ -206,9 +233,16 @@ class Table(BaseComponent):
         }
 
     def _get_render_config(self) -> Dict[str, Any]:
-        """Presentation config: stored for reconstruction, excluded from hash."""
+        """Presentation config: stored for reconstruction, excluded from hash.
+
+        ``clears_selections`` is an interaction-time behavior (which dependent
+        selections a row click resets); it does NOT shape the preprocessed data,
+        so it lives here (stored, excluded from the cache-key hash) rather than in
+        ``_get_cache_config()``.
+        """
         return {
             "title": self._title,
+            "clears_selections": self._clears_selections,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -229,6 +263,7 @@ class Table(BaseComponent):
     def _restore_render_config(self, config: Dict[str, Any]) -> None:
         """Restore presentation configuration from cached config."""
         self._title = config.get("title", self._title)
+        self._clears_selections = config.get("clears_selections", []) or []
 
     def get_state_dependencies(self) -> List[str]:
         """
@@ -1062,8 +1097,18 @@ class Table(BaseComponent):
         if self._initial_sort:
             args["initialSort"] = self._initial_sort
 
-        # Add any extra config options
-        args.update(self._config)
+        # Dependent selection identifiers a row click resets to "unset". Surfaced
+        # as camelCase for Vue; only emitted when non-empty so the default-OFF case
+        # adds no arg (byte-identical existing behavior). The snake_case key is a
+        # managed config param filtered out of the _config merge below.
+        if self._clears_selections:
+            args["clearsSelections"] = list(self._clears_selections)
+
+        # Add any extra config options, excluding managed keys that are surfaced via
+        # dedicated camelCase args above (prevents a stray snake_case duplicate).
+        args.update(
+            {k: v for k, v in self._config.items() if k not in _MANAGED_CONFIG_KEYS}
+        )
 
         return args
 

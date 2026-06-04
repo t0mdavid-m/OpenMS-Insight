@@ -70,6 +70,15 @@ export interface TableComponentArgs extends BaseComponentArgs {
   paginationIdentifier?: string
   /** Column metadata for filter dialogs (precomputed unique values, min/max) */
   columnMetadata?: Record<string, ColumnMetadata>
+  /**
+   * Dependent selection IDENTIFIER names to RESET to the store's "unset" sentinel
+   * (null/undefined) whenever a row is clicked, IN ADDITION to the `interactivity`
+   * selections this table sets. Default absent => no-op (only this table's own
+   * selections are written). Identifiers this table itself sets via `interactivity`
+   * are never cleared even if listed. Used so e.g. clicking a protein row also
+   * clears stale `aa`/`tag` selections published by other components.
+   */
+  clearsSelections?: string[]
 }
 
 /**

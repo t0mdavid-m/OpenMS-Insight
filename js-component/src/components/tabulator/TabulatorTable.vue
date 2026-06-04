@@ -1338,10 +1338,44 @@ export default defineComponent({
         }
       }
 
+      // ADDITIONALLY: reset any DEPENDENT selections this click should clear, to
+      // the store's "unset" sentinel (null). Default off (clearsSelections absent)
+      // => this is a no-op. Identifiers this table itself sets via interactivity
+      // are skipped so we never clobber the values just written above. The null
+      // propagates through App.vue -> StateManager.update_from_vue (which treats
+      // null as "no selection") so dependent components' filters/interval_filters
+      // see no selection on the next render (oracle parity:
+      // updateSelectedProtein clears selectedAA/selectedTag/tagData on each click).
+      this.clearDependentSelections()
+
       // Clear flag after Vue's next tick (after watcher has fired)
       this.$nextTick(() => {
         this.skipNextSync = false
       })
+    },
+
+    /**
+     * Reset the configured `clearsSelections` dependent identifiers to the store's
+     * "unset" sentinel (null), skipping any identifier this table itself sets via
+     * `interactivity` (those were just written to the clicked row's value). Default
+     * off: when `args.clearsSelections` is absent/empty this is a no-op, so existing
+     * components are unaffected.
+     */
+    clearDependentSelections(): void {
+      const clears = this.args.clearsSelections
+      if (!clears || clears.length === 0) {
+        return
+      }
+      const interactivity = this.args.interactivity || {}
+      for (const identifier of clears) {
+        // Never clear an identifier this table is itself setting.
+        if (identifier in interactivity) {
+          continue
+        }
+        // null is the "unset" representation: StateManager / _prepare_vue_data
+        // treat null/undefined as no-selection, so dependents skip it.
+        this.selectionStore.updateSelection(identifier, null)
+      }
     },
 
     /**
