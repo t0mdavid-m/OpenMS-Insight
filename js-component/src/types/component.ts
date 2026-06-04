@@ -112,7 +112,39 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   taggerLevel1Key?: string
   /** Oracle level-1 charge-label x scaling factor (27.5). */
   xPosScalingFactor?: number
+  // --- selective-highlight (FLASHApp parity), default mode ---
+  /**
+   * When true, the selection-driven selective highlight is active: the modebar
+   * toggle buttons are constructed and the client-side all-signal highlight runs.
+   * Off (absent) => existing default-plot behavior, byte-identical.
+   */
+  selectiveHighlightEnabled?: boolean
+  /**
+   * Enables the "Show/Hide Deconvolved Peaks" modebar button (annotated spectrum).
+   * When ON, the toggle cumulatively highlights ALL signal peaks.
+   */
+  deconvPeaksToggle?: boolean
   height?: number // Component height in pixels
+}
+
+/**
+ * Selective-highlight (FLASHApp parity) render-time payload, arriving via
+ * ``allDataForDrawing.selectiveHighlight``. The selective set is baked into the
+ * plot's ``highlight_mask`` (per-row); this carries the ALL-SIGNAL key-set (for
+ * the "Show Deconvolved Peaks" toggle), the id column those keys live in, and the
+ * toggle defaults. The toggles switch sets entirely client-side (no round-trip).
+ */
+export interface SelectiveHighlightPayload {
+  /** The id column the all-signal keys are matched against (first interactivity). */
+  idColumn?: string | null
+  /** Every signal peak's id (ALL-SIGNAL set for the toggle); null on the deconv path. */
+  allSignalKeys?: (number | string)[] | null
+  /** Toggle DEFAULT: z=N labels visible (oracle ON). */
+  annotationsVisible?: boolean
+  /** Toggle DEFAULT: deconvolved-peaks highlight (oracle OFF). */
+  deconvolvedPeaksHighlightMode?: boolean
+  /** Whether the "Show Deconvolved Peaks" button is enabled (annotated spectrum). */
+  deconvPeaksToggle?: boolean
 }
 
 /**
@@ -136,6 +168,9 @@ export interface DensityPlotComponentArgs extends BaseComponentArgs {
   decoyValue: string
   /** Legend noun, e.g. "QScore" (default) or "ProteoformLevelQvalue". */
   scoreLabel?: string
+  /** Explicit trace legend names; fall back to `${scoreLabel} (Target|Decoy)`. */
+  targetLabel?: string
+  decoyLabel?: string
   styling?: { targetColor?: string; decoyColor?: string }
   config?: Record<string, unknown>
   height?: number
@@ -400,6 +435,14 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
   hoverColumns?: string[]
   interactivity?: InteractivityMapping
   height?: number
+  /**
+   * Dynamic-title (FLASHApp parity) scan+mass selection-identifier mapping, e.g.
+   * `{ scan: 'spectrum', mass: 'mass' }`. When set, the title is computed
+   * reactively from the selection store: '' if the scan selection is unset, else
+   * 'Precursor signals' if the mass selection is unset, else 'Mass signals'.
+   * When absent, the static `title` is used unchanged.
+   */
+  titleSelection?: { scan?: string; mass?: string } | null
 }
 
 /**

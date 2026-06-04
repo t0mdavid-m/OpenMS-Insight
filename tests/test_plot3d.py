@@ -581,3 +581,96 @@ class TestPlot3DCategoryNameTemplate:
         )
         assert plot._category_name_template is None
         assert plot._get_component_args()["categoryNameTemplate"] is None
+
+
+class TestPlot3DDynamicTitle:
+    """Dynamic-title (FLASHApp parity) ``title_selection`` mapping.
+
+    The oracle Plotly3Dplot.vue ``title`` computed:
+      '' when the scan selection is unset,
+      'Precursor signals' when the scan is set but the mass is unset,
+      'Mass signals' when both are set.
+    ``compute_dynamic_title`` is the single source of truth (the Vue title mirrors
+    it reactively). Default ``None`` => the static ``title`` is used unchanged.
+    """
+
+    def _make(self, temp_cache_dir, data, **overrides):
+        defaults = {
+            "cache_id": "plot3d_title",
+            "data": data,
+            "x_column": "mass",
+            "y_column": "charge",
+            "z_column": "intensity",
+            "category_column": "series",
+            "filters": {"spectrum": "scan", "mass": "mass_index"},
+            "filter_defaults": {"spectrum": -1},
+            "title": "Precursor Signals",
+            "title_selection": {"scan": "spectrum", "mass": "mass"},
+            "cache_path": str(temp_cache_dir),
+        }
+        defaults.update(overrides)
+        return Plot3D(**defaults)
+
+    def test_empty_when_scan_unset(
+        self, mock_streamlit, temp_cache_dir: Path, sample_plot3d_data: pl.LazyFrame
+    ):
+        plot = self._make(temp_cache_dir, sample_plot3d_data)
+        assert plot.compute_dynamic_title({}) == ""
+        assert plot.compute_dynamic_title({"mass": 5}) == ""
+
+    def test_precursor_signals_when_scan_only(
+        self, mock_streamlit, temp_cache_dir: Path, sample_plot3d_data: pl.LazyFrame
+    ):
+        plot = self._make(temp_cache_dir, sample_plot3d_data)
+        assert plot.compute_dynamic_title({"spectrum": 100}) == "Precursor signals"
+
+    def test_mass_signals_when_scan_and_mass(
+        self, mock_streamlit, temp_cache_dir: Path, sample_plot3d_data: pl.LazyFrame
+    ):
+        plot = self._make(temp_cache_dir, sample_plot3d_data)
+        assert (
+            plot.compute_dynamic_title({"spectrum": 100, "mass": 5}) == "Mass signals"
+        )
+
+    def test_title_selection_passed_to_vue_args(
+        self, mock_streamlit, temp_cache_dir: Path, sample_plot3d_data: pl.LazyFrame
+    ):
+        plot = self._make(temp_cache_dir, sample_plot3d_data)
+        assert plot._get_component_args()["titleSelection"] == {
+            "scan": "spectrum",
+            "mass": "mass",
+        }
+
+    def test_default_none_uses_static_title(
+        self, mock_streamlit, temp_cache_dir: Path, sample_plot3d_data: pl.LazyFrame
+    ):
+        plot = Plot3D(
+            cache_id="plot3d_title_off",
+            data=sample_plot3d_data,
+            x_column="mass",
+            y_column="charge",
+            z_column="intensity",
+            title="Precursor Signals",
+            cache_path=str(temp_cache_dir),
+        )
+        # None => compute_dynamic_title returns None (caller falls back to static).
+        assert plot._title_selection is None
+        assert plot.compute_dynamic_title({"spectrum": 100, "mass": 5}) is None
+        assert plot._get_component_args()["titleSelection"] is None
+
+    def test_title_selection_roundtrips_through_reconstruction(
+        self, mock_streamlit, temp_cache_dir: Path, sample_plot3d_data: pl.LazyFrame
+    ):
+        self._make(
+            temp_cache_dir, sample_plot3d_data, cache_id="plot3d_title_rt"
+        )
+        # title_selection is render config (persisted, NOT hash-affecting).
+        restored = Plot3D(cache_id="plot3d_title_rt", cache_path=str(temp_cache_dir))
+        assert restored._title_selection == {"scan": "spectrum", "mass": "mass"}
+        assert restored._get_component_args()["titleSelection"] == {
+            "scan": "spectrum",
+            "mass": "mass",
+        }
+        # Not in the cache (hash) config — it is presentation-only.
+        assert "title_selection" not in restored._get_cache_config()
+        assert "title_selection" in restored._get_render_config()

@@ -99,6 +99,7 @@ class Plot3D(BaseComponent):
         log_z: bool = False,
         hover_columns: Optional[List[str]] = None,
         optional_filters: Optional[List[str]] = None,
+        title_selection: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         """
@@ -165,6 +166,15 @@ class Plot3D(BaseComponent):
                 {"x": 2.5, "y": 0, "z": 0.2}.
             log_z: If True, log10-transform z. Default False (parity = linear).
             hover_columns: Extra tidy columns surfaced on hover.
+            title_selection: Optional mapping of the SCAN + MASS selection
+                identifiers driving a DYNAMIC title (FLASHApp parity), e.g.
+                ``{"scan": "spectrum", "mass": "mass"}``. The keys are fixed roles
+                (``"scan"`` and ``"mass"``); the values are the selection-store
+                identifier names to read. At render time the title is computed as:
+                ``''`` when the scan selection is unset, else ``'Precursor signals'``
+                when the mass selection is unset, else ``'Mass signals'`` (oracle
+                Plotly3Dplot.vue). Default ``None`` -> use the static ``title``
+                unchanged. Render config (not hash-affecting).
             **kwargs: Additional configuration options.
         """
         self._x_column = x_column
@@ -186,6 +196,9 @@ class Plot3D(BaseComponent):
         self._camera_eye = camera_eye or dict(DEFAULT_CAMERA_EYE)
         self._log_z = log_z
         self._hover_columns = hover_columns or []
+        # Dynamic-title (FLASHApp parity) scan+mass selection-identifier mapping.
+        # None => use the static title unchanged (default behavior).
+        self._title_selection = title_selection
         # Identifiers (subset of filters) skipped when their selection is None, so
         # the plot shows all rows for the required filters and only narrows when the
         # optional selection is set (e.g. show all of a scan's masses until a mass
@@ -274,6 +287,7 @@ class Plot3D(BaseComponent):
             "y_tick0": self._y_tick0,
             "camera_eye": self._camera_eye,
             "optional_filters": self._optional_filters,
+            "title_selection": self._title_selection,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
@@ -303,6 +317,7 @@ class Plot3D(BaseComponent):
         self._y_tick0 = config.get("y_tick0", 0.0)
         self._camera_eye = config.get("camera_eye", dict(DEFAULT_CAMERA_EYE))
         self._optional_filters = config.get("optional_filters", [])
+        self._title_selection = config.get("title_selection")
 
     def _select_columns(self) -> List[str]:
         """Build the de-duplicated list of tidy columns to keep."""
@@ -357,6 +372,36 @@ class Plot3D(BaseComponent):
             lf = lf.sort(sort_keys, maintain_order=True)
 
         self._preprocessed_data = {"plot3dData": lf.collect()}
+
+    def compute_dynamic_title(self, state: Dict[str, Any]) -> Optional[str]:
+        """
+        Compute the FLASHApp-parity dynamic title from the selection state.
+
+        Mirrors the oracle Plotly3Dplot.vue ``title`` computed property exactly:
+
+        - ``''`` when the scan selection is unset,
+        - ``'Precursor signals'`` when the scan is set but the mass is unset,
+        - ``'Mass signals'`` when both the scan and the mass are set.
+
+        Returns ``None`` when ``title_selection`` is not configured (the caller then
+        falls back to the static ``title`` — default behavior unchanged). This is the
+        single source of truth shared by Python tests and (re-implemented identically)
+        by the Vue reactive title.
+
+        Args:
+            state: Current selection state (identifier -> value).
+        """
+        if not self._title_selection:
+            return None
+        scan_ident = self._title_selection.get("scan")
+        mass_ident = self._title_selection.get("mass")
+        scan_val = state.get(scan_ident) if scan_ident else None
+        mass_val = state.get(mass_ident) if mass_ident else None
+        if scan_val is None:
+            return ""
+        if mass_val is None:
+            return "Precursor signals"
+        return "Mass signals"
 
     def _get_vue_component_name(self) -> str:
         """Return the Vue component name."""
@@ -421,6 +466,12 @@ class Plot3D(BaseComponent):
             "hoverColumns": self._hover_columns or [],
             "interactivity": self._interactivity or {},
             "height": DEFAULT_PLOT3D_HEIGHT,
+            # Dynamic-title (FLASHApp parity): the scan+mass selection-identifier
+            # mapping. When present, Plotly3D.vue computes the title reactively from
+            # the selection store (oracle Plotly3Dplot.vue): '' if scan unset, else
+            # 'Precursor signals' if mass unset, else 'Mass signals'. When absent,
+            # the static ``title`` is used unchanged.
+            "titleSelection": self._title_selection,
         }
 
     def __call__(

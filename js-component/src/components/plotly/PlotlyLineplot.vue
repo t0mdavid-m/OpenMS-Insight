@@ -65,6 +65,13 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
+      // Selective-highlight (FLASHApp parity) modebar toggle state. Defaults match
+      // the oracle: annotations (z=N labels) VISIBLE, deconvolved-peaks highlight
+      // OFF. Both toggle entirely CLIENT-SIDE (no server round-trip): Python sends
+      // the selective set (baked into highlight_mask) + the ALL-SIGNAL key-set, and
+      // these flags pick which set the highlighted trace draws + whether labels show.
+      annotationsVisible: true as boolean,
+      deconvolvedPeaksHighlightMode: false as boolean,
     }
   },
   computed: {
@@ -213,6 +220,94 @@ export default defineComponent({
       const raw = this.streamlitDataStore.allDataForDrawing?.peakAnnotations
       if (!raw || !Array.isArray(raw)) return []
       return raw as PeakAnnotation[]
+    },
+
+    /**
+     * Selective-highlight (FLASHApp parity) render-time payload from Python.
+     * Carries the ALL-SIGNAL key-set (for the "Show Deconvolved Peaks" toggle),
+     * the id column those keys live in, the button-enable flag, and the toggle
+     * defaults. Present only when the new highlight path is configured.
+     */
+    selectiveHighlight():
+      | {
+          idColumn?: string | null
+          allSignalKeys?: (number | string)[] | null
+          deconvPeaksToggle?: boolean
+          annotationsVisible?: boolean
+          deconvolvedPeaksHighlightMode?: boolean
+        }
+      | undefined {
+      const raw = this.streamlitDataStore.allDataForDrawing?.selectiveHighlight
+      return raw as
+        | {
+            idColumn?: string | null
+            allSignalKeys?: (number | string)[] | null
+            deconvPeaksToggle?: boolean
+          }
+        | undefined
+    },
+
+    /**
+     * Whether the selective-highlight (FLASHApp parity) path is active for this
+     * plot. Config-time flag from args; gates the modebar toggle buttons + the
+     * client-side all-signal highlight, so existing default plots are unchanged.
+     */
+    selectiveHighlightEnabled(): boolean {
+      return Boolean(this.args.selectiveHighlightEnabled)
+    },
+
+    /**
+     * Whether the "Show Deconvolved Peaks" toggle button is enabled (config-time;
+     * the oracle adds it only on the annotated spectrum).
+     */
+    deconvPeaksToggleEnabled(): boolean {
+      return Boolean(this.args.deconvPeaksToggle)
+    },
+
+    /**
+     * The ALL-SIGNAL key SET (every signal peak's id), for the toggle. Empty set
+     * when not configured. Membership-tested against each row's id-column value.
+     */
+    allSignalKeySet(): Set<number | string> {
+      const keys = this.selectiveHighlight?.allSignalKeys
+      if (!Array.isArray(keys)) return new Set()
+      return new Set(keys)
+    },
+
+    /**
+     * The EFFECTIVE highlight mask actually drawn, derived CLIENT-SIDE from the
+     * toggle state (no round-trip):
+     *  - base: the SELECTIVE mask Python baked into ``highlight_mask`` (the
+     *    selected mass's peaks),
+     *  - when ``deconvolvedPeaksHighlightMode`` is ON: cumulatively OR-in EVERY
+     *    signal peak (the ALL-SIGNAL set), matched by the id-column value — exactly
+     *    the oracle ``highlightedValues`` deconvolvedPeaksHighlightMode branch.
+     * Returns undefined when the selective path is inactive (so the base
+     * ``highlight_mask`` is used verbatim — default behavior unchanged).
+     */
+    effectiveHighlightMask(): boolean[] | undefined {
+      if (!this.selectiveHighlightEnabled) return undefined
+      const data = this.activePlotData
+      if (!data) return undefined
+      const base = data.highlight_mask
+      const n = data.x_values.length
+      const mask: boolean[] = new Array(n)
+      for (let i = 0; i < n; i++) mask[i] = base ? Boolean(base[i]) : false
+
+      // Toggle ON => additionally highlight all signal peaks (cumulative).
+      if (this.deconvolvedPeaksHighlightMode) {
+        const idCol = this.selectiveHighlight?.idColumn
+        const all = this.allSignalKeySet
+        if (idCol && all.size > 0) {
+          const idValues = data[`interactivity_${idCol}`] as unknown[] | undefined
+          if (Array.isArray(idValues)) {
+            for (let i = 0; i < n; i++) {
+              if (all.has(idValues[i] as number | string)) mask[i] = true
+            }
+          }
+        }
+      }
+      return mask
     },
 
     /**
@@ -1040,6 +1135,10 @@ export default defineComponent({
     }> {
       const descriptors = this.peakAnnotationDescriptors
       if (descriptors.length === 0) return []
+      // Selective-highlight (FLASHApp parity): the "Hide Annotations" toggle hides
+      // the z=N charge labels entirely (oracle: annotationsVisible gate). Only
+      // applies when the new path is active; other modes are unaffected.
+      if (this.selectiveHighlightEnabled && !this.annotationsVisible) return []
 
       const xRange = this.xRange
       // 1% of the x-range padding applied to BOTH boxes (oracle parity).
@@ -1220,7 +1319,12 @@ export default defineComponent({
       }
 
       const traces: Plotly.Data[] = []
-      const { highlight_mask, selected_mask } = this.activePlotData
+      const { selected_mask } = this.activePlotData
+      // Selective-highlight (FLASHApp parity): use the toggle-derived effective
+      // mask when the new path is active (selective set, plus all-signal peaks when
+      // "Show Deconvolved Peaks" is ON); otherwise the base mask (unchanged).
+      const highlight_mask =
+        this.effectiveHighlightMask ?? this.activePlotData.highlight_mask
       const selectedIndex = this.selectedPeakIndex
       const baseline = -10000000
 
@@ -1528,6 +1632,70 @@ export default defineComponent({
       return pixelWidth / (plotWidth / rangeWidth)
     },
 
+    /**
+     * Selective-highlight (FLASHApp parity) modebar toggle buttons.
+     *
+     * Returns the toggle buttons to ADD to the modebar, in oracle order:
+     *  1. "Hide/Show Annotations" — ALWAYS present (when the new path is active);
+     *     toggles the z=N charge labels. Title reflects state: visible => "Hide".
+     *  2. "Hide/Show Deconvolved Peaks" — only when ``deconvPeaksToggle`` is on
+     *     (the annotated spectrum); toggles highlighting ALL signal peaks. Title:
+     *     mode ON => "Hide", else "Show".
+     * Empty when the selective-highlight path is not active (default plots unchanged).
+     */
+    buildSelectiveHighlightButtons(): Plotly.ModeBarButton[] {
+      if (!this.selectiveHighlightEnabled) return []
+      const buttons: Plotly.ModeBarButton[] = []
+      buttons.push({
+        // Title swaps with state (oracle: annotationsVisible ? "Hide" : "Show").
+        title: this.annotationsVisible ? 'Hide Annotations' : 'Show Annotations',
+        name: 'toggleAnnotations',
+        icon: {
+          width: 1792,
+          height: 1792,
+          // Oracle eye icon (PlotlyLineplotUnified.vue).
+          path: 'M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z',
+        },
+        click: () => {
+          this.toggleAnnotations()
+        },
+      })
+      // Deconvolved-peaks toggle: annotated spectrum only (oracle isAnnotatedSpectraMode).
+      if (this.deconvPeaksToggleEnabled) {
+        buttons.push({
+          title: this.deconvolvedPeaksHighlightMode
+            ? 'Hide Deconvolved Peaks'
+            : 'Show Deconvolved Peaks',
+          name: 'toggleDeconvolvedPeaks',
+          icon: {
+            width: 1792,
+            height: 1792,
+            // Oracle list icon (PlotlyLineplotUnified.vue).
+            path: 'M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z',
+          },
+          click: () => {
+            this.toggleDeconvolvedPeaksHighlight()
+          },
+        })
+      }
+      return buttons
+    },
+
+    /** Toggle the z=N charge labels (client-side; re-renders with new state). */
+    toggleAnnotations(): void {
+      this.annotationsVisible = !this.annotationsVisible
+      this.renderPlot()
+    },
+
+    /**
+     * Toggle highlighting ALL signal peaks (cumulative with the selective set).
+     * Client-side: ``effectiveHighlightMask`` recomputes from the all-signal set.
+     */
+    toggleDeconvolvedPeaksHighlight(): void {
+      this.deconvolvedPeaksHighlightMode = !this.deconvolvedPeaksHighlightMode
+      this.renderPlot()
+    },
+
     async renderPlot(): Promise<void> {
       try {
         const element = document.getElementById(this.id)
@@ -1559,9 +1727,19 @@ export default defineComponent({
           },
         ]
 
+        // Selective-highlight (FLASHApp parity) modebar toggle buttons. They flip
+        // the local toggle state and re-render — the highlighted trace + z=N labels
+        // recompute CLIENT-SIDE from the selective / all-signal sets Python already
+        // sent (no server round-trip). The button TITLES are the exact dynamic
+        // oracle labels (PlotlyLineplotUnified.vue): "Hide/Show Annotations" and
+        // "Hide/Show Deconvolved Peaks". Order matches the oracle: annotations
+        // toggle first, then (annotated-spectrum only) the deconvolved-peaks toggle.
+        const toggleButtons = this.buildSelectiveHighlightButtons()
+        const allButtons = [...toggleButtons, ...modeBarButtons]
+
         await Plotly.newPlot(this.id, this.traces, this.layout, {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-          modeBarButtonsToAdd: modeBarButtons,
+          modeBarButtonsToAdd: allButtons,
           scrollZoom: true,
           responsive: true,
         })

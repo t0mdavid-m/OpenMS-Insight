@@ -55,6 +55,12 @@ export default defineComponent({
     scoreLabel(): string {
       return this.args.scoreLabel || 'QScore'
     },
+    targetTraceName(): string {
+      return this.args.targetLabel || `${this.scoreLabel} (Target)`
+    },
+    decoyTraceName(): string {
+      return this.args.decoyLabel || `${this.scoreLabel} (Decoy)`
+    },
     targetColor(): string {
       return this.args.styling?.targetColor || DEFAULT_TARGET_COLOR
     },
@@ -111,7 +117,7 @@ export default defineComponent({
           y: target.y,
           mode: 'lines+markers',
           type: 'scatter',
-          name: `${this.scoreLabel} (Target)`,
+          name: this.targetTraceName,
           marker: { color: this.targetColor },
           line: { color: this.targetColor },
         },
@@ -123,7 +129,7 @@ export default defineComponent({
           y: decoy.y,
           mode: 'lines+markers',
           type: 'scatter',
-          name: `${this.scoreLabel} (Decoy)`,
+          name: this.decoyTraceName,
           marker: { color: this.decoyColor },
           line: { color: this.decoyColor },
         })

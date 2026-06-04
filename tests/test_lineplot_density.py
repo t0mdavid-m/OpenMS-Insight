@@ -158,6 +158,24 @@ class TestDensityComponentArgs:
         args = comp._get_component_args()
         assert args["scoreLabel"] == "ProteoformLevelQvalue"
 
+    def test_trace_labels_default_none_and_configurable(
+        self, mock_streamlit, temp_cache_dir, sample_density_data
+    ):
+        # Default: no explicit trace labels -> Vue falls back to
+        # f"{scoreLabel} (Target|Decoy)".
+        default_args = _make(temp_cache_dir, sample_density_data)._get_component_args()
+        assert default_args["targetLabel"] is None
+        assert default_args["decoyLabel"] is None
+        # Configurable -> oracle FDR legend names.
+        comp = _make(
+            temp_cache_dir,
+            sample_density_data,
+            config={"targetLabel": "Target QScores", "decoyLabel": "Decoy QScores"},
+        )
+        args = comp._get_component_args()
+        assert args["targetLabel"] == "Target QScores"
+        assert args["decoyLabel"] == "Decoy QScores"
+
     def test_vue_component_name(
         self, mock_streamlit, temp_cache_dir, sample_density_data
     ):

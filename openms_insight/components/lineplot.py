@@ -63,6 +63,17 @@ _MANAGED_CONFIG_KEYS = frozenset(
         "tag_start_column",
         "selected_aa_identifier",
         "plot_config",
+        # Selective-highlight (FLASHApp parity) constructor params. Surfaced to Vue
+        # via dedicated camelCase args / the render-time payload, so they must NOT
+        # also leak as snake_case top-level args.
+        "highlight_selection",
+        "highlight_match_column",
+        "highlight_link_path",
+        "highlight_link_key_column",
+        "highlight_link_match_column",
+        "highlight_charge_column",
+        "highlight_annotation_template",
+        "deconv_peaks_toggle",
     }
 )
 
@@ -100,6 +111,40 @@ _TAGGER_PARAM_DEFAULTS: Dict[str, Any] = {
     "tag_masses_column": "masses",
     "tag_start_column": None,
     "selected_aa_identifier": None,
+}
+
+# Default-mode SELECTIVE-HIGHLIGHT parameters (FLASHApp parity). These reproduce
+# the oracle's selection-driven mass-spectrum interaction in the generic default
+# LinePlot. They are CONFIG (they determine which frames load + how the highlight
+# is computed) and round-trip via the manifest like the density/tagger params; the
+# resulting highlight itself is computed at RENDER time from the selection state
+# (see ``_prepare_vue_data_default``) and is never cached.
+#
+# - highlight_selection: selection identifier whose value drives the selective
+#   highlight (e.g. "mass"). None disables the whole new path (default OFF).
+# - highlight_match_column: when set and no link path is configured, highlight
+#   BASE rows where base[match_column] == state[highlight_selection] (deconvolved
+#   spectrum, whose base frame carries mass_in_scan per row).
+# - highlight_link_path: parquet of a highlight LINKAGE frame (annotated spectrum,
+#   where highlighted peaks are a subset linked by signal-peak membership). One row
+#   per (signal peak, mass it belongs to); may be 1:many per peak. Columns:
+#     * highlight_link_key_column  -> matches the base frame's first-interactivity
+#                                     value / index (e.g. "peak_id"),
+#     * highlight_link_match_column -> the mass each peak belongs to (e.g.
+#                                     "mass_in_scan"); compared to the selection,
+#     * highlight_charge_column     -> the per-peak charge (for z=N labels).
+# - highlight_annotation_template: charge-label text; template.format(charge).
+# - deconv_peaks_toggle: enable the "Show Deconvolved Peaks" modebar button (the
+#   annotated spectrum); default OFF.
+_HIGHLIGHT_PARAM_DEFAULTS: Dict[str, Any] = {
+    "highlight_selection": None,
+    "highlight_match_column": None,
+    "highlight_link_path": None,
+    "highlight_link_key_column": "peak_id",
+    "highlight_link_match_column": "mass_in_scan",
+    "highlight_charge_column": "charge",
+    "highlight_annotation_template": "z={}",
+    "deconv_peaks_toggle": False,
 }
 
 
@@ -227,6 +272,10 @@ class LinePlot(BaseComponent):
             key: kwargs.pop(key, default)
             for key, default in _TAGGER_PARAM_DEFAULTS.items()
         }
+        highlight_params = {
+            key: kwargs.pop(key, default)
+            for key, default in _HIGHLIGHT_PARAM_DEFAULTS.items()
+        }
 
         self._x_column = x_column
         self._y_column = y_column
@@ -267,6 +316,25 @@ class LinePlot(BaseComponent):
             if self._tag_data_path is not None
             else None
         )
+        # Selective-highlight (FLASHApp parity) config.
+        self._highlight_selection = highlight_params["highlight_selection"]
+        self._highlight_match_column = highlight_params["highlight_match_column"]
+        self._highlight_link_path = highlight_params["highlight_link_path"]
+        self._highlight_link_key_column = highlight_params["highlight_link_key_column"]
+        self._highlight_link_match_column = highlight_params[
+            "highlight_link_match_column"
+        ]
+        self._highlight_charge_column = highlight_params["highlight_charge_column"]
+        self._highlight_annotation_template = highlight_params[
+            "highlight_annotation_template"
+        ]
+        self._deconv_peaks_toggle = highlight_params["deconv_peaks_toggle"]
+        # Lazy handle to the highlight linkage frame (annotated spectrum).
+        self._highlight_link = (
+            pl.scan_parquet(self._highlight_link_path)
+            if self._highlight_link_path is not None
+            else None
+        )
 
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: Optional[Dict[str, Any]] = None
@@ -297,6 +365,7 @@ class LinePlot(BaseComponent):
             # Per-mode params (round-tripped verbatim for subprocess recreation).
             **density_params,
             **tagger_params,
+            **highlight_params,
             **kwargs,
         )
 
@@ -340,6 +409,15 @@ class LinePlot(BaseComponent):
             "tag_masses_column": self._tag_masses_column,
             "tag_start_column": self._tag_start_column,
             "selected_aa_identifier": self._selected_aa_identifier,
+            # selective-highlight (FLASHApp parity) config
+            "highlight_selection": self._highlight_selection,
+            "highlight_match_column": self._highlight_match_column,
+            "highlight_link_path": self._highlight_link_path,
+            "highlight_link_key_column": self._highlight_link_key_column,
+            "highlight_link_match_column": self._highlight_link_match_column,
+            "highlight_charge_column": self._highlight_charge_column,
+            "highlight_annotation_template": self._highlight_annotation_template,
+            "deconv_peaks_toggle": self._deconv_peaks_toggle,
         }
 
     def _get_render_config(self) -> Dict[str, Any]:
@@ -384,6 +462,26 @@ class LinePlot(BaseComponent):
         self._tag_data = (
             pl.scan_parquet(self._tag_data_path)
             if self._tag_data_path is not None
+            else None
+        )
+        # selective-highlight (FLASHApp parity) config
+        self._highlight_selection = config.get("highlight_selection")
+        self._highlight_match_column = config.get("highlight_match_column")
+        self._highlight_link_path = config.get("highlight_link_path")
+        self._highlight_link_key_column = config.get(
+            "highlight_link_key_column", "peak_id"
+        )
+        self._highlight_link_match_column = config.get(
+            "highlight_link_match_column", "mass_in_scan"
+        )
+        self._highlight_charge_column = config.get("highlight_charge_column", "charge")
+        self._highlight_annotation_template = config.get(
+            "highlight_annotation_template", "z={}"
+        )
+        self._deconv_peaks_toggle = config.get("deconv_peaks_toggle", False)
+        self._highlight_link = (
+            pl.scan_parquet(self._highlight_link_path)
+            if self._highlight_link_path is not None
             else None
         )
         # Initialize dynamic annotations (not cached)
@@ -658,7 +756,16 @@ class LinePlot(BaseComponent):
                 if ident and ident not in deps:
                     deps.append(ident)
             return deps
-        return list(self._filters.keys())
+        deps = list(self._filters.keys())
+        # The selective-highlight (FLASHApp parity) is computed at render time from
+        # the highlight selection, so a change to it must invalidate this plot's
+        # cache. Registering it as a dependency makes a selection change a cache
+        # MISS => ``_prepare_vue_data_default`` recomputes the highlight from the
+        # fresh state (the modebar toggles then switch sets client-side, no
+        # round-trip). Off by default => no behavior change for existing plots.
+        if self._highlight_selection and self._highlight_selection not in deps:
+            deps.append(self._highlight_selection)
+        return deps
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -700,6 +807,11 @@ class LinePlot(BaseComponent):
             for col in self._filters.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        # Selective-highlight (FLASHApp parity) needs its match column kept in the
+        # base projection (the deconv spectrum highlights base rows by it).
+        if self._highlight_selection and self._highlight_match_column:
+            if self._highlight_match_column not in columns_to_select:
+                columns_to_select.append(self._highlight_match_column)
 
         # Get cached data (DataFrame or LazyFrame)
         data = self._preprocessed_data.get("data")
@@ -724,9 +836,56 @@ class LinePlot(BaseComponent):
         highlight_col = self._highlight_column
         annotation_col = self._annotation_column
 
+        # --- Selective highlight (FLASHApp parity), SELECTION-driven, NOT cached --
+        # When the new highlight params are set, compute (at render time, from the
+        # fresh selection state):
+        #   (a) the SELECTIVE highlight key-set (the selected mass's peaks),
+        #   (b) the ALL-SIGNAL key-set (every signal peak; powers the toggle),
+        #   (c) per-charge z=N labels for the selected set (COG producer).
+        # (a) reuses the existing ``_dynamic_annotations`` highlight column path —
+        # we merge the computed selective set into the keyed dynamic-annotation dict
+        # used just below, so the SAME ``_dynamic_highlight`` column + plot-config
+        # wiring renders it (identical to a caller-supplied ``set_dynamic_annotations``).
+        # (b) + the toggle-default flags + button labels are passed to Vue so the
+        # modebar toggles switch the drawn set client-side with NO server round-trip.
+        # This supersedes the static ``highlight_column`` ONLY when configured.
+        #
+        # IMPORTANT: the computation is local (it does NOT mutate the instance
+        # ``_dynamic_annotations``/``_peak_annotations`` attributes), so the bridge's
+        # render-time-annotation machinery stays inert and the FULL payload caches
+        # cleanly keyed by the highlight selection (a state dependency). A cache HIT
+        # therefore means the same selection and the cached selective highlight is
+        # correct verbatim.
+        all_signal_keys: Optional[List[Any]] = None
+        if self._highlight_selection:
+            (
+                selective_highlight,
+                all_signal_keys,
+                charge_descriptors,
+            ) = self._compute_selective_highlight(df_pandas, state)
+            # Merge (a) into the keyed dynamic-annotation dict consumed below. A
+            # caller-supplied ``_dynamic_annotations`` still wins per key (additive,
+            # no override); the selective set fills the rest.
+            if selective_highlight:
+                merged = dict(selective_highlight)
+                if isinstance(self._dynamic_annotations, dict):
+                    merged.update(self._dynamic_annotations)
+                dynamic_annotations = merged
+            else:
+                dynamic_annotations = self._dynamic_annotations
+            # (c) z=N labels: prefer a caller-supplied set, else the computed one.
+            peak_annotations = (
+                self._peak_annotations
+                if self._peak_annotations is not None
+                else charge_descriptors
+            )
+        else:
+            dynamic_annotations = self._dynamic_annotations
+            peak_annotations = self._peak_annotations
+
         # Apply dynamic annotations if set
         # Annotations are keyed by peak_id (stable identifier from interactivity column)
-        if self._dynamic_annotations and len(df_pandas) > 0:
+        if dynamic_annotations and len(df_pandas) > 0:
             num_rows = len(df_pandas)
             highlights = [False] * num_rows
             annotations = [""] * num_rows
@@ -741,13 +900,13 @@ class LinePlot(BaseComponent):
             if id_column and id_column in df_pandas.columns:
                 peak_ids = df_pandas[id_column].tolist()
                 for row_idx, peak_id in enumerate(peak_ids):
-                    if peak_id in self._dynamic_annotations:
-                        ann_data = self._dynamic_annotations[peak_id]
+                    if peak_id in dynamic_annotations:
+                        ann_data = dynamic_annotations[peak_id]
                         highlights[row_idx] = ann_data.get("highlight", False)
                         annotations[row_idx] = ann_data.get("annotation", "")
             else:
                 # Fallback: use row index as key (legacy behavior)
-                for idx, ann_data in self._dynamic_annotations.items():
+                for idx, ann_data in dynamic_annotations.items():
                     if isinstance(idx, int) and 0 <= idx < num_rows:
                         highlights[idx] = ann_data.get("highlight", False)
                         annotations[idx] = ann_data.get("annotation", "")
@@ -763,7 +922,7 @@ class LinePlot(BaseComponent):
 
             # Update hash to include dynamic annotation state
             ann_hash = hashlib.md5(
-                str(sorted(self._dynamic_annotations.keys())).encode()
+                str(sorted(dynamic_annotations.keys())).encode()
             ).hexdigest()[:8]
             data_hash = f"{data_hash}_{ann_hash}"
 
@@ -775,8 +934,213 @@ class LinePlot(BaseComponent):
             "_plotConfig": self._build_plot_config(highlight_col, annotation_col),
         }
         # Attach generic render-time per-peak annotation descriptors (not cached).
-        self._attach_peak_annotations(result)
+        # Uses the LOCAL peak_annotations (caller's set, or the computed z=N labels).
+        self._attach_peak_annotations(result, peak_annotations)
+        # Attach the selective-highlight payload (ALL-SIGNAL set + toggle defaults +
+        # button labels) so the Vue modebar toggles switch sets WITHOUT a round-trip.
+        if self._highlight_selection:
+            self._attach_selective_highlight(result, all_signal_keys)
         return result
+
+    @staticmethod
+    def _coerce_selection_value(sel: Any) -> Any:
+        """Normalize a JSON selection scalar (float 3.0 -> int 3) for matching."""
+        if isinstance(sel, float) and sel.is_integer():
+            return int(sel)
+        return sel
+
+    def _compute_selective_highlight(
+        self, df_pandas: "Any", state: Dict[str, Any]
+    ) -> tuple:
+        """
+        Compute the FLASHApp-parity selective highlight from the current selection.
+
+        Returns ``(selective_highlight, all_signal_keys, charge_descriptors)``:
+
+        - ``selective_highlight``: ``{key: {"highlight": True}}`` for the base rows
+          belonging to the selected mass (drives the orange highlight via the
+          existing ``_dynamic_highlight`` column path). ``key`` is the base frame's
+          first-interactivity value (e.g. ``peak_id``).
+        - ``all_signal_keys``: every signal-peak key (LINK path only) — the set the
+          "Show Deconvolved Peaks" toggle highlights client-side. ``None`` when no
+          link frame is configured (the deconv/match-column path has no toggle).
+        - ``charge_descriptors``: per-charge ``z=N`` label descriptors at each
+          charge group's intensity-weighted COG m/z (LINK path only; the deconv
+          spectrum emits NO charge labels). ``None`` otherwise.
+
+        Two modes (parity with PlotlyLineplotUnified.vue ``highlightedValues``):
+
+        * MATCH-COLUMN (deconv spectrum): highlight base rows where
+          ``base[highlight_match_column] == sel``. ``base`` carries one mass per row
+          (``mass_in_scan``), so the selected mass's row(s) light up directly.
+        * LINK (annotated spectrum): the highlighted peaks are a SUBSET linked by
+          signal-peak membership. The linkage frame has one row per
+          ``(signal peak, mass)``; selective keys are the ``key_column`` values whose
+          ``match_column`` equals ``sel`` (may be 1:many per peak).
+        """
+        sel = self._coerce_selection_value(state.get(self._highlight_selection))
+
+        # Base ID column used to key the highlight (first interactivity column,
+        # e.g. peak_id). Without it we cannot map highlight keys onto base rows.
+        id_column: Optional[str] = None
+        if self._interactivity:
+            id_column = list(self._interactivity.values())[0]
+
+        # ---- MATCH-COLUMN path (deconvolved spectrum) ----
+        if self._highlight_link is None and self._highlight_match_column:
+            selective: Dict[Any, Dict[str, Any]] = {}
+            if (
+                sel is not None
+                and id_column is not None
+                and id_column in df_pandas.columns
+                and self._highlight_match_column in df_pandas.columns
+            ):
+                match_vals = df_pandas[self._highlight_match_column].tolist()
+                key_vals = df_pandas[id_column].tolist()
+                for key, mval in zip(key_vals, match_vals):
+                    if self._values_match(mval, sel):
+                        selective[key] = {"highlight": True}
+            # No link frame => no all-signal toggle, no z=N labels (deconv parity).
+            return selective, None, None
+
+        # ---- LINK path (annotated spectrum) ----
+        if self._highlight_link is not None:
+            return self._compute_link_highlight(df_pandas, sel, id_column)
+
+        # Highlight selection configured but neither match column nor link frame:
+        # nothing to highlight (defensive). Off-by-default contract preserved.
+        return {}, None, None
+
+    @staticmethod
+    def _values_match(a: Any, b: Any) -> bool:
+        """Equality with float/int tolerance for mass/index selection scalars."""
+        if a is None or b is None:
+            return False
+        if a == b:
+            return True
+        try:
+            return float(a) == float(b)
+        except (TypeError, ValueError):
+            return False
+
+    def _compute_link_highlight(
+        self, df_pandas: "Any", sel: Any, id_column: Optional[str]
+    ) -> tuple:
+        """LINK-path selective highlight + all-signal set + z=N COG descriptors."""
+        key_col = self._highlight_link_key_column
+        match_col = self._highlight_link_match_column
+        charge_col = self._highlight_charge_column
+
+        # Collect the linkage frame once (cached via the component's filtering layer
+        # is unnecessary here — it is a small per-spectrum side frame; we still use
+        # ``filter_and_collect_cached`` for consistency with the component's caching).
+        link_cols = [key_col, match_col]
+        if charge_col:
+            link_cols.append(charge_col)
+        link_df, _ = filter_and_collect_cached(
+            self._highlight_link,
+            {},  # no row filters — the linkage frame is already per-context
+            {},
+            columns=list(dict.fromkeys(link_cols)),
+        )
+
+        # ALL-SIGNAL set: every signal-peak key in the linkage (toggle highlights
+        # ALL masses' peaks). Preserve first-seen order, de-duplicated.
+        all_signal_keys = list(dict.fromkeys(link_df[key_col].tolist())) if (
+            len(link_df) > 0 and key_col in link_df.columns
+        ) else []
+
+        # SELECTIVE set: linkage rows whose match value == the selected mass.
+        selective: Dict[Any, Dict[str, Any]] = {}
+        selected_keys: List[Any] = []
+        if sel is not None and len(link_df) > 0 and match_col in link_df.columns:
+            keys = link_df[key_col].tolist()
+            matches = link_df[match_col].tolist()
+            for key, mval in zip(keys, matches):
+                if self._values_match(mval, sel):
+                    if key not in selective:
+                        selective[key] = {"highlight": True}
+                        selected_keys.append(key)
+
+        # z=N labels: per-charge COG over the SELECTED mass's linked peaks. Pull
+        # (mz, intensity) from the base frame (x/y) joined on the key, and the
+        # charge from the linkage. Mirrors compute_charge_annotations' COG producer
+        # (intensity-weighted center-of-gravity m/z, oracle formula).
+        charge_descriptors: Optional[List[Dict[str, Any]]] = None
+        if (
+            selected_keys
+            and id_column is not None
+            and id_column in df_pandas.columns
+            and charge_col
+            and charge_col in link_df.columns
+        ):
+            # Map base key -> (mz, intensity) from the displayed frame.
+            base_mz = dict(
+                zip(df_pandas[id_column].tolist(), df_pandas[self._x_column].tolist())
+            )
+            base_int = dict(
+                zip(df_pandas[id_column].tolist(), df_pandas[self._y_column].tolist())
+            )
+            # signal_peaks list shaped like compute_charge_annotations input:
+            # [idx, mz, intensity, charge] per selected linked peak.
+            sel_set = set(selected_keys)
+            keys = link_df[key_col].tolist()
+            charges = link_df[charge_col].tolist()
+            signal_peaks: List[List[float]] = []
+            for key, chg in zip(keys, charges):
+                if key not in sel_set:
+                    continue
+                if key not in base_mz:
+                    continue
+                signal_peaks.append(
+                    [0.0, float(base_mz[key]), float(base_int.get(key, 0.0)), float(chg)]
+                )
+            if signal_peaks:
+                color = self._styling.get("highlightColor", "#E4572E")
+                charge_descriptors = compute_charge_annotations(
+                    signal_peaks,
+                    color=color,
+                    template=self._highlight_annotation_template,
+                )
+
+        return selective, all_signal_keys, charge_descriptors
+
+    def _attach_selective_highlight(
+        self, result: Dict[str, Any], all_signal_keys: Optional[List[Any]]
+    ) -> None:
+        """
+        Attach the selective-highlight client-side toggle payload to the Vue data.
+
+        Sends the ALL-SIGNAL key-set + the id column it keys on + the two
+        toggle-default flags + dynamic button labels so the Vue modebar toggles can
+        switch the highlighted trace and the z=N labels WITHOUT a server round-trip.
+        Folds the all-signal digest into ``_hash`` so the frontend re-renders when
+        the set changes.
+        """
+        id_column: Optional[str] = None
+        if self._interactivity:
+            id_column = list(self._interactivity.values())[0]
+        payload: Dict[str, Any] = {
+            "idColumn": id_column,
+            # ALL-SIGNAL key-set for the "Show Deconvolved Peaks" toggle. Empty
+            # list (not None) when a link frame exists but is empty; None when no
+            # link frame is configured (deconv path => button is suppressed anyway).
+            "allSignalKeys": all_signal_keys,
+            # Toggle DEFAULTS (oracle): annotations visible ON, deconv-peaks OFF.
+            "annotationsVisible": True,
+            "deconvolvedPeaksHighlightMode": False,
+            # Button enable + dynamic titles (oracle PlotlyLineplotUnified.vue).
+            "deconvPeaksToggle": bool(self._deconv_peaks_toggle),
+        }
+        result["selectiveHighlight"] = payload
+        digest = hashlib.md5(
+            json.dumps(
+                {"all": all_signal_keys, "dt": bool(self._deconv_peaks_toggle)},
+                sort_keys=True,
+                default=str,
+            ).encode()
+        ).hexdigest()[:8]
+        result["_hash"] = f"{result.get('_hash', '')}_sh{digest}"
 
     def _prepare_vue_data_density(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Static density payload: emit the tidy long ``{x, y, group}`` frame."""
@@ -1121,19 +1485,32 @@ class LinePlot(BaseComponent):
             return next(iter(self._interactivity.keys()))
         return None
 
-    def _attach_peak_annotations(self, result: Dict[str, Any]) -> None:
+    def _attach_peak_annotations(
+        self,
+        result: Dict[str, Any],
+        annotations: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """
         Attach generic render-time per-peak annotation descriptors to the payload.
 
         Mirrors the dynamic-annotation pattern: descriptors are NOT cached (the
         bridge re-applies them on a cache hit via :meth:`_apply_fresh_annotations`)
         and the hash absorbs them so the frontend re-renders when they change.
+
+        Args:
+            result: The vue-data dict to attach onto.
+            annotations: Explicit descriptor list (e.g. the selective-highlight z=N
+                labels computed at render time). Defaults to ``self._peak_annotations``
+                so existing callers (``_apply_fresh_annotations``) are unchanged.
         """
-        if self._peak_annotations is None:
+        descriptors = (
+            annotations if annotations is not None else self._peak_annotations
+        )
+        if descriptors is None:
             return
-        result["peakAnnotations"] = self._peak_annotations
+        result["peakAnnotations"] = descriptors
         digest = hashlib.md5(
-            json.dumps(self._peak_annotations, sort_keys=True, default=str).encode()
+            json.dumps(descriptors, sort_keys=True, default=str).encode()
         ).hexdigest()[:8]
         result["_hash"] = f"{result.get('_hash', '')}_pa{digest}"
 
@@ -1194,6 +1571,16 @@ class LinePlot(BaseComponent):
             "annotationColumn": self._annotation_column,
         }
 
+        # Selective-highlight (FLASHApp parity): config-time flags so the Vue
+        # modebar toggle buttons are constructed even before any mass is selected.
+        # ``deconvPeaksToggle`` enables the "Show Deconvolved Peaks" button (the
+        # annotated spectrum). The two toggle DEFAULTS (annotations ON, deconv-peaks
+        # OFF) match the oracle. Only emitted when the new path is configured so
+        # existing default plots are byte-identical.
+        if self._highlight_selection:
+            args["selectiveHighlightEnabled"] = True
+            args["deconvPeaksToggle"] = bool(self._deconv_peaks_toggle)
+
         # Add any extra pass-through config options, excluding the structured
         # constructor params that are stored in self._config purely for
         # subprocess recreation (they are already surfaced via dedicated args /
@@ -1219,6 +1606,11 @@ class LinePlot(BaseComponent):
             "targetValue": self._target_value,
             "decoyValue": self._decoy_value,
             "scoreLabel": self._plot_config.get("scoreLabel", "QScore"),
+            # Optional explicit trace legend names (oracle FDR uses "Target QScores"
+            # / "Decoy QScores"); when unset the Vue falls back to
+            # f"{scoreLabel} (Target)" / f"{scoreLabel} (Decoy)".
+            "targetLabel": self._plot_config.get("targetLabel"),
+            "decoyLabel": self._plot_config.get("decoyLabel"),
             "styling": styling,
             "config": self._plot_config,
         }
@@ -1420,8 +1812,15 @@ class LinePlot(BaseComponent):
         selected/highlight column names) that the generic _build_plot_config
         rebuild cannot reproduce. Tagger is fully state-dependent, so a cache hit
         means the cached config is still correct — preserve it.
+
+        The selective-highlight (FLASHApp parity) path also emits a state-derived
+        _plotConfig (the ``_dynamic_highlight`` column wiring). Because the highlight
+        selection is a state dependency, a cache HIT means the same selection, so the
+        cached config — including the dynamic highlight column — is still correct.
+        Preserving it stops the generic rebuild from reverting to the static
+        ``highlight_column`` (which would drop the selective highlight on a hit).
         """
-        return self._mode == "tagger"
+        return self._mode == "tagger" or bool(self._highlight_selection)
 
     def _build_plot_config(
         self,
@@ -2105,6 +2504,7 @@ def compute_tagger_level1_spectrum(
 def compute_charge_annotations(
     signal_peaks_for_mass: List[Any],
     color: str = "#E4572E",
+    template: str = "z={}",
 ) -> List[Dict[str, Any]]:
     """
     Build generic ``PeakAnnotation`` descriptors for per-charge labels.
@@ -2115,6 +2515,10 @@ def compute_charge_annotations(
     formula) and emits one ``{x, text, color, group}`` label per charge. No
     ``hover`` is set — the oracle m/z charge branch emits no hover point for
     charge labels (PlotlyLineplotUnified.vue 889-899).
+
+    The label text is ``template.format(charge)`` (default ``"z={}"`` -> ``"z=2"``),
+    matching the oracle ``"z=" + charge`` and the configurable
+    ``highlight_annotation_template`` LinePlot param.
 
     This keeps the library generic (it consumes plain descriptors); callers in
     any MS viewer can reuse it for the plain Annotated-Spectrum charge overlay.
@@ -2143,7 +2547,7 @@ def compute_charge_annotations(
         labels.append(
             {
                 "x": cog,
-                "text": f"z={charge}",
+                "text": template.format(charge),
                 "color": color,
                 "group": "charge",
             }

@@ -196,10 +196,33 @@ export default defineComponent({
 
       return traces
     },
+    /**
+     * Dynamic title (FLASHApp parity). When ``titleSelection`` maps the scan +
+     * mass selection identifiers, the title is computed reactively from the
+     * selection store EXACTLY like the oracle Plotly3Dplot.vue ``title`` computed:
+     *   '' when the scan selection is unset,
+     *   'Precursor signals' when the scan is set but the mass is unset,
+     *   'Mass signals' when both are set.
+     * When ``titleSelection`` is absent, falls back to the static ``args.title``
+     * (default behavior unchanged). The Python ``compute_dynamic_title`` mirrors
+     * this for tests; the live title is reactive so it updates with NO round-trip.
+     */
+    displayTitle(): string | undefined {
+      const ts = this.args.titleSelection
+      if (!ts) return this.args.title
+      const scanIdent = ts.scan
+      const massIdent = ts.mass
+      const scanVal = scanIdent ? this.selectionStore.$state[scanIdent] : undefined
+      const massVal = massIdent ? this.selectionStore.$state[massIdent] : undefined
+      if (scanVal === undefined || scanVal === null) return ''
+      if (massVal === undefined || massVal === null) return 'Precursor signals'
+      return 'Mass signals'
+    },
     layout(): Partial<Plotly.Layout> {
       const cameraEye = this.args.cameraEye || DEFAULT_CAMERA_EYE
+      const title = this.displayTitle
       return {
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: title ? { text: `<b>${title}</b>` } : undefined,
         paper_bgcolor: this.theme?.backgroundColor,
         plot_bgcolor: this.theme?.secondaryBackgroundColor,
         height: this.args.height ?? DEFAULT_HEIGHT,
@@ -241,6 +264,18 @@ export default defineComponent({
       if (this.isInitialized) {
         this.renderPlot()
       }
+    },
+    // Re-render when the selection changes so the dynamic title (FLASHApp parity)
+    // updates reactively. Only relevant when titleSelection is configured; the
+    // re-render is a cheap relayout (no new data). Default (no titleSelection)
+    // plots still re-render harmlessly on selection but their title is static.
+    'selectionStore.$state': {
+      handler() {
+        if (this.isInitialized && this.args.titleSelection) {
+          this.renderPlot()
+        }
+      },
+      deep: true,
     },
   },
   mounted() {
@@ -292,7 +327,7 @@ export default defineComponent({
             icon: Plotly.Icons.camera,
             click: (plotlyElement: unknown) => {
               Plotly.downloadImage(plotlyElement as Plotly.PlotlyHTMLElement, {
-                filename: this.args.title || 'FLASHViewer-3d-plot',
+                filename: this.displayTitle || this.args.title || 'FLASHViewer-3d-plot',
                 height: DEFAULT_HEIGHT,
                 width: DEFAULT_HEIGHT,
                 format: 'svg',
