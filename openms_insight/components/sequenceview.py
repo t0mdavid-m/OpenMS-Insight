@@ -106,7 +106,7 @@ def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[f
 def calculate_fragment_masses_pyopenms(
     sequence_str: str,
 ) -> Dict[str, List[List[float]]]:
-    """Calculate theoretical fragment masses using pyOpenMS TheoreticalSpectrumGenerator.
+    """Calculate theoretical terminal-fragment masses (oracle ``getFragmentMassesWithSeq``).
 
     Args:
         sequence_str: Peptide sequence string (can include modifications)
@@ -115,98 +115,35 @@ def calculate_fragment_masses_pyopenms(
         Dict with fragment_masses_a, fragment_masses_b, etc.
         Each is a list of lists (one per position, supporting multiple masses).
 
-    AMBIGUOUS-residue handling (oracle parity): when the sequence contains an
-    ``X``/``x``, ``TheoreticalSpectrumGenerator`` raises ("unknown AA 'X'"), so
-    instead the terminal fragment masses are computed the oracle way — per
-    prefix/suffix with the X stripped first (see
-    :func:`_calculate_fragment_masses_oracle_x`, an exact port of FLASHApp
-    ``getFragmentMassesWithSeq`` + ``remove_ambigious``). X-free sequences take
-    the byte-unchanged TSG path below.
+    UNIFIED oracle path (round-16 finding 3-seqview-008): this delegates to
+    :func:`_calculate_fragment_masses_oracle` — an exact port of FLASHApp
+    ``getFragmentMassesWithSeq`` (+ the per-prefix/per-suffix ``remove_ambigious``
+    strip) run for the oracle's ``ax``/``by``/``cz`` families — for EVERY sequence.
+
+    Previously two divergent paths existed: a ``TheoreticalSpectrumGenerator``
+    (TSG) path for X-free sequences and the oracle port for X-containing ones. The
+    TSG path OMITTED the full-length terminal fragment ion (``b_L`` / ``y_L`` etc.
+    = the intact proteoform mass at grid position ``L-1``), while both the oracle
+    port and the FLASHApp oracle INCLUDE it. Unifying removes that divergence so
+    every sequence matches the oracle for the FULL grid.
+
+    The oracle port was proven (round 15 + round 16) to reproduce the former TSG
+    output EXACTLY for grid positions ``1..L-1`` on clean (X-free) sequences
+    (verified numerically for ``PEPTIDEK``, ``ACDEFGHK``, modified sequences,
+    etc.); the ONLY change for clean sequences is the now-INCLUDED full-length
+    terminal ion. For an X-free input the X-strip is a no-op, so existing
+    ``1..L-1`` masses are byte-unchanged. The oracle port additionally handles
+    single-residue sequences (``n == 1``) gracefully, which the TSG path could not
+    (TSG raised "peptide must have at least 2 residues for c-ion generation").
+
+    Modifications embedded in ``sequence_str`` are preserved through the
+    ``toUniModString()`` round-trip in the oracle port, so a modified sequence
+    still gets the correct shifted fragment masses.
     """
     try:
-        from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
+        from pyopenms import AASequence  # noqa: F401 (import guard for fallback)
 
-        # X-containing sequences: TSG cannot handle 'X'. Reproduce the oracle's
-        # per-prefix / per-suffix X-stripped masses on the FULL-length grid so the
-        # ion numbering still aligns 1:1 with the displayed residues.
-        if _has_ambiguous_x(sequence_str):
-            return _calculate_fragment_masses_oracle_x(sequence_str)
-
-        aa_seq = AASequence.fromString(sequence_str)
-        n = aa_seq.size()
-
-        # Configure TheoreticalSpectrumGenerator
-        tsg = TheoreticalSpectrumGenerator()
-        params = tsg.getParameters()
-
-        params.setValue("add_a_ions", "true")
-        params.setValue("add_b_ions", "true")
-        params.setValue("add_c_ions", "true")
-        params.setValue("add_x_ions", "true")
-        params.setValue("add_y_ions", "true")
-        params.setValue("add_z_ions", "true")
-        params.setValue("add_first_prefix_ion", "true")  # Include b1/a1/c1 ions
-        params.setValue("add_metainfo", "true")
-
-        tsg.setParameters(params)
-
-        # Generate spectrum for charge 1, then convert to neutral masses
-        spec = MSSpectrum()
-        tsg.getSpectrum(spec, aa_seq, 1, 1)
-
-        ion_types = ["a", "b", "c", "x", "y", "z"]
-        result = {f"fragment_masses_{ion}": [[] for _ in range(n)] for ion in ion_types}
-
-        # Get ion names from StringDataArrays
-        ion_names = []
-        sdas = spec.getStringDataArrays()
-        for sda in sdas:
-            if sda.getName() == "IonNames":
-                for i in range(sda.size()):
-                    name = sda[i]
-                    if isinstance(name, bytes):
-                        name = name.decode("utf-8")
-                    ion_names.append(name)
-                break
-
-        # Parse peaks and organize by ion type and position
-        for i in range(spec.size()):
-            peak = spec[i]
-            # Convert singly-charged m/z to neutral mass
-            mz_charge1 = peak.getMZ()
-            neutral_mass = mz_charge1 - PROTON_MASS
-            ion_name = ion_names[i] if i < len(ion_names) else ""
-
-            if not ion_name:
-                continue
-
-            # Parse ion name (e.g., "b3+", "y5++")
-            ion_type = None
-            ion_number = None
-
-            for t in ion_types:
-                if ion_name.lower().startswith(t):
-                    ion_type = t
-                    try:
-                        num_str = ""
-                        for c in ion_name[1:]:
-                            if c.isdigit():
-                                num_str += c
-                            else:
-                                break
-                        if num_str:
-                            ion_number = int(num_str)
-                    except (ValueError, IndexError):
-                        pass
-                    break
-
-            if ion_type and ion_number and 1 <= ion_number <= n:
-                idx = ion_number - 1
-                key = f"fragment_masses_{ion_type}"
-                if idx < len(result[key]):
-                    result[key][idx].append(neutral_mass)
-
-        return result
+        return _calculate_fragment_masses_oracle(sequence_str)
 
     except ImportError:
         # Fallback to simple calculation without pyOpenMS
@@ -216,15 +153,15 @@ def calculate_fragment_masses_pyopenms(
         return {f"fragment_masses_{ion}": [] for ion in ["a", "b", "c", "x", "y", "z"]}
 
 
-def _calculate_fragment_masses_oracle_x(
+def _calculate_fragment_masses_oracle(
     sequence_str: str,
 ) -> Dict[str, List[List[float]]]:
-    """Terminal fragment masses for an X-containing sequence (oracle parity).
+    """Terminal fragment masses for ANY sequence (oracle ``getFragmentMassesWithSeq``).
 
     Exact port of FLASHApp ``getFragmentMassesWithSeq`` (run for each of the
     oracle's ``ax``/``by``/``cz`` ion families) combined with the per-prefix /
     per-suffix ``remove_ambigious`` strip. For a sequence of length ``n`` (the
-    FULL length, INCLUDING the ambiguous X positions, so ion numbering stays
+    FULL length, INCLUDING any ambiguous X positions, so ion numbering stays
     aligned 1:1 with the displayed residue grid):
 
       * prefix ion at position ``i`` (a/b/c) = monoweight of the X-STRIPPED
@@ -232,16 +169,23 @@ def _calculate_fragment_masses_oracle_x(
       * suffix ion at position ``i`` (x/y/z) = monoweight of the X-STRIPPED
         ``getSuffix(i+1)`` for the matching suffix ResidueType (XIon/YIon/ZIon).
 
-    Because removing an X SHORTENS the sub-sequence, the X position reproduces
-    its neighbour's mass (e.g. ``PEPTX`` -> ``PEPT``), exactly as the oracle
-    yields. Every position (incl. the full-length terminal ion) is populated,
-    matching ``getFragmentMassesWithSeq`` (the TSG path omits the full-length
-    ion; the X path follows the oracle and keeps it). Returns the per-position
-    ``number[][]`` shape (one mass per position) the Vue side consumes.
+    Every position is populated, INCLUDING the full-length terminal ion at grid
+    position ``n-1`` (ion number ``n`` = the whole sequence): the full-length
+    prefix ion (``b_L``) maps to the C-terminal residue and the full-length suffix
+    ion (``y_L``) maps to residue 0 in the Vue grid, exactly as the oracle does.
+    Returns the per-position ``number[][]`` shape (one mass per position) the Vue
+    side consumes.
+
+    AMBIGUOUS-residue handling: for an X-free sequence the ``remove_ambigious``
+    strip is a no-op, so the ``1..L-1`` masses equal the former
+    ``TheoreticalSpectrumGenerator`` output (proven numerically). For an
+    X-containing sequence, removing an X SHORTENS the sub-sequence, so the X
+    position reproduces its neighbour's mass (e.g. ``PEPTX`` -> ``PEPT``), exactly
+    as the oracle yields.
 
     Modifications embedded in ``sequence_str`` are preserved through the
-    ``toUniModString()`` round-trip, so a modified X-sequence still gets the
-    correct shifted fragment masses.
+    ``toUniModString()`` round-trip, so a modified sequence still gets the correct
+    shifted fragment masses.
     """
     from pyopenms import AASequence, Residue
 

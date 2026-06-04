@@ -1365,12 +1365,14 @@ class TestSequenceViewAmbiguousX:
         for ion in ("a", "b", "c", "x", "y", "z"):
             assert got[f"fragment_masses_{ion}"] == oracle[f"fragment_masses_{ion}"]
 
-    def test_clean_control_unchanged_vs_oracle_grid(self):
-        """Clean PEPTIDEK: populated positions equal the oracle grid.
+    def test_clean_control_matches_full_oracle_grid(self):
+        """Clean PEPTIDEK: the FULL grid (incl. the terminal ion) equals the oracle.
 
-        The TSG path omits the FULL-length terminal ion (last position empty),
-        which is a pre-existing structural choice for clean sequences; every
-        POPULATED position still equals the oracle's getMonoWeight value.
+        Round-16 finding 3-seqview-008: the unified oracle path now populates the
+        full-length terminal fragment ion (``b_L`` / ``y_L`` etc.) for clean
+        sequences too, so EVERY grid position — not just ``1..L-1`` — equals the
+        oracle's ``getFragmentMassesWithSeq`` value. (The former TSG path left the
+        last position empty.)
         """
         from openms_insight.components.sequenceview import (
             calculate_fragment_masses_pyopenms,
@@ -1382,9 +1384,102 @@ class TestSequenceViewAmbiguousX:
             ins = got[f"fragment_masses_{ion}"]
             orc = oracle[f"fragment_masses_{ion}"]
             assert len(ins) == len(orc)
+            # Every position is populated (no empty terminal cell) and matches.
             for pos_ins, pos_orc in zip(ins, orc):
-                if pos_ins:  # populated position
-                    assert pos_ins[0] == pytest.approx(pos_orc[0], abs=1e-5)
+                assert len(pos_ins) == len(pos_orc) == 1
+                assert pos_ins[0] == pytest.approx(pos_orc[0], abs=1e-5)
+
+    def test_clean_full_length_terminal_ion_present(self):
+        """Clean PEPTIDEK now carries the full-length b_L / y_L terminal ion.
+
+        Pins the 3-seqview-008 fix: the intact-proteoform prefix ion (``b_8`` at
+        grid index 7 = C-terminal residue) and suffix ion (``y_8`` at grid index 7
+        = ion number 8, which the Vue grid maps to residue 0) are populated and
+        equal the oracle's full-length masses. (Previously both were ``[]``.)
+        """
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+
+        got = calculate_fragment_masses_pyopenms("PEPTIDEK")
+        oracle = _oracle_fragment_grid("PEPTIDEK")
+        last = 7  # ion number 8 -> grid index 7
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            assert got[f"fragment_masses_{ion}"][last] != []
+            assert got[f"fragment_masses_{ion}"][last][0] == pytest.approx(
+                oracle[f"fragment_masses_{ion}"][last][0], abs=1e-5
+            )
+
+    def test_clean_positions_1_to_Lminus1_unchanged_vs_tsg(self):
+        """Clean sequences: grid positions 1..L-1 are byte-equal to the old TSG path.
+
+        Back-compat proof for 3-seqview-008. We recompute the former
+        ``TheoreticalSpectrumGenerator`` masses inline and assert the unified
+        oracle path reproduces them EXACTLY for every populated non-terminal
+        position (a/b/c/x/y/z) on several clean sequences (incl. a modified one).
+        The ONLY new value is the full-length terminal ion at index ``L-1``.
+        """
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+        from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
+
+        def _tsg_grid(seq):
+            aa_seq = AASequence.fromString(seq)
+            n = aa_seq.size()
+            tsg = TheoreticalSpectrumGenerator()
+            params = tsg.getParameters()
+            for ion in ("a", "b", "c", "x", "y", "z"):
+                params.setValue(f"add_{ion}_ions", "true")
+            params.setValue("add_first_prefix_ion", "true")
+            params.setValue("add_metainfo", "true")
+            tsg.setParameters(params)
+            spec = MSSpectrum()
+            tsg.getSpectrum(spec, aa_seq, 1, 1)
+            ion_types = ["a", "b", "c", "x", "y", "z"]
+            grid = {f"fragment_masses_{i}": [[] for _ in range(n)] for i in ion_types}
+            names = []
+            for sda in spec.getStringDataArrays():
+                if sda.getName() == "IonNames":
+                    for i in range(sda.size()):
+                        nm = sda[i]
+                        names.append(nm.decode() if isinstance(nm, bytes) else nm)
+                    break
+            for i in range(spec.size()):
+                nm = names[i] if i < len(names) else ""
+                if not nm:
+                    continue
+                it = nm[0].lower()
+                if it not in ion_types:
+                    continue
+                num = ""
+                for ch in nm[1:]:
+                    if ch.isdigit():
+                        num += ch
+                    else:
+                        break
+                if not num:
+                    continue
+                idx = int(num) - 1
+                if 0 <= idx < n:
+                    grid[f"fragment_masses_{it}"][idx].append(
+                        spec[i].getMZ() - 1.007276
+                    )
+            return grid
+
+        for seq in ("PEPTIDEK", "ACDEFGHK", "SHC(Carbamidomethyl)IAEVEK"):
+            new = calculate_fragment_masses_pyopenms(seq)
+            old = _tsg_grid(seq)
+            n = AASequence.fromString(seq).size()
+            for ion in ("a", "b", "c", "x", "y", "z"):
+                for i in range(n - 1):  # 1..L-1 (grid indices 0..n-2)
+                    o = old[f"fragment_masses_{ion}"][i]
+                    g = new[f"fragment_masses_{ion}"][i]
+                    if o:  # TSG populated this non-terminal position
+                        assert len(g) == 1
+                        assert g[0] == pytest.approx(o[0], abs=1e-6), (
+                            f"{seq} {ion} pos {i} changed vs TSG"
+                        )
 
 
 class TestSequenceViewNonAmbiguousResidues:
