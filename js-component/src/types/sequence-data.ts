@@ -88,6 +88,20 @@ export interface SequenceData {
    */
   proteoform_end?: number
   /**
+   * True when the theoretical fragment grid (`fragment_masses_*`) was computed on
+   * the proteoform SUB-region rather than the full sequence (3-seqview-009). The
+   * Vue side then offsets each fragment index by `fragment_grid_offset` to map it
+   * to the right grid residue and suppresses prefix/suffix ions at an undetermined
+   * terminus. Absent -> full-length grid, no offset, no suppression (back-compat).
+   */
+  proteoform_fragments?: boolean
+  /**
+   * Grid offset (clamped 0-based proteoform start == `sequence_start`) for the
+   * proteoform-region fragment grid. Only meaningful when `proteoform_fragments`
+   * is true; defaults to 0.
+   */
+  fragment_grid_offset?: number
+  /**
    * Per-row OBSERVED mass (e.g. the proteoform's measured/computed mass).
    * Present only when an `observed_mass_column` is configured in Python; drives
    * the mass-info header. Absent otherwise (no header, back-compatible).

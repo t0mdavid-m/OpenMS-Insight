@@ -127,14 +127,21 @@ def calculate_fragment_masses_pyopenms(
     port and the FLASHApp oracle INCLUDE it. Unifying removes that divergence so
     every sequence matches the oracle for the FULL grid.
 
-    The oracle port was proven (round 15 + round 16) to reproduce the former TSG
-    output EXACTLY for grid positions ``1..L-1`` on clean (X-free) sequences
-    (verified numerically for ``PEPTIDEK``, ``ACDEFGHK``, modified sequences,
-    etc.); the ONLY change for clean sequences is the now-INCLUDED full-length
-    terminal ion. For an X-free input the X-strip is a no-op, so existing
-    ``1..L-1`` masses are byte-unchanged. The oracle port additionally handles
-    single-residue sequences (``n == 1``) gracefully, which the TSG path could not
-    (TSG raised "peptide must have at least 2 residues for c-ion generation").
+    The oracle port reproduces the former TSG output for grid positions
+    ``1..L-1`` on clean (X-free) sequences to within ~5e-7 Da, NOT byte-for-byte
+    (round-17 finding 3-seqview-011): the old TSG path added a ROUNDED proton
+    (``1.007276``) per ion, whereas this path delegates the charge-0 neutral mass
+    entirely to pyOpenMS' ``getMonoWeight`` (full-precision constants), so the two
+    differ by ~4.67e-7 Da per position. That tiny shift is BENIGN -- it is far
+    below any fragment match tolerance and, critically, the new path is now
+    BYTE-EXACT against the ORACLE ``getFragmentMassesWithSeq`` (verified
+    numerically for ``PEPTIDEK``, ``ACDEFGHK``, modified sequences, X-containing
+    sequences, etc.), which is the correctness target. The ONLY structural change
+    for clean sequences is the now-INCLUDED full-length terminal ion at ``L-1``.
+    For an X-free input the X-strip is a no-op. The oracle port additionally
+    handles single-residue sequences (``n == 1``) gracefully, which the TSG path
+    could not (TSG raised "peptide must have at least 2 residues for c-ion
+    generation").
 
     Modifications embedded in ``sequence_str`` are preserved through the
     ``toUniModString()`` round-trip in the oracle port, so a modified sequence
@@ -177,11 +184,12 @@ def _calculate_fragment_masses_oracle(
     side consumes.
 
     AMBIGUOUS-residue handling: for an X-free sequence the ``remove_ambigious``
-    strip is a no-op, so the ``1..L-1`` masses equal the former
-    ``TheoreticalSpectrumGenerator`` output (proven numerically). For an
-    X-containing sequence, removing an X SHORTENS the sub-sequence, so the X
-    position reproduces its neighbour's mass (e.g. ``PEPTX`` -> ``PEPT``), exactly
-    as the oracle yields.
+    strip is a no-op, so the ``1..L-1`` masses match the former
+    ``TheoreticalSpectrumGenerator`` output to ~5e-7 Da (the old TSG path added a
+    ROUNDED proton; this path is byte-exact against the ORACLE instead -- see
+    :func:`calculate_fragment_masses_pyopenms`). For an X-containing sequence,
+    removing an X SHORTENS the sub-sequence, so the X position reproduces its
+    neighbour's mass (e.g. ``PEPTX`` -> ``PEPT``), exactly as the oracle yields.
 
     Modifications embedded in ``sequence_str`` are preserved through the
     ``toUniModString()`` round-trip, so a modified sequence still gets the correct
@@ -1371,6 +1379,65 @@ class SequenceView:
 
         return None
 
+    @staticmethod
+    def _clamp_proteoform_region(
+        start_reported: Optional[int],
+        end_reported: Optional[int],
+        seq_len: int,
+    ) -> Tuple[int, int]:
+        """Clamp the reported proteoform terminals to a sub-sequence slice range.
+
+        Reproduces the oracle slice-index derivation (FLASHApp
+        ``src/parse/tnt.py``) expressed in the stored 0-based terminals, which is
+        identical to the Vue clamps (``SequenceView.vue`` ``sequence_start`` /
+        ``sequence_end``):
+
+        * ``start`` -- ``max(0, start_reported)``; a missing or negative
+          (undetermined) N-terminus clamps to residue 0.
+        * ``end``   -- ``end_reported`` when it is a determined index in
+          ``[0, seq_len-1]``; a missing or negative (undetermined) C-terminus
+          clamps to the last residue ``seq_len - 1``.
+
+        Returns ``(clamped_start, clamped_end)`` (both inclusive, 0-based). For a
+        whole-protein proteoform this is ``(0, seq_len-1)`` -> the full sequence.
+        """
+        last = max(seq_len - 1, 0)
+        start = start_reported if start_reported is not None else 0
+        start = 0 if start < 0 else min(start, last)
+        end = end_reported if end_reported is not None else last
+        end = last if end < 0 else min(end, last)
+        if end < start:
+            end = start
+        return start, end
+
+    @staticmethod
+    def _slice_sequence_for_region(
+        sequence_str: str, clamped_start: int, clamped_end: int
+    ) -> str:
+        """Slice an OpenMS sequence string to the proteoform residue region.
+
+        The slice is by RESIDUE (not raw character), so an embedded modification
+        ``(Mod)`` stays attached to its residue -- mirroring the oracle, which
+        slices the plain residue string ``str(sequence)[start:end+1]`` (the
+        FLASHTnT proteoform sequence carries no embedded mod syntax, so for that
+        producer this is a plain ``[start:end+1]``; the residue-aware slice keeps a
+        modified-sequence caller correct too).
+        """
+        try:
+            from pyopenms import AASequence
+
+            aa_seq = AASequence.fromString(sequence_str)
+            n = aa_seq.size()
+            if n == 0:
+                return ""
+            cs = max(0, min(clamped_start, n - 1))
+            ce = max(cs, min(clamped_end, n - 1))
+            # getSubsequence(start, length) -> the [cs, ce] inclusive residue range.
+            return aa_seq.getSubsequence(cs, ce - cs + 1).toString()
+        except Exception:
+            # Fallback: plain character slice (no pyOpenMS / parse failure).
+            return sequence_str[clamped_start:clamped_end + 1]
+
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
 
@@ -1432,10 +1499,62 @@ class SequenceView:
         # Parse sequence
         residues, modifications = parse_openms_sequence(sequence_str)
 
-        # Calculate theoretical fragment masses
-        fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
+        # Resolve the optional proteoform terminal indices up-front: when a
+        # proteoform REGION is configured the theoretical fragments must be
+        # computed on the proteoform SUB-sequence (oracle parity, see below), so
+        # we need the terminals before the fragment computation.
+        proteoform_start_reported: Optional[int] = None
+        proteoform_end_reported: Optional[int] = None
+        if (
+            self._proteoform_start_column is not None
+            or self._proteoform_end_column is not None
+        ):
+            proteoform_start_reported, proteoform_end_reported = (
+                self._get_proteoform_terminals_for_state(state)
+            )
 
-        # Calculate theoretical mass
+        # PROTEOFORM-REGION fragment computation (oracle parity; 3-seqview-009).
+        # The oracle (FLASHApp ``src/parse/tnt.py``) computes fragments on the
+        # DETERMINED PROTEOFORM SUB-region, not the full protein:
+        #   ``getFragmentDataFromSeq(str(sequence)[start_index:end_index+1], ...)``
+        # with ``start_index = 0 if proteoform_start<=0 else proteoform_start-1``
+        # and ``end_index = L-1 if proteoform_end<=0 else proteoform_end-1`` (the
+        # 1-based StartPosition/EndPosition). In the stored 0-based terminals those
+        # bounds are exactly the Vue clamps ``max(0, start)`` /
+        # ``(L-1 if end<0 else end)`` -- i.e. the slice is
+        # ``sequence[clamped_start : clamped_end + 1]``. The Vue side then maps each
+        # sub-sequence fragment index back to its grid residue with the SAME
+        # ``clamped_start`` offset (``aaIndex = theoIndex + sequence_start``).
+        #
+        # Gated on a proteoform region being CONFIGURED: when no proteoform columns
+        # are supplied (non-FLASHTnT callers) the full sequence is used and the
+        # offset is 0 -> byte-unchanged. A WHOLE-protein proteoform (clamped slice
+        # == full, both termini determined) also yields the full sequence + offset
+        # 0, so its output is byte-identical too.
+        fragment_sequence_str = sequence_str
+        fragment_grid_offset = 0
+        use_proteoform_fragments = (
+            self._proteoform_start_column is not None
+            or self._proteoform_end_column is not None
+        ) and len(residues) > 0
+        if use_proteoform_fragments:
+            clamped_start, clamped_end = self._clamp_proteoform_region(
+                proteoform_start_reported,
+                proteoform_end_reported,
+                len(residues),
+            )
+            fragment_sequence_str = self._slice_sequence_for_region(
+                sequence_str, clamped_start, clamped_end
+            )
+            fragment_grid_offset = clamped_start
+
+        # Calculate theoretical fragment masses (on the proteoform sub-sequence
+        # when a proteoform region is configured, else the full sequence).
+        fragment_masses = calculate_fragment_masses_pyopenms(fragment_sequence_str)
+
+        # Calculate theoretical mass (always the FULL/whole-protein theoretical
+        # mass; the oracle stores ``theoretical_mass`` from the full sequence even
+        # for a truncated proteoform, while the fragment grid uses the sub-region).
         theoretical_mass = get_theoretical_mass(sequence_str)
 
         # Build sequence data structure
@@ -1497,11 +1616,23 @@ class SequenceView:
             self._proteoform_start_column is not None
             or self._proteoform_end_column is not None
         ):
-            start_val, end_val = self._get_proteoform_terminals_for_state(state)
+            start_val = proteoform_start_reported
+            end_val = proteoform_end_reported
             if start_val is not None:
                 sequence_data["proteoform_start"] = start_val
             if end_val is not None:
                 sequence_data["proteoform_end"] = end_val
+            # Signal that the theoretical fragment grid was computed on the
+            # proteoform SUB-region (3-seqview-009): the Vue side then offsets each
+            # fragment index by ``fragment_grid_offset`` to map it to the right grid
+            # residue, and SUPPRESSES prefix (a/b/c) ions when the N-terminus is
+            # undetermined (reported start < 0) and suffix (x/y/z) ions when the
+            # C-terminus is undetermined (reported end < 0) -- oracle
+            # SequenceView.vue:803-807. Whole-protein proteoforms keep offset 0 and
+            # both termini determined, so this is a no-op for them.
+            if use_proteoform_fragments and len(residues) > 0:
+                sequence_data["proteoform_fragments"] = True
+                sequence_data["fragment_grid_offset"] = fragment_grid_offset
 
         # Optional observed mass -> mass-info header (3-seqview-004). Emit
         # `observed_mass` (+ the header title) alongside the always-present
@@ -1552,12 +1683,16 @@ class SequenceView:
         term_start = sequence_data.get("proteoform_start", "")
         term_end = sequence_data.get("proteoform_end", "")
         observed_mass_in_payload = sequence_data.get("observed_mass", "")
+        # Proteoform-region fragment flag + offset: ride into the hash so the
+        # sub-region grid (3-seqview-009) re-renders when it changes.
+        proteoform_fragments_in_payload = sequence_data.get("fragment_grid_offset", "")
         hash_input = (
             f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
             f":{int(self._internal_fragments)}"
             f":{int(self._coverage_column is not None)}:{coverage_in_payload}"
             f":{term_start}:{term_end}"
             f":{observed_mass_in_payload}"
+            f":{proteoform_fragments_in_payload}"
         )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 

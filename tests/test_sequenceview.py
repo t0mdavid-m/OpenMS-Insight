@@ -1534,3 +1534,250 @@ class TestSequenceViewNonAmbiguousResidues:
         frags = calculate_fragment_masses_pyopenms("")
         for ion in ("a", "b", "c", "x", "y", "z"):
             assert frags[f"fragment_masses_{ion}"] == []
+
+
+# ---------------------------------------------------------------------------
+# PROTEOFORM-REGION fragment handling (round-17 findings 3-seqview-009 +
+# 3-seqview-010).
+#
+# The oracle (FLASHApp src/parse/tnt.py) computes the theoretical fragment grid
+# on the DETERMINED PROTEOFORM SUB-region
+# (``getFragmentDataFromSeq(str(sequence)[start_index:end_index+1], ...)``) and
+# the oracle SequenceView.vue maps each fragment index back with an OFFSET
+# (``aaIndex = theoIndex + sequence_start``) + suppresses undetermined-terminus
+# families. These tests prove the migrated Python side now slices the grid to the
+# proteoform region exactly as the oracle and emits the offset / reported
+# terminals; the Vue offset + suppression are covered by the vitest spec
+# ``SequenceView.proteoformRegion.spec.ts``.
+# ---------------------------------------------------------------------------
+
+
+def _oracle_tnt_slice_indices(start_position_1based, end_position_1based, seq_len):
+    """Verbatim port of the oracle FLASHApp src/parse/tnt.py slice derivation.
+
+    ``proteoform_start = StartPosition`` (1-based), ``proteoform_end = EndPosition``;
+    ``start_index = 0 if proteoform_start <= 0 else proteoform_start - 1`` and
+    ``end_index = L-1 if proteoform_end <= 0 else proteoform_end - 1``. The
+    fragment grid is computed on ``str(sequence)[start_index:end_index + 1]``.
+    """
+    proteoform_start = start_position_1based
+    proteoform_end = end_position_1based
+    start_index = 0 if proteoform_start <= 0 else proteoform_start - 1
+    end_index = seq_len - 1 if proteoform_end <= 0 else proteoform_end - 1
+    return start_index, end_index
+
+
+@pytest.fixture
+def proteoform_region_sequence_data() -> "pl.LazyFrame":
+    """Sequence frame mirroring the migrated ``seq_tnt`` proteoform layout.
+
+    Each row carries the FULL protein ``sequence`` + the stored 0-based terminals
+    (``proteoform_start``/``proteoform_end``, == oracle StartPosition-1 /
+    EndPosition-1; negative => undetermined).
+
+    p1: MKPEPTIDEK, proteoform PEPTIDEK -> 0-based start 2, end 9 (truncated N).
+    p2: MKPEPTIDEK, whole protein -> start 0, end 9 (whole-protein, byte-identical).
+    p3: MKPEPTIDEK, UNDETERMINED N -> start -1, end 9.
+    p4: MKPEPTIDEK, UNDETERMINED C -> start 2, end -1.
+    """
+    import polars as pl
+
+    return pl.DataFrame(
+        {
+            "protein_id": [1, 2, 3, 4],
+            "sequence": ["MKPEPTIDEK"] * 4,
+            "precursor_charge": [1, 1, 1, 1],
+            "proteoform_start": [2, 0, -1, 2],
+            "proteoform_end": [9, 9, 9, -1],
+        }
+    ).lazy()
+
+
+class TestSequenceViewProteoformRegion:
+    """Sub-region fragment grid numerically matches the oracle getFragmentDataFromSeq."""
+
+    def _build(self, temp_cache_dir, seq_lf, peaks_lf, cache_id):
+        from openms_insight.components.sequenceview import SequenceView
+
+        return SequenceView(
+            cache_id=cache_id,
+            sequence_data=seq_lf,
+            peaks_data=peaks_lf,
+            cache_path=str(temp_cache_dir),
+            filters={"protein": "protein_id"},
+            proteoform_start_column="proteoform_start",
+            proteoform_end_column="proteoform_end",
+            deconvolved=True,
+        )
+
+    def test_truncated_proteoform_grid_matches_oracle_subsequence(
+        self, temp_cache_dir, proteoform_region_sequence_data, sample_peaks_data
+    ):
+        """Truncated proteoform: grid == oracle getFragmentMassesWithSeq(sub-seq)."""
+        sv = self._build(
+            temp_cache_dir,
+            proteoform_region_sequence_data,
+            sample_peaks_data,
+            "test_sv_pf_trunc",
+        )
+        seq = sv._prepare_vue_data({"protein": 1})["sequenceData"]
+
+        # The grid was sliced to the proteoform sub-region; the flag + offset ride.
+        assert seq["proteoform_fragments"] is True
+        assert seq["fragment_grid_offset"] == 2
+        # The DISPLAY grid is still the FULL protein (10 residues).
+        assert len(seq["sequence"]) == 10
+        # ...but the fragment grid is the 8-residue sub-region PEPTIDEK.
+        assert len(seq["fragment_masses_b"]) == 8
+
+        # Numerically identical to the oracle, computed on the SLICED string
+        # exactly as FLASHApp src/parse/tnt.py would.
+        start_index, end_index = _oracle_tnt_slice_indices(3, 10, 10)  # 1-based 3..10
+        assert (start_index, end_index) == (2, 9)
+        sub = "MKPEPTIDEK"[start_index:end_index + 1]
+        assert sub == "PEPTIDEK"
+        oracle = _oracle_fragment_grid(sub)
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            assert seq[f"fragment_masses_{ion}"] == oracle[f"fragment_masses_{ion}"], (
+                f"{ion} grid diverges from oracle sub-sequence"
+            )
+        # The famous example from the finding: b1 == 97.05 (P), NOT 131.04 (M).
+        assert seq["fragment_masses_b"][0][0] == pytest.approx(97.0527642233, abs=1e-6)
+
+    def test_truncated_proteoform_reports_terminals(
+        self, temp_cache_dir, proteoform_region_sequence_data, sample_peaks_data
+    ):
+        """The reported (0-based) terminals propagate for the Vue grid + truncation."""
+        sv = self._build(
+            temp_cache_dir,
+            proteoform_region_sequence_data,
+            sample_peaks_data,
+            "test_sv_pf_term",
+        )
+        seq = sv._prepare_vue_data({"protein": 1})["sequenceData"]
+        assert seq["proteoform_start"] == 2
+        assert seq["proteoform_end"] == 9
+
+    def test_undetermined_start_clamps_grid_keeps_reported_negative(
+        self, temp_cache_dir, proteoform_region_sequence_data, sample_peaks_data
+    ):
+        """Undetermined N: grid uses clamped start 0; reported start stays -1.
+
+        The oracle slice for an undetermined N (StartPosition 0 -> proteoform_start
+        0 -> start_index 0) is the SAME as a determined start 0, so the grid spans
+        from residue 0; the reported -1 is what drives the Vue prefix suppression.
+        """
+        sv = self._build(
+            temp_cache_dir,
+            proteoform_region_sequence_data,
+            sample_peaks_data,
+            "test_sv_pf_undet_n",
+        )
+        seq = sv._prepare_vue_data({"protein": 3})["sequenceData"]
+        assert seq["proteoform_start"] == -1  # reported -> Vue suppresses a/b/c
+        assert seq["fragment_grid_offset"] == 0  # clamped for the grid
+        # Grid == oracle for the clamped sub-region [0, 9] (the whole protein here).
+        oracle = _oracle_fragment_grid("MKPEPTIDEK")
+        assert seq["fragment_masses_b"] == oracle["fragment_masses_b"]
+
+    def test_undetermined_end_clamps_grid_keeps_reported_negative(
+        self, temp_cache_dir, proteoform_region_sequence_data, sample_peaks_data
+    ):
+        """Undetermined C: grid end clamps to L-1; reported end stays -1."""
+        sv = self._build(
+            temp_cache_dir,
+            proteoform_region_sequence_data,
+            sample_peaks_data,
+            "test_sv_pf_undet_c",
+        )
+        seq = sv._prepare_vue_data({"protein": 4})["sequenceData"]
+        assert seq["proteoform_end"] == -1  # reported -> Vue suppresses x/y/z
+        assert seq["fragment_grid_offset"] == 2
+        # Slice is [2, 9] (PEPTIDEK) since end clamps to L-1; matches oracle.
+        oracle = _oracle_fragment_grid("PEPTIDEK")
+        assert seq["fragment_masses_y"] == oracle["fragment_masses_y"]
+
+    def test_whole_protein_proteoform_byte_identical_to_full_grid(
+        self, temp_cache_dir, proteoform_region_sequence_data, sample_peaks_data
+    ):
+        """Whole-protein proteoform: offset 0 + grid == full-sequence grid (back-compat)."""
+        from openms_insight.components.sequenceview import (
+            calculate_fragment_masses_pyopenms,
+        )
+
+        sv = self._build(
+            temp_cache_dir,
+            proteoform_region_sequence_data,
+            sample_peaks_data,
+            "test_sv_pf_whole",
+        )
+        seq = sv._prepare_vue_data({"protein": 2})["sequenceData"]
+        assert seq["fragment_grid_offset"] == 0
+        full = calculate_fragment_masses_pyopenms("MKPEPTIDEK")
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            assert seq[f"fragment_masses_{ion}"] == full[f"fragment_masses_{ion}"]
+
+    def test_non_proteoform_caller_grid_byte_unchanged(
+        self, temp_cache_dir, sample_sequence_data, sample_peaks_data
+    ):
+        """A caller WITHOUT proteoform columns: no flag, full-sequence grid (back-compat)."""
+        from openms_insight.components.sequenceview import (
+            SequenceView,
+            calculate_fragment_masses_pyopenms,
+        )
+
+        sv = SequenceView(
+            cache_id="test_sv_pf_none",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+            deconvolved=True,
+        )
+        seq = sv._prepare_vue_data({"spectrum": 1})["sequenceData"]
+        assert "proteoform_fragments" not in seq
+        assert "fragment_grid_offset" not in seq
+        full = calculate_fragment_masses_pyopenms("".join(seq["sequence"]))
+        for ion in ("a", "b", "c", "x", "y", "z"):
+            assert seq[f"fragment_masses_{ion}"] == full[f"fragment_masses_{ion}"]
+
+    def test_proteoform_fragments_changes_hash(
+        self, temp_cache_dir, proteoform_region_sequence_data, sample_peaks_data
+    ):
+        """Truncated vs whole-protein proteoform -> different render hash."""
+        sv = self._build(
+            temp_cache_dir,
+            proteoform_region_sequence_data,
+            sample_peaks_data,
+            "test_sv_pf_hash",
+        )
+        h_trunc = sv._prepare_vue_data({"protein": 1})["_hash"]
+        h_whole = sv._prepare_vue_data({"protein": 2})["_hash"]
+        assert h_trunc != h_whole
+
+    def test_clamp_region_helper(self):
+        """Unit: _clamp_proteoform_region mirrors the oracle clamps."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        clamp = SequenceView._clamp_proteoform_region
+        # determined truncated
+        assert clamp(2, 6, 10) == (2, 6)
+        # undetermined N -> start clamps to 0
+        assert clamp(-1, 6, 10) == (0, 6)
+        # undetermined C -> end clamps to last
+        assert clamp(2, -1, 10) == (2, 9)
+        # missing (None) -> full range
+        assert clamp(None, None, 10) == (0, 9)
+        # whole protein
+        assert clamp(0, 9, 10) == (0, 9)
+
+    def test_slice_sequence_helper_residue_aware(self):
+        """Unit: _slice_sequence_for_region slices by residue (mods stay attached)."""
+        from openms_insight.components.sequenceview import SequenceView
+
+        sl = SequenceView._slice_sequence_for_region
+        assert sl("MKPEPTIDEK", 2, 9) == "PEPTIDEK"
+        # A modified residue inside the region keeps its modification.
+        out = sl("PEPT(Phospho)IDEK", 0, 3)
+        assert out.startswith("PEPT")
+        assert "Phospho" in out

@@ -455,6 +455,40 @@ export default defineComponent({
     cDetermined(): boolean {
       return this.proteoformEndReported >= 0
     },
+    /**
+     * Whether the theoretical fragment grid was computed on the proteoform
+     * SUB-region (3-seqview-009). When true, Python sliced the fragment masses to
+     * ``sequence[proteoformStart..proteoformEnd]`` and the Vue side must map each
+     * fragment index back to its grid residue with the ``fragmentGridOffset``
+     * offset (oracle ``aaIndex = theoIndex + sequence_start``) and SUPPRESS prefix
+     * (a/b/c) ions at an undetermined N-terminus / suffix (x/y/z) ions at an
+     * undetermined C-terminus (oracle SequenceView.vue:803-807). When false
+     * (non-proteoform / unconfigured callers, and back-compat), the grid spans the
+     * full sequence, the offset is 0, and nothing is suppressed -> byte-unchanged.
+     */
+    proteoformFragments(): boolean {
+      return this.sequenceData?.proteoform_fragments === true
+    },
+    /**
+     * Grid offset for the proteoform-region fragment grid: the clamped 0-based
+     * proteoform start (== ``sequence_start``). 0 when the grid is full-length
+     * (non-proteoform / whole-protein), so the prefix mapping ``ionNumber - 1``
+     * stays unchanged for those.
+     */
+    fragmentGridOffset(): number {
+      if (!this.proteoformFragments) return 0
+      return this.sequenceData?.fragment_grid_offset ?? 0
+    },
+    /**
+     * Grid residue index the suffix (x/y/z) ion number 1 maps onto: the clamped
+     * proteoform C-terminus (== ``sequence_end``) when the grid is sub-region,
+     * else the last residue ``sequence.length - 1`` (byte-identical mapping for
+     * full-length grids: ``sequenceLength - ionNumber``).
+     */
+    fragmentGridSuffixEnd(): number {
+      if (!this.proteoformFragments) return this.sequence.length - 1
+      return this.proteoformEnd
+    },
     theoreticalMass(): number {
       return this.sequenceData?.theoretical_mass ?? 0
     },
@@ -565,7 +599,15 @@ export default defineComponent({
           explainedCleavage++
         }
       }
-      return (explainedCleavage / (this.sequence.length - 1)) * 100
+      // Denominator = number of inter-residue bonds in the matched region. Oracle
+      // (calculateCleavagePercentage) uses ``sequence_end - sequence_start`` so a
+      // truncated proteoform divides by its sub-region length, not the full
+      // protein. For a full-length grid this equals ``sequence.length - 1``
+      // (byte-unchanged for non-proteoform / whole-protein callers).
+      const denom = this.proteoformFragments
+        ? this.proteoformEnd - this.proteoformStart
+        : this.sequence.length - 1
+      return denom > 0 ? (explainedCleavage / denom) * 100 : 0
     },
     fragmentTableHeaders() {
       const headers = [
@@ -751,11 +793,38 @@ export default defineComponent({
         return Math.abs(massDiffDa) <= this.fragmentMassTolerance
       }
     },
-    /** Mark amino acid position with matched ion */
-    markAminoAcidPosition(ionType: string, ionNumber: number, typeName: string): void {
-      const sequenceLength = this.sequence.length
+    /**
+     * Map a fragment ion to its grid residue and mark it.
+     *
+     * Oracle parity (SequenceView.vue ``markAminoAcidPosition`` /
+     * ``prepareFragmentTable``): a PREFIX (a/b/c) ion ``n`` maps to grid residue
+     * ``n - 1 + sequence_start`` and a SUFFIX (x/y/z) ion ``n`` maps to grid
+     * residue ``sequence_end - n + 1``. For a proteoform SUB-region grid
+     * (``proteoformFragments``) ``sequence_start`` is the clamped start
+     * (``fragmentGridOffset``) and ``sequence_end`` the clamped end
+     * (``fragmentGridSuffixEnd``); for a full-length grid the offset is 0 and the
+     * end is the last residue, so the mapping reduces to the historical
+     * ``ionNumber - 1`` / ``sequenceLength - ionNumber`` (byte-unchanged).
+     *
+     * ``useProteoformOffset`` is true for the theoretical matcher (whose ion
+     * numbers are relative to the proteoform sub-region). The external-annotation
+     * matcher passes false: idXML ion numbers are full-protein relative, so they
+     * keep the un-offset mapping even when a proteoform region is configured.
+     */
+    markAminoAcidPosition(
+      ionType: string,
+      ionNumber: number,
+      typeName: string,
+      useProteoformOffset = true,
+    ): void {
       const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
-      const aaIndex = isPrefixIon ? ionNumber - 1 : sequenceLength - ionNumber
+      const prefixOffset = useProteoformOffset ? this.fragmentGridOffset : 0
+      const suffixEnd = useProteoformOffset
+        ? this.fragmentGridSuffixEnd
+        : this.sequence.length - 1
+      const aaIndex = isPrefixIon
+        ? ionNumber - 1 + prefixOffset
+        : suffixEnd - ionNumber + 1
 
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         const aaObj = this.sequenceObjects[aaIndex]
@@ -823,9 +892,10 @@ export default defineComponent({
 
         matchingFragments.push(fragmentRow)
 
-        // Mark amino acid position
+        // Mark amino acid position. External (idXML) ion numbers are full-protein
+        // relative, so do NOT apply the proteoform sub-region offset here.
         if (ionNumber > 0 && ann.ion_type !== 'unknown') {
-          this.markAminoAcidPosition(ann.ion_type, ionNumber, '')
+          this.markAminoAcidPosition(ann.ion_type, ionNumber, '', false)
         }
       }
 
@@ -849,6 +919,19 @@ export default defineComponent({
 
       // Process each selected ion type
       for (const ionType of this.ionTypes.filter((t) => t.selected)) {
+        // Undetermined-terminus suppression (oracle SequenceView.vue:803-807):
+        // "Don't match fragments in FLASHTnT if end could not be determined."
+        // Skip ALL prefix (a/b/c) ions when the N-terminus is undetermined
+        // (reported start < 0) and ALL suffix (x/y/z) ions when the C-terminus is
+        // undetermined (reported end < 0). Gated on the proteoform-region grid so
+        // non-FLASHTnT callers are unaffected (back-compat).
+        if (this.proteoformFragments) {
+          const isPrefix = ['a', 'b', 'c'].includes(ionType.text)
+          const isSuffix = ['x', 'y', 'z'].includes(ionType.text)
+          if (isPrefix && this.proteoformStartReported < 0) continue
+          if (isSuffix && this.proteoformEndReported < 0) continue
+        }
+
         const theoreticalFrags = this.getFragmentMasses(ionType.text)
 
         for (let theoIndex = 0; theoIndex < theoreticalFrags.length; theoIndex++) {
@@ -991,16 +1074,22 @@ export default defineComponent({
         this.selectedAAIndex = aaIndex
       }
 
-      // Find corresponding fragment in table
+      // Find corresponding fragment in table. Invert the grid mapping so the ion
+      // NUMBER is relative to the proteoform sub-region (oracle parity): prefix
+      // ``n = aaIndex - sequence_start + 1``, suffix ``n = sequence_end - aaIndex + 1``.
+      // For a full-length grid (offset 0, end = L-1) this reduces to the historical
+      // ``aaIndex + 1`` / ``sequence.length - aaIndex`` (byte-unchanged).
       const aaObj = this.sequenceObjects[aaIndex]
+      const prefixNumber = aaIndex - this.fragmentGridOffset + 1
+      const suffixNumber = this.fragmentGridSuffixEnd - aaIndex + 1
       let ionName = ''
 
-      if (aaObj.bIon) ionName = `b${aaIndex + 1}`
-      else if (aaObj.aIon) ionName = `a${aaIndex + 1}`
-      else if (aaObj.cIon) ionName = `c${aaIndex + 1}`
-      else if (aaObj.yIon) ionName = `y${this.sequence.length - aaIndex}`
-      else if (aaObj.xIon) ionName = `x${this.sequence.length - aaIndex}`
-      else if (aaObj.zIon) ionName = `z${this.sequence.length - aaIndex}`
+      if (aaObj.bIon) ionName = `b${prefixNumber}`
+      else if (aaObj.aIon) ionName = `a${prefixNumber}`
+      else if (aaObj.cIon) ionName = `c${prefixNumber}`
+      else if (aaObj.yIon) ionName = `y${suffixNumber}`
+      else if (aaObj.xIon) ionName = `x${suffixNumber}`
+      else if (aaObj.zIon) ionName = `z${suffixNumber}`
 
       if (ionName) {
         const rowIndex = this.fragmentTableData.findIndex((row) => row.Name === ionName)
@@ -1087,12 +1176,17 @@ export default defineComponent({
       }
     },
     onFragmentTableRowClick(_event: Event, { item }: { item: FragmentTableRow }): void {
-      // Find the amino acid index from the fragment
+      // Find the amino acid index from the fragment, applying the proteoform
+      // sub-region grid offset (same mapping as markAminoAcidPosition). Reduces to
+      // the historical ``ionNumber - 1`` / ``sequence.length - ionNumber`` for a
+      // full-length grid (offset 0, end = L-1).
       const ionType = item.IonType.charAt(0)
       const ionNumber = item.IonNumber
       const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
 
-      const aaIndex = isPrefixIon ? ionNumber - 1 : this.sequence.length - ionNumber
+      const aaIndex = isPrefixIon
+        ? ionNumber - 1 + this.fragmentGridOffset
+        : this.fragmentGridSuffixEnd - ionNumber + 1
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         this.selectedAAIndex = aaIndex
       }
