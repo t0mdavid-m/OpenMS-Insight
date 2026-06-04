@@ -669,6 +669,8 @@ class SequenceView:
         proteoform_end_column: Optional[str] = None,
         observed_mass_column: Optional[str] = None,
         mass_header_title: str = "Proteoform",
+        theoretical_mass_label: str = "Theoretical mass",
+        observed_mass_label: str = "Observed mass",
         mass_selection_identifier: Optional[str] = None,
         **kwargs,
     ):
@@ -806,6 +808,8 @@ class SequenceView:
             or proteoform_end_column is not None
             or observed_mass_column is not None
             or mass_header_title != "Proteoform"
+            or theoretical_mass_label != "Theoretical mass"
+            or observed_mass_label != "Observed mass"
             or mass_selection_identifier is not None
             or bool(kwargs)
         )
@@ -846,6 +850,11 @@ class SequenceView:
             # (off when None). mass_header_title is the oracle massTitle.
             self._observed_mass_column = observed_mass_column
             self._mass_header_title = mass_header_title
+            # Field-label prefixes for the theoretical/observed mass rows; the
+            # FLASHTnT proteoform branch overrides the generic defaults with
+            # "Theoretical protein mass"/"Observed proteoform mass" (oracle).
+            self._theoretical_mass_label = theoretical_mass_label
+            self._observed_mass_label = observed_mass_label
             # Optional inbound mass-selection identifier -> drives the inbound
             # fragment-row highlight in Vue (off when None).
             self._mass_selection_identifier = mass_selection_identifier
@@ -948,6 +957,8 @@ class SequenceView:
             "proteoform_end_column": self._proteoform_end_column,
             "observed_mass_column": self._observed_mass_column,
             "mass_header_title": self._mass_header_title,
+            "theoretical_mass_label": self._theoretical_mass_label,
+            "observed_mass_label": self._observed_mass_label,
             "mass_selection_identifier": self._mass_selection_identifier,
         }
 
@@ -1002,6 +1013,12 @@ class SequenceView:
         self._proteoform_end_column = config.get("proteoform_end_column")
         self._observed_mass_column = config.get("observed_mass_column")
         self._mass_header_title = config.get("mass_header_title", "Proteoform")
+        self._theoretical_mass_label = config.get(
+            "theoretical_mass_label", "Theoretical mass"
+        )
+        self._observed_mass_label = config.get(
+            "observed_mass_label", "Observed mass"
+        )
         self._mass_selection_identifier = config.get("mass_selection_identifier")
         self._config = {}
 
@@ -1436,6 +1453,8 @@ class SequenceView:
             if observed_mass is not None:
                 sequence_data["observed_mass"] = observed_mass
                 sequence_data["mass_header_title"] = self._mass_header_title
+                sequence_data["theoretical_mass_label"] = self._theoretical_mass_label
+                sequence_data["observed_mass_label"] = self._observed_mass_label
 
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)

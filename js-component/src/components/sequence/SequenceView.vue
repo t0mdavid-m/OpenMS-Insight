@@ -471,6 +471,19 @@ export default defineComponent({
       return this.sequenceData?.mass_header_title ?? 'Proteoform'
     },
     /**
+     * Field-label prefixes for the theoretical/observed mass rows. Configurable so a
+     * caller can match the oracle's per-branch wording: the precursor/FLASHDeconv
+     * branch uses "Theoretical mass"/"Observed mass" (the defaults), while the
+     * FLASHTnT proteoform branch uses "Theoretical protein mass"/"Observed proteoform
+     * mass" (oracle `preparePrecursorInfo`).
+     */
+    theoreticalMassLabel(): string {
+      return this.sequenceData?.theoretical_mass_label ?? 'Theoretical mass'
+    },
+    observedMassLabel(): string {
+      return this.sequenceData?.observed_mass_label ?? 'Observed mass'
+    },
+    /**
      * Whether the mass-info header is shown (3-seqview-004). Gated on Python
      * having supplied an observed mass; off otherwise so existing callers render
      * byte-unchanged.
@@ -494,8 +507,8 @@ export default defineComponent({
         deltaStr = Math.abs(theo - this.observedMass).toFixed(2)
       }
       return [
-        `Theoretical mass : ${theo.toFixed(2)}`,
-        `Observed mass : ${observedStr}`,
+        `${this.theoreticalMassLabel} : ${theo.toFixed(2)}`,
+        `${this.observedMassLabel} : ${observedStr}`,
         `Δ Mass (Da) : ${deltaStr}`,
       ]
     },

@@ -119,6 +119,27 @@ describe('SequenceView mass-info header (3-seqview-004)', () => {
     )
     expect((wrapper.vm as any).massHeaderTitle).toBe('Precursor')
   })
+
+  it('uses configurable field labels (oracle proteoform branch wording) — 3-seqview-005', () => {
+    const { wrapper } = mountView(
+      {},
+      {
+        sequenceData: {
+          sequence: ['P', 'E', 'P'],
+          theoretical_mass: 1000.0,
+          observed_mass: 1002.5,
+          mass_header_title: 'Proteoform',
+          theoretical_mass_label: 'Theoretical protein mass',
+          observed_mass_label: 'Observed proteoform mass',
+        },
+      },
+    )
+    expect((wrapper.vm as any).massHeaderFields).toEqual([
+      'Theoretical protein mass : 1000.00',
+      'Observed proteoform mass : 1002.50',
+      'Δ Mass (Da) : 2.50',
+    ])
+  })
 })
 
 // --------------------------------------------------------------- 3-seqview-003

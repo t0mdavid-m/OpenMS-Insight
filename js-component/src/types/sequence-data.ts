@@ -95,6 +95,9 @@ export interface SequenceData {
   observed_mass?: number
   /** Title shown to the left of the mass-info header fields (oracle massTitle). */
   mass_header_title?: string
+  /** Field-label prefixes for the theoretical/observed mass header rows. */
+  theoretical_mass_label?: string
+  observed_mass_label?: string
   /** External peak annotations from search engine (optional) */
   external_annotations?: ExternalAnnotation[]
   /** Fragment tolerance value from search parameters (optional) */
