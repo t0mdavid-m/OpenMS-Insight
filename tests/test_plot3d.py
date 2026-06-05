@@ -203,9 +203,7 @@ class TestPlot3DPrepareVueData:
 
         # Scan 200 has three rows, all positive intensity -> all three kept.
         original = sample_plot3d_data.collect()
-        expected = int(
-            ((original["scan"] == 200) & (original["intensity"] > 0)).sum()
-        )
+        expected = int(((original["scan"] == 200) & (original["intensity"] > 0)).sum())
         assert len(df) == expected
 
     def test_optional_filter_shows_all_until_selected(
@@ -235,9 +233,7 @@ class TestPlot3DPrepareVueData:
         assert len(all_masses) == 3
 
         # scan + mass selected -> narrowed to that mass ordinal.
-        one_mass = plot._prepare_vue_data(
-            {"spectrum": 200, "mass": 1}
-        )["plot3dData"]
+        one_mass = plot._prepare_vue_data({"spectrum": 200, "mass": 1})["plot3dData"]
         assert set(one_mass["mass_index"].tolist()) == {1}
         assert len(one_mass) == 2
 
@@ -661,9 +657,7 @@ class TestPlot3DDynamicTitle:
     def test_title_selection_roundtrips_through_reconstruction(
         self, mock_streamlit, temp_cache_dir: Path, sample_plot3d_data: pl.LazyFrame
     ):
-        self._make(
-            temp_cache_dir, sample_plot3d_data, cache_id="plot3d_title_rt"
-        )
+        self._make(temp_cache_dir, sample_plot3d_data, cache_id="plot3d_title_rt")
         # title_selection is render config (persisted, NOT hash-affecting).
         restored = Plot3D(cache_id="plot3d_title_rt", cache_path=str(temp_cache_dir))
         assert restored._title_selection == {"scan": "spectrum", "mass": "mass"}

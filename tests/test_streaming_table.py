@@ -188,9 +188,7 @@ class TestStreamingTableFilters:
         assert result["_pagination"]["total_pages"] == 2
         assert len(result["tableData"]) == 50
 
-    def test_interval_filter_span_narrowing(
-        self, mock_streamlit, temp_cache_dir
-    ):
+    def test_interval_filter_span_narrowing(self, mock_streamlit, temp_cache_dir):
         """An interval filter keeps rows where low_col <= value <= high_col, and is
         skipped (shows all) when the selection is None."""
         data = pl.LazyFrame(

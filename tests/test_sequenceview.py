@@ -1635,7 +1635,7 @@ class TestSequenceViewProteoformRegion:
         # exactly as FLASHApp src/parse/tnt.py would.
         start_index, end_index = _oracle_tnt_slice_indices(3, 10, 10)  # 1-based 3..10
         assert (start_index, end_index) == (2, 9)
-        sub = "MKPEPTIDEK"[start_index:end_index + 1]
+        sub = "MKPEPTIDEK"[start_index : end_index + 1]
         assert sub == "PEPTIDEK"
         oracle = _oracle_fragment_grid(sub)
         for ion in ("a", "b", "c", "x", "y", "z"):

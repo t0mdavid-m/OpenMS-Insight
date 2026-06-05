@@ -178,8 +178,8 @@ class Heatmap(BaseComponent):
         self._downsample = self._resolve_downsample_name(
             downsample, use_streaming, use_simple_downsample
         )
-        self._use_streaming, self._use_simple_downsample = (
-            self._downsample_to_booleans(self._downsample)
+        self._use_streaming, self._use_simple_downsample = self._downsample_to_booleans(
+            self._downsample
         )
         self._category_column = category_column
         self._category_colors = category_colors or {}
@@ -335,15 +335,13 @@ class Heatmap(BaseComponent):
                 config.get("use_streaming"),
                 config.get("use_simple_downsample"),
             )
-        self._use_streaming, self._use_simple_downsample = (
-            self._downsample_to_booleans(self._downsample)
+        self._use_streaming, self._use_simple_downsample = self._downsample_to_booleans(
+            self._downsample
         )
         self._categorical_filters = config.get("categorical_filters", [])
         # Fallback (very old caches lacking the key) mirrors the per-instance
         # auto-derive rather than the shared literal it used to default to.
-        self._zoom_identifier = config.get(
-            "zoom_identifier", f"{self._cache_id}_zoom"
-        )
+        self._zoom_identifier = config.get("zoom_identifier", f"{self._cache_id}_zoom")
         self._category_column = config.get("category_column")
         self._log_scale = config.get("log_scale", True)
         self._low_values_on_top = config.get("low_values_on_top", False)

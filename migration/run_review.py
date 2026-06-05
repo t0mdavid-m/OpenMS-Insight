@@ -17,6 +17,7 @@ round AND every gate step recorded for that round passed.
 Ledger: one JSON object per line in migration/review-log/phase-<N>.jsonl
 Fields: ts, phase, round, kind(review|gate|note), unit, status, findings[], msg
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,8 +32,8 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("run_review.py requires pyyaml  (pip install pyyaml)")
 
-ROOT = Path(__file__).resolve().parent            # migration/
-REPO = ROOT.parent                                # repo root
+ROOT = Path(__file__).resolve().parent  # migration/
+REPO = ROOT.parent  # repo root
 CONFIG = ROOT / "units.yaml"
 LOGDIR = ROOT / "review-log"
 
@@ -108,7 +109,9 @@ def cmd_record(args) -> int:
         },
     )
     extra = f" ({len(findings)} finding(s))" if findings else ""
-    print(f"recorded: round {entry['round']} unit {entry['unit']} -> {entry['status']}{extra}")
+    print(
+        f"recorded: round {entry['round']} unit {entry['unit']} -> {entry['status']}{extra}"
+    )
     return 0
 
 
@@ -134,8 +137,13 @@ def cmd_gate(args) -> int:
         print(f"--> {name}: {'PASS' if ok else 'FAIL'} (rc={proc.returncode})")
         append(
             args.phase,
-            {"round": args.round, "kind": "gate", "unit": name,
-             "status": "pass" if ok else "fail", "msg": tail[-2000:]},
+            {
+                "round": args.round,
+                "kind": "gate",
+                "unit": name,
+                "status": "pass" if ok else "fail",
+                "msg": tail[-2000:],
+            },
         )
     print(f"\n=== machine gate: {'GREEN' if all_ok else 'RED'} ===")
     return 0 if all_ok else 1
@@ -162,11 +170,15 @@ def cmd_report(args) -> int:
         return bool(recs) and all(s == "pass" for s in recs)
 
     def round_clean(rd) -> bool:
-        units_clean = all(review_status.get((rd, u)) == "clean" for u in units) if units else True
+        units_clean = (
+            all(review_status.get((rd, u)) == "clean" for u in units) if units else True
+        )
         return units_clean and gate_ok(rd)
 
     print(f"\n================ REVIEW REPORT — phase {args.phase} ================")
-    print(f"units: {len(units)} | rounds: {rounds or '—'} | convergence target: {conv}\n")
+    print(
+        f"units: {len(units)} | rounds: {rounds or '—'} | convergence target: {conv}\n"
+    )
     if rounds:
         header = "unit".ljust(30) + "".join(f"R{rd}".rjust(5) for rd in rounds)
         print(header)
@@ -174,12 +186,21 @@ def cmd_report(args) -> int:
         for u in units:
             line = u.ljust(30)
             for rd in rounds:
-                line += {"clean": "✓", "finding": "✗"}.get(review_status.get((rd, u)), "·").rjust(5)
+                line += {"clean": "✓", "finding": "✗"}.get(
+                    review_status.get((rd, u)), "·"
+                ).rjust(5)
             print(line)
-        print("GATE".ljust(30) + "".join(
-            ("✓" if gate_ok(rd) else ("✗" if rd in gate_records else "·")).rjust(5) for rd in rounds))
-        print("ROUND CLEAN".ljust(30) + "".join(
-            ("✓" if round_clean(rd) else "✗").rjust(5) for rd in rounds))
+        print(
+            "GATE".ljust(30)
+            + "".join(
+                ("✓" if gate_ok(rd) else ("✗" if rd in gate_records else "·")).rjust(5)
+                for rd in rounds
+            )
+        )
+        print(
+            "ROUND CLEAN".ljust(30)
+            + "".join(("✓" if round_clean(rd) else "✗").rjust(5) for rd in rounds)
+        )
 
     streak = 0
     for rd in rounds:
@@ -195,13 +216,15 @@ def cmd_report(args) -> int:
         for f in (r.get("findings") or [])
     )
 
-    print(f"\nOPEN FINDINGS (round {latest}): {len(open_ids)}"
-          + (": " + ", ".join(open_ids) if open_ids else ""))
+    print(
+        f"\nOPEN FINDINGS (round {latest}): {len(open_ids)}"
+        + (": " + ", ".join(open_ids) if open_ids else "")
+    )
     print(f"CONSECUTIVE CLEAN ROUNDS: {streak} / {conv}")
     print("STATUS: " + ("CONVERGED" if converged else "NOT CONVERGED"))
 
     if args.tail:
-        tail = rows[-args.tail:]
+        tail = rows[-args.tail :]
         if tail:
             print(f"\n---- ledger tail (last {len(tail)}) ----")
             for r in tail:

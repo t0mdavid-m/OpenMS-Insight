@@ -131,9 +131,7 @@ class TestDensityKdeFromRawScores:
 
 
 class TestDensityComponentArgs:
-    def test_component_args(
-        self, mock_streamlit, temp_cache_dir, sample_density_data
-    ):
+    def test_component_args(self, mock_streamlit, temp_cache_dir, sample_density_data):
         comp = _make(temp_cache_dir, sample_density_data)
         args = comp._get_component_args()
         assert args["componentType"] == "PlotlyDensityPlot"
@@ -224,9 +222,7 @@ class TestDensityCacheConfig:
     ):
         """A density LinePlot reloaded purely from cache works."""
         _make(temp_cache_dir, sample_density_data, cache_id="density_reload")
-        restored = LinePlot(
-            cache_id="density_reload", cache_path=str(temp_cache_dir)
-        )
+        restored = LinePlot(cache_id="density_reload", cache_path=str(temp_cache_dir))
         assert restored._mode == "density"
         result = restored._prepare_vue_data({})
         assert "plotData" in result

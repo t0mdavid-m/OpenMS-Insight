@@ -1706,9 +1706,7 @@ class TestGoToSelectionPropagation:
         assert sm.get_selection("selected_id") == 250
         assert sm.get_selection("selected_value") == "item_250"
 
-    def test_go_to_not_found_does_not_change_selection(
-        self, goto_interactivity_table
-    ):
+    def test_go_to_not_found_does_not_change_selection(self, goto_interactivity_table):
         """
         A not-found go-to must not set any selection (nothing to navigate to).
         """
@@ -1979,9 +1977,7 @@ class TestGoToUnprojectedColumn:
         assert result.get("_go_to_not_found") is True
         assert result.get("_navigate_to_page") is None
 
-    def test_go_to_projected_column_still_resolves(
-        self, tmp_path, mock_streamlit_goto
-    ):
+    def test_go_to_projected_column_still_resolves(self, tmp_path, mock_streamlit_goto):
         """Guard regression check: go-to on a column that IS in the projection
         still resolves normally (the fix only catches the absent-column case)."""
         data = pl.LazyFrame(

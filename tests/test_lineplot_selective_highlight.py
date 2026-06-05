@@ -141,7 +141,9 @@ class TestLinkPathSelectiveHighlight:
         assert sh["deconvolvedPeaksHighlightMode"] is False
         assert sh["deconvPeaksToggle"] is True
 
-    def test_one_to_many_peak_membership(self, mock_streamlit, tmp_path, annotated_base):
+    def test_one_to_many_peak_membership(
+        self, mock_streamlit, tmp_path, annotated_base
+    ):
         """A single peak may belong to MULTIPLE masses (1:many linkage)."""
         # peak 0 belongs to BOTH mass 150 and mass 999 (shared signal peak).
         rows = {
@@ -223,9 +225,7 @@ class TestMatchColumnSelectiveHighlight:
         if "_dynamic_highlight" in df.columns:
             assert not any(df["_dynamic_highlight"])
 
-    def test_value_label_on_matched_stick(
-        self, mock_streamlit, tmp_path, deconv_base
-    ):
+    def test_value_label_on_matched_stick(self, mock_streamlit, tmp_path, deconv_base):
         # round-9 finding 3-deconv-001: the selected mass's MonoMass VALUE LABEL
         # (oracle mass.toFixed(2)) rides the peakAnnotations channel via
         # highlight_value_column + highlight_value_template.
@@ -278,9 +278,7 @@ class TestSelectiveHighlightDefaultOff:
         # highlightColumn stays the static one (None here).
         assert res["_plotConfig"]["highlightColumn"] is None
 
-    def test_static_highlight_column_still_works(
-        self, mock_streamlit, tmp_path
-    ):
+    def test_static_highlight_column_still_works(self, mock_streamlit, tmp_path):
         """The legacy static highlight_column path is unchanged when set."""
         data = pl.LazyFrame(
             {

@@ -156,7 +156,14 @@ class TestVolcanoPlotThresholds:
         # Presentation params are render-time too: they must NOT affect the hash
         # (they live in _get_render_config instead).
         render_config = volcano1._get_render_config()
-        for key in ("title", "x_label", "y_label", "up_color", "down_color", "ns_color"):
+        for key in (
+            "title",
+            "x_label",
+            "y_label",
+            "up_color",
+            "down_color",
+            "ns_color",
+        ):
             assert key not in cache_config, f"{key} must not be hash-affecting"
             assert key in render_config, f"{key} must be in render config"
 

@@ -448,9 +448,7 @@ class TestNoZoomRenderDownsample:
         levels, _ = heatmap._get_levels_for_state({})
         level0 = levels[0]
         level0_size = (
-            level0.collect().height
-            if isinstance(level0, pl.LazyFrame)
-            else len(level0)
+            level0.collect().height if isinstance(level0, pl.LazyFrame) else len(level0)
         )
         # Sanity: cache level is well above min_points (the ~2x buffer).
         assert level0_size > 1.5 * min_points

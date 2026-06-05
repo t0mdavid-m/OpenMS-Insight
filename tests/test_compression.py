@@ -35,9 +35,7 @@ def _binned_grid_data() -> pl.LazyFrame:
     return pl.LazyFrame(rows)
 
 
-def _bin_intensities(
-    result: pl.DataFrame, x_bin: int, y_bin: int
-) -> list:
+def _bin_intensities(result: pl.DataFrame, x_bin: int, y_bin: int) -> list:
     """Sorted intensities of the kept points falling in grid bin (x_bin, y_bin)."""
     cell = result.filter(
         (pl.col("x") >= x_bin * 10.0)

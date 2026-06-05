@@ -488,7 +488,7 @@ def compute_internal_fragment_masses(
 
             candidates = [mass]
             if modifications is not None:
-                for (s, e, m) in modifications:
+                for s, e, m in modifications:
                     # Modification fully contained in [i+1, j+1].
                     if (s >= i + 1) and (e <= j + 1):
                         candidates[0] += m
@@ -498,11 +498,8 @@ def compute_internal_fragment_masses(
 
             for mm in candidates:
                 # Per-candidate terminal-collision filter.
-                if (
-                    terminal_masses is not None
-                    and _is_match_with_tolerance(
-                        terminal_masses, mm, terminal_collision_ppm
-                    )
+                if terminal_masses is not None and _is_match_with_tolerance(
+                    terminal_masses, mm, terminal_collision_ppm
                 ):
                     continue
                 masses.append(mm + 18.010564683 + shift)
@@ -1086,9 +1083,7 @@ class SequenceView:
         self._theoretical_mass_label = config.get(
             "theoretical_mass_label", "Theoretical mass"
         )
-        self._observed_mass_label = config.get(
-            "observed_mass_label", "Observed mass"
-        )
+        self._observed_mass_label = config.get("observed_mass_label", "Observed mass")
         self._mass_selection_identifier = config.get("mass_selection_identifier")
         self._config = {}
 
@@ -1336,9 +1331,7 @@ class SequenceView:
 
         return start_val, end_val
 
-    def _get_observed_mass_for_state(
-        self, state: Dict[str, Any]
-    ) -> Optional[float]:
+    def _get_observed_mass_for_state(self, state: Dict[str, Any]) -> Optional[float]:
         """Get the per-row observed mass for the current state (mass header).
 
         Reads ``self._observed_mass_column`` from cached sequences.parquet with the
@@ -1439,7 +1432,7 @@ class SequenceView:
             return aa_seq.getSubsequence(cs, ce - cs + 1).toString()
         except Exception:
             # Fallback: plain character slice (no pyOpenMS / parse failure).
-            return sequence_str[clamped_start:clamped_end + 1]
+            return sequence_str[clamped_start : clamped_end + 1]
 
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.

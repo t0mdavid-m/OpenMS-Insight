@@ -352,9 +352,7 @@ class Plot3D(BaseComponent):
             lf = lf.filter(pl.col(self._z_column) > 0)
 
         if self._log_z:
-            lf = lf.with_columns(
-                pl.col(self._z_column).log(10).alias(self._z_column)
-            )
+            lf = lf.with_columns(pl.col(self._z_column).log(10).alias(self._z_column))
 
         # When sub-trace breaks are requested, stably sort so each series' points
         # are contiguous within its category, WITHOUT disturbing within-series

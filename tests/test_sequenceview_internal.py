@@ -78,9 +78,7 @@ def test_internal_fragment_golden_PEPTIDEK_no_mods_no_collision():
 def test_internal_fragment_golden_bz_cy_absolute():
     """Pin the exact bz and cy mass lists too (not just the invariant)."""
     residues = list("PEPTIDEK")
-    data = compute_internal_fragment_data(
-        residues, remove_terminal_collisions=False
-    )
+    data = compute_internal_fragment_data(residues, remove_terminal_collisions=False)
     expected_bz = [
         538.227494,
         667.270087,
@@ -131,18 +129,14 @@ def test_internal_min_length_custom():
 def test_internal_end_can_reach_cterminus():
     """The end index may equal L (fragment includes the last residue)."""
     residues = list("PEPTIDEK")
-    _m, _s, e = compute_internal_fragment_masses(
-        residues, "by", terminal_masses=None
-    )
+    _m, _s, e = compute_internal_fragment_masses(residues, "by", terminal_masses=None)
     assert max(e) == len(residues)  # includes the last residue (K)
 
 
 def test_internal_short_sequence_empty():
     """A sequence shorter than min_length yields no internal fragments."""
     residues = list("PEPT")  # length 4 < 5
-    data = compute_internal_fragment_data(
-        residues, remove_terminal_collisions=False
-    )
+    data = compute_internal_fragment_data(residues, remove_terminal_collisions=False)
     for fam in ("by", "bz", "cy"):
         assert data[f"fragment_masses_{fam}"] == []
         assert data[f"start_indices_{fam}"] == []
@@ -192,9 +186,7 @@ def test_internal_ambiguous_modification_forks():
 def test_internal_terminal_collision_drops_entries():
     """A terminal mass equal to a candidate's pre-shift sum drops that entry."""
     residues = list("PEPTIDEK")
-    base = compute_internal_fragment_data(
-        residues, remove_terminal_collisions=False
-    )
+    base = compute_internal_fragment_data(residues, remove_terminal_collisions=False)
     # The collision filter compares the PRE-(+H2O+shift) candidate `mm`.
     # For 'by' the emitted mass is mm + H2O + shift with shift == -H2O, so the
     # net add is 0 and mm == by_mass exactly.
@@ -216,9 +208,7 @@ def test_internal_terminal_collision_default_on_in_data():
     """compute_internal_fragment_data honours remove_terminal_collisions."""
     residues = list("PEPTIDEK")
     on = compute_internal_fragment_data(residues, remove_terminal_collisions=True)
-    off = compute_internal_fragment_data(
-        residues, remove_terminal_collisions=False
-    )
+    off = compute_internal_fragment_data(residues, remove_terminal_collisions=False)
     # With no terminal_masses provided, "on" degrades to no filtering (term=None
     # only when remove flag is False; when True but terminal_masses=None the
     # per-family call still gets terminal_masses=None -> no drops).
@@ -230,13 +220,9 @@ def test_internal_terminal_collision_default_on_in_data():
 def test_internal_unknown_residue_uses_zero_mass():
     """X/Z map to 0 in the verbatim aa_masses table (no pyOpenMS fallback)."""
     residues = list("PEPXIDEK")  # X at index 3 contributes 0
-    with_x = compute_internal_fragment_masses(
-        residues, "by", terminal_masses=None
-    )
+    with_x = compute_internal_fragment_masses(residues, "by", terminal_masses=None)
     residues_ref = list("PEPTIDEK")
-    ref = compute_internal_fragment_masses(
-        residues_ref, "by", terminal_masses=None
-    )
+    ref = compute_internal_fragment_masses(residues_ref, "by", terminal_masses=None)
     # Same number of windows; masses differ where X replaces T (101.047679).
     assert len(with_x[0]) == len(ref[0])
     # Window (1,6) = EPTID vs EPXID differs by exactly the T residue mass.
@@ -311,18 +297,14 @@ def test_internal_terminal_collision_z_vs_x_changes_drop():
         terminal_collision_ppm=10.0,
     )
 
-    correct_pairs = set(
-        zip(correct["start_indices_by"], correct["end_indices_by"])
-    )
+    correct_pairs = set(zip(correct["start_indices_by"], correct["end_indices_by"]))
     wrong_pairs = set(zip(wrong["start_indices_by"], wrong["end_indices_by"]))
 
     # (3, 10) is dropped by the correct set, kept by the wrong set.
     assert (3, 10) not in correct_pairs
     assert (3, 10) in wrong_pairs
     # And the correct set yields exactly one fewer 'by' internal fragment.
-    assert len(correct["fragment_masses_by"]) == len(
-        wrong["fragment_masses_by"]
-    ) - 1
+    assert len(correct["fragment_masses_by"]) == len(wrong["fragment_masses_by"]) - 1
 
     # Confirm the divergence is specifically z (within 10 ppm) and not x.
     dropped_mass = 773.399327  # by-internal (3,10) neutral mass, pre-shift net 0

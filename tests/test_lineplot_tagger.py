@@ -98,7 +98,7 @@ class TestTaggerFrameResolve:
         comp = self._resolved_tagger(temp_cache_dir, sample_tagger_data, tmp_path)
         deps = comp.get_state_dependencies()
         assert "tag" in deps  # tag selection drives a re-render
-        assert "aa" in deps   # residue selection drives a re-render (gold)
+        assert "aa" in deps  # residue selection drives a re-render (gold)
 
     def test_managed_tag_keys_do_not_leak_into_args(
         self, mock_streamlit, temp_cache_dir, sample_tagger_data, tmp_path
@@ -109,8 +109,12 @@ class TestTaggerFrameResolve:
         comp = self._resolved_tagger(temp_cache_dir, sample_tagger_data, tmp_path)
         args = comp._get_component_args()
         for key in (
-            "tag_data_path", "tag_id_column", "tag_sequence_column",
-            "tag_masses_column", "tag_start_column", "selected_aa_identifier",
+            "tag_data_path",
+            "tag_id_column",
+            "tag_sequence_column",
+            "tag_masses_column",
+            "tag_start_column",
+            "selected_aa_identifier",
         ):
             assert key not in args, key
 
@@ -267,11 +271,7 @@ class TestTaggerPrepareVueData:
         )
         lvl2 = r2["plotDataTaggerLevel1"]
         # mass 350 has one signal peak at mz 175.0 -> highlighted, not gold.
-        hl2 = [
-            x
-            for x, h in zip(lvl2["x"].tolist(), lvl2["highlight"].tolist())
-            if h
-        ]
+        hl2 = [x for x, h in zip(lvl2["x"].tolist(), lvl2["highlight"].tolist()) if h]
         assert hl2 == [175.0]
         assert lvl2["selected_gold"].tolist() == [False] * len(lvl2)
 
@@ -325,9 +325,7 @@ class TestTaggerStateDependencies:
 
 
 class TestTaggerComponentArgs:
-    def test_component_args(
-        self, mock_streamlit, temp_cache_dir, sample_tagger_data
-    ):
+    def test_component_args(self, mock_streamlit, temp_cache_dir, sample_tagger_data):
         comp = _make(temp_cache_dir, sample_tagger_data)
         args = comp._get_component_args()
         assert args["mode"] == "tagger"
@@ -366,9 +364,7 @@ class TestTaggerCacheConfig:
         assert config["tag_identifier"] == "tag"
         assert config["mass_match_tol"] == 1e-5
 
-        restored = _make(
-            temp_cache_dir, sample_tagger_data, cache_id="tagger_restore"
-        )
+        restored = _make(temp_cache_dir, sample_tagger_data, cache_id="tagger_restore")
         restored._restore_cache_config(config)
         assert restored._mode == "tagger"
         assert restored._signal_peaks_column == "SignalPeaks"

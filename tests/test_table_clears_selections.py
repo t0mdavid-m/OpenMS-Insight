@@ -152,9 +152,7 @@ class TestClearsSelectionsStateFlow:
         The user clicks protein row id=2 (Scan=30). The Vue click writes
         {protein:2, scan:30} AND {aa:null, tag:null}; update_from_vue applies it.
         """
-        _make_protein_table(
-            protein_df, str(tmp_path), clears_selections=["aa", "tag"]
-        )
+        _make_protein_table(protein_df, str(tmp_path), clears_selections=["aa", "tag"])
 
         # Stale dependent selections from a previous proteoform.
         state_manager.set_selection("aa", 7)
@@ -190,9 +188,7 @@ class TestClearsSelectionsStateFlow:
         This is the downstream half: the tag table reads `aa` via interval_filters;
         a stale aa would empty/narrow it, the cleared aa restores the full set.
         """
-        _make_protein_table(
-            protein_df, str(tmp_path), clears_selections=["aa", "tag"]
-        )
+        _make_protein_table(protein_df, str(tmp_path), clears_selections=["aa", "tag"])
         tag_table = _make_tag_table(tag_df, str(tmp_path))
 
         # First establish a stale aa that DOES narrow the tag table, to prove the
@@ -277,9 +273,7 @@ class TestClearsSelectionsArgs:
         self, protein_df, tmp_path, mock_streamlit
     ):
         # Create (writes cache), then reconstruct from cache only.
-        _make_protein_table(
-            protein_df, str(tmp_path), clears_selections=["aa", "tag"]
-        )
+        _make_protein_table(protein_df, str(tmp_path), clears_selections=["aa", "tag"])
         reconstructed = Table(cache_id="protein_table", cache_path=str(tmp_path))
         assert reconstructed._clears_selections == ["aa", "tag"]
         args = reconstructed._get_component_args()

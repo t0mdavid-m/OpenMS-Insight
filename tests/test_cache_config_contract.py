@@ -145,8 +145,14 @@ class TestHeatmapCacheConfig:
 
         # Presentation params must NOT be hash-affecting
         cache_config = heatmap._get_cache_config()
-        for key in ("title", "x_label", "y_label", "colorscale", "reversescale",
-                    "intensity_label"):
+        for key in (
+            "title",
+            "x_label",
+            "y_label",
+            "colorscale",
+            "reversescale",
+            "intensity_label",
+        ):
             assert key not in cache_config, f"{key} must not be hash-affecting"
 
 
@@ -308,9 +314,7 @@ class TestHeatmapCategoryColorsRoundtrip:
         assert reconstructed._category_colors == custom_colors, (
             "category_colors lost on cache reconstruction"
         )
-        assert (
-            reconstructed._get_component_args()["categoryColors"] == custom_colors
-        )
+        assert reconstructed._get_component_args()["categoryColors"] == custom_colors
 
 
 class TestHeatmapDownsampleEnum:

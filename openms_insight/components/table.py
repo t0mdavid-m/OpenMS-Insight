@@ -688,9 +688,7 @@ class Table(BaseComponent):
             low_col, high_col = bounds[0], bounds[1]
             if isinstance(value, float) and value.is_integer():
                 value = int(value)
-            data = data.filter(
-                (pl.col(low_col) <= value) & (pl.col(high_col) >= value)
-            )
+            data = data.filter((pl.col(low_col) <= value) & (pl.col(high_col) >= value))
 
         # Get pagination state
         pagination_state = state.get(self._pagination_identifier)

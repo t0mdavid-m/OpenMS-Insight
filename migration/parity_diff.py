@@ -16,6 +16,7 @@ the seed probes below assert structural invariants that must always hold.
 
 Exit code: 0 if all probes pass, 1 otherwise.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -32,6 +33,7 @@ def probe(name: str):
     def deco(fn):
         PROBES[name] = fn
         return fn
+
     return deco
 
 
@@ -41,7 +43,9 @@ def _public_api():
     """Public export surface + component_type uniqueness (anti-regression snapshot)."""
     import openms_insight as oi
 
-    exported = sorted(getattr(oi, "__all__", []) or [n for n in dir(oi) if not n.startswith("_")])
+    exported = sorted(
+        getattr(oi, "__all__", []) or [n for n in dir(oi) if not n.startswith("_")]
+    )
     types = {}
     for name in exported:
         ct = getattr(getattr(oi, name, None), "_component_type", None)
@@ -59,8 +63,12 @@ def _base_contract():
     from openms_insight.core.base import BaseComponent
 
     required = [
-        "_prepare_vue_data", "_get_component_args", "get_filters_mapping",
-        "get_interactivity_mapping", "get_state_dependencies", "__call__",
+        "_prepare_vue_data",
+        "_get_component_args",
+        "get_filters_mapping",
+        "get_interactivity_mapping",
+        "get_state_dependencies",
+        "__call__",
     ]
     missing = [m for m in required if not hasattr(BaseComponent, m)]
     assert not missing, f"BaseComponent missing contract methods: {missing}"
@@ -82,11 +90,15 @@ def run(update: bool) -> int:
         bpath = BASELINE / f"{name}.json"
         if update or not bpath.exists():
             bpath.write_text(payload)
-            print(f"[parity-diff] {name}: baseline {'updated' if update else 'created'}")
+            print(
+                f"[parity-diff] {name}: baseline {'updated' if update else 'created'}"
+            )
         elif bpath.read_text() == payload:
             print(f"[parity-diff] {name}: OK")
         else:
-            print(f"[parity-diff] {name}: DRIFT vs baseline (refresh with --update if intended)")
+            print(
+                f"[parity-diff] {name}: DRIFT vs baseline (refresh with --update if intended)"
+            )
             failed.append(name)
     print(f"\n[parity-diff] {len(PROBES) - len(failed)}/{len(PROBES)} probes passing")
     return 1 if failed else 0

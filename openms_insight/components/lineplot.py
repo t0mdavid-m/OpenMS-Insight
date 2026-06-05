@@ -1041,7 +1041,9 @@ class LinePlot(BaseComponent):
                         selective[key] = {"highlight": True}
                         if want_label:
                             try:
-                                text = self._highlight_value_template.format(val_vals[i])
+                                text = self._highlight_value_template.format(
+                                    val_vals[i]
+                                )
                             except (ValueError, KeyError, IndexError):
                                 text = str(val_vals[i])
                             descriptors.append(
@@ -1097,9 +1099,11 @@ class LinePlot(BaseComponent):
 
         # ALL-SIGNAL set: every signal-peak key in the linkage (toggle highlights
         # ALL masses' peaks). Preserve first-seen order, de-duplicated.
-        all_signal_keys = list(dict.fromkeys(link_df[key_col].tolist())) if (
-            len(link_df) > 0 and key_col in link_df.columns
-        ) else []
+        all_signal_keys = (
+            list(dict.fromkeys(link_df[key_col].tolist()))
+            if (len(link_df) > 0 and key_col in link_df.columns)
+            else []
+        )
 
         # SELECTIVE set: linkage rows whose match value == the selected mass.
         selective: Dict[Any, Dict[str, Any]] = {}
@@ -1144,7 +1148,12 @@ class LinePlot(BaseComponent):
                 if key not in base_mz:
                     continue
                 signal_peaks.append(
-                    [0.0, float(base_mz[key]), float(base_int.get(key, 0.0)), float(chg)]
+                    [
+                        0.0,
+                        float(base_mz[key]),
+                        float(base_int.get(key, 0.0)),
+                        float(chg),
+                    ]
                 )
             if signal_peaks:
                 color = self._styling.get("highlightColor", "#E4572E")
@@ -1419,9 +1428,7 @@ class LinePlot(BaseComponent):
             # Position of the open mass within the highlighted list (oracle index).
             open_hpos = idx_to_hpos[tagger_mass]
             open_signal_peaks = (
-                signal_peaks[tagger_mass]
-                if tagger_mass < len(signal_peaks)
-                else []
+                signal_peaks[tagger_mass] if tagger_mass < len(signal_peaks) else []
             )
             # Per-charge COG badge clusters (z=<charge>). The BADGE gold flag uses
             # the RAW selectedAA rule (oracle Tagger.vue:322-323), distinct from
@@ -1438,12 +1445,9 @@ class LinePlot(BaseComponent):
             # highlighted. The STICK gold flag uses reversedSelectedAA == open_hpos
             # (|| == open_hpos-1) — oracle Tagger.vue:260 (reversedSelectedAA),
             # NOT the raw selectedAA used by the charge BADGE.
-            stick_gold = (
-                reversed_selected_aa is not None
-                and (
-                    reversed_selected_aa == open_hpos
-                    or reversed_selected_aa == open_hpos - 1
-                )
+            stick_gold = reversed_selected_aa is not None and (
+                reversed_selected_aa == open_hpos
+                or reversed_selected_aa == open_hpos - 1
             )
             df_level1 = pd.DataFrame(
                 compute_tagger_level1_spectrum(
@@ -1470,9 +1474,7 @@ class LinePlot(BaseComponent):
                 ]
             )
         if df_level1.empty:
-            df_level1 = pd.DataFrame(
-                columns=["x", "y", "highlight", "selected_gold"]
-            )
+            df_level1 = pd.DataFrame(columns=["x", "y", "highlight", "selected_gold"])
 
         # --- Hash includes spectrum + tag payload + drill-down state ---
         # Use the scan/spectrum filter value (exclude the opaque tag payload key,
@@ -1554,9 +1556,7 @@ class LinePlot(BaseComponent):
                 labels computed at render time). Defaults to ``self._peak_annotations``
                 so existing callers (``_apply_fresh_annotations``) are unchanged.
         """
-        descriptors = (
-            annotations if annotations is not None else self._peak_annotations
-        )
+        descriptors = annotations if annotations is not None else self._peak_annotations
         if descriptors is None:
             return
         result["peakAnnotations"] = descriptors
