@@ -34,7 +34,6 @@ import pytest
 from openms_insight import Table
 from openms_insight.core.state import StateManager
 
-
 # =============================================================================
 # Vue-payload helper (mirrors App.vue's JSON-cloned selection store -> Python)
 # =============================================================================

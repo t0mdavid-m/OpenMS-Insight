@@ -6,7 +6,6 @@ parity (1e-5 tolerance, COG = Σ(I/ΣI)·mz, reversedSelectedAA = len-1-selected
 gold rule == i || == i-1).
 """
 
-import pandas as pd
 import pytest
 
 from openms_insight import LinePlot

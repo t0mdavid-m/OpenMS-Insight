@@ -24,7 +24,6 @@ import pytest
 
 from openms_insight import Table
 
-
 # Column definitions exercising both new named formatters. The `fixed` formatter
 # reproduces the oracle toFixedFormatter (guarded toFixed); `placeholder`
 # reproduces the inline `-1 -> '-'` sentinel substitution.

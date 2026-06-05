@@ -387,18 +387,18 @@ class TestPresentationParamsDoNotInvalidateCache:
     def test_presentation_change_keeps_same_config_hash(
         self, mock_streamlit, temp_cache_dir, sample_heatmap_data
     ):
-        base_kwargs = dict(
-            data=sample_heatmap_data,
-            cache_path=str(temp_cache_dir),
-            x_column="retention_time",
-            y_column="mz",
-            intensity_column="intensity",
-            min_points=100,
+        base_kwargs = {
+            "data": sample_heatmap_data,
+            "cache_path": str(temp_cache_dir),
+            "x_column": "retention_time",
+            "y_column": "mz",
+            "intensity_column": "intensity",
+            "min_points": 100,
             # Pin the state-routing zoom_identifier so the two instances differ
             # ONLY in presentation params. (The default is auto-derived from
             # cache_id — a per-instance state key, not a data-shaping param.)
-            zoom_identifier="shared_zoom",
-        )
+            "zoom_identifier": "shared_zoom",
+        }
 
         plain = Heatmap(cache_id="test_hm_hash_plain", **base_kwargs)
         # Differ ONLY in presentation params
@@ -460,14 +460,14 @@ class TestTableTitleRenderConfig:
         self, mock_streamlit, temp_cache_dir, sample_table_data
     ):
         """Two tables differing ONLY in title share the same cache-key hash."""
-        base_kwargs = dict(
-            data=sample_table_data,
-            cache_path=str(temp_cache_dir),
+        base_kwargs = {
+            "data": sample_table_data,
+            "cache_path": str(temp_cache_dir),
             # Pin the state-routing pagination_identifier so the two instances
             # differ ONLY in title. (Its default is auto-derived from cache_id —
             # a per-instance state key, not a data-shaping param.)
-            pagination_identifier="shared_page",
-        )
+            "pagination_identifier": "shared_page",
+        }
 
         plain = Table(cache_id="test_table_hash_plain", title="A", **base_kwargs)
         retitled = Table(cache_id="test_table_hash_retitled", title="B", **base_kwargs)

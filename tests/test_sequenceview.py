@@ -1419,10 +1419,11 @@ class TestSequenceViewAmbiguousX:
         position (a/b/c/x/y/z) on several clean sequences (incl. a modified one).
         The ONLY new value is the full-length terminal ion at index ``L-1``.
         """
+        from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
+
         from openms_insight.components.sequenceview import (
             calculate_fragment_masses_pyopenms,
         )
-        from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
 
         def _tsg_grid(seq):
             aa_seq = AASequence.fromString(seq)

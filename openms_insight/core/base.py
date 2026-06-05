@@ -346,7 +346,7 @@ class BaseComponent(ABC):
         """
         pass
 
-    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:  # noqa: B027
         """
         Restore presentation (render-time) configuration from cache.
 

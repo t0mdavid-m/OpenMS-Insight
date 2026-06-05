@@ -12,6 +12,9 @@ from ..core.cache import CacheMissError
 from ..core.registry import register_component
 from ..preprocessing.filtering import optimize_for_transfer
 
+if TYPE_CHECKING:  # type-hint only; pyopenms is imported lazily at the call sites
+    from pyopenms import AASequence
+
 # Proton mass for m/z calculations
 PROTON_MASS = 1.007276
 

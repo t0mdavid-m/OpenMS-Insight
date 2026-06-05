@@ -12,11 +12,11 @@ import math
 from collections import Counter
 
 from openms_insight.components.sequenceview import (
+    _terminal_collision_masses,
     calculate_fragment_masses_pyopenms,
     compute_internal_fragment_data,
     compute_internal_fragment_masses,
     parse_openms_sequence,
-    _terminal_collision_masses,
 )
 
 NH3 = 17.0265491015

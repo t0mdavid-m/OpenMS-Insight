@@ -5,7 +5,6 @@ driving the state dict that the bridge would pass to `_prepare_vue_data`, and
 asserts the derived drill-down level + emitted frames respond correctly.
 """
 
-import polars as pl
 import pytest
 
 from openms_insight import LinePlot

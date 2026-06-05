@@ -5,7 +5,6 @@ coordinates (mirrors the existing _dynamic_annotations pattern). The COG /
 charge-group math is done in Python (`compute_charge_annotations`).
 """
 
-import pandas as pd
 import pytest
 
 from openms_insight import LinePlot
