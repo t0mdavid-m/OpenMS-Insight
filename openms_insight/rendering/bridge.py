@@ -77,6 +77,19 @@ _COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
 # ALL hashes on the next render so all components get data in one rerun
 _BATCH_RESEND_KEY = "_svc_batch_resend"
 
+# Session state key for the last state actually DELIVERED to Vue, per component.
+# Used by the PHASE 6 idempotence guard to avoid re-running for a state Vue has
+# already received. An echo of an already-applied sort/selection would otherwise
+# ping-pong setComponentValue <-> st.rerun forever (e.g. on a table column sort).
+_LAST_RENDERED_STATE_KEY = "_svc_last_rendered_state"
+
+# Bookkeeping keys in get_state_for_vue() that are NOT user-visible state. They
+# must be excluded from the PHASE 6 render snapshot, or their monotonic counters
+# would make every snapshot differ and defeat the guard.
+_RENDER_SNAPSHOT_SKIP = frozenset(
+    {"selection_counter", "pagination_counter", "counter", "id"}
+)
+
 
 def _get_component_cache() -> Dict[str, Any]:
     """Get per-component data cache from session state."""
@@ -854,9 +867,40 @@ def render_component(
         if annotations_changed:
             state_changed = True
 
-    # === PHASE 6: Rerun if state changed ===
-    # This will send the UPDATED data (now in cache) to Vue
-    if state_changed:
+    # === PHASE 6: Rerun if state changed AND Vue has not already received this state ===
+    # Idempotence guard against the sort/selection echo loop: an advancing Vue
+    # counter (the ratchet) keeps state_changed True via the sort page-override and
+    # cache miss, so a naive `if state_changed: st.rerun()` ping-pongs
+    # setComponentValue <-> st.rerun forever and hangs the app on a table sort.
+    #
+    # We key on the GLOBAL rendered selection state (minus the monotonic bookkeeping
+    # counters) plus the data and annotation hashes -- i.e. exactly what Vue would
+    # receive -- and remember it as "delivered" ONLY on a render that actually sent
+    # data to Vue (cache hit, or awaiting-filter where there is nothing to send).
+    # A render is then suppressed only when this exact state was already delivered.
+    # This is conservative by construction: a genuine first delivery is never
+    # suppressed (we have not recorded it yet), while repeats of an already-delivered
+    # state -- including cache-miss repeats from the echo loop -- are. Cross-component
+    # cascades still settle: each new combined state is delivered once before being
+    # suppressed.
+    delivered = st.session_state.setdefault(_LAST_RENDERED_STATE_KEY, {})
+    rendered_state = state_manager.get_state_for_vue()
+    render_snapshot = (
+        tuple(
+            sorted(
+                (k, _make_hashable(v))
+                for k, v in rendered_state.items()
+                if k not in _RENDER_SNAPSHOT_SKIP
+            )
+        ),
+        data_hash,
+        st.session_state.get(f"_svc_ann_hash_{key}"),
+    )
+    already_delivered = delivered.get(component_id) == render_snapshot
+    if cache_valid or awaiting_filter:
+        delivered[component_id] = render_snapshot
+
+    if state_changed and not already_delivered:
         if _DEBUG_STATE_SYNC:
             _logger.warning(
                 f"[Bridge:{component._cache_id}] Phase6: RERUN triggered, "
@@ -865,7 +909,8 @@ def render_component(
         st.rerun()
     elif _DEBUG_STATE_SYNC:
         _logger.warning(
-            f"[Bridge:{component._cache_id}] Phase6: No rerun needed, state_changed=False"
+            f"[Bridge:{component._cache_id}] Phase6: No rerun needed, "
+            f"state_changed={state_changed}, already_delivered={already_delivered}"
         )
 
     return result

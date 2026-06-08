@@ -1705,6 +1705,85 @@ class TestTableSelectionClearingOnInvalidFilter:
 
 
 # =============================================================================
+# TestPhase6IdempotenceGuard
+# =============================================================================
+
+
+class TestPhase6IdempotenceGuard:
+    """PHASE 6 rerun idempotence guard — the table-sort infinite-loop fix.
+
+    A sort echo with an advancing Vue counter keeps state_changed=True (via the
+    page override / cache miss); a naive ``if state_changed: st.rerun()`` then
+    ping-pongs setComponentValue <-> st.rerun forever. The guard suppresses the
+    rerun once a rendered state has already been DELIVERED to Vue, while never
+    dropping a genuine first delivery.
+    """
+
+    def test_no_rerun_for_already_delivered_state(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """A later render of an already-delivered state must NOT rerun, even when a
+        cache miss sets state_changed=True (this is what previously looped)."""
+        from openms_insight.rendering.bridge import _get_component_cache
+
+        session_id = state_manager.session_id
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=3,
+            pagination_identifier="test_table_page",
+        )
+
+        # Render 1: cache MISS -> caches page-2 data and reruns.
+        # Render 2: cache HIT  -> delivers page-2 data and records it as delivered.
+        render_component(table_component, state_manager)
+        render_component(table_component, state_manager)
+
+        # Force a cache miss for the SAME, already-delivered state. Without the
+        # guard, PHASE 5 sets state_changed=True and the bridge reruns forever.
+        _get_component_cache().clear()
+        mock_streamlit_bridge["rerun"].reset_mock()
+
+        render_component(table_component, state_manager)
+
+        assert not mock_streamlit_bridge["rerun"].called, (
+            "Bridge re-ran for an already-delivered state (sort echo loop)"
+        )
+
+    def test_rerun_still_fires_for_a_new_state(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """The guard must not over-suppress: a genuinely new rendered state (page
+        change) still reruns so its freshly cached data reaches Vue."""
+        session_id = state_manager.session_id
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=3,
+            pagination_identifier="test_table_page",
+        )
+        render_component(table_component, state_manager)  # settle page 2
+        render_component(table_component, state_manager)
+
+        # Vue navigates to a different page -> new rendered state -> must rerun.
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=4,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=4,
+            pagination_identifier="test_table_page",
+        )
+        mock_streamlit_bridge["rerun"].reset_mock()
+        render_component(table_component, state_manager)
+
+        assert mock_streamlit_bridge["rerun"].called, (
+            "Bridge failed to rerun for a new state (page change); data would be stale"
+        )
+
+
+# =============================================================================
 # TestLinePlotSelectionClearing
 # =============================================================================
 

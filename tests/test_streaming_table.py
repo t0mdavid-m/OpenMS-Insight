@@ -579,3 +579,41 @@ class TestPaginationCounterConflict:
         assert state_manager._state["selections"][selection_id] == 99
         # Pagination should NOT update (15 < 20)
         assert state_manager._state["selections"][pagination_id]["page"] == 10
+
+    def test_update_from_vue_identical_state_is_noop(self, mock_streamlit):
+        """An echoed, identical selection is a no-op: no modification and no counter
+        bump, even when Vue's counter has advanced.
+
+        This is the idempotence contract the JS-side ``updateSelection`` guard
+        mirrors. Together they stop a sort/selection echo from ping-ponging
+        ``setComponentValue`` <-> ``st.rerun`` forever (the table-sort hang).
+        """
+        from openms_insight.core.state import StateManager
+
+        state_manager = StateManager("test_state")
+        pagination_id = "test_table_page"
+        pagination_value = {
+            "page": 3,
+            "page_size": 100,
+            "sort_column": "Score",
+            "sort_dir": "desc",
+        }
+
+        state_manager._state["pagination_counter"] = 7
+        state_manager._state["selections"][pagination_id] = dict(pagination_value)
+
+        # Vue echoes the SAME value back with a much higher counter (the ratchet).
+        vue_state = {
+            "pagination_counter": 99,
+            "selection_counter": 0,
+            "id": state_manager.session_id,
+            pagination_id: dict(pagination_value),
+        }
+
+        modified = state_manager.update_from_vue(vue_state)
+
+        assert modified is False
+        # Counter must NOT advance for an unchanged value...
+        assert state_manager._state["pagination_counter"] == 7
+        # ...and the value is untouched.
+        assert state_manager._state["selections"][pagination_id] == pagination_value

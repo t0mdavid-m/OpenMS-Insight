@@ -55,6 +55,14 @@ export const useSelectionStore = defineStore('selection', {
      * @param value - The selected value
      */
     updateSelection(identifier: string, value: unknown) {
+      // Idempotence guard (mirror of Python StateManager.set_selection): skip the
+      // counter bump entirely when the value is unchanged, so an echoed or
+      // programmatic re-set of the same selection/sort/page does not re-trigger
+      // App.vue's counter watcher (which would ping-pong setComponentValue <->
+      // st.rerun and hang the app, e.g. on a table column sort).
+      if (JSON.stringify(this.$state[identifier]) === JSON.stringify(value)) {
+        return
+      }
       const isPagination = isPaginationIdentifier(identifier)
       console.log('[SelectionStore] ===== updateSelection =====', {
         timestamp: Date.now(),

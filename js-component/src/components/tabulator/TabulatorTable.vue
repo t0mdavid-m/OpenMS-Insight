@@ -697,6 +697,17 @@ export default defineComponent({
             return
           }
 
+          // Also skip if this matches the sort we already requested. replaceData()
+          // during an inbound (server-confirmed) render can re-fire dataSorting
+          // before the reactive paginationState above has propagated; without this,
+          // the programmatic re-fire would re-request an already-applied sort and
+          // feed the rerun loop. requestedSort* is set on user sort (below) and
+          // synced from server state in the paginationState watcher.
+          if (sortColumn === this.requestedSortColumn && sortDir === this.requestedSortDir) {
+            console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort already requested, skipping`)
+            return
+          }
+
           console.log(`[TabulatorTable ${this.args.title}] dataSorting: requesting sorted data`, {
             from: { col: cachedSortCol, dir: cachedSortDir },
             to: { col: sortColumn, dir: sortDir },
