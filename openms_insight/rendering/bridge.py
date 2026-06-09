@@ -581,9 +581,14 @@ def render_component(
         component_args["height"] = height
 
     # Batch resend: if any component requested data in previous run, clear ALL hashes
-    if st.session_state.get(_BATCH_RESEND_KEY):
-        st.session_state[_VUE_ECHOED_HASH_KEY] = {}
-        st.session_state.pop(_BATCH_RESEND_KEY, None)
+    # Targeted resend: clear the echoed hash only for the components that requested
+    # data, so one component's request does not force every other component to
+    # re-send (and re-parse) data Vue already holds.
+    requesting_keys = st.session_state.pop(_BATCH_RESEND_KEY, None)
+    if requesting_keys:
+        echoed = st.session_state.get(_VUE_ECHOED_HASH_KEY, {})
+        for requesting_key in requesting_keys:
+            echoed.pop(requesting_key, None)
 
     # Initialize hash cache in session state if needed
     if _VUE_ECHOED_HASH_KEY not in st.session_state:
@@ -640,12 +645,16 @@ def render_component(
 
     # Build payload - only send data if cache is valid for current state
     if cache_valid:
-        # Cache HIT - send cached data (it's correct for current state)
+        # Cache HIT - send cached data (it's correct for current state).
+        # Honor Vue's echoed hash: if Vue already holds this exact data, send
+        # dataChanged=False so it reuses its parsed copy instead of re-parsing
+        # (the bidirectional hash confirmation that was stored but never used).
+        vue_has_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(key) == cached_hash
         data_payload = {
             **cached_data,
             "selection_store": initial_state,
             "hash": cached_hash,
-            "dataChanged": True,
+            "dataChanged": not vue_has_hash,
             "awaitingFilter": False,
         }
         if _DEBUG_STATE_SYNC:
@@ -713,9 +722,10 @@ def render_component(
         # Apply Vue's state update FIRST - this is the key fix!
         state_changed = state_manager.update_from_vue(result)
 
-        # Check if Vue is requesting data resend
+        # Check if Vue is requesting data resend (accumulate the requesting
+        # component's key so the next render clears only its echoed hash).
         if result.get("_requestData", False):
-            st.session_state[_BATCH_RESEND_KEY] = True
+            st.session_state.setdefault(_BATCH_RESEND_KEY, set()).add(key)
 
     # === PHASE 4: Get UPDATED state and prepare data ===
     # Now state reflects Vue's request (e.g., new page number after click)
@@ -814,11 +824,14 @@ def render_component(
             current_ann_hash,
         )
 
-        # If cache was invalid at Phase 1, we didn't send data to Vue (dataChanged=False).
-        # Trigger a rerun so the newly cached data gets sent on the next render.
-        # This handles cross-component filter changes where the affected component
-        # needs to receive updated data (e.g., new total_rows/total_pages).
-        if not cache_valid:
+        # If cache was invalid at Phase 1, we didn't send data to Vue
+        # (dataChanged=False). Trigger a rerun so the newly cached data gets sent on
+        # the next render — but only if Vue doesn't already hold this exact data hash
+        # (when the recomputed data matches Vue's echoed hash, a rerun would deliver
+        # nothing new). This handles cross-component filter changes where the affected
+        # component needs updated data (e.g., new total_rows/total_pages).
+        vue_has_data = data_hash == st.session_state[_VUE_ECHOED_HASH_KEY].get(key)
+        if not cache_valid and not vue_has_data:
             state_changed = True
             if _DEBUG_STATE_SYNC:
                 _logger.warning(

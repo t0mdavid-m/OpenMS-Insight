@@ -149,9 +149,11 @@ export default defineComponent({
         debouncedSendState()
       }
     }, { immediate: true })
-    // Hash and annotation changes are sent immediately (data sync, not user interaction)
-    watch(() => streamlitDataStore.hash, () => sendStateToStreamlit())
-    watch(() => streamlitDataStore.annotations, () => sendStateToStreamlit(), { deep: true })
+    // Hash and annotation changes are data-sync echoes; debounce them too so a
+    // settling render that bumps several of (counter, hash, annotations) collapses
+    // into a single setComponentValue (each echo otherwise forces a Streamlit rerun).
+    watch(() => streamlitDataStore.hash, () => debouncedSendState())
+    watch(() => streamlitDataStore.annotations, () => debouncedSendState(), { deep: true })
     // RequestData needs immediate response - flush any pending debounced state first
     watch(() => streamlitDataStore.requestData, (newVal) => {
       if (newVal) {

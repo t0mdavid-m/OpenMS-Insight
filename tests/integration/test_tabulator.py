@@ -1782,6 +1782,50 @@ class TestPhase6IdempotenceGuard:
             "Bridge failed to rerun for a new state (page change); data would be stale"
         )
 
+    def test_no_data_resend_when_vue_already_holds_hash(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """Hash confirmation: when Vue has echoed back the hash it already holds,
+        PHASE 1 sends dataChanged=False so Vue reuses its parsed data instead of
+        re-parsing it (the redundant re-parse that made each round-trip slow)."""
+        from openms_insight.rendering.bridge import _VUE_ECHOED_HASH_KEY
+
+        session_id = state_manager.session_id
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=1,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=1,
+            pagination_identifier="test_table_page",
+        )
+        render_component(table_component, state_manager)  # cache miss -> caches data
+        render_component(table_component, state_manager)  # cache hit -> dataChanged=True
+
+        sent = mock_streamlit_bridge["vue_func"].call_args.kwargs
+        cached_hash = sent["hash"]
+        key = sent["key"]
+        assert cached_hash and sent["dataChanged"] is True
+
+        # Simulate Vue echoing back that exact hash (it now holds the data).
+        import streamlit as st
+
+        st.session_state[_VUE_ECHOED_HASH_KEY][key] = cached_hash
+
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=1,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=1,
+            pagination_identifier="test_table_page",
+        )
+        render_component(table_component, state_manager)
+
+        resent = mock_streamlit_bridge["vue_func"].call_args.kwargs
+        assert resent["hash"] == cached_hash
+        assert resent["dataChanged"] is False, (
+            "Vue already holds this hash; data should not be re-sent/re-parsed"
+        )
+
 
 # =============================================================================
 # TestLinePlotSelectionClearing
