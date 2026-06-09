@@ -1799,7 +1799,9 @@ class TestPhase6IdempotenceGuard:
             pagination_identifier="test_table_page",
         )
         render_component(table_component, state_manager)  # cache miss -> caches data
-        render_component(table_component, state_manager)  # cache hit -> dataChanged=True
+        render_component(
+            table_component, state_manager
+        )  # cache hit -> dataChanged=True
 
         sent = mock_streamlit_bridge["vue_func"].call_args.kwargs
         cached_hash = sent["hash"]
