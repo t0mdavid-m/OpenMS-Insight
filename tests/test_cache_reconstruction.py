@@ -940,3 +940,101 @@ class TestFilterAndInteractivityRestoration:
         )
 
         assert reconstructed.get_filter_defaults() == filter_defaults
+
+
+class TestCreationCacheReuse:
+    """M1: creation mode (data=/data_path=) reuses a valid, config-matching
+    on-disk cache instead of re-running preprocessing.
+
+    These pin the behavior the viewer depends on: once a cache is built, the
+    many Streamlit reruns that reconstruct the same component with the same
+    data + config must NOT re-preprocess (no subprocess storm, no rescans),
+    while a changed data-shaping config — or regenerate_cache=True — still
+    rebuilds.
+    """
+
+    @staticmethod
+    def _count_preprocess(monkeypatch) -> list:
+        """Patch Table._preprocess to count + pass through; returns the call log."""
+        calls: list = []
+        original = Table._preprocess
+
+        def counting(inner_self):
+            calls.append(1)
+            return original(inner_self)
+
+        monkeypatch.setattr(Table, "_preprocess", counting)
+        return calls
+
+    def test_matching_config_skips_preprocess(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        """A second construction with identical config must not re-preprocess;
+        it reconstructs from cache exactly like reconstruction mode."""
+        cache_id = "m1_reuse"
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            filters={"spectrum": "scan_id"},
+        )
+
+        calls = self._count_preprocess(monkeypatch)
+        reused = Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            filters={"spectrum": "scan_id"},
+        )
+
+        assert calls == [], "preprocessing should be skipped on a config-matching cache"
+        assert reused._raw_data is None
+        assert reused._preprocessed_data.get("data") is not None
+        assert reused._filters == {"spectrum": "scan_id"}
+
+    def test_changed_config_triggers_rebuild(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        """A different data-shaping config changes config_hash, so the cache is
+        not reused and preprocessing runs again."""
+        cache_id = "m1_rebuild"
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+        )
+
+        calls = self._count_preprocess(monkeypatch)
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            filters={"spectrum": "scan_id"},  # hash-affecting change
+        )
+        assert len(calls) == 1
+
+    def test_regenerate_cache_forces_rebuild(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        """regenerate_cache=True rebuilds even when the config matches."""
+        cache_id = "m1_regen"
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+        )
+
+        calls = self._count_preprocess(monkeypatch)
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            regenerate_cache=True,
+        )
+        assert len(calls) == 1

@@ -139,6 +139,31 @@ class BaseComponent(ABC):
             self._interactivity = interactivity or {}
             self._config = kwargs
 
+            # M1: Reuse a valid, config-matching on-disk cache instead of
+            # re-running preprocessing. Subclasses set every data-shaping
+            # attribute BEFORE calling super().__init__(), so both
+            # _cache_exists() (version + component_type) and
+            # _compute_config_hash() (filters + interactivity +
+            # _get_cache_config()) are valid at this point. When the existing
+            # cache encodes the exact same data-shaping config, reconstruct from
+            # it just as reconstruction mode does (raw_data=None,
+            # _load_from_cache()), skipping the subprocess/in-process rebuild.
+            #
+            # Freshness contract: a cache_id identifies a single (data, config)
+            # pair. When the underlying data changes, callers use a distinct
+            # cache_id (the FLASHApp convention) or pass regenerate_cache=True
+            # (the workflow rebuilds caches when it produces new results).
+            # Presentation-only changes live in _get_render_config() and
+            # intentionally do NOT block reuse here.
+            if (
+                not regenerate_cache
+                and self._cache_exists()
+                and self._cached_config_matches()
+            ):
+                self._raw_data = None
+                self._load_from_cache()
+                return
+
             if data_path is not None:
                 # Subprocess preprocessing - memory released after cache creation
                 from .subprocess_preprocess import preprocess_component
@@ -159,6 +184,14 @@ class BaseComponent(ABC):
                 # In-process preprocessing
                 self._raw_data = data
                 self._validate_mappings()
+                # Capture the cache-reuse key from the INPUT config, BEFORE
+                # _preprocess() populates derived cache-config (e.g. Table's
+                # auto-detected column_definitions). A future construction's M1
+                # check (_cached_config_matches) likewise computes its hash
+                # before preprocessing, so the two are comparable only when both
+                # are taken from input config. (config_hash, written in
+                # _save_to_cache from the post-preprocess state, is left as-is.)
+                self._input_config_hash = self._compute_config_hash()
                 self._preprocess()
                 self._save_to_cache()
 
@@ -290,6 +323,32 @@ class BaseComponent(ABC):
 
         return True
 
+    def _cached_config_matches(self) -> bool:
+        """Return True when the on-disk cache encodes the same INPUT config we
+        would preprocess with now.
+
+        Complements _cache_exists() (which checks version + component_type but
+        deliberately ignores config). Used by the creation branch (M1) to skip
+        re-running preprocessing when the existing cache already matches.
+
+        Compares the manifest's ``input_config_hash`` — the hash captured from
+        input config BEFORE preprocessing — against ``_compute_config_hash()``
+        evaluated here, which is also before preprocessing. This avoids the
+        trap of hashing preprocessing-derived config (e.g. Table's auto-detected
+        column_definitions), which is unavailable at this point. Only
+        _get_cache_config()-derived config participates, so presentation-only
+        changes (_get_render_config()) never block reuse. A manifest written
+        before this field existed has input_config_hash=None and safely falls
+        through to a rebuild.
+        """
+        try:
+            with open(self._get_manifest_path()) as f:
+                manifest = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return False
+        cached = manifest.get("input_config_hash")
+        return cached is not None and cached == self._compute_config_hash()
+
     def _load_from_cache(self) -> None:
         """Load all configuration and preprocessed data from cache.
 
@@ -384,6 +443,11 @@ class BaseComponent(ABC):
             "component_type": self._component_type,
             "created_at": datetime.now().isoformat(),
             "config_hash": self._compute_config_hash(),
+            # M1 cache-reuse key: the config hash captured from INPUT config
+            # before preprocessing (set in the in-process creation branch).
+            # Reproducible by a future construction's pre-preprocess M1 check,
+            # unlike config_hash which reflects post-preprocess derived config.
+            "input_config_hash": getattr(self, "_input_config_hash", None),
             "config": self._get_stored_config(),
             "filters": self._filters,
             "filter_defaults": self._filter_defaults,
