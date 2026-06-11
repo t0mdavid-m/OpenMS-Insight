@@ -66,6 +66,127 @@ def sample_lineplot_data() -> pl.LazyFrame:
 
 
 @pytest.fixture
+def sample_density_data() -> pl.LazyFrame:
+    """Tidy long {x, y, group} density frame (target + decoy series)."""
+    return pl.LazyFrame(
+        {
+            "x": [0.1, 0.5, 0.9, 0.2, 0.6, 1.0],
+            "y": [0.2, 1.0, 0.3, 0.1, 0.4, 0.05],
+            "group": [
+                "target",
+                "target",
+                "target",
+                "decoy",
+                "decoy",
+                "decoy",
+            ],
+        }
+    )
+
+
+@pytest.fixture
+def sample_density_data_target_only() -> pl.LazyFrame:
+    """Tidy long {x, y, group} density frame with no decoy rows."""
+    return pl.LazyFrame(
+        {
+            "x": [0.1, 0.5, 0.9],
+            "y": [0.2, 1.0, 0.3],
+            "group": ["target", "target", "target"],
+        }
+    )
+
+
+@pytest.fixture
+def sample_density_scores() -> pl.LazyFrame:
+    """Raw scores + target/decoy label column for the kde_from path.
+
+    Label 0 => target, label > 0 => decoy (FLASHApp TargetDecoyType convention,
+    mapped to 'target'/'decoy' via target_value/decoy_value in the test).
+    """
+    import random
+
+    random.seed(7)
+    n = 300
+    return pl.LazyFrame(
+        {
+            "Qscore": [random.uniform(0.0, 1.0) for _ in range(n)]
+            + [random.uniform(0.0, 0.5) for _ in range(n)],
+            "label": ["target"] * n + ["decoy"] * n,
+        }
+    )
+
+
+@pytest.fixture
+def TAG_PAYLOAD() -> dict:
+    """A TagData payload (opaque dict carried by the 'tag' selection).
+
+    masses are descending fragment masses matching the deconvolved MonoMass of
+    scan 1 in `sample_tagger_data` (350.0, 250.0, 150.0). sequence length 3 with
+    selectedAA=1 => reversedSelectedAA = (3-1) - 1 = 1.
+    """
+    return {
+        "sequence": "ABC",
+        "nTerminal": True,
+        "masses": [350.0, 250.0, 150.0],
+        "selectedAA": 1,
+        "startPos": 0,
+        "endPos": 2,
+    }
+
+
+@pytest.fixture
+def sample_tagger_data() -> pl.LazyFrame:
+    """Per-scan frame with list columns for the tagger mode.
+
+    Scan 1 (scan_id=1) deconvolved masses [150, 250, 350], one with a multi-peak
+    charge envelope for COG testing. SignalPeaks[i] is a list of
+    [peak_index, mz, intensity, charge] for MonoMass[i].
+    """
+    return pl.LazyFrame(
+        {
+            "scan_id": [1, 2],
+            "tag_id": [10, 20],
+            "MonoMass": [
+                [150.0, 250.0, 350.0],
+                [100.0, 200.0],
+            ],
+            "SumIntensity": [
+                [1000.0, 2000.0, 1500.0],
+                [500.0, 800.0],
+            ],
+            # SignalPeaks: per-mass list of [idx, mz, intensity, charge].
+            # Stored all-float (masstable schema: list_(list_(list_(float64())))).
+            "SignalPeaks": [
+                [
+                    # mass 150.0 -> charge 12 (two peaks for COG) + charge 13
+                    [
+                        [0.0, 75.0, 3.0, 12.0],
+                        [1.0, 75.1, 1.0, 12.0],
+                        [2.0, 50.0, 2.0, 13.0],
+                    ],
+                    # mass 250.0 -> charge 5 single peak
+                    [[3.0, 125.0, 4.0, 5.0]],
+                    # mass 350.0 -> charge 7 single peak
+                    [[4.0, 175.0, 6.0, 7.0]],
+                ],
+                [
+                    [[5.0, 100.0, 1.0, 1.0]],
+                    [[6.0, 200.0, 1.0, 1.0]],
+                ],
+            ],
+            "MonoMass_Anno": [
+                [75.0, 75.1, 50.0, 125.0, 175.0],
+                [100.0, 200.0],
+            ],
+            "SumIntensity_Anno": [
+                [3.0, 1.0, 2.0, 4.0, 6.0],
+                [1.0, 1.0],
+            ],
+        }
+    )
+
+
+@pytest.fixture
 def sample_heatmap_data() -> pl.LazyFrame:
     """Create sample data for Heatmap component."""
     import random
@@ -125,6 +246,34 @@ def sample_volcanoplot_data() -> pl.LazyFrame:
             "comparison_id": [
                 random.choice(["A_vs_B", "C_vs_D"]) for _ in range(n_proteins)
             ],
+        }
+    )
+
+
+@pytest.fixture
+def sample_plot3d_data() -> pl.LazyFrame:
+    """Create sample tidy long-format data for the Plot3D component.
+
+    One row per plotted point. Includes:
+    - a non-positive intensity row (to exercise drop_nonpositive_z),
+    - two series values ("Signal"/"Noise"),
+    - two scan values (to exercise filtering).
+    """
+    return pl.LazyFrame(
+        {
+            "mass": [1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3500.0],
+            "charge": [2, 3, 2, 4, 3, 2],
+            "intensity": [500.0, 1200.0, 0.0, 800.0, 1500.0, 300.0],
+            "series": [
+                "Signal",
+                "Signal",
+                "Noise",
+                "Signal",
+                "Noise",
+                "Noise",
+            ],
+            "scan": [100, 100, 100, 200, 200, 200],
+            "mass_index": [0, 1, 0, 0, 1, 1],
         }
     )
 

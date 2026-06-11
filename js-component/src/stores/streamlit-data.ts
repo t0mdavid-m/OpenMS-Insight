@@ -127,9 +127,16 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         // This ensures watchers see the new data when they fire on hash change
         // IMPORTANT: Merge new data instead of replacing, so multiple components
         // can each contribute their data (tableData, heatmapData, plotData, etc.)
+        // If the hash is unchanged we already hold the parsed Arrow tables, so skip
+        // the (expensive) re-parse and only refresh non-Arrow values / metadata.
+        const sameHash = newHash === this.hash
         const data = newData.args as StreamlitData
         Object.entries(data).forEach(([key, value]) => {
           if (value instanceof ArrowTable) {
+            if (sameHash && this.dataForDrawing[key] !== undefined) {
+              // Identical data we already parsed at this hash — reuse it.
+              return
+            }
             // Use column-based parsing for plot data (LinePlot's `plotData`,
             // MirrorPlot's `plotDataTop`/`plotDataBottom`) — more efficient for plotting.
             // Use row-based parsing for tableData (needed for Tabulator) and

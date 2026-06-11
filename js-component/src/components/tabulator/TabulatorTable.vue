@@ -564,9 +564,12 @@ export default defineComponent({
           if (colDef.headerTooltip === undefined) {
             colDef.headerTooltip = true
           }
-          // Resolve custom formatter names to their implementations
-          // Python sends formatter as a string (e.g., "scientific", "signed", "badge")
-          // We replace it with the actual formatter function
+          // Resolve custom formatter names to their implementations.
+          // Python sends formatter as a string, which we swap for the registered
+          // function. Supported custom names (see formatters.ts customFormatters):
+          // "scientific", "signed", "badge", "fixed", "placeholder".
+          // No per-name logic lives here — the registry resolves names generically,
+          // so new formatters require no change to this file.
           if (typeof colDef.formatter === 'string' && isCustomFormatter(colDef.formatter)) {
             const customFormatter = getCustomFormatter(colDef.formatter)
             if (customFormatter) {
@@ -691,6 +694,17 @@ export default defineComponent({
 
           if (sortColumn === cachedSortCol && sortDir === cachedSortDir) {
             console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort unchanged, skipping`)
+            return
+          }
+
+          // Also skip if this matches the sort we already requested. replaceData()
+          // during an inbound (server-confirmed) render can re-fire dataSorting
+          // before the reactive paginationState above has propagated; without this,
+          // the programmatic re-fire would re-request an already-applied sort and
+          // feed the rerun loop. requestedSort* is set on user sort (below) and
+          // synced from server state in the paginationState watcher.
+          if (sortColumn === this.requestedSortColumn && sortDir === this.requestedSortDir) {
+            console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort already requested, skipping`)
             return
           }
 
@@ -1015,9 +1029,30 @@ export default defineComponent({
       console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: rows[${targetIndex}] exists:`, !!rows?.[targetIndex])
 
       if (rows && rows[targetIndex]) {
+        const targetRow = rows[targetIndex]
         this.tabulator.deselectRow()
-        rows[targetIndex].select()
-        rows[targetIndex].scrollTo('center', false)
+        targetRow.select()
+        targetRow.scrollTo('center', false)
+
+        // Propagate the cross-component selection to the navigated row so
+        // downstream linked components update (parity with onRowClick and the
+        // client-side go-to path). Python's server-side go-to also sets this
+        // selection authoritatively; updating here mirrors onRowClick exactly
+        // and keeps behavior correct even if Python's value hasn't arrived yet.
+        // Guard with skipNextSync so the resulting store watcher doesn't redo
+        // the (already-applied) visual selection.
+        const interactivity = this.args.interactivity || {}
+        const rowData = targetRow.getData()
+        if (rowData && Object.keys(interactivity).length > 0) {
+          this.skipNextSync = true
+          for (const [identifier, column] of Object.entries(interactivity)) {
+            const value = rowData[column as string]
+            this.selectionStore.updateSelection(identifier, value)
+          }
+          this.$nextTick(() => {
+            this.skipNextSync = false
+          })
+        }
         console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: SUCCESS - selected row ${targetIndex}`)
       }
     },
@@ -1314,10 +1349,44 @@ export default defineComponent({
         }
       }
 
+      // ADDITIONALLY: reset any DEPENDENT selections this click should clear, to
+      // the store's "unset" sentinel (null). Default off (clearsSelections absent)
+      // => this is a no-op. Identifiers this table itself sets via interactivity
+      // are skipped so we never clobber the values just written above. The null
+      // propagates through App.vue -> StateManager.update_from_vue (which treats
+      // null as "no selection") so dependent components' filters/interval_filters
+      // see no selection on the next render (oracle parity:
+      // updateSelectedProtein clears selectedAA/selectedTag/tagData on each click).
+      this.clearDependentSelections()
+
       // Clear flag after Vue's next tick (after watcher has fired)
       this.$nextTick(() => {
         this.skipNextSync = false
       })
+    },
+
+    /**
+     * Reset the configured `clearsSelections` dependent identifiers to the store's
+     * "unset" sentinel (null), skipping any identifier this table itself sets via
+     * `interactivity` (those were just written to the clicked row's value). Default
+     * off: when `args.clearsSelections` is absent/empty this is a no-op, so existing
+     * components are unaffected.
+     */
+    clearDependentSelections(): void {
+      const clears = this.args.clearsSelections
+      if (!clears || clears.length === 0) {
+        return
+      }
+      const interactivity = this.args.interactivity || {}
+      for (const identifier of clears) {
+        // Never clear an identifier this table is itself setting.
+        if (identifier in interactivity) {
+          continue
+        }
+        // null is the "unset" representation: StateManager / _prepare_vue_data
+        // treat null/undefined as no-selection, so dependents skip it.
+        this.selectionStore.updateSelection(identifier, null)
+      }
     },
 
     /**

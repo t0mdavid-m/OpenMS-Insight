@@ -6,7 +6,7 @@ _hash key, which is required by bridge.py._prepare_vue_data_cached().
 
 import pytest
 
-from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
+from openms_insight import Heatmap, LinePlot, Plot3D, Table, VolcanoPlot
 
 
 @pytest.mark.parametrize(
@@ -17,6 +17,25 @@ from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
             LinePlot,
             "sample_lineplot_data",
             {"x_column": "mass", "y_column": "intensity"},
+        ),
+        (
+            LinePlot,
+            "sample_density_data",
+            {"mode": "density"},
+        ),
+        (
+            LinePlot,
+            "sample_tagger_data",
+            {
+                "mode": "tagger",
+                "filters": {"spectrum": "scan_id", "tag": "tag_id"},
+                "interactivity": {"tagger_mass": "peak_id"},
+                "x_column": "MonoMass",
+                "y_column": "SumIntensity",
+                "signal_peaks_column": "SignalPeaks",
+                "mz_column": "MonoMass_Anno",
+                "mz_intensity_column": "SumIntensity_Anno",
+            },
         ),
         (
             Heatmap,
@@ -31,6 +50,15 @@ from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
             VolcanoPlot,
             "sample_volcanoplot_data",
             {"log2fc_column": "log2FC", "pvalue_column": "pvalue"},
+        ),
+        (
+            Plot3D,
+            "sample_plot3d_data",
+            {
+                "x_column": "mass",
+                "y_column": "charge",
+                "z_column": "intensity",
+            },
         ),
     ],
 )

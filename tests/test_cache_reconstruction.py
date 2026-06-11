@@ -503,8 +503,11 @@ class TestSequenceViewCacheReconstruction:
         assert reconstructed_count == original_count
 
     def test_sequenceview_cache_miss_raises_error(self, temp_cache_dir: Path):
-        """Test that SequenceView raises ValueError when no cache and no data."""
-        with pytest.raises(ValueError, match="Cache not found"):
+        """Test that SequenceView raises CacheMissError when no cache and no data.
+
+        Aligned with BaseComponent (was a plain ValueError before Phase 2).
+        """
+        with pytest.raises(CacheMissError, match="Cache not found"):
             SequenceView(
                 cache_id="nonexistent_sequenceview",
                 cache_path=str(temp_cache_dir),
@@ -539,6 +542,33 @@ class TestSequenceViewCacheReconstruction:
         )
         assert sv._filter_defaults["spectrum"] is None
         assert sv._filter_defaults["sequence"] is None
+
+    def test_sequenceview_filter_defaults_param_honored_and_roundtrips(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """The exposed filter_defaults param is applied and survives reconstruction.
+
+        Identifiers absent from filter_defaults still default to None (historical
+        behavior); supplied values are persisted and restored from cache.
+        """
+        cache_id = "test_sv_filter_defaults_param"
+
+        SequenceView(
+            cache_id=cache_id,
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id", "sequence": "sequence_id"},
+            filter_defaults={"spectrum": -1},  # only one of the two
+        )
+
+        reconstructed = SequenceView(cache_id=cache_id, cache_path=str(temp_cache_dir))
+        assert reconstructed._filter_defaults["spectrum"] == -1
+        # Identifier without a supplied default falls back to None
+        assert reconstructed._filter_defaults["sequence"] is None
 
     def test_sequenceview_filter_defaults_auto_populated_reconstruction(
         self,
@@ -706,38 +736,45 @@ class TestDataRequiredForConfiguration:
         )
 
         # Attempting to reconstruct with filters should fail
-        with pytest.raises(ValueError, match="Configuration arguments require"):
+        with pytest.raises(CacheMissError, match="Configuration arguments require"):
             SequenceView(
                 cache_id=cache_id,
                 cache_path=str(temp_cache_dir),
                 filters={"spectrum": "scan_id"},
             )
 
-    def test_sequenceview_title_without_data_fails(
+    def test_sequenceview_title_is_render_time(
         self, temp_cache_dir: Path, sample_sequence_data: pl.LazyFrame
     ):
-        """Test that passing title to SequenceView without data fails."""
+        """title is render-time: passing it without data no longer forces a rebuild.
+
+        Phase 2 makes title a presentation (render-time) param, so a cache-only
+        reconstruction succeeds even when title is passed (the cached title is
+        used; the passed value is ignored, mirroring BaseComponent).
+        """
         cache_id = "test_sequenceview_title"
 
-        # Create cache first
+        # Create cache first with a title
         SequenceView(
             cache_id=cache_id,
             sequence_data=sample_sequence_data,
             cache_path=str(temp_cache_dir),
+            title="Cached Title",
         )
 
-        # Attempting to reconstruct with title should fail
-        with pytest.raises(ValueError, match="Configuration arguments require"):
-            SequenceView(
-                cache_id=cache_id,
-                cache_path=str(temp_cache_dir),
-                title="New Title",
-            )
+        # Reconstructing with a (ignored) title no longer raises
+        reconstructed = SequenceView(
+            cache_id=cache_id,
+            cache_path=str(temp_cache_dir),
+            title="New Title",
+        )
+        # Cached value wins (render-time param is restored from cache)
+        assert reconstructed._title == "Cached Title"
 
-    def test_sequenceview_height_without_data_fails(
+    def test_sequenceview_height_is_render_time(
         self, temp_cache_dir: Path, sample_sequence_data: pl.LazyFrame
     ):
-        """Test that passing non-default height to SequenceView without data fails."""
+        """height is render-time: passing it without data no longer forces a rebuild."""
         cache_id = "test_sequenceview_height"
 
         # Create cache first
@@ -747,13 +784,13 @@ class TestDataRequiredForConfiguration:
             cache_path=str(temp_cache_dir),
         )
 
-        # Attempting to reconstruct with non-default height should fail
-        with pytest.raises(ValueError, match="Configuration arguments require"):
-            SequenceView(
-                cache_id=cache_id,
-                cache_path=str(temp_cache_dir),
-                height=600,  # Non-default value
-            )
+        # Reconstructing with a non-default height no longer raises
+        reconstructed = SequenceView(
+            cache_id=cache_id,
+            cache_path=str(temp_cache_dir),
+            height=600,  # render-time only
+        )
+        assert reconstructed is not None
 
 
 class TestRegenerateCache:
@@ -903,3 +940,124 @@ class TestFilterAndInteractivityRestoration:
         )
 
         assert reconstructed.get_filter_defaults() == filter_defaults
+
+
+class TestCreationCacheReuse:
+    """M1: creation mode (data=/data_path=) reuses a valid, config-matching
+    on-disk cache instead of re-running preprocessing.
+
+    These pin the behavior the viewer depends on: once a cache is built, the
+    many Streamlit reruns that reconstruct the same component with the same
+    data + config must NOT re-preprocess (no subprocess storm, no rescans),
+    while a changed data-shaping config — or regenerate_cache=True — still
+    rebuilds.
+    """
+
+    @staticmethod
+    def _count_preprocess(monkeypatch) -> list:
+        """Patch Table._preprocess to count + pass through; returns the call log."""
+        calls: list = []
+        original = Table._preprocess
+
+        def counting(inner_self):
+            calls.append(1)
+            return original(inner_self)
+
+        monkeypatch.setattr(Table, "_preprocess", counting)
+        return calls
+
+    def test_matching_config_skips_preprocess(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        """A second construction with identical config must not re-preprocess;
+        it reconstructs from cache exactly like reconstruction mode."""
+        cache_id = "m1_reuse"
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            filters={"spectrum": "scan_id"},
+        )
+
+        calls = self._count_preprocess(monkeypatch)
+        reused = Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            filters={"spectrum": "scan_id"},
+        )
+
+        assert calls == [], "preprocessing should be skipped on a config-matching cache"
+        assert reused._raw_data is None
+        assert reused._preprocessed_data.get("data") is not None
+        assert reused._filters == {"spectrum": "scan_id"}
+
+    def test_changed_config_triggers_rebuild(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        """A different data-shaping config changes config_hash, so the cache is
+        not reused and preprocessing runs again."""
+        cache_id = "m1_rebuild"
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+        )
+
+        calls = self._count_preprocess(monkeypatch)
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            filters={"spectrum": "scan_id"},  # hash-affecting change
+        )
+        assert len(calls) == 1
+
+    def test_regenerate_cache_forces_rebuild(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        """regenerate_cache=True rebuilds even when the config matches."""
+        cache_id = "m1_regen"
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+        )
+
+        calls = self._count_preprocess(monkeypatch)
+        Table(
+            cache_id=cache_id,
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+            regenerate_cache=True,
+        )
+        assert len(calls) == 1
+
+
+class TestRowGroupSizing:
+    """M7: the cache writer now honors _get_row_group_size() so per-group
+    min/max statistics enable Polars predicate pushdown (row-group skipping) on
+    filtered reads. The hook existed but was never passed to the writers, so
+    writes used Polars' default (often a single row group)."""
+
+    def test_row_group_size_honored_on_write(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        import pyarrow.parquet as pq
+
+        # Force a tiny row-group size; sample_table_data has 5 rows -> 3 groups.
+        monkeypatch.setattr(Table, "_get_row_group_size", lambda self: 2)
+        Table(
+            cache_id="rg_table",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+        )
+        parquet = temp_cache_dir / "rg_table" / "preprocessed" / "data.parquet"
+        assert pq.ParquetFile(parquet).num_row_groups == 3

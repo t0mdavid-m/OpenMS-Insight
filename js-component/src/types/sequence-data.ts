@@ -19,6 +19,27 @@ export interface ExternalAnnotation {
 }
 
 /**
+ * Theoretical internal-fragment arrays (enumerated in Python).
+ *
+ * Distinct from the per-position terminal `fragment_masses_a..z` (number[][]):
+ * these are FLAT number[] (one entry per enumerated internal fragment). Only the
+ * three families the oracle draws are present: by (label "by/cz"), bz, cy.
+ * `start` is 0-based, `end` is 1-based (matches the fill predicate
+ * `aaIndex > start && aaIndex <= end`).
+ */
+export interface InternalFragmentData {
+  fragment_masses_by: number[]
+  start_indices_by: number[]
+  end_indices_by: number[]
+  fragment_masses_bz: number[]
+  start_indices_bz: number[]
+  end_indices_bz: number[]
+  fragment_masses_cy: number[]
+  start_indices_cy: number[]
+  end_indices_cy: number[]
+}
+
+/**
  * Sequence data structure containing peptide sequence and fragment information.
  */
 export interface SequenceData {
@@ -42,6 +63,55 @@ export interface SequenceData {
   theoretical_mass: number
   /** List of amino acids with fixed modifications (e.g., ['C', 'M']) */
   fixed_modifications: string[]
+  /**
+   * Per-residue coverage, ALREADY normalised to [0, 1] (value / maxCoverage),
+   * one entry per residue. Present only when a `coverage_column` is configured
+   * in Python; absent otherwise (no coverage gradient, back-compatible).
+   */
+  coverage?: number[]
+  /**
+   * Raw maximum coverage count (pre-normalisation). Used for the coverage scale
+   * legend label (e.g. "5x"). Present iff `coverage` is present.
+   */
+  maxCoverage?: number
+  /**
+   * Reported proteoform N-terminus residue index (0-based). A NEGATIVE value
+   * marks an UNDETERMINED N-terminus (renders a "??" terminal marker); a value
+   * > 0 marks a truncated N-terminus (struck-through terminal letter + the
+   * residues before it dimmed). Optional; absent -> full determined terminus.
+   */
+  proteoform_start?: number
+  /**
+   * Reported proteoform C-terminus residue index (0-based). A NEGATIVE value
+   * marks an UNDETERMINED C-terminus; a value < length-1 marks a truncated
+   * C-terminus. Optional; absent -> full determined terminus.
+   */
+  proteoform_end?: number
+  /**
+   * True when the theoretical fragment grid (`fragment_masses_*`) was computed on
+   * the proteoform SUB-region rather than the full sequence (3-seqview-009). The
+   * Vue side then offsets each fragment index by `fragment_grid_offset` to map it
+   * to the right grid residue and suppresses prefix/suffix ions at an undetermined
+   * terminus. Absent -> full-length grid, no offset, no suppression (back-compat).
+   */
+  proteoform_fragments?: boolean
+  /**
+   * Grid offset (clamped 0-based proteoform start == `sequence_start`) for the
+   * proteoform-region fragment grid. Only meaningful when `proteoform_fragments`
+   * is true; defaults to 0.
+   */
+  fragment_grid_offset?: number
+  /**
+   * Per-row OBSERVED mass (e.g. the proteoform's measured/computed mass).
+   * Present only when an `observed_mass_column` is configured in Python; drives
+   * the mass-info header. Absent otherwise (no header, back-compatible).
+   */
+  observed_mass?: number
+  /** Title shown to the left of the mass-info header fields (oracle massTitle). */
+  mass_header_title?: string
+  /** Field-label prefixes for the theoretical/observed mass header rows. */
+  theoretical_mass_label?: string
+  observed_mass_label?: string
   /** External peak annotations from search engine (optional) */
   external_annotations?: ExternalAnnotation[]
   /** Fragment tolerance value from search parameters (optional) */
@@ -52,6 +122,24 @@ export interface SequenceData {
   neutral_losses?: boolean
   /** Whether to enable proton loss/addition matching by default */
   proton_loss_addition?: boolean
+  /** True when the internal-fragment arrays below are populated. */
+  internal_fragments?: boolean
+  /** Default tolerance value for the internal-fragment matcher. */
+  internal_fragment_tolerance?: number
+  /** Whether the internal-fragment tolerance is ppm (true) or Da (false). */
+  internal_fragment_tolerance_ppm?: boolean
+  /** Flat theoretical internal-fragment masses for the by/cz family. */
+  fragment_masses_by?: number[]
+  start_indices_by?: number[]
+  end_indices_by?: number[]
+  /** Flat theoretical internal-fragment masses for the bz family. */
+  fragment_masses_bz?: number[]
+  start_indices_bz?: number[]
+  end_indices_bz?: number[]
+  /** Flat theoretical internal-fragment masses for the cy family. */
+  fragment_masses_cy?: number[]
+  start_indices_cy?: number[]
+  end_indices_cy?: number[]
 }
 
 /**
@@ -72,6 +160,11 @@ export interface ObservedSpectrumData {
 export interface SequenceObject {
   /** Single-letter amino acid code */
   aminoAcid: string
+  /**
+   * Per-residue coverage, normalised to [0, 1] (from SequenceData.coverage).
+   * Undefined when no coverage is supplied -> no coverage gradient is drawn.
+   */
+  coverage?: number
   /** Whether this position has a matched a ion */
   aIon: boolean
   /** Whether this position has a matched b ion */

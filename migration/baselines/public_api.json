@@ -1,0 +1,28 @@
+{
+  "component_types": {
+    "Heatmap": "heatmap",
+    "LinePlot": "lineplot",
+    "MirrorPlot": "mirrorplot",
+    "Plot3D": "plot3d",
+    "SequenceView": "sequence_view",
+    "Table": "table",
+    "VolcanoPlot": "volcanoplot"
+  },
+  "exported": [
+    "BaseComponent",
+    "CacheMissError",
+    "Heatmap",
+    "LinePlot",
+    "MirrorPlot",
+    "Plot3D",
+    "SequenceView",
+    "SequenceViewResult",
+    "StateManager",
+    "Table",
+    "VolcanoPlot",
+    "clear_component_annotations",
+    "get_component_annotations",
+    "get_component_class",
+    "register_component"
+  ]
+}

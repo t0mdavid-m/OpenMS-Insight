@@ -17,19 +17,6 @@ from ..preprocessing.compression import (
 from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
 
 
-# Cache key only includes zoom state (not other selections)
-def _make_zoom_cache_key(zoom: Optional[Dict[str, Any]]) -> tuple:
-    """Create hashable cache key from zoom state."""
-    if zoom is None:
-        return (None,)
-    return (
-        ("x0", zoom.get("xRange", [-1, -1])[0]),
-        ("x1", zoom.get("xRange", [-1, -1])[1]),
-        ("y0", zoom.get("yRange", [-1, -1])[0]),
-        ("y1", zoom.get("yRange", [-1, -1])[1]),
-    )
-
-
 @register_component("heatmap")
 class Heatmap(BaseComponent):
     """
@@ -81,14 +68,15 @@ class Heatmap(BaseComponent):
         display_aspect_ratio: float = 16 / 9,
         x_bins: Optional[int] = None,
         y_bins: Optional[int] = None,
-        zoom_identifier: str = "heatmap_zoom",
+        zoom_identifier: Optional[str] = None,
         title: Optional[str] = None,
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
         colorscale: str = "Portland",
         reversescale: bool = False,
-        use_simple_downsample: bool = False,
-        use_streaming: bool = True,
+        downsample: str = "streaming",
+        use_simple_downsample: Optional[bool] = None,
+        use_streaming: Optional[bool] = None,
         categorical_filters: Optional[List[str]] = None,
         category_column: Optional[str] = None,
         category_colors: Optional[Dict[str, str]] = None,
@@ -125,15 +113,26 @@ class Heatmap(BaseComponent):
                 x_bins × y_bins ≈ 2×min_points with even spatial distribution.
             y_bins: Number of bins along y-axis for downsampling. If None
                 (default), auto-computed from display_aspect_ratio.
-            zoom_identifier: State key for storing zoom range (default: 'heatmap_zoom')
+            zoom_identifier: State key for storing the zoom range. Default:
+                "{cache_id}_zoom", derived per-instance so two heatmaps on one
+                page do not collide on shared zoom state. Pass an explicit value
+                to override (e.g. to deliberately share zoom across plots).
             title: Heatmap title displayed above the plot
             x_label: X-axis label (defaults to x_column)
             y_label: Y-axis label (defaults to y_column)
             colorscale: Plotly colorscale name (default: 'Portland')
-            use_simple_downsample: If True, use simple top-N downsampling instead
-                of spatial binning (doesn't require scipy)
-            use_streaming: If True (default), use streaming downsampling that
-                stays lazy until render time. Reduces memory on init.
+            downsample: Downsampling strategy, one of:
+                - "streaming" (default): lazy cascading downsampling that stays
+                  lazy until render time (lowest init memory).
+                - "eager": levels computed upfront (more init memory, faster
+                  render) using scipy-based spatial binning.
+                - "simple": simple top-N downsampling instead of spatial binning
+                  (does not require scipy).
+            use_simple_downsample: DEPRECATED — use ``downsample="simple"``.
+                When explicitly set, overrides ``downsample`` for back-compat.
+            use_streaming: DEPRECATED — use ``downsample="streaming"`` /
+                ``"eager"``. When explicitly set, overrides ``downsample`` for
+                back-compat.
             categorical_filters: List of filter identifiers that should have
                 per-value compression levels. This ensures constant point counts
                 are sent to the client regardless of filter selection. Should be
@@ -165,19 +164,28 @@ class Heatmap(BaseComponent):
         self._display_aspect_ratio = display_aspect_ratio
         self._x_bins = x_bins
         self._y_bins = y_bins
-        self._zoom_identifier = zoom_identifier
+        # Default zoom identifier derived per-instance from cache_id so two
+        # heatmaps on one page do not collide on shared zoom state (mirrors the
+        # Table.pagination_identifier auto-derive). An explicit value overrides.
+        self._zoom_identifier = zoom_identifier or f"{cache_id}_zoom"
         self._title = title
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
         self._colorscale = colorscale
         self._reversescale = reversescale
-        self._use_simple_downsample = use_simple_downsample
+        # Resolve the single downsample-strategy enum into the two internal
+        # dispatch booleans, honoring the deprecated explicit booleans when set.
+        self._downsample = self._resolve_downsample_name(
+            downsample, use_streaming, use_simple_downsample
+        )
+        self._use_streaming, self._use_simple_downsample = self._downsample_to_booleans(
+            self._downsample
+        )
         self._category_column = category_column
         self._category_colors = category_colors or {}
         self._log_scale = log_scale
         self._low_values_on_top = low_values_on_top
         self._intensity_label = intensity_label
-        self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
 
         super().__init__(
@@ -189,7 +197,10 @@ class Heatmap(BaseComponent):
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
-            # Pass component-specific params for subprocess recreation
+            # Pass component-specific params for subprocess recreation.
+            # Presentation params (title/labels/colorscale/reversescale/
+            # intensity_label) are forwarded too so a data_path subprocess build
+            # writes them into the manifest's render config.
             x_column=x_column,
             y_column=y_column,
             intensity_column=intensity_column,
@@ -197,22 +208,70 @@ class Heatmap(BaseComponent):
             display_aspect_ratio=display_aspect_ratio,
             x_bins=x_bins,
             y_bins=y_bins,
-            zoom_identifier=zoom_identifier,
+            zoom_identifier=self._zoom_identifier,
             title=title,
             x_label=x_label,
             y_label=y_label,
             colorscale=colorscale,
-            use_simple_downsample=use_simple_downsample,
-            use_streaming=use_streaming,
+            reversescale=reversescale,
+            downsample=self._downsample,
             categorical_filters=categorical_filters,
             category_column=category_column,
             category_colors=category_colors,
+            log_scale=log_scale,
+            low_values_on_top=low_values_on_top,
+            intensity_label=intensity_label,
             **kwargs,
         )
 
+    @staticmethod
+    def _resolve_downsample_name(
+        downsample: str,
+        use_streaming: Optional[bool],
+        use_simple_downsample: Optional[bool],
+    ) -> str:
+        """Resolve the downsample-strategy enum from the new + deprecated params.
+
+        The deprecated explicit booleans win when set (back-compat). Their
+        legacy precedence is preserved: ``use_simple_downsample=True`` -> simple;
+        otherwise ``use_streaming`` toggles streaming vs eager.
+        """
+        if use_simple_downsample is True:
+            return "simple"
+        if use_streaming is not None or use_simple_downsample is not None:
+            # An explicit (deprecated) boolean was passed; honor the old matrix.
+            return "streaming" if use_streaming else "eager"
+        if downsample not in ("streaming", "eager", "simple"):
+            raise ValueError(
+                f"downsample must be 'streaming', 'eager' or 'simple', "
+                f"got {downsample!r}"
+            )
+        return downsample
+
+    @staticmethod
+    def _downsample_to_booleans(downsample: str) -> Tuple[bool, bool]:
+        """Map the strategy enum to (use_streaming, use_simple_downsample).
+
+        Keeps the existing internal dispatch (which reads the two booleans)
+        byte-identical:
+        - "streaming" -> (True, False): cascading streaming path.
+        - "eager"     -> (False, False): eager scipy-binning path.
+        - "simple"    -> (False, True): eager path using simple top-N.
+        """
+        if downsample == "simple":
+            return False, True
+        if downsample == "eager":
+            return False, False
+        return True, False
+
     def _get_cache_config(self) -> Dict[str, Any]:
         """
-        Get configuration that affects cache validity.
+        Get HASH-AFFECTING (data-shaping) configuration.
+
+        Only params that shape the cached multi-resolution levels appear here.
+        Presentation params (title/labels/colorscale/reversescale/intensity_label)
+        are render-time and live in ``_get_render_config()`` so retuning them does
+        NOT rebuild the (potentially million-point) cache.
 
         Returns:
             Dict of config values that affect preprocessing
@@ -225,23 +284,38 @@ class Heatmap(BaseComponent):
             "display_aspect_ratio": self._display_aspect_ratio,
             "x_bins": self._x_bins,
             "y_bins": self._y_bins,
-            "use_simple_downsample": self._use_simple_downsample,
-            "use_streaming": self._use_streaming,
+            "downsample": self._downsample,
             "categorical_filters": sorted(self._categorical_filters),
             "zoom_identifier": self._zoom_identifier,
+            "category_column": self._category_column,
+            "log_scale": self._log_scale,
+            "low_values_on_top": self._low_values_on_top,
+        }
+
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation config: stored for reconstruction, excluded from hash.
+
+        ``reversescale`` is included here (it was previously dropped entirely on
+        reconstruction-from-cache, silently reverting to False — a parity bug for
+        the e-value / ``low_values_on_top`` "bright = best" recipe).
+        """
+        return {
             "title": self._title,
             "x_label": self._x_label,
             "y_label": self._y_label,
             "colorscale": self._colorscale,
-            "category_column": self._category_column,
-            "log_scale": self._log_scale,
-            "low_values_on_top": self._low_values_on_top,
+            "reversescale": self._reversescale,
             "intensity_label": self._intensity_label,
-            # Note: category_colors is render-time styling, doesn't affect cache
+            # category_colors is render-time styling (excluded from the hash) but
+            # MUST be stored/restored here so a cache-only reconstruction keeps the
+            # categorical palette instead of silently reverting to default Plotly
+            # colors. Mirrors Plot3D._get_render_config; same parity-break class as
+            # the reversescale fix above.
+            "category_colors": self._category_colors,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._x_column = config.get("x_column")
         self._y_column = config.get("y_column")
         self._intensity_column = config.get("intensity_column", "intensity")
@@ -251,19 +325,39 @@ class Heatmap(BaseComponent):
         # Fallback to old defaults for backward compatibility with old caches
         self._x_bins = config.get("x_bins", 400)
         self._y_bins = config.get("y_bins", 50)
-        self._use_simple_downsample = config.get("use_simple_downsample", False)
-        self._use_streaming = config.get("use_streaming", True)
+        # Downsample strategy: prefer the new enum; fall back to the deprecated
+        # boolean keys for back-compat with caches written before the rename.
+        if "downsample" in config:
+            self._downsample = config["downsample"]
+        else:
+            self._downsample = self._resolve_downsample_name(
+                "streaming",
+                config.get("use_streaming"),
+                config.get("use_simple_downsample"),
+            )
+        self._use_streaming, self._use_simple_downsample = self._downsample_to_booleans(
+            self._downsample
+        )
         self._categorical_filters = config.get("categorical_filters", [])
-        self._zoom_identifier = config.get("zoom_identifier", "heatmap_zoom")
+        # Fallback (very old caches lacking the key) mirrors the per-instance
+        # auto-derive rather than the shared literal it used to default to.
+        self._zoom_identifier = config.get("zoom_identifier", f"{self._cache_id}_zoom")
+        self._category_column = config.get("category_column")
+        self._log_scale = config.get("log_scale", True)
+        self._low_values_on_top = config.get("low_values_on_top", False)
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation configuration from cached config."""
         self._title = config.get("title")
         self._x_label = config.get("x_label", self._x_column)
         self._y_label = config.get("y_label", self._y_column)
         self._colorscale = config.get("colorscale", "Portland")
-        self._category_column = config.get("category_column")
-        self._log_scale = config.get("log_scale", True)
-        self._low_values_on_top = config.get("low_values_on_top", False)
+        # BUG FIX: reversescale must round-trip on reconstruction (was lost).
+        self._reversescale = config.get("reversescale", False)
         self._intensity_label = config.get("intensity_label")
-        # category_colors is not stored in cache (render-time styling)
+        # BUG FIX: category_colors must round-trip on a cache-only reconstruction
+        # (was dropped, reverting categorical mode to default Plotly colors).
+        self._category_colors = config.get("category_colors", {})
 
     def get_state_dependencies(self) -> list:
         """
@@ -327,8 +421,6 @@ class Heatmap(BaseComponent):
         Returns:
             Dict with level LazyFrames keyed by "{prefix}_{idx}" and "num_levels"
         """
-        import sys
-
         result = {}
         num_compressed = len(level_sizes)
 
@@ -339,10 +431,6 @@ class Heatmap(BaseComponent):
         full_res_path = cache_dir / f"{prefix}_{num_compressed}.parquet"
         full_res = source_data.sort([self._x_column, self._y_column])
         full_res.sink_parquet(full_res_path, compression="zstd")
-        print(
-            f"[HEATMAP] Saved {prefix}_{num_compressed} ({total:,} pts)",
-            file=sys.stderr,
-        )
 
         # Start cascading from full resolution
         current_source = pl.scan_parquet(full_res_path)
@@ -381,11 +469,6 @@ class Heatmap(BaseComponent):
             level = level.sort([self._x_column, self._y_column])
             level.sink_parquet(level_path, compression="zstd")
 
-            print(
-                f"[HEATMAP] Saved {prefix}_{level_idx} (target {target_size:,} pts)",
-                file=sys.stderr,
-            )
-
             # Next iteration uses this level as source (cascading)
             current_source = pl.scan_parquet(level_path)
             current_size = target_size
@@ -418,8 +501,6 @@ class Heatmap(BaseComponent):
         - cat_level_im_dimension_0_1: 20K points with im_id=1
         - etc.
         """
-        import sys
-
         # Get data ranges (for the full dataset)
         # These ranges are used for ALL levels to ensure consistent binning
         x_range, y_range = get_data_range(
@@ -440,12 +521,6 @@ class Heatmap(BaseComponent):
                 (0, self._display_aspect_ratio),  # Fake x_range matching aspect
                 (0, 1.0),  # Fake y_range
             )
-            print(
-                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
-                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
-                f"display aspect: {self._display_aspect_ratio:.2f})",
-                file=sys.stderr,
-            )
 
         # Get total count
         total = self._raw_data.select(pl.len()).collect().item()
@@ -462,10 +537,6 @@ class Heatmap(BaseComponent):
         # Process each categorical filter
         for filter_id in self._categorical_filters:
             if filter_id not in self._filters:
-                print(
-                    f"[HEATMAP] Warning: categorical_filter '{filter_id}' not in filters, skipping",
-                    file=sys.stderr,
-                )
                 continue
 
             column_name = self._filters[filter_id]
@@ -482,11 +553,6 @@ class Heatmap(BaseComponent):
                 [v for v in unique_values if v is not None and v >= 0]
             )
 
-            print(
-                f"[HEATMAP] Categorical filter '{filter_id}' ({column_name}): {len(unique_values)} unique values",
-                file=sys.stderr,
-            )
-
             self._preprocessed_data["categorical_filter_values"][filter_id] = (
                 unique_values
             )
@@ -501,11 +567,6 @@ class Heatmap(BaseComponent):
 
                 # Compute level sizes for this filtered subset (2× for cache buffer)
                 level_sizes = compute_compression_levels(cache_target, filtered_total)
-
-                print(
-                    f"[HEATMAP]   Value {filter_value}: {filtered_total:,} pts → levels {level_sizes}",
-                    file=sys.stderr,
-                )
 
                 # Store level sizes for this filter value
                 self._preprocessed_data[
@@ -573,8 +634,6 @@ class Heatmap(BaseComponent):
 
         Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
-        import sys
-
         # Get data ranges (minimal collect - just 4 values)
         # These ranges are used for ALL levels to ensure consistent binning
         x_range, y_range = get_data_range(
@@ -595,12 +654,6 @@ class Heatmap(BaseComponent):
                 cache_target,
                 (0, self._display_aspect_ratio),  # Fake x_range matching aspect
                 (0, 1.0),  # Fake y_range
-            )
-            print(
-                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
-                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
-                f"display aspect: {self._display_aspect_ratio:.2f})",
-                file=sys.stderr,
             )
 
         # Get total count
@@ -643,8 +696,6 @@ class Heatmap(BaseComponent):
         downsampling for better spatial distribution.
         Data is sorted by x, y columns for efficient range query predicate pushdown.
         """
-        import sys
-
         # Get data ranges
         x_range, y_range = get_data_range(
             self._raw_data,
@@ -663,12 +714,6 @@ class Heatmap(BaseComponent):
                 cache_target,
                 (0, self._display_aspect_ratio),  # Fake x_range matching aspect
                 (0, 1.0),  # Fake y_range
-            )
-            print(
-                f"[HEATMAP] Auto-computed bins: {self._x_bins}x{self._y_bins} "
-                f"= {self._x_bins * self._y_bins:,} (cache target: {cache_target:,}, "
-                f"display aspect: {self._display_aspect_ratio:.2f})",
-                file=sys.stderr,
             )
 
         # Get total count
@@ -692,6 +737,7 @@ class Heatmap(BaseComponent):
                         current,
                         max_points=size,
                         intensity_column=self._intensity_column,
+                        descending=not self._low_values_on_top,
                     )
                 else:
                     downsampled = downsample_2d(
@@ -702,6 +748,7 @@ class Heatmap(BaseComponent):
                         intensity_column=self._intensity_column,
                         x_bins=self._x_bins,
                         y_bins=self._y_bins,
+                        descending=not self._low_values_on_top,
                     )
                 # Sort by x, y for efficient range query predicate pushdown
                 if isinstance(downsampled, pl.LazyFrame):
@@ -863,8 +910,6 @@ class Heatmap(BaseComponent):
         Returns:
             Filtered Polars DataFrame at appropriate resolution
         """
-        import sys
-
         x0, x1 = zoom["xRange"]
         y0, y1 = zoom["yRange"]
 
@@ -875,7 +920,7 @@ class Heatmap(BaseComponent):
 
         last_filtered = None
 
-        for level_idx, level_data in enumerate(all_levels):
+        for level_data in all_levels:
             # Ensure we have a LazyFrame for filtering
             if isinstance(level_data, pl.DataFrame):
                 level_data = level_data.lazy()
@@ -904,10 +949,6 @@ class Heatmap(BaseComponent):
 
             count = len(filtered)
             last_filtered = filtered
-            print(
-                f"[HEATMAP] Level {level_idx}: {count} pts in zoom range",
-                file=sys.stderr,
-            )
 
             if count >= self._min_points:
                 # This level has enough detail
@@ -919,17 +960,13 @@ class Heatmap(BaseComponent):
                     render_x_bins, render_y_bins = compute_optimal_bins(
                         self._min_points, zoom_x_range, zoom_y_range
                     )
-                    print(
-                        f"[HEATMAP] Render downsample: {count:,} → {self._min_points:,} pts "
-                        f"(bins: {render_x_bins}x{render_y_bins})",
-                        file=sys.stderr,
-                    )
                     if self._use_streaming or self._use_simple_downsample:
                         if self._use_simple_downsample:
                             return downsample_2d_simple(
                                 filtered.lazy(),
                                 max_points=self._min_points,
                                 intensity_column=self._intensity_column,
+                                descending=not self._low_values_on_top,
                             ).collect()
                         else:
                             return downsample_2d_streaming(
@@ -942,6 +979,7 @@ class Heatmap(BaseComponent):
                                 y_bins=render_y_bins,
                                 x_range=zoom_x_range,
                                 y_range=zoom_y_range,
+                                descending=not self._low_values_on_top,
                             ).collect()
                     else:
                         return downsample_2d(
@@ -952,11 +990,92 @@ class Heatmap(BaseComponent):
                             intensity_column=self._intensity_column,
                             x_bins=render_x_bins,
                             y_bins=render_y_bins,
+                            descending=not self._low_values_on_top,
                         ).collect()
                 return filtered
 
         # Even largest level has fewer points than threshold
         return last_filtered if last_filtered is not None else pl.DataFrame()
+
+    def _downsample_to_min_points(self, df_polars: pl.DataFrame) -> pl.DataFrame:
+        """
+        Final render-time downsample to exactly min_points (no-zoom / full view).
+
+        Mirrors the zoom path's render downsample (see _select_level_for_zoom):
+        cache levels hold ~2x min_points, so the smallest level still carries
+        roughly double the intended point budget. This reduces it to min_points
+        using the same downsample helper the zoom path uses, honoring the
+        documented contract ("final downsample at render time reduces to exactly
+        min_points") and matching the oracle, which always applies
+        downsample_heatmap() to the smallest level at the full view.
+
+        No-op when the frame already has <= min_points points (parity with the
+        zoom path's ``count > min_points`` guard and the oracle's
+        downsample_heatmap no-op on small inputs).
+
+        Args:
+            df_polars: Collected Polars DataFrame at the smallest cache level.
+
+        Returns:
+            Downsampled Polars DataFrame (<= min_points points).
+        """
+        # Need x/y columns to bin; nothing to do if data is already small enough.
+        if (
+            self._x_column is None
+            or self._y_column is None
+            or len(df_polars) <= self._min_points
+        ):
+            return df_polars
+
+        # Full-view bins: use the cached full data range (set during
+        # preprocessing) so binning spans the whole view, like the oracle.
+        # Fall back to the frame's own extent if the range is unavailable.
+        x_range = self._preprocessed_data.get("x_range")
+        y_range = self._preprocessed_data.get("y_range")
+        if x_range is None or y_range is None:
+            x_range = (
+                df_polars[self._x_column].min(),
+                df_polars[self._x_column].max(),
+            )
+            y_range = (
+                df_polars[self._y_column].min(),
+                df_polars[self._y_column].max(),
+            )
+
+        render_x_bins, render_y_bins = compute_optimal_bins(
+            self._min_points, x_range, y_range
+        )
+
+        if self._use_simple_downsample:
+            return downsample_2d_simple(
+                df_polars.lazy(),
+                max_points=self._min_points,
+                intensity_column=self._intensity_column,
+                descending=not self._low_values_on_top,
+            ).collect()
+        if self._use_streaming:
+            return downsample_2d_streaming(
+                df_polars.lazy(),
+                max_points=self._min_points,
+                x_column=self._x_column,
+                y_column=self._y_column,
+                intensity_column=self._intensity_column,
+                x_bins=render_x_bins,
+                y_bins=render_y_bins,
+                x_range=x_range,
+                y_range=y_range,
+                descending=not self._low_values_on_top,
+            ).collect()
+        return downsample_2d(
+            df_polars.lazy(),
+            max_points=self._min_points,
+            x_column=self._x_column,
+            y_column=self._y_column,
+            intensity_column=self._intensity_column,
+            x_bins=render_x_bins,
+            y_bins=render_y_bins,
+            descending=not self._low_values_on_top,
+        ).collect()
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -974,8 +1093,6 @@ class Heatmap(BaseComponent):
         Returns:
             Dict with heatmapData (pandas DataFrame) and _hash for change detection
         """
-        import sys
-
         zoom = state.get(self._zoom_identifier)
 
         # Build columns to select (filter out None values)
@@ -1000,9 +1117,6 @@ class Heatmap(BaseComponent):
 
         # Get levels based on current state (may use per-filter levels)
         levels, filtered_raw = self._get_levels_for_state(state)
-        level_sizes = [
-            len(lvl) if isinstance(lvl, pl.DataFrame) else "?" for lvl in levels
-        ]
 
         # Determine which filters still need to be applied at render time
         # (filters not in categorical_filters need runtime application)
@@ -1016,15 +1130,9 @@ class Heatmap(BaseComponent):
             # No zoom - use smallest level
             if not levels:
                 # No levels available
-                print("[HEATMAP] No levels available", file=sys.stderr)
                 return {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}
 
             data = levels[0]
-            using_cat = self._preprocessed_data.get("has_categorical_filters", False)
-            print(
-                f"[HEATMAP] No zoom → level 0 ({level_sizes[0]} pts), levels={level_sizes}, categorical={using_cat}",
-                file=sys.stderr,
-            )
 
             # Ensure we have a LazyFrame
             if isinstance(data, pl.DataFrame):
@@ -1032,41 +1140,37 @@ class Heatmap(BaseComponent):
 
             # Apply non-categorical filters if any - returns (pandas DataFrame, hash)
             if non_categorical_filters:
-                df_pandas, data_hash = filter_and_collect_cached(
+                df_pandas, _ = filter_and_collect_cached(
                     data,
                     non_categorical_filters,
                     state,
                     columns=columns_to_select,
                     filter_defaults=self._filter_defaults,
                 )
-                # Sort for render order (last drawn = on top in scattergl)
-                # Default: ascending (high on top). low_values_on_top: descending (low on top)
-                if (
-                    self._intensity_column
-                    and self._intensity_column in df_pandas.columns
-                ):
-                    df_pandas = df_pandas.sort_values(
-                        self._intensity_column, ascending=not self._low_values_on_top
-                    ).reset_index(drop=True)
+                df_polars = pl.from_pandas(df_pandas)
             else:
                 # No filters to apply - levels already filtered by categorical filter
                 schema_names = data.collect_schema().names()
                 available_cols = [c for c in columns_to_select if c in schema_names]
                 df_polars = data.select(available_cols).collect()
-                # Sort for render order (last drawn = on top in scattergl)
-                # Default: ascending (high on top). low_values_on_top: descending (low on top)
-                if (
-                    self._intensity_column
-                    and self._intensity_column in df_polars.columns
-                ):
-                    df_polars = df_polars.sort(
-                        self._intensity_column, descending=self._low_values_on_top
-                    )
-                data_hash = compute_dataframe_hash(df_polars)
-                df_pandas = df_polars.to_pandas()
+
+            # Final render-time downsample to min_points. Cache levels hold
+            # ~2x min_points, so the smallest level still carries ~double the
+            # budget; reduce it here exactly as the zoom path does, honoring the
+            # documented contract and matching the oracle (downsample_heatmap on
+            # the smallest level at the full view). No-op when already small.
+            df_polars = self._downsample_to_min_points(df_polars)
+
+            # Sort for render order (last drawn = on top in scattergl)
+            # Default: ascending (high on top). low_values_on_top: descending (low on top)
+            if self._intensity_column and self._intensity_column in df_polars.columns:
+                df_polars = df_polars.sort(
+                    self._intensity_column, descending=self._low_values_on_top
+                )
+            data_hash = compute_dataframe_hash(df_polars)
+            df_pandas = df_polars.to_pandas()
         else:
             # Zoomed - select appropriate level
-            print(f"[HEATMAP] Zoom {zoom} → selecting level...", file=sys.stderr)
             df_polars = self._select_level_for_zoom(
                 zoom, state, levels, filtered_raw, non_categorical_filters
             )
@@ -1079,10 +1183,6 @@ class Heatmap(BaseComponent):
                 df_polars = df_polars.sort(
                     self._intensity_column, descending=self._low_values_on_top
                 )
-            print(
-                f"[HEATMAP] Selected {len(df_polars)} pts for zoom, levels={level_sizes}",
-                file=sys.stderr,
-            )
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 

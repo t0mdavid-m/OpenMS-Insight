@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -77,6 +78,26 @@ _COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
 # ALL hashes on the next render so all components get data in one rerun
 _BATCH_RESEND_KEY = "_svc_batch_resend"
 
+# Session state key for the last state actually DELIVERED to Vue, per component.
+# Used by the PHASE 6 idempotence guard to avoid re-running for a state Vue has
+# already received. An echo of an already-applied sort/selection would otherwise
+# ping-pong setComponentValue <-> st.rerun forever (e.g. on a table column sort).
+_LAST_RENDERED_STATE_KEY = "_svc_last_rendered_state"
+
+# M5: cross-panel rerun batching. While _DEFER_RERUN flag is set (by a grid's
+# batch_rerun() context), PHASE 6 records a pending rerun instead of raising
+# st.rerun() mid-pass, so every panel renders in one pass and the grid reruns
+# ONCE at the end -- collapsing an N-panel cascade from N passes to ~1.
+_DEFER_RERUN_KEY = "_svc_defer_rerun"
+_PENDING_RERUN_KEY = "_svc_pending_rerun"
+
+# Bookkeeping keys in get_state_for_vue() that are NOT user-visible state. They
+# must be excluded from the PHASE 6 render snapshot, or their monotonic counters
+# would make every snapshot differ and defeat the guard.
+_RENDER_SNAPSHOT_SKIP = frozenset(
+    {"selection_counter", "pagination_counter", "counter", "id"}
+)
+
 
 def _get_component_cache() -> Dict[str, Any]:
     """Get per-component data cache from session state."""
@@ -144,9 +165,41 @@ def clear_component_annotations() -> None:
         st.session_state[_COMPONENT_ANNOTATIONS_KEY].clear()
 
 
+def _has_render_time_annotations(component: "BaseComponent") -> bool:
+    """
+    Whether a component carries render-time annotation state.
+
+    Covers the legacy keyed ``_dynamic_annotations``, the generic descriptor-based
+    ``_peak_annotations`` (LinePlot.set_peak_annotations), and per-side
+    ``_top_dynamic_annotations`` / ``_bottom_dynamic_annotations`` (MirrorPlot).
+    Any of these must be re-applied to cached base data on a cache hit; without
+    detecting the per-side attrs, MirrorPlot annotations silently vanished on a
+    cache HIT (cache MISS worked, masking the break). Kept generic/attribute-based
+    rather than MirrorPlot-type-specific.
+    """
+    if getattr(component, "_dynamic_annotations", None) is not None:
+        return True
+    # Per-side annotations (MirrorPlot) are dicts keyed by interactivity value;
+    # require a real dict (not just non-None) so mock/uninitialized attributes —
+    # e.g. a MagicMock component — don't spuriously flag render-time state, the
+    # same guard rationale as _peak_annotations below.
+    if isinstance(getattr(component, "_top_dynamic_annotations", None), dict):
+        return True
+    if isinstance(getattr(component, "_bottom_dynamic_annotations", None), dict):
+        return True
+    # Peak annotations are a list of descriptors; require a real list so that
+    # mock/uninitialized attributes don't spuriously flag render-time state.
+    return isinstance(getattr(component, "_peak_annotations", None), list)
+
+
 def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
     """
-    Compute hash of component's dynamic annotations, if any.
+    Compute hash of component's render-time annotations, if any.
+
+    Includes the keyed ``_dynamic_annotations``, the per-side
+    ``_top_dynamic_annotations`` / ``_bottom_dynamic_annotations`` (MirrorPlot),
+    and the generic descriptor-based ``_peak_annotations`` so a cache entry is
+    invalidated when any of them changes.
 
     Args:
         component: The component to check for annotations
@@ -154,11 +207,26 @@ def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
     Returns:
         Short hash string if annotations exist, None otherwise
     """
+    parts = []
     annotations = getattr(component, "_dynamic_annotations", None)
-    if annotations is None:
+    if annotations is not None:
+        parts.append(str(sorted(annotations.keys())))
+    # Per-side annotations (MirrorPlot): hash each side independently so a change
+    # on either side invalidates the cache entry on a HIT and forces a re-render.
+    # isinstance(dict) guard mirrors _has_render_time_annotations (mock-safe).
+    top_annotations = getattr(component, "_top_dynamic_annotations", None)
+    if isinstance(top_annotations, dict):
+        parts.append("top:" + str(sorted(top_annotations.keys())))
+    bottom_annotations = getattr(component, "_bottom_dynamic_annotations", None)
+    if isinstance(bottom_annotations, dict):
+        parts.append("bottom:" + str(sorted(bottom_annotations.keys())))
+    peak_annotations = getattr(component, "_peak_annotations", None)
+    if isinstance(peak_annotations, list):
+        parts.append(json.dumps(peak_annotations, sort_keys=True, default=str))
+    if not parts:
         return None
-    # Hash the sorted keys (sufficient for change detection)
-    return hashlib.md5(str(sorted(annotations.keys())).encode()).hexdigest()[:8]
+    # Hash the combined parts (sufficient for change detection)
+    return hashlib.md5("|".join(parts).encode()).hexdigest()[:8]
 
 
 def _get_cached_vue_data(
@@ -241,10 +309,9 @@ def _prepare_vue_data_cached(
     Returns:
         Tuple of (vue_data dict, data_hash string)
     """
-    # Check if component has dynamic annotations (e.g., LinePlot linked to SequenceView)
-    has_dynamic_annotations = (
-        getattr(component, "_dynamic_annotations", None) is not None
-    )
+    # Check if component has render-time annotations (e.g., LinePlot linked to
+    # SequenceView, or LinePlot.set_peak_annotations charge labels)
+    has_dynamic_annotations = _has_render_time_annotations(component)
 
     # Try cache first (works for ALL components now)
     cached = _get_cached_vue_data(component_id, filter_state_hashable)
@@ -274,6 +341,14 @@ def _prepare_vue_data_cached(
             # No dynamic annotations - ensure _plotConfig is present
             # When annotations are cleared, Vue needs _plotConfig with null columns
             # to stop showing stale annotations (Vue merge only updates keys present)
+            #
+            # Some components (e.g. LinePlot tagger mode) emit a richer, fully
+            # state-derived _plotConfig (e.g. drill-down `level`) that the generic
+            # _build_plot_config(highlight, annotation) rebuild cannot reproduce.
+            # Such components are fully state-dependent, so the cached _plotConfig
+            # is correct on a hit — preserve it verbatim.
+            if getattr(component, "_preserves_plot_config", lambda: False)() is True:
+                return cached_data, cached_hash
             if hasattr(component, "_build_plot_config"):
                 vue_data = dict(cached_data)
                 vue_data["_plotConfig"] = component._build_plot_config(
@@ -408,6 +483,16 @@ def _validate_interactivity_selections(
             # Awaiting filter - no data to validate against
             return False
 
+        # Skip non-scalar filter values: some filter identifiers carry an opaque
+        # payload (e.g. the tagger 'tag' = TagData dict) rather than a
+        # column-matchable scalar. Such filters don't restrict rows here.
+        if isinstance(selected_value, (dict, list)):
+            continue
+
+        # Skip filters whose column isn't present in the data schema.
+        if column not in data.collect_schema().names():
+            continue
+
         # Convert float to int for integer columns (type mismatch handling)
         if isinstance(selected_value, float) and selected_value.is_integer():
             selected_value = int(selected_value)
@@ -504,9 +589,14 @@ def render_component(
         component_args["height"] = height
 
     # Batch resend: if any component requested data in previous run, clear ALL hashes
-    if st.session_state.get(_BATCH_RESEND_KEY):
-        st.session_state[_VUE_ECHOED_HASH_KEY] = {}
-        st.session_state.pop(_BATCH_RESEND_KEY, None)
+    # Targeted resend: clear the echoed hash only for the components that requested
+    # data, so one component's request does not force every other component to
+    # re-send (and re-parse) data Vue already holds.
+    requesting_keys = st.session_state.pop(_BATCH_RESEND_KEY, None)
+    if requesting_keys:
+        echoed = st.session_state.get(_VUE_ECHOED_HASH_KEY, {})
+        for requesting_key in requesting_keys:
+            echoed.pop(requesting_key, None)
 
     # Initialize hash cache in session state if needed
     if _VUE_ECHOED_HASH_KEY not in st.session_state:
@@ -563,14 +653,38 @@ def render_component(
 
     # Build payload - only send data if cache is valid for current state
     if cache_valid:
-        # Cache HIT - send cached data (it's correct for current state)
-        data_payload = {
-            **cached_data,
-            "selection_store": initial_state,
-            "hash": cached_hash,
-            "dataChanged": True,
-            "awaitingFilter": False,
-        }
+        # Cache HIT - data is correct for the current state.
+        # Honor Vue's echoed hash: if Vue already holds this exact data, reuse
+        # its parsed copy instead of re-sending (the bidirectional hash
+        # confirmation that was stored but never used).
+        vue_has_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(key) == cached_hash
+        if vue_has_hash:
+            # M3: Vue already holds this exact data, so OMIT the cached
+            # DataFrames. Spreading them back into kwargs makes Streamlit's
+            # component channel re-encode them to Arrow IPC on EVERY rerun even
+            # though Vue discards them (dataChanged=False -> it keeps its parsed
+            # copy; see streamlit-data.ts !dataChanged+hasCache branch). Keep
+            # only the lightweight _plotConfig that branch still consults; it is
+            # stable here because a cache HIT requires filter AND annotation
+            # state to match (an annotation change takes the cache-MISS path).
+            data_payload = {
+                "selection_store": initial_state,
+                "hash": cached_hash,
+                "dataChanged": False,
+                "awaitingFilter": False,
+            }
+            if "_plotConfig" in cached_data:
+                data_payload["_plotConfig"] = cached_data["_plotConfig"]
+        else:
+            # Vue does not have this data yet -> send it. Vue echoes the hash
+            # back, enabling the omit path above on subsequent reruns.
+            data_payload = {
+                **cached_data,
+                "selection_store": initial_state,
+                "hash": cached_hash,
+                "dataChanged": True,
+                "awaitingFilter": False,
+            }
         if _DEBUG_STATE_SYNC:
             # Log pagination state for debugging
             pagination_key = next((k for k in state_keys if "page" in k.lower()), None)
@@ -636,9 +750,10 @@ def render_component(
         # Apply Vue's state update FIRST - this is the key fix!
         state_changed = state_manager.update_from_vue(result)
 
-        # Check if Vue is requesting data resend
+        # Check if Vue is requesting data resend (accumulate the requesting
+        # component's key so the next render clears only its echoed hash).
         if result.get("_requestData", False):
-            st.session_state[_BATCH_RESEND_KEY] = True
+            st.session_state.setdefault(_BATCH_RESEND_KEY, set()).add(key)
 
     # === PHASE 4: Get UPDATED state and prepare data ===
     # Now state reflects Vue's request (e.g., new page number after click)
@@ -737,11 +852,14 @@ def render_component(
             current_ann_hash,
         )
 
-        # If cache was invalid at Phase 1, we didn't send data to Vue (dataChanged=False).
-        # Trigger a rerun so the newly cached data gets sent on the next render.
-        # This handles cross-component filter changes where the affected component
-        # needs to receive updated data (e.g., new total_rows/total_pages).
-        if not cache_valid:
+        # If cache was invalid at Phase 1, we didn't send data to Vue
+        # (dataChanged=False). Trigger a rerun so the newly cached data gets sent on
+        # the next render — but only if Vue doesn't already hold this exact data hash
+        # (when the recomputed data matches Vue's echoed hash, a rerun would deliver
+        # nothing new). This handles cross-component filter changes where the affected
+        # component needs updated data (e.g., new total_rows/total_pages).
+        vue_has_data = data_hash == st.session_state[_VUE_ECHOED_HASH_KEY].get(key)
+        if not cache_valid and not vue_has_data:
             state_changed = True
             if _DEBUG_STATE_SYNC:
                 _logger.warning(
@@ -790,21 +908,96 @@ def render_component(
         if annotations_changed:
             state_changed = True
 
-    # === PHASE 6: Rerun if state changed ===
-    # This will send the UPDATED data (now in cache) to Vue
-    if state_changed:
-        if _DEBUG_STATE_SYNC:
-            _logger.warning(
-                f"[Bridge:{component._cache_id}] Phase6: RERUN triggered, "
-                f"next render will have cache HIT"
+    # === PHASE 6: Rerun if state changed AND Vue has not already received this state ===
+    # Idempotence guard against the sort/selection echo loop: an advancing Vue
+    # counter (the ratchet) keeps state_changed True via the sort page-override and
+    # cache miss, so a naive `if state_changed: st.rerun()` ping-pongs
+    # setComponentValue <-> st.rerun forever and hangs the app on a table sort.
+    #
+    # We key on the GLOBAL rendered selection state (minus the monotonic bookkeeping
+    # counters) plus the data and annotation hashes -- i.e. exactly what Vue would
+    # receive -- and remember it as "delivered" ONLY on a render that actually sent
+    # data to Vue (cache hit, or awaiting-filter where there is nothing to send).
+    # A render is then suppressed only when this exact state was already delivered.
+    # This is conservative by construction: a genuine first delivery is never
+    # suppressed (we have not recorded it yet), while repeats of an already-delivered
+    # state -- including cache-miss repeats from the echo loop -- are. Cross-component
+    # cascades still settle: each new combined state is delivered once before being
+    # suppressed.
+    delivered = st.session_state.setdefault(_LAST_RENDERED_STATE_KEY, {})
+    rendered_state = state_manager.get_state_for_vue()
+    render_snapshot = (
+        tuple(
+            sorted(
+                (k, _make_hashable(v))
+                for k, v in rendered_state.items()
+                if k not in _RENDER_SNAPSHOT_SKIP
             )
-        st.rerun()
+        ),
+        data_hash,
+        st.session_state.get(f"_svc_ann_hash_{key}"),
+    )
+    already_delivered = delivered.get(component_id) == render_snapshot
+    if cache_valid or awaiting_filter:
+        delivered[component_id] = render_snapshot
+
+    if state_changed and not already_delivered:
+        if st.session_state.get(_DEFER_RERUN_KEY):
+            # M5: inside a grid batch -- record that a rerun is needed instead of
+            # raising st.rerun() now. The grid renders ALL panels in one pass
+            # (each downstream panel reads, via the shared StateManager, the
+            # upstream selection an earlier panel set in this SAME pass) and
+            # reruns ONCE at the end, collapsing an N-panel cascade to ~1 pass.
+            st.session_state[_PENDING_RERUN_KEY] = True
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase6: deferred rerun (batch)"
+                )
+        else:
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase6: RERUN triggered, "
+                    f"next render will have cache HIT"
+                )
+            st.rerun()
     elif _DEBUG_STATE_SYNC:
         _logger.warning(
-            f"[Bridge:{component._cache_id}] Phase6: No rerun needed, state_changed=False"
+            f"[Bridge:{component._cache_id}] Phase6: No rerun needed, "
+            f"state_changed={state_changed}, already_delivered={already_delivered}"
         )
 
     return result
+
+
+@contextmanager
+def batch_rerun():
+    """Batch a linked grid's cross-panel reruns into a single rerun.
+
+    Within this block, :func:`render_component` records a pending rerun (PHASE 6)
+    instead of calling ``st.rerun()`` immediately. A linked grid wraps its whole
+    panel loop in this context so every panel renders in ONE pass -- each
+    downstream panel reads, via the shared ``StateManager``, the upstream
+    selection an earlier panel set in this same pass -- and the grid reruns once
+    at the end if any panel changed state. This collapses a
+    scan->mass->spectra->3D cascade from one full-page pass per panel to ~1,
+    instead of the ratchet settling one panel per pass.
+
+    Re-entrant: only the outermost block performs the single deferred rerun.
+    Outside any such block (e.g. apps that don't batch), ``render_component``
+    reruns immediately, so behavior is unchanged for existing callers.
+    """
+    already_batching = st.session_state.get(_DEFER_RERUN_KEY, False)
+    st.session_state[_DEFER_RERUN_KEY] = True
+    if not already_batching:
+        st.session_state[_PENDING_RERUN_KEY] = False
+    try:
+        yield
+    finally:
+        st.session_state[_DEFER_RERUN_KEY] = already_batching
+    # Only the outermost batch fires the single deferred rerun (after the whole
+    # grid has rendered). st.rerun() raises, aborting the pass exactly once.
+    if not already_batching and st.session_state.pop(_PENDING_RERUN_KEY, False):
+        st.rerun()
 
 
 def _hash_data(data: Dict[str, Any]) -> str:

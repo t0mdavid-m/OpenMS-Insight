@@ -8,14 +8,44 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
+from ..core.cache import CacheMissError
 from ..core.registry import register_component
 from ..preprocessing.filtering import optimize_for_transfer
+
+if TYPE_CHECKING:  # type-hint only; pyopenms is imported lazily at the call sites
+    from pyopenms import AASequence
 
 # Proton mass for m/z calculations
 PROTON_MASS = 1.007276
 
 # Cache version - increment when cache format changes
 CACHE_VERSION = 1
+
+
+def _has_ambiguous_x(sequence_str: str) -> bool:
+    """True if the sequence carries an AMBIGUOUS residue ('X' or 'x').
+
+    Used to gate the oracle's ``remove_ambigious`` handling: only X-containing
+    sequences take the special path, so every X-free sequence stays on the
+    byte-unchanged pyOpenMS path.
+    """
+    return "X" in sequence_str or "x" in sequence_str
+
+
+def _remove_ambiguous_x(aa_seq: "AASequence") -> "AASequence":
+    """Strip AMBIGUOUS 'X'/'x' residues from an AASequence (oracle parity).
+
+    Exact port of FLASHApp ``src/render/sequence.py:remove_ambigious`` — round-trip
+    through ``toUniModString()`` and delete every ``X``/``x`` (and ONLY those;
+    modifications and all other residues, incl. B/Z/J/U/O, are preserved). The
+    result is a SHORTER sequence whose monoisotopic / fragment masses are then
+    computed by pyOpenMS exactly as the oracle does.
+    """
+    from pyopenms import AASequence
+
+    return AASequence.fromString(
+        aa_seq.toUniModString().replace("X", "").replace("x", "")
+    )
 
 
 def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
@@ -79,7 +109,7 @@ def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[f
 def calculate_fragment_masses_pyopenms(
     sequence_str: str,
 ) -> Dict[str, List[List[float]]]:
-    """Calculate theoretical fragment masses using pyOpenMS TheoreticalSpectrumGenerator.
+    """Calculate theoretical terminal-fragment masses (oracle ``getFragmentMassesWithSeq``).
 
     Args:
         sequence_str: Peptide sequence string (can include modifications)
@@ -87,85 +117,43 @@ def calculate_fragment_masses_pyopenms(
     Returns:
         Dict with fragment_masses_a, fragment_masses_b, etc.
         Each is a list of lists (one per position, supporting multiple masses).
+
+    UNIFIED oracle path (round-16 finding 3-seqview-008): this delegates to
+    :func:`_calculate_fragment_masses_oracle` — an exact port of FLASHApp
+    ``getFragmentMassesWithSeq`` (+ the per-prefix/per-suffix ``remove_ambigious``
+    strip) run for the oracle's ``ax``/``by``/``cz`` families — for EVERY sequence.
+
+    Previously two divergent paths existed: a ``TheoreticalSpectrumGenerator``
+    (TSG) path for X-free sequences and the oracle port for X-containing ones. The
+    TSG path OMITTED the full-length terminal fragment ion (``b_L`` / ``y_L`` etc.
+    = the intact proteoform mass at grid position ``L-1``), while both the oracle
+    port and the FLASHApp oracle INCLUDE it. Unifying removes that divergence so
+    every sequence matches the oracle for the FULL grid.
+
+    The oracle port reproduces the former TSG output for grid positions
+    ``1..L-1`` on clean (X-free) sequences to within ~5e-7 Da, NOT byte-for-byte
+    (round-17 finding 3-seqview-011): the old TSG path added a ROUNDED proton
+    (``1.007276``) per ion, whereas this path delegates the charge-0 neutral mass
+    entirely to pyOpenMS' ``getMonoWeight`` (full-precision constants), so the two
+    differ by ~4.67e-7 Da per position. That tiny shift is BENIGN -- it is far
+    below any fragment match tolerance and, critically, the new path is now
+    BYTE-EXACT against the ORACLE ``getFragmentMassesWithSeq`` (verified
+    numerically for ``PEPTIDEK``, ``ACDEFGHK``, modified sequences, X-containing
+    sequences, etc.), which is the correctness target. The ONLY structural change
+    for clean sequences is the now-INCLUDED full-length terminal ion at ``L-1``.
+    For an X-free input the X-strip is a no-op. The oracle port additionally
+    handles single-residue sequences (``n == 1``) gracefully, which the TSG path
+    could not (TSG raised "peptide must have at least 2 residues for c-ion
+    generation").
+
+    Modifications embedded in ``sequence_str`` are preserved through the
+    ``toUniModString()`` round-trip in the oracle port, so a modified sequence
+    still gets the correct shifted fragment masses.
     """
     try:
-        from pyopenms import AASequence, MSSpectrum, TheoreticalSpectrumGenerator
+        from pyopenms import AASequence  # noqa: F401 (import guard for fallback)
 
-        aa_seq = AASequence.fromString(sequence_str)
-        n = aa_seq.size()
-
-        # Configure TheoreticalSpectrumGenerator
-        tsg = TheoreticalSpectrumGenerator()
-        params = tsg.getParameters()
-
-        params.setValue("add_a_ions", "true")
-        params.setValue("add_b_ions", "true")
-        params.setValue("add_c_ions", "true")
-        params.setValue("add_x_ions", "true")
-        params.setValue("add_y_ions", "true")
-        params.setValue("add_z_ions", "true")
-        params.setValue("add_first_prefix_ion", "true")  # Include b1/a1/c1 ions
-        params.setValue("add_metainfo", "true")
-
-        tsg.setParameters(params)
-
-        # Generate spectrum for charge 1, then convert to neutral masses
-        spec = MSSpectrum()
-        tsg.getSpectrum(spec, aa_seq, 1, 1)
-
-        ion_types = ["a", "b", "c", "x", "y", "z"]
-        result = {f"fragment_masses_{ion}": [[] for _ in range(n)] for ion in ion_types}
-
-        # Get ion names from StringDataArrays
-        ion_names = []
-        sdas = spec.getStringDataArrays()
-        for sda in sdas:
-            if sda.getName() == "IonNames":
-                for i in range(sda.size()):
-                    name = sda[i]
-                    if isinstance(name, bytes):
-                        name = name.decode("utf-8")
-                    ion_names.append(name)
-                break
-
-        # Parse peaks and organize by ion type and position
-        for i in range(spec.size()):
-            peak = spec[i]
-            # Convert singly-charged m/z to neutral mass
-            mz_charge1 = peak.getMZ()
-            neutral_mass = mz_charge1 - PROTON_MASS
-            ion_name = ion_names[i] if i < len(ion_names) else ""
-
-            if not ion_name:
-                continue
-
-            # Parse ion name (e.g., "b3+", "y5++")
-            ion_type = None
-            ion_number = None
-
-            for t in ion_types:
-                if ion_name.lower().startswith(t):
-                    ion_type = t
-                    try:
-                        num_str = ""
-                        for c in ion_name[1:]:
-                            if c.isdigit():
-                                num_str += c
-                            else:
-                                break
-                        if num_str:
-                            ion_number = int(num_str)
-                    except (ValueError, IndexError):
-                        pass
-                    break
-
-            if ion_type and ion_number and 1 <= ion_number <= n:
-                idx = ion_number - 1
-                key = f"fragment_masses_{ion_type}"
-                if idx < len(result[key]):
-                    result[key][idx].append(neutral_mass)
-
-        return result
+        return _calculate_fragment_masses_oracle(sequence_str)
 
     except ImportError:
         # Fallback to simple calculation without pyOpenMS
@@ -173,6 +161,77 @@ def calculate_fragment_masses_pyopenms(
     except Exception as e:
         print(f"Error calculating fragments for {sequence_str}: {e}")
         return {f"fragment_masses_{ion}": [] for ion in ["a", "b", "c", "x", "y", "z"]}
+
+
+def _calculate_fragment_masses_oracle(
+    sequence_str: str,
+) -> Dict[str, List[List[float]]]:
+    """Terminal fragment masses for ANY sequence (oracle ``getFragmentMassesWithSeq``).
+
+    Exact port of FLASHApp ``getFragmentMassesWithSeq`` (run for each of the
+    oracle's ``ax``/``by``/``cz`` ion families) combined with the per-prefix /
+    per-suffix ``remove_ambigious`` strip. For a sequence of length ``n`` (the
+    FULL length, INCLUDING any ambiguous X positions, so ion numbering stays
+    aligned 1:1 with the displayed residue grid):
+
+      * prefix ion at position ``i`` (a/b/c) = monoweight of the X-STRIPPED
+        ``getPrefix(i+1)`` for the matching prefix ResidueType (AIon/BIon/CIon);
+      * suffix ion at position ``i`` (x/y/z) = monoweight of the X-STRIPPED
+        ``getSuffix(i+1)`` for the matching suffix ResidueType (XIon/YIon/ZIon).
+
+    Every position is populated, INCLUDING the full-length terminal ion at grid
+    position ``n-1`` (ion number ``n`` = the whole sequence): the full-length
+    prefix ion (``b_L``) maps to the C-terminal residue and the full-length suffix
+    ion (``y_L``) maps to residue 0 in the Vue grid, exactly as the oracle does.
+    Returns the per-position ``number[][]`` shape (one mass per position) the Vue
+    side consumes.
+
+    AMBIGUOUS-residue handling: for an X-free sequence the ``remove_ambigious``
+    strip is a no-op, so the ``1..L-1`` masses match the former
+    ``TheoreticalSpectrumGenerator`` output to ~5e-7 Da (the old TSG path added a
+    ROUNDED proton; this path is byte-exact against the ORACLE instead -- see
+    :func:`calculate_fragment_masses_pyopenms`). For an X-containing sequence,
+    removing an X SHORTENS the sub-sequence, so the X position reproduces its
+    neighbour's mass (e.g. ``PEPTX`` -> ``PEPT``), exactly as the oracle yields.
+
+    Modifications embedded in ``sequence_str`` are preserved through the
+    ``toUniModString()`` round-trip, so a modified sequence still gets the correct
+    shifted fragment masses.
+    """
+    from pyopenms import AASequence, Residue
+
+    aa_seq = AASequence.fromString(sequence_str)
+    n = aa_seq.size()
+
+    result: Dict[str, List[List[float]]] = {
+        f"fragment_masses_{ion}": [[] for _ in range(n)]
+        for ion in ("a", "b", "c", "x", "y", "z")
+    }
+
+    RT = Residue.ResidueType
+    # Oracle ion-family map: prefix ResidueType -> key, suffix ResidueType -> key
+    # ('ax' -> a/x, 'by' -> b/y, 'cz' -> c/z), matching getFragmentMassesWithSeq.
+    families = (
+        (RT.AIon, "a", RT.XIon, "x"),
+        (RT.BIon, "b", RT.YIon, "y"),
+        (RT.CIon, "c", RT.ZIon, "z"),
+    )
+
+    for prefix_type, prefix_key, suffix_type, suffix_key in families:
+        # Prefix ions (oracle: per aa_index, X-stripped getPrefix(i+1) monoweight).
+        for i in range(n):
+            prefix_mass = _remove_ambiguous_x(aa_seq.getPrefix(i + 1)).getMonoWeight(
+                prefix_type, 0
+            )
+            result[f"fragment_masses_{prefix_key}"][i] = [prefix_mass]
+        # Suffix ions (oracle: per aa_index, X-stripped getSuffix(i+1) monoweight).
+        for i in range(n):
+            suffix_mass = _remove_ambiguous_x(aa_seq.getSuffix(i + 1)).getMonoWeight(
+                suffix_type, 0
+            )
+            result[f"fragment_masses_{suffix_key}"][i] = [suffix_mass]
+
+    return result
 
 
 def _calculate_fragment_masses_simple(
@@ -254,12 +313,256 @@ def _calculate_fragment_masses_simple(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Internal fragment math
+#
+# Ported verbatim from FLASHApp/src/render/sequence.py
+# (`getInternalFragmentMassesWithSeq` + `getInternalFragmentDataFromSeq`) so the
+# theoretical-internal-fragment enumeration runs in Python. The Vue side only
+# matches these enumerated masses against the selected scan's observed masses
+# (mirroring how the terminal map already works).
+#
+# Parity-critical details (do NOT "fix" these without re-deriving golden values):
+#   * minimum internal length 5 (`if j < i + min_length - 1: continue`)
+#   * start index is 0-based (i); end index is 1-based, exclusive-style (j+1)
+#   * the start is barred from the first and last residue (i in [1, L-2]); the
+#     end MAY reach the C-terminus (end == L includes the last residue)
+#   * per-family neutral shift: by/cz -> +0, bz -> -NH3, cy -> +NH3
+#   * ambiguous (partially overlapping) modifications fork into TWO candidates at
+#     the same (start, end); fully-contained mods add once to the single candidate
+#   * the per-candidate terminal-collision filter drops internals matching any
+#     terminal b/y/c/z neutral mass within `terminal_collision_ppm` (default ON)
+# ---------------------------------------------------------------------------
+
+# Oracle constants (kept as separate literals to match the oracle arithmetic;
+# H2O_INTERNAL == 18.010564683 is also written verbatim inside the mass formula).
+H2O_INTERNAL = 18.010564683
+NH3_INTERNAL = 17.0265491015
+
+# Verbatim copy of `aa_masses` from FLASHApp/src/render/sequence.py. The internal
+# fragment math uses THIS table (not pyOpenMS) for the residue sum, including the
+# X/Z -> 0 and the high-resolution U mass.
+INTERNAL_AA_MASSES: Dict[str, float] = {
+    "A": 71.037114,
+    "R": 156.101111,
+    "N": 114.042927,
+    "D": 115.026943,
+    "C": 103.009185,
+    "E": 129.042593,
+    "Q": 128.058578,
+    "G": 57.021464,
+    "H": 137.058912,
+    "I": 113.084064,
+    "L": 113.084064,
+    "K": 128.094963,
+    "M": 131.040485,
+    "F": 147.068414,
+    "P": 97.052764,
+    "S": 87.032028,
+    "T": 101.047679,
+    "U": 150.953633405,
+    "W": 186.079313,
+    "Y": 163.063329,
+    "V": 99.068414,
+    "X": 0,
+    "Z": 0,
+}
+
+# Default internal-fragment configuration (parity defaults). Surfaced so callers
+# can override per instance; `remove_terminal_collisions` defaults ON for parity.
+DEFAULT_INTERNAL_FRAGMENT_CONFIG: Dict[str, Any] = {
+    "min_length": 5,
+    "ion_types": ["by", "bz", "cy"],
+    "tolerance": 10.0,
+    "tolerance_ppm": True,
+    "remove_terminal_collisions": True,
+    "terminal_collision_ppm": 10.0,
+}
+
+
+def _internal_shift(res_type: str) -> float:
+    """Neutral-mass shift for an internal-ion family (oracle logic, verbatim)."""
+    if res_type in ("by", "cz"):
+        return -H2O_INTERNAL
+    if res_type == "bz":
+        return -H2O_INTERNAL - NH3_INTERNAL
+    return -H2O_INTERNAL + NH3_INTERNAL  # "cy"
+
+
+def _is_match_with_tolerance(
+    sorted_masses: List[float], target: float, ppm: float
+) -> bool:
+    """Port of `isMatchWithTolerance`: binary search a sorted mass list.
+
+    Returns True if any value in ``sorted_masses`` is within ``ppm`` of
+    ``target`` (tolerance computed as ``target * ppm / 1e6``).
+    """
+    tol = target * ppm / 1e6
+    lo, hi = 0, len(sorted_masses) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if abs(sorted_masses[mid] - target) <= tol:
+            return True
+        elif sorted_masses[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return False
+
+
+def _terminal_collision_masses(
+    fragment_masses: Dict[str, List[List[float]]],
+) -> List[float]:
+    """Build the sorted terminal-mass list for the collision filter.
+
+    The oracle uses ``byp + bys + czp + czs`` (b/y prefix-suffix + c/z
+    prefix-suffix neutral masses for charge 0; FLASHApp
+    ``src/render/sequence.py:213-215``). Those four families correspond to the
+    terminal ``b, y, c, z`` neutral masses, which Insight already computes via
+    :func:`calculate_fragment_masses_pyopenms`. Flatten those per-position lists
+    and sort ascending. (Using ``x`` instead of ``z`` here would diverge by ~42 Da
+    — ``z`` ≈ ``y - NH3`` while ``x`` ≈ ``y + CO`` — so drop decisions could differ.)
+    """
+    masses: List[float] = []
+    for ion in ("b", "y", "c", "z"):
+        for per_pos in fragment_masses.get(f"fragment_masses_{ion}", []):
+            masses.extend(per_pos)
+    masses.sort()
+    return masses
+
+
+def compute_internal_fragment_masses(
+    residues: List[str],
+    res_type: str,
+    *,
+    min_length: int = 5,
+    modifications: Optional[List[Tuple[int, int, float]]] = None,
+    terminal_masses: Optional[List[float]] = None,
+    terminal_collision_ppm: float = 10.0,
+) -> Tuple[List[float], List[int], List[int]]:
+    """Enumerate theoretical internal-fragment masses for one family.
+
+    Pure port of ``getInternalFragmentMassesWithSeq`` (FLASHApp). Returns three
+    parallel flat lists ``(masses, start_indices, end_indices)`` where each entry
+    is one enumerated internal fragment. ``start`` is 0-based, ``end`` is 1-based
+    (exclusive-style), matching the Vue fill predicate
+    ``aaIndex > start && aaIndex <= end``.
+
+    Args:
+        residues: Plain single-letter residue list (no modification syntax).
+        res_type: Internal-ion family ('by', 'cz', 'bz', or 'cy').
+        min_length: Minimum internal-fragment residue length (default 5).
+        modifications: Optional list of ``(start_1based, end_1based, mass)``
+            ranges. Fully-contained mods add to the single candidate; partially
+            overlapping mods fork into a second ``mass + m`` candidate.
+        terminal_masses: Optional sorted terminal masses for the collision
+            filter. When provided, candidates matching any terminal mass within
+            ``terminal_collision_ppm`` are dropped.
+        terminal_collision_ppm: ppm window for the terminal-collision filter.
+
+    Returns:
+        Tuple of (masses, start_indices, end_indices).
+    """
+    shift = _internal_shift(res_type)
+    masses: List[float] = []
+    starts: List[int] = []
+    ends: List[int] = []
+    length = len(residues)
+
+    for i in range(length):
+        # First position cannot start an internal fragment.
+        if i == 0:
+            continue
+        # Last position cannot start one (and ends the i-loop).
+        if i == length - 1:
+            break
+
+        mass = 0.0
+        for j in range(length):
+            # Accumulate residues from i..j inclusive.
+            if j >= i:
+                mass += INTERNAL_AA_MASSES[residues[j]]
+            # Enforce minimum length (oracle: i + 5 - 1).
+            if j < i + min_length - 1:
+                continue
+
+            candidates = [mass]
+            if modifications is not None:
+                for s, e, m in modifications:
+                    # Modification fully contained in [i+1, j+1].
+                    if (s >= i + 1) and (e <= j + 1):
+                        candidates[0] += m
+                    # Modification partially overlaps: emit BOTH variants.
+                    elif (s >= i + 1) or (e <= j + 1):
+                        candidates.append(mass + m)
+
+            for mm in candidates:
+                # Per-candidate terminal-collision filter.
+                if terminal_masses is not None and _is_match_with_tolerance(
+                    terminal_masses, mm, terminal_collision_ppm
+                ):
+                    continue
+                masses.append(mm + 18.010564683 + shift)
+                starts.append(i)  # 0-based N bound
+                ends.append(j + 1)  # 1-based C bound (exclusive-style)
+
+    return masses, starts, ends
+
+
+def compute_internal_fragment_data(
+    residues: List[str],
+    *,
+    ion_types: Tuple[str, ...] = ("by", "bz", "cy"),
+    min_length: int = 5,
+    modifications: Optional[List[Tuple[int, int, float]]] = None,
+    terminal_masses: Optional[List[float]] = None,
+    remove_terminal_collisions: bool = True,
+    terminal_collision_ppm: float = 10.0,
+) -> Dict[str, List]:
+    """Enumerate internal fragments for all requested families.
+
+    Pure port of ``getInternalFragmentDataFromSeq`` (FLASHApp). Produces, for each
+    family in ``ion_types``, three flat lists keyed
+    ``fragment_masses_<fam>`` / ``start_indices_<fam>`` / ``end_indices_<fam>``.
+
+    Note: ``by`` and ``cz`` share the same shift and the oracle only emits three
+    families (``by``, ``bz``, ``cy``).
+    """
+    term = terminal_masses if remove_terminal_collisions else None
+    out: Dict[str, List] = {}
+    for it in ion_types:
+        m, s, e = compute_internal_fragment_masses(
+            residues,
+            it,
+            min_length=min_length,
+            modifications=modifications,
+            terminal_masses=term,
+            terminal_collision_ppm=terminal_collision_ppm,
+        )
+        out[f"fragment_masses_{it}"] = m
+        out[f"start_indices_{it}"] = s
+        out[f"end_indices_{it}"] = e
+    return out
+
+
 def get_theoretical_mass(sequence_str: str) -> float:
-    """Calculate monoisotopic mass of a peptide sequence."""
+    """Calculate monoisotopic mass of a peptide sequence.
+
+    AMBIGUOUS-residue handling (oracle parity, FLASHApp
+    ``getFragmentDataFromSeq`` -> ``remove_ambigious``): when the sequence
+    contains an ``X``/``x``, the X residues are STRIPPED before the pyOpenMS
+    ``getMonoWeight`` call (an X-containing proteoform like ``PEPTXIDEK`` yields
+    the X-stripped mass ``PEPTIDEK`` ~927.45, NOT pyOpenMS' "unknown AA" error
+    that would otherwise fall through to 0.0). X-free sequences take the
+    byte-unchanged path. Only ``X``/``x`` are stripped — every other residue
+    (incl. B/Z/J/U/O) passes through to pyOpenMS exactly as before.
+    """
     try:
         from pyopenms import AASequence
 
         aa_seq = AASequence.fromString(sequence_str)
+        if _has_ambiguous_x(sequence_str):
+            aa_seq = _remove_ambiguous_x(aa_seq)
         return aa_seq.getMonoWeight()
     except ImportError:
         # Fallback
@@ -294,6 +597,56 @@ def get_theoretical_mass(sequence_str: str) -> float:
         return mass
     except Exception:
         return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Per-residue sequence coverage
+#
+# Generic port of the oracle's per-residue coverage gradient (FLASHApp uses it
+# for sequence-tag coverage, but coverage is a general proteomics concept). The
+# oracle (`FLASHApp/src/render/sequence.py` + `src/parse/tnt.py`) supplies the
+# component a per-residue list `coverage` ALREADY normalised to [0, 1]
+# (`p_cov = coverage / max(coverage)`) plus the raw integer `maxCoverage`
+# (used only for the scale legend label, e.g. "5x").
+#
+# Insight keeps that exact contract: the caller provides a per-residue coverage
+# list (a `coverage_column` in the sequence frame). We normalise it the same way
+# the oracle does and emit both `coverage` (per-residue, [0, 1]) and
+# `maxCoverage` (raw max) into `sequenceData`. The Vue side renders the
+# `rgba(228, 87, 46, alpha)` gradient per residue and a coverage scale legend.
+# When no coverage is configured, neither key is emitted (back-compatible: the
+# existing secondary-background cells are unchanged).
+# ---------------------------------------------------------------------------
+
+# Oracle coverage gradient base color (E4572E), kept here for documentation /
+# test reference. The actual rgba() string is built in AminoAcidCell.vue.
+COVERAGE_COLOR_RGB = (228, 87, 46)
+
+
+def normalize_coverage(
+    raw_coverage: List[float],
+) -> Tuple[List[float], float]:
+    """Normalise a raw per-residue coverage list the way the oracle does.
+
+    Mirrors ``FLASHApp/src/parse/tnt.py`` (``p_cov = coverage / max(coverage)``
+    when ``max(coverage) > 0`` else all-zeros, and ``maxCoverage = max(coverage)``).
+
+    Args:
+        raw_coverage: Per-residue raw coverage counts (one entry per residue).
+
+    Returns:
+        Tuple of ``(normalized_coverage, max_coverage)`` where
+        ``normalized_coverage`` is in ``[0, 1]`` (per residue) and
+        ``max_coverage`` is the raw maximum (0.0 when empty / all-zero).
+    """
+    if not raw_coverage:
+        return [], 0.0
+    max_cov = max(raw_coverage)
+    if max_cov > 0:
+        normalized = [float(c) / max_cov for c in raw_coverage]
+    else:
+        normalized = [0.0 for _ in raw_coverage]
+    return normalized, float(max_cov)
 
 
 # Default annotation configuration
@@ -338,6 +691,10 @@ class SequenceView:
     - Amino acid grid display with configurable row width
     - Fragment ion markers (a, b, c, x, y, z) with configurable colors
     - Tolerance-based fragment matching (done in Vue)
+    - Optional mass-info header (theoretical / observed / delta mass) when an
+      ``observed_mass_column`` is supplied (oracle ``preparePrecursorInfo`` parity)
+    - Optional inbound mass -> fragment-table-row highlight via
+      ``mass_selection_identifier`` (oracle ``updateFragmentTableFromMassSelection``)
     - Returns annotation dataframe for linked components
     - Supports filtering by spectrum and sequence identifiers
 
@@ -363,12 +720,25 @@ class SequenceView:
         peaks_data: Optional[pl.LazyFrame] = None,
         peaks_data_path: Optional[str] = None,
         filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
+        residue_identifier: Optional[str] = None,
+        fragment_mass_identifier: Optional[str] = None,
         deconvolved: bool = False,
         annotation_config: Optional[Dict[str, Any]] = None,
         cache_path: str = ".",
         title: Optional[str] = None,
         height: int = 400,
+        internal_fragments: bool = False,
+        internal_fragment_config: Optional[Dict[str, Any]] = None,
+        coverage_column: Optional[str] = None,
+        proteoform_start_column: Optional[str] = None,
+        proteoform_end_column: Optional[str] = None,
+        observed_mass_column: Optional[str] = None,
+        mass_header_title: str = "Proteoform",
+        theoretical_mass_label: str = "Theoretical mass",
+        observed_mass_label: str = "Observed mass",
+        mass_selection_identifier: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -385,8 +755,33 @@ class SequenceView:
             peaks_data_path: Path to parquet file with peaks data.
             filters: Mapping of identifier names to column names for filtering.
                 Example: {"spectrum": "scan_id", "sequence": "sequence_id"}
+            filter_defaults: Optional default values for filter identifiers when
+                no selection is present in state. Mirrors the canonical
+                ``filter_defaults`` of the other components. Any filter identifier
+                not present here defaults to ``None`` (the historical behavior).
             interactivity: Mapping of identifier names to column names for clicks.
                 Example: {"peak": "peak_id"} sets 'peak' selection to clicked peak's ID.
+            residue_identifier: Optional selection identifier published when a
+                sequence residue is clicked (0-based residue index). This is the
+                oracle's TWO-PATH PATH 1 (aa / sequence-tag selection):
+                - When ``coverage_column`` is configured (coverage shown), only
+                  residues with sequence-tag coverage (coverage > 0) publish, the
+                  selection TOGGLES (re-clicking the selected residue clears it),
+                  and it auto-clears when the sequence changes (oracle parity).
+                - When no coverage is configured (back-compat), a residue with a
+                  matching fragment publishes its index on click (no toggle), the
+                  historical Insight behavior. ``None`` (default) -> not published.
+            fragment_mass_identifier: Optional selection identifier for the
+                oracle's PATH 2 (mass / fragment selection). When set, clicking a
+                residue that has a matching FRAGMENT ion publishes that fragment
+                peak's mass-selection value to this identifier — reproducing the
+                oracle ``updateMassTableFromFragmentMass`` -> ``updateSelectedMass``.
+                The value is resolved via the ``interactivity`` column of the same
+                name when present (e.g. ``interactivity={"mass": "mass_in_scan"}``
+                with ``fragment_mass_identifier="mass"`` publishes the matched
+                peak's ``mass_in_scan`` = the deconvolved-mass index), else the
+                global peak id. ``None`` (default) -> PATH 2 off (back-compatible).
+                PATH 1 and PATH 2 fire INDEPENDENTLY on a single residue click.
             deconvolved: If False (default), peaks are m/z values and matching considers
                 charge states 1 to precursor_charge. If True, peaks are neutral masses.
             annotation_config: Configuration for fragment matching:
@@ -398,6 +793,58 @@ class SequenceView:
             cache_path: Base path for cache storage.
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
+            internal_fragments: If True, also render an internal-fragment map
+                below the terminal sequence map. The theoretical internal
+                fragments are enumerated in Python (from the same ``sequence``
+                string) and matched against observed masses in Vue. This is
+                cache-invalidating config (like ``deconvolved``).
+            internal_fragment_config: Optional overrides for internal-fragment
+                enumeration/matching. Recognised keys (all optional):
+                - min_length: minimum internal length (default 5)
+                - ion_types: families to enumerate (default ["by", "bz", "cy"])
+                - tolerance: default match tolerance (default 10.0)
+                - tolerance_ppm: ppm (True) vs Da (False) default (default True)
+                - remove_terminal_collisions: drop internals colliding with a
+                  terminal b/y/c/z mass (default True, for parity)
+                - terminal_collision_ppm: ppm window for that filter (default 10.0)
+            coverage_column: Optional name of a column in the sequence frame that
+                holds a per-residue coverage list (one numeric entry per residue
+                of the sequence). When provided, the component normalises it the
+                way the oracle does (per residue / max) and renders a per-residue
+                coverage gradient + a coverage scale legend. When ``None``
+                (default) no coverage is emitted and rendering is unchanged
+                (backward compatible).
+            proteoform_start_column: Optional name of a column holding the 0-based
+                proteoform N-terminus residue index. A NEGATIVE value marks an
+                UNDETERMINED N-terminus (rendered as a "??" terminal marker); a
+                value > 0 marks a truncated N-terminus. ``None`` (default) ->
+                full determined N-terminus (no visual change).
+            proteoform_end_column: Optional name of a column holding the 0-based
+                proteoform C-terminus residue index. A NEGATIVE value marks an
+                UNDETERMINED C-terminus; a value < length-1 marks a truncated
+                C-terminus. ``None`` (default) -> full determined C-terminus.
+            observed_mass_column: Optional name of a column holding the per-row
+                OBSERVED mass (e.g. the proteoform's measured/computed mass). When
+                provided, the component renders the oracle's MASS-INFO HEADER above
+                the sequence grid (3-seqview-004): ``massTitle`` plus three fields
+                ``Theoretical mass`` (from the computed ``theoretical_mass``),
+                ``Observed mass`` (this column) and ``Δ Mass (Da)``
+                (``|theoretical - observed|``). This reproduces the oracle
+                ``preparePrecursorInfo`` proteoform branch. A NEGATIVE / null value
+                renders the observed + delta fields as "-" (oracle parity for a
+                non-positive computed mass). ``None`` (default) -> no header
+                (back-compatible: existing callers render byte-unchanged).
+            mass_header_title: Title shown to the LEFT of the mass-info header
+                fields (oracle ``massTitle``; defaults to "Proteoform"). Only used
+                when ``observed_mass_column`` is configured.
+            mass_selection_identifier: Optional selection identifier the component
+                LISTENS to for the INBOUND mass -> fragment-table-row highlight
+                (3-seqview-003, oracle ``updateFragmentTableFromMassSelection``).
+                When set, an external change to this selection (the same slot
+                ``fragment_mass_identifier`` publishes to, e.g. ``"mass"``) finds
+                the matched peak whose interactivity value equals the selection and
+                highlights the corresponding fragment-table row locally. ``None``
+                (default) -> no inbound highlight (back-compatible).
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -407,28 +854,42 @@ class SequenceView:
         # Determine if data is provided (creation mode vs reconstruction mode)
         has_sequence_data = sequence_data is not None or sequence_data_path is not None
 
-        # Check if any configuration arguments were provided
+        # Check if any DATA-SHAPING configuration arguments were provided.
+        # title/height are render-time (presentation) params and intentionally
+        # NOT part of this guard — passing them does not require data, mirroring
+        # how BaseComponent treats presentation params.
         has_config = (
             peaks_data is not None
             or peaks_data_path is not None
             or filters is not None
+            or filter_defaults is not None
             or interactivity is not None
+            or residue_identifier is not None
+            or fragment_mass_identifier is not None
             or deconvolved is not False
             or annotation_config is not None
-            or title is not None
-            or height != 400
+            or internal_fragments is not False
+            or internal_fragment_config is not None
+            or coverage_column is not None
+            or proteoform_start_column is not None
+            or proteoform_end_column is not None
+            or observed_mass_column is not None
+            or mass_header_title != "Proteoform"
+            or theoretical_mass_label != "Theoretical mass"
+            or observed_mass_label != "Observed mass"
+            or mass_selection_identifier is not None
             or bool(kwargs)
         )
 
         if not has_sequence_data:
             # Reconstruction mode - only cache_id and cache_path allowed
             if has_config:
-                raise ValueError(
+                raise CacheMissError(
                     "Configuration arguments require sequence_data= or sequence_data_path= to be provided. "
                     "For reconstruction from cache, use only cache_id and cache_path."
                 )
             if not self._cache_exists():
-                raise ValueError(
+                raise CacheMissError(
                     f"Cache not found at '{self._cache_dir}'. "
                     f"Provide sequence_data= or sequence_data_path= to create the cache."
                 )
@@ -439,11 +900,49 @@ class SequenceView:
             self._height = height
             self._deconvolved = deconvolved
             self._config = kwargs
+
+            # Internal-fragment config (parity defaults; merge any overrides).
+            self._internal_fragments = internal_fragments
+            self._internal_fragment_config = {**DEFAULT_INTERNAL_FRAGMENT_CONFIG}
+            if internal_fragment_config:
+                self._internal_fragment_config.update(internal_fragment_config)
+
+            # Per-residue coverage column (generic; off when None).
+            self._coverage_column = coverage_column
+            # Optional proteoform terminal-index columns (truncated/undetermined
+            # N/C terminals; off when None).
+            self._proteoform_start_column = proteoform_start_column
+            self._proteoform_end_column = proteoform_end_column
+            # Optional per-row observed mass -> drives the mass-info header
+            # (off when None). mass_header_title is the oracle massTitle.
+            self._observed_mass_column = observed_mass_column
+            self._mass_header_title = mass_header_title
+            # Field-label prefixes for the theoretical/observed mass rows; the
+            # FLASHTnT proteoform branch overrides the generic defaults with
+            # "Theoretical protein mass"/"Observed proteoform mass" (oracle).
+            self._theoretical_mass_label = theoretical_mass_label
+            self._observed_mass_label = observed_mass_label
+            # Optional inbound mass-selection identifier -> drives the inbound
+            # fragment-row highlight in Vue (off when None).
+            self._mass_selection_identifier = mass_selection_identifier
             self._filters = filters or {}
+            # filter_defaults: caller-supplied overrides; any filter identifier
+            # not listed defaults to None (historical behavior).
+            provided_defaults = filter_defaults or {}
             self._filter_defaults = {}
             for identifier in self._filters.keys():
-                self._filter_defaults[identifier] = None
+                self._filter_defaults[identifier] = provided_defaults.get(
+                    identifier, None
+                )
             self._interactivity = interactivity or {}
+            # Identifier emitted when a sequence residue is clicked (0-based residue
+            # index). Lets a downstream tagger derive the tag-relative selectedAA.
+            self._residue_identifier = residue_identifier
+            # PATH 2 identifier: when set, clicking a residue with a matching
+            # fragment publishes that fragment peak's mass-selection value to this
+            # identifier (resolved via the same-named interactivity column when
+            # present, else the peak id). None -> PATH 2 off (back-compatible).
+            self._fragment_mass_identifier = fragment_mass_identifier
 
             # Store annotation config with defaults
             self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
@@ -501,15 +1000,33 @@ class SequenceView:
             )
 
     def _get_cache_config(self) -> Dict[str, Any]:
-        """Get all configuration to store in cache."""
+        """Get all configuration to store in cache.
+
+        ``title``/``height`` are render-time presentation params but are still
+        persisted here so a cache-only reconstruction restores them faithfully
+        (they are simply not part of the ``has_config`` reconstruction guard).
+        """
         return {
             "version": CACHE_VERSION,
             "filters": self._filters,
+            "filter_defaults": self._filter_defaults,
             "interactivity": self._interactivity,
+            "residue_identifier": self._residue_identifier,
+            "fragment_mass_identifier": self._fragment_mass_identifier,
             "title": self._title,
             "height": self._height,
             "deconvolved": self._deconvolved,
             "annotation_config": self._annotation_config,
+            "internal_fragments": self._internal_fragments,
+            "internal_fragment_config": self._internal_fragment_config,
+            "coverage_column": self._coverage_column,
+            "proteoform_start_column": self._proteoform_start_column,
+            "proteoform_end_column": self._proteoform_end_column,
+            "observed_mass_column": self._observed_mass_column,
+            "mass_header_title": self._mass_header_title,
+            "theoretical_mass_label": self._theoretical_mass_label,
+            "observed_mass_label": self._observed_mass_label,
+            "mass_selection_identifier": self._mass_selection_identifier,
         }
 
     def _cache_exists(self) -> bool:
@@ -537,16 +1054,37 @@ class SequenceView:
 
         # Restore all configuration
         self._filters = config.get("filters", {})
+        # Restore caller-supplied filter defaults (falling back to None for any
+        # filter identifier not present, preserving historical behavior and
+        # back-compat with caches written before filter_defaults was stored).
+        stored_defaults = config.get("filter_defaults") or {}
         self._filter_defaults = {}
         for identifier in self._filters.keys():
-            self._filter_defaults[identifier] = None
+            self._filter_defaults[identifier] = stored_defaults.get(identifier, None)
         self._interactivity = config.get("interactivity", {})
+        self._residue_identifier = config.get("residue_identifier")
+        self._fragment_mass_identifier = config.get("fragment_mass_identifier")
         self._title = config.get("title")
         self._height = config.get("height", 400)
         self._deconvolved = config.get("deconvolved", False)
         self._annotation_config = config.get(
             "annotation_config", {**DEFAULT_ANNOTATION_CONFIG}
         )
+        self._internal_fragments = config.get("internal_fragments", False)
+        self._internal_fragment_config = {**DEFAULT_INTERNAL_FRAGMENT_CONFIG}
+        self._internal_fragment_config.update(
+            config.get("internal_fragment_config", {})
+        )
+        self._coverage_column = config.get("coverage_column")
+        self._proteoform_start_column = config.get("proteoform_start_column")
+        self._proteoform_end_column = config.get("proteoform_end_column")
+        self._observed_mass_column = config.get("observed_mass_column")
+        self._mass_header_title = config.get("mass_header_title", "Proteoform")
+        self._theoretical_mass_label = config.get(
+            "theoretical_mass_label", "Theoretical mass"
+        )
+        self._observed_mass_label = config.get("observed_mass_label", "Observed mass")
+        self._mass_selection_identifier = config.get("mass_selection_identifier")
         self._config = {}
 
         # Load cached LazyFrames
@@ -580,10 +1118,22 @@ class SequenceView:
             filter_cols = [c for c in self._filters.values() if c in schema.names()]
 
             # Build column list: filter columns + required columns
+            # (+ the optional per-residue coverage list column, when configured).
             required = ["sequence", "precursor_charge"]
+            optional = []
+            if self._coverage_column is not None:
+                optional.append(self._coverage_column)
+            if self._proteoform_start_column is not None:
+                optional.append(self._proteoform_start_column)
+            if self._proteoform_end_column is not None:
+                optional.append(self._proteoform_end_column)
+            if self._observed_mass_column is not None:
+                optional.append(self._observed_mass_column)
             cols = list(
                 dict.fromkeys(
-                    filter_cols + [c for c in required if c in schema.names()]
+                    filter_cols
+                    + [c for c in required if c in schema.names()]
+                    + [c for c in optional if c in schema.names()]
                 )
             )
 
@@ -673,6 +1223,217 @@ class SequenceView:
 
         return "", 1
 
+    def _get_coverage_for_state(self, state: Dict[str, Any]) -> List[float]:
+        """Get the raw per-residue coverage list for the current state.
+
+        Reads ``self._coverage_column`` from cached sequences.parquet with the
+        same predicate pushdown / None-default semantics as
+        :meth:`_get_sequence_for_state`. Returns an empty list when coverage is
+        not configured, the column is absent, the filter is unset, or no row
+        matches (so the gradient stays off and back-compat is preserved).
+
+        Returns:
+            Raw per-residue coverage values (one per residue), or ``[]``.
+        """
+        if self._coverage_column is None:
+            return []
+
+        filtered = self._cached_sequences
+        schema = filtered.collect_schema()
+        if self._coverage_column not in schema.names():
+            return []
+
+        # Apply filters (matching _get_sequence_for_state behaviour exactly).
+        for identifier, column in self._filters.items():
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    # Filter has None default and state is None - empty intentionally
+                    return []
+
+        try:
+            df = filtered.select([self._coverage_column]).head(1).collect()
+            if df.height > 0:
+                value = df[self._coverage_column][0]
+                if value is None:
+                    return []
+                # Polars list cell -> Python list of floats.
+                return [float(v) for v in value]
+        except Exception:
+            pass
+
+        return []
+
+    def _get_proteoform_terminals_for_state(
+        self, state: Dict[str, Any]
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """Get the proteoform (start, end) terminal indices for the state.
+
+        Reads ``self._proteoform_start_column`` / ``_proteoform_end_column`` from
+        cached sequences.parquet with the same predicate-pushdown / None-default
+        semantics as :meth:`_get_sequence_for_state`. Each is ``None`` when the
+        column is not configured / absent / unmatched (so the terminal markers
+        stay in their default determined state, back-compatible).
+
+        Returns:
+            Tuple of ``(start_index, end_index)``, each ``Optional[int]``.
+        """
+        if (
+            self._proteoform_start_column is None
+            and self._proteoform_end_column is None
+        ):
+            return None, None
+
+        filtered = self._cached_sequences
+        schema = filtered.collect_schema()
+        cols = [
+            c
+            for c in (self._proteoform_start_column, self._proteoform_end_column)
+            if c is not None and c in schema.names()
+        ]
+        if not cols:
+            return None, None
+
+        # Apply filters (matching _get_sequence_for_state behaviour exactly).
+        for identifier, column in self._filters.items():
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    return None, None
+
+        start_val: Optional[int] = None
+        end_val: Optional[int] = None
+        try:
+            df = filtered.select(cols).head(1).collect()
+            if df.height > 0:
+                if (
+                    self._proteoform_start_column in cols
+                    and df[self._proteoform_start_column][0] is not None
+                ):
+                    start_val = int(df[self._proteoform_start_column][0])
+                if (
+                    self._proteoform_end_column in cols
+                    and df[self._proteoform_end_column][0] is not None
+                ):
+                    end_val = int(df[self._proteoform_end_column][0])
+        except Exception:
+            pass
+
+        return start_val, end_val
+
+    def _get_observed_mass_for_state(self, state: Dict[str, Any]) -> Optional[float]:
+        """Get the per-row observed mass for the current state (mass header).
+
+        Reads ``self._observed_mass_column`` from cached sequences.parquet with the
+        same predicate-pushdown / None-default semantics as
+        :meth:`_get_sequence_for_state`. Returns ``None`` when the column is not
+        configured / absent / unmatched (so the mass header stays off and
+        back-compat is preserved).
+
+        Returns:
+            The observed mass as a float, or ``None``.
+        """
+        if self._observed_mass_column is None:
+            return None
+
+        filtered = self._cached_sequences
+        schema = filtered.collect_schema()
+        if self._observed_mass_column not in schema.names():
+            return None
+
+        # Apply filters (matching _get_sequence_for_state behaviour exactly).
+        for identifier, column in self._filters.items():
+            if column in schema.names():
+                filter_value = state.get(identifier)
+                if filter_value is not None:
+                    filtered = filtered.filter(pl.col(column) == filter_value)
+                elif (
+                    identifier in self._filter_defaults
+                    and self._filter_defaults[identifier] is None
+                ):
+                    return None
+
+        try:
+            df = filtered.select([self._observed_mass_column]).head(1).collect()
+            if df.height > 0:
+                value = df[self._observed_mass_column][0]
+                if value is None:
+                    return None
+                return float(value)
+        except Exception:
+            pass
+
+        return None
+
+    @staticmethod
+    def _clamp_proteoform_region(
+        start_reported: Optional[int],
+        end_reported: Optional[int],
+        seq_len: int,
+    ) -> Tuple[int, int]:
+        """Clamp the reported proteoform terminals to a sub-sequence slice range.
+
+        Reproduces the oracle slice-index derivation (FLASHApp
+        ``src/parse/tnt.py``) expressed in the stored 0-based terminals, which is
+        identical to the Vue clamps (``SequenceView.vue`` ``sequence_start`` /
+        ``sequence_end``):
+
+        * ``start`` -- ``max(0, start_reported)``; a missing or negative
+          (undetermined) N-terminus clamps to residue 0.
+        * ``end``   -- ``end_reported`` when it is a determined index in
+          ``[0, seq_len-1]``; a missing or negative (undetermined) C-terminus
+          clamps to the last residue ``seq_len - 1``.
+
+        Returns ``(clamped_start, clamped_end)`` (both inclusive, 0-based). For a
+        whole-protein proteoform this is ``(0, seq_len-1)`` -> the full sequence.
+        """
+        last = max(seq_len - 1, 0)
+        start = start_reported if start_reported is not None else 0
+        start = 0 if start < 0 else min(start, last)
+        end = end_reported if end_reported is not None else last
+        end = last if end < 0 else min(end, last)
+        if end < start:
+            end = start
+        return start, end
+
+    @staticmethod
+    def _slice_sequence_for_region(
+        sequence_str: str, clamped_start: int, clamped_end: int
+    ) -> str:
+        """Slice an OpenMS sequence string to the proteoform residue region.
+
+        The slice is by RESIDUE (not raw character), so an embedded modification
+        ``(Mod)`` stays attached to its residue -- mirroring the oracle, which
+        slices the plain residue string ``str(sequence)[start:end+1]`` (the
+        FLASHTnT proteoform sequence carries no embedded mod syntax, so for that
+        producer this is a plain ``[start:end+1]``; the residue-aware slice keeps a
+        modified-sequence caller correct too).
+        """
+        try:
+            from pyopenms import AASequence
+
+            aa_seq = AASequence.fromString(sequence_str)
+            n = aa_seq.size()
+            if n == 0:
+                return ""
+            cs = max(0, min(clamped_start, n - 1))
+            ce = max(cs, min(clamped_end, n - 1))
+            # getSubsequence(start, length) -> the [cs, ce] inclusive residue range.
+            return aa_seq.getSubsequence(cs, ce - cs + 1).toString()
+        except Exception:
+            # Fallback: plain character slice (no pyOpenMS / parse failure).
+            return sequence_str[clamped_start : clamped_end + 1]
+
     def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
 
@@ -702,10 +1463,16 @@ class SequenceView:
                         schema={"peak_id": pl.Int64, "mass": pl.Float64}
                     )
 
-        # Select available columns
+        # Select available columns: the required peak_id/mass (+ optional intensity)
+        # plus any interactivity columns present, so a fragment click can emit the
+        # mapped column's value (e.g. a per-scan mass ordinal) rather than only the
+        # global peak_id.
         cols = ["peak_id", "mass"]
         if "intensity" in schema.names():
             cols.append("intensity")
+        for column in self._interactivity.values():
+            if column in schema.names() and column not in cols:
+                cols.append(column)
 
         try:
             return filtered.select(cols).collect()
@@ -728,10 +1495,62 @@ class SequenceView:
         # Parse sequence
         residues, modifications = parse_openms_sequence(sequence_str)
 
-        # Calculate theoretical fragment masses
-        fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
+        # Resolve the optional proteoform terminal indices up-front: when a
+        # proteoform REGION is configured the theoretical fragments must be
+        # computed on the proteoform SUB-sequence (oracle parity, see below), so
+        # we need the terminals before the fragment computation.
+        proteoform_start_reported: Optional[int] = None
+        proteoform_end_reported: Optional[int] = None
+        if (
+            self._proteoform_start_column is not None
+            or self._proteoform_end_column is not None
+        ):
+            proteoform_start_reported, proteoform_end_reported = (
+                self._get_proteoform_terminals_for_state(state)
+            )
 
-        # Calculate theoretical mass
+        # PROTEOFORM-REGION fragment computation (oracle parity; 3-seqview-009).
+        # The oracle (FLASHApp ``src/parse/tnt.py``) computes fragments on the
+        # DETERMINED PROTEOFORM SUB-region, not the full protein:
+        #   ``getFragmentDataFromSeq(str(sequence)[start_index:end_index+1], ...)``
+        # with ``start_index = 0 if proteoform_start<=0 else proteoform_start-1``
+        # and ``end_index = L-1 if proteoform_end<=0 else proteoform_end-1`` (the
+        # 1-based StartPosition/EndPosition). In the stored 0-based terminals those
+        # bounds are exactly the Vue clamps ``max(0, start)`` /
+        # ``(L-1 if end<0 else end)`` -- i.e. the slice is
+        # ``sequence[clamped_start : clamped_end + 1]``. The Vue side then maps each
+        # sub-sequence fragment index back to its grid residue with the SAME
+        # ``clamped_start`` offset (``aaIndex = theoIndex + sequence_start``).
+        #
+        # Gated on a proteoform region being CONFIGURED: when no proteoform columns
+        # are supplied (non-FLASHTnT callers) the full sequence is used and the
+        # offset is 0 -> byte-unchanged. A WHOLE-protein proteoform (clamped slice
+        # == full, both termini determined) also yields the full sequence + offset
+        # 0, so its output is byte-identical too.
+        fragment_sequence_str = sequence_str
+        fragment_grid_offset = 0
+        use_proteoform_fragments = (
+            self._proteoform_start_column is not None
+            or self._proteoform_end_column is not None
+        ) and len(residues) > 0
+        if use_proteoform_fragments:
+            clamped_start, clamped_end = self._clamp_proteoform_region(
+                proteoform_start_reported,
+                proteoform_end_reported,
+                len(residues),
+            )
+            fragment_sequence_str = self._slice_sequence_for_region(
+                sequence_str, clamped_start, clamped_end
+            )
+            fragment_grid_offset = clamped_start
+
+        # Calculate theoretical fragment masses (on the proteoform sub-sequence
+        # when a proteoform region is configured, else the full sequence).
+        fragment_masses = calculate_fragment_masses_pyopenms(fragment_sequence_str)
+
+        # Calculate theoretical mass (always the FULL/whole-protein theoretical
+        # mass; the oracle stores ``theoretical_mass`` from the full sequence even
+        # for a truncated proteoform, while the fragment grid uses the sub-region).
         theoretical_mass = get_theoretical_mass(sequence_str)
 
         # Build sequence data structure
@@ -748,6 +1567,81 @@ class SequenceView:
             **fragment_masses,
         }
 
+        # Internal-fragment payload (enumerated in Python; matched in Vue).
+        if self._internal_fragments:
+            terminal_masses = _terminal_collision_masses(fragment_masses)
+            internal = compute_internal_fragment_data(
+                residues,
+                ion_types=tuple(self._internal_fragment_config["ion_types"]),
+                min_length=self._internal_fragment_config["min_length"],
+                modifications=None,  # Phase-1 plain path; wire proteoform mods later
+                terminal_masses=terminal_masses,
+                remove_terminal_collisions=self._internal_fragment_config[
+                    "remove_terminal_collisions"
+                ],
+                terminal_collision_ppm=self._internal_fragment_config[
+                    "terminal_collision_ppm"
+                ],
+            )
+            # Adds the nine flat number[] arrays
+            # (fragment_masses_{by,bz,cy} + start_indices_* + end_indices_*).
+            sequence_data.update(internal)
+            sequence_data["internal_fragments"] = True
+            sequence_data["internal_fragment_tolerance"] = (
+                self._internal_fragment_config["tolerance"]
+            )
+            sequence_data["internal_fragment_tolerance_ppm"] = (
+                self._internal_fragment_config["tolerance_ppm"]
+            )
+
+        # Per-residue coverage payload (generic; gated on coverage_column).
+        # Emit `coverage` (normalised per residue, like the oracle's p_cov) and
+        # `maxCoverage` (raw max, for the scale legend). Absent when no coverage
+        # is supplied (back-compatible: no visual change).
+        if self._coverage_column is not None:
+            raw_coverage = self._get_coverage_for_state(state)
+            if raw_coverage:
+                normalized, max_cov = normalize_coverage(raw_coverage)
+                sequence_data["coverage"] = normalized
+                sequence_data["maxCoverage"] = max_cov
+
+        # Optional proteoform terminal indices (truncated / undetermined "??"
+        # terminals). Emit only the values that were supplied; absent values keep
+        # the Vue default (full determined terminus). Back-compatible.
+        if (
+            self._proteoform_start_column is not None
+            or self._proteoform_end_column is not None
+        ):
+            start_val = proteoform_start_reported
+            end_val = proteoform_end_reported
+            if start_val is not None:
+                sequence_data["proteoform_start"] = start_val
+            if end_val is not None:
+                sequence_data["proteoform_end"] = end_val
+            # Signal that the theoretical fragment grid was computed on the
+            # proteoform SUB-region (3-seqview-009): the Vue side then offsets each
+            # fragment index by ``fragment_grid_offset`` to map it to the right grid
+            # residue, and SUPPRESSES prefix (a/b/c) ions when the N-terminus is
+            # undetermined (reported start < 0) and suffix (x/y/z) ions when the
+            # C-terminus is undetermined (reported end < 0) -- oracle
+            # SequenceView.vue:803-807. Whole-protein proteoforms keep offset 0 and
+            # both termini determined, so this is a no-op for them.
+            if use_proteoform_fragments and len(residues) > 0:
+                sequence_data["proteoform_fragments"] = True
+                sequence_data["fragment_grid_offset"] = fragment_grid_offset
+
+        # Optional observed mass -> mass-info header (3-seqview-004). Emit
+        # `observed_mass` (+ the header title) alongside the always-present
+        # `theoretical_mass`; the Vue side derives the delta. Absent when no
+        # observed_mass_column is configured (back-compatible: no header).
+        if self._observed_mass_column is not None:
+            observed_mass = self._get_observed_mass_for_state(state)
+            if observed_mass is not None:
+                sequence_data["observed_mass"] = observed_mass
+                sequence_data["mass_header_title"] = self._mass_header_title
+                sequence_data["theoretical_mass_label"] = self._theoretical_mass_label
+                sequence_data["observed_mass_label"] = self._observed_mass_label
+
         # Get filtered peaks
         peaks_df = self._get_peaks_for_state(state)
 
@@ -756,19 +1650,53 @@ class SequenceView:
         observed_masses: List[float] = []
         peak_ids: List[int] = []
         precursor_mass: float = 0.0
+        # peak_id -> {column: value} for any configured interactivity columns, so a
+        # fragment click can emit the mapped column's value (e.g. a per-scan mass
+        # ordinal) instead of only the global peak_id.
+        peak_interactivity: Dict[int, Dict[str, Any]] = {}
 
         if peaks_df.height > 0:
             observed_masses = peaks_df["mass"].to_list()
             peak_ids = peaks_df["peak_id"].to_list()
+            interactivity_cols = [
+                col
+                for col in self._interactivity.values()
+                if col in peaks_df.columns and col != "peak_id"
+            ]
+            if interactivity_cols:
+                for record in peaks_df.select(
+                    ["peak_id", *interactivity_cols]
+                ).to_dicts():
+                    pid = record["peak_id"]
+                    peak_interactivity[pid] = {
+                        col: record[col] for col in interactivity_cols
+                    }
 
-        # Create hash for change detection
-        hash_input = f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
+        # Create hash for change detection. Fold the internal-fragments flag and
+        # the coverage flag in so flipping either re-renders (both ride
+        # sequenceData).
+        coverage_in_payload = int("coverage" in sequence_data)
+        term_start = sequence_data.get("proteoform_start", "")
+        term_end = sequence_data.get("proteoform_end", "")
+        observed_mass_in_payload = sequence_data.get("observed_mass", "")
+        # Proteoform-region fragment flag + offset: ride into the hash so the
+        # sub-region grid (3-seqview-009) re-renders when it changes.
+        proteoform_fragments_in_payload = sequence_data.get("fragment_grid_offset", "")
+        hash_input = (
+            f"{sequence_str}:{peaks_df.height}:{precursor_charge}"
+            f":{int(self._internal_fragments)}"
+            f":{int(self._coverage_column is not None)}:{coverage_in_payload}"
+            f":{term_start}:{term_end}"
+            f":{observed_mass_in_payload}"
+            f":{proteoform_fragments_in_payload}"
+        )
         data_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         result = {
             "sequenceData": sequence_data,
             "observedMasses": observed_masses,
             "peakIds": peak_ids,
+            "peakInteractivity": peak_interactivity,
             "precursorMass": precursor_mass,
             "annotationConfig": self._annotation_config,
             "precursorCharge": precursor_charge,
@@ -798,6 +1726,26 @@ class SequenceView:
 
         if self._interactivity:
             args["interactivity"] = self._interactivity
+
+        if self._residue_identifier:
+            args["residueIdentifier"] = self._residue_identifier
+
+        # PATH 2 mass identifier — emitted only when configured (default-OFF).
+        if self._fragment_mass_identifier:
+            args["fragmentMassIdentifier"] = self._fragment_mass_identifier
+
+        # Inbound mass->fragment-row highlight identifier (3-seqview-003) — emitted
+        # only when configured (default-OFF), so existing callers are unaffected.
+        if self._mass_selection_identifier:
+            args["massSelectionIdentifier"] = self._mass_selection_identifier
+
+        # Internal-fragment args only when on, so existing callers are unaffected.
+        if self._internal_fragments:
+            args["internalFragments"] = True
+            args["internalFragmentConfig"] = {
+                "tolerance": self._internal_fragment_config["tolerance"],
+                "tolerancePpm": self._internal_fragment_config["tolerance_ppm"],
+            }
 
         args.update(self._config)
         return args

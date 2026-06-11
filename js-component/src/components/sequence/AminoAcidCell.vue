@@ -106,6 +106,18 @@ export default defineComponent({
       type: Boolean,
       default: true,
     },
+    /**
+     * Whether the per-residue coverage / sequence-tag layer is "shown". Mirrors
+     * the oracle AminoAcidCell `showTags` prop: PATH 1 (the aa-position / tag
+     * selection) only fires while tags are shown, and turning it off clears any
+     * residue selection. Insight has no separate tags toggle, so SequenceView
+     * passes `coverage is supplied` here. Default `true` keeps back-compat for
+     * callers that do not drive it.
+     */
+    showTags: {
+      type: Boolean,
+      default: true,
+    },
     fontSize: {
       type: Number,
       default: 12,
@@ -119,7 +131,10 @@ export default defineComponent({
       default: null,
     },
   },
-  emits: ['selected'],
+  // `selected` -> PATH 2 (matching-fragment / mass selection).
+  // `tagSelected` -> PATH 1 (coverage-gated aa-position selection; SequenceView
+  // owns the toggle + store write). `clearTagSelection` -> showTags-off auto-clear.
+  emits: ['selected', 'tagSelected', 'clearTagSelection'],
   setup() {
     const streamlitData = useStreamlitDataStore()
     return { streamlitData }
@@ -153,6 +168,24 @@ export default defineComponent({
         this.sequenceObject.zIon
       )
     },
+    /**
+     * Whether this residue carries sequence-tag coverage (oracle
+     * `DoesThisAAHaveSequenceTags`: coverage > 0). This — NOT a matching fragment
+     * — is the predicate gating PATH 1 (the aa-position / tag selection).
+     */
+    hasSequenceTags(): boolean {
+      return this.coverage > 0
+    },
+    /**
+     * Per-residue coverage in [0, 1], or -1 when not supplied. Mirrors the
+     * oracle AminoAcidCell `coverage` computed (undefined -> -1 -> no gradient).
+     */
+    coverage(): number {
+      if (this.sequenceObject.coverage !== undefined) {
+        return this.sequenceObject.coverage
+      }
+      return -1
+    },
     aminoAcidCellClass(): Record<string, boolean> {
       return {
         'sequence-amino-acid': !this.fixedModification,
@@ -161,7 +194,7 @@ export default defineComponent({
     },
     cellStyles(): Record<string, string> {
       const isDark = this.theme?.base === 'dark'
-      return {
+      const styles: Record<string, string> = {
         '--amino-acid-cell-color': this.theme?.textColor ?? '#000',
         '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#000',
@@ -175,6 +208,21 @@ export default defineComponent({
         '--extra-frag-stroke': isDark ? 'rgba(255, 255, 255, 0.5)' : 'black',
         position: 'relative',
       }
+
+      // Per-residue coverage gradient (oracle parity). When coverage is supplied
+      // (>= 0) paint the cell `rgba(228, 87, 46, alpha)` with the oracle's
+      // alpha = (coverage * 0.9) + 0.1 scaling (0 stays fully transparent).
+      // When coverage is absent (-1) leave the secondary background untouched
+      // (back-compatible: no visual change).
+      if (this.coverage >= 0) {
+        let alpha = this.coverage
+        if (alpha !== 0) {
+          alpha = alpha * 0.9 + 0.1
+        }
+        styles['--amino-acid-cell-bg-color'] = `rgba(228, 87, 46, ${alpha})`
+      }
+
+      return styles
     },
     modificationDisplay(): string {
       if (this.modification === null) return ''
@@ -185,8 +233,37 @@ export default defineComponent({
       return mod.toFixed(2)
     },
   },
+  watch: {
+    // Oracle parity (AminoAcidCell.vue watch ~372-376): when the tags layer is
+    // turned off, clear any residue (aa-position) selection. SequenceView decides
+    // whether this is wired (only when coverage / PATH 1 is configured).
+    showTags(): void {
+      if (!this.showTags) {
+        this.$emit('clearTagSelection')
+      }
+    },
+  },
   methods: {
+    /**
+     * Reproduces the oracle `selectCell()` (AminoAcidCell.vue ~385-396): on ONE
+     * residue click, fire BOTH independent paths.
+     *
+     * PATH 1 (aa / sequence-tag selection): emit `tagSelected` ONLY for residues
+     * that have sequence-TAG coverage (coverage > 0) AND only while tags are
+     * shown. SequenceView owns the toggle (re-clicking the selected residue
+     * clears it) and the store write.
+     *
+     * PATH 2 (mass / fragment selection): emit `selected` for residues with a
+     * matching FRAGMENT ion (unchanged predicate). SequenceView maps the
+     * fragment's observed mass to the configured mass selection.
+     *
+     * The two checks are independent: a residue may satisfy either or both, and
+     * each path fires on its own.
+     */
     selectCell(): void {
+      if (this.hasSequenceTags && this.showTags) {
+        this.$emit('tagSelected', this.index)
+      }
       if (this.hasMatchingFragments) {
         this.$emit('selected', this.index)
       }

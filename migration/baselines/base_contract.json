@@ -1,0 +1,10 @@
+{
+  "required_methods": [
+    "_prepare_vue_data",
+    "_get_component_args",
+    "get_filters_mapping",
+    "get_interactivity_mapping",
+    "get_state_dependencies",
+    "__call__"
+  ]
+}

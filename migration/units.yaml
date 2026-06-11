@@ -1,0 +1,216 @@
+# Review-unit registry for the OpenMS-Insight parity migration.
+# Consumed by run_review.py. Oracle paths are READ-ONLY reference behavior.
+#   vue:*       -> /home/user/openms-streamlit-vue-component/src/components/<path>
+#   flashapp:*  -> /home/user/FLASHApp/src/render/<path>
+# (full paths are written out so agents can open them directly).
+
+meta:
+  repo: t0mdavid-m/OpenMS-Insight
+  branch: claude/kind-heisenberg-u6dVm
+  convergence: 3        # consecutive clean rounds required to converge a phase
+  oracle_vue_root: /home/user/openms-streamlit-vue-component/src/components
+  oracle_flashapp_root: /home/user/FLASHApp/src/render
+
+phases:
+
+  "1":
+    name: "Parity — port every FLASHApp visualization onto OpenMS-Insight"
+    gate:
+      - name: pytest
+        cmd: "python -m pytest -q"
+        cwd: /home/user/OpenMS-Insight
+      - name: npm-build
+        cmd: "npm run build"
+        cwd: /home/user/OpenMS-Insight/js-component
+      - name: parity-diff
+        cmd: "python migration/parity_diff.py"
+        cwd: /home/user/OpenMS-Insight
+      - name: vitest
+        cmd: "npx vitest run"
+        cwd: /home/user/OpenMS-Insight/js-component
+    units:
+      # --- Heatmap (target: openms_insight/components/heatmap.py) ---
+      - id: heatmap:log
+        target: openms_insight/components/heatmap.py
+        concern: "log-intensity color scaling parity"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/heatmap/PlotlyHeatmap.vue
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/heatmap/plotly-heatmap.ts
+          - /home/user/FLASHApp/src/render/update.py   # render_heatmap
+      - id: heatmap:multi-res
+        target: openms_insight/components/heatmap.py
+        concern: "cascading multi-resolution compression vs. old downsampling"
+        oracle:
+          - /home/user/FLASHApp/src/render/compression.py
+          - /home/user/FLASHApp/src/render/scan_resolution.py
+          - /home/user/OpenMS-Insight/openms_insight/preprocessing/compression.py
+      - id: heatmap:zoom
+        target: openms_insight/components/heatmap.py
+        concern: "zoom_identifier {xRange,yRange} re-resolution on zoom"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/heatmap/PlotlyHeatmap.vue
+      - id: heatmap:categorical
+        target: openms_insight/components/heatmap.py
+        concern: "MS2 scoping + categorical filters (point counts)"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/heatmap/PlotlyHeatmap.vue
+          - /home/user/FLASHApp/src/render/update.py
+      - id: heatmap:interactivity
+        target: openms_insight/components/heatmap.py
+        concern: "point selection / cross-link (value-based)"
+        oracle:
+          - /home/user/FLASHApp/src/render/update.py
+          - /home/user/FLASHApp/src/render/StateTracker.py
+
+      # --- Table (target: openms_insight/components/table.py) ---
+      - id: table:formatters
+        target: openms_insight/components/table.py
+        concern: "port custom Tabulator formatters"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/tabulator-formatters.ts
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/TabulatorScanTable.vue
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/TabulatorMassTable.vue
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/TabulatorProteinTable.vue
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/TabulatorTagTable.vue
+      - id: table:pagination
+        target: openms_insight/components/table.py
+        concern: "server-side pagination parity"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/TabulatorTable.vue
+      - id: table:row-select
+        target: openms_insight/components/table.py
+        concern: "row selection -> value-based cross-link (replaces index payload)"
+        oracle:
+          - /home/user/FLASHApp/src/render/update.py
+      - id: table:go-to
+        target: openms_insight/components/table.py
+        concern: "scroll/go-to-row on external selection"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/TabulatorTable.vue
+      - id: table:filters
+        target: openms_insight/components/table.py
+        concern: "filters mapping parity"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/tabulator/TabulatorTable.vue
+
+      # --- LinePlot (target: openms_insight/components/lineplot.py) ---
+      - id: lineplot:stick
+        target: openms_insight/components/lineplot.py
+        concern: "stick (deconv/anno) spectrum rendering"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/PlotlyLineplot.vue
+          - /home/user/FLASHApp/src/render/update.py
+      - id: lineplot:highlight
+        target: openms_insight/components/lineplot.py
+        concern: "highlight_column behavior"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/PlotlyLineplot.vue
+      - id: lineplot:annotation
+        target: openms_insight/components/lineplot.py
+        concern: "PER-PEAK CHARGE-STATE annotations + hover + isotope/signal coloring (user-flagged; may need a generic annotation extension, not a 1:1 map)"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/PlotlyLineplot.vue
+          - /home/user/FLASHApp/src/render/update.py
+      - id: lineplot:zoom
+        target: openms_insight/components/lineplot.py
+        concern: "zoom behavior"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/PlotlyLineplot.vue
+      - id: lineplot:svg
+        target: openms_insight/components/lineplot.py
+        concern: "SVG export (replace dom-to-image-more / SvgScreenshot with Plotly SVG export)"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/ui/SvgScreenshot.vue
+      - id: lineplot:click
+        target: openms_insight/components/lineplot.py
+        concern: "click / selection events -> cross-link"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/PlotlyLineplot.vue
+      - id: lineplot:tagger
+        target: 'openms_insight/components/lineplot.py  (mode="tagger", NEW)'
+        concern: "de-novo tag overlay + stateful drill-down (hardest port)"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/PlotlyLineplotTagger.vue
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/PlotlyLineplotUnified.vue
+      - id: lineplot:density
+        target: 'openms_insight/components/lineplot.py  (mode="density", NEW)'
+        concern: "target/decoy FDR KDE (two line series)"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/lineplot/FDR_plotly.vue
+
+      # --- SequenceView (target: openms_insight/components/sequenceview.py) ---
+      - id: sequenceview:coverage
+        target: openms_insight/components/sequenceview.py
+        concern: "sequence coverage rendering"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/sequence/SequenceView.vue
+          - /home/user/FLASHApp/src/render/sequence.py
+      - id: sequenceview:terminal-frags
+        target: openms_insight/components/sequenceview.py
+        concern: "terminal fragment ions"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/sequence/SequenceView.vue
+          - /home/user/openms-streamlit-vue-component/src/components/sequence/ProteinTerminalCell.vue
+      - id: sequenceview:internal-frags
+        target: 'openms_insight/components/sequenceview.py  (internal_fragments=True, NEW)'
+        concern: "internal fragment map math moved into Insight (numeric golden test)"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/sequence/InternalFragmentMap.vue
+          - /home/user/FLASHApp/src/render/sequence.py   # getInternalFragmentDataFromSeq
+
+      # --- Plot3D (NEW component) ---
+      - id: plot3d
+        target: openms_insight/components/plot3d.py   # NEW
+        concern: "precursor S/N 3D scatter; x/y/z_column + series_column + mode"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/plotly/3Dplot/Plotly3Dplot.vue
+
+      # --- FLASHQuant page recipe (not a component) ---
+      - id: quant-recipe
+        target: "docs/recipe: Table(interactivity=feature) + Plot3D(filters=feature)"
+        concern: "feature table <-> 3D linked view; flatten comma-split MZs/RTs/Intensities"
+        oracle:
+          - /home/user/openms-streamlit-vue-component/src/components/flashQuant/FLASHQuantView.vue
+          - /home/user/FLASHApp/content/FLASHQuant/FLASHQuantViewer.py
+
+  "2":
+    name: "Simplification & generalization — minimal-but-powerful public surface"
+    gate:
+      - name: pytest
+        cmd: "python -m pytest -q"
+        cwd: /home/user/OpenMS-Insight
+      - name: npm-build
+        cmd: "npm run build"
+        cwd: /home/user/OpenMS-Insight/js-component
+      - name: parity-diff
+        cmd: "python migration/parity_diff.py"
+        cwd: /home/user/OpenMS-Insight
+      - name: vitest
+        cmd: "npx vitest run"
+        cwd: /home/user/OpenMS-Insight/js-component
+    critics: [simplicity, feature-parity, reusability]   # three critics per unit
+    units:
+      - id: api:table
+        target: openms_insight/components/table.py
+        concern: "minimal mandatory params + modular optional/render-time extensions"
+      - id: api:heatmap
+        target: openms_insight/components/heatmap.py
+        concern: "minimal surface; render-time toggles via __call__"
+      - id: api:lineplot
+        target: openms_insight/components/lineplot.py
+        concern: "stick/tagger/density unified behind a coherent surface; generic annotation API"
+      - id: api:mirrorplot
+        target: openms_insight/components/mirrorplot.py
+        concern: "coherent surface"
+      - id: api:volcanoplot
+        target: openms_insight/components/volcanoplot.py
+        concern: "render-time fc/p thresholds (reference pattern)"
+      - id: api:sequenceview
+        target: openms_insight/components/sequenceview.py
+        concern: "coverage/terminal/internal frags behind clean flags"
+      - id: api:plot3d
+        target: openms_insight/components/plot3d.py
+        concern: "coherent surface for a brand-new component"
+      - id: api:surface
+        target: openms_insight/__init__.py
+        concern: "public exports, naming consistency, StateManager ergonomics, generic interfaces lifted from FLASHApp concepts (linked-grid, annotation overlay, cross-link, fragment-map)"

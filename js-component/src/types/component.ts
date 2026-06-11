@@ -45,6 +45,13 @@ export interface ColumnMetadata {
 
 /**
  * Table component arguments.
+ *
+ * `columnDefinitions` are raw Tabulator column dicts that round-trip through the
+ * disk cache, so any `formatter` must be a JSON-serializable string (not an
+ * inline JS function). String formatter names are resolved to functions in
+ * `TabulatorTable.vue` via the `customFormatters` registry (formatters.ts).
+ * Supported custom names: "scientific", "signed", "badge", "fixed",
+ * "placeholder" (each accepts an optional `formatterParams` object).
  */
 export interface TableComponentArgs extends BaseComponentArgs {
   componentType: 'TabulatorTable'
@@ -63,15 +70,36 @@ export interface TableComponentArgs extends BaseComponentArgs {
   paginationIdentifier?: string
   /** Column metadata for filter dialogs (precomputed unique values, min/max) */
   columnMetadata?: Record<string, ColumnMetadata>
+  /**
+   * Dependent selection IDENTIFIER names to RESET to the store's "unset" sentinel
+   * (null/undefined) whenever a row is clicked, IN ADDITION to the `interactivity`
+   * selections this table sets. Default absent => no-op (only this table's own
+   * selections are written). Identifiers this table itself sets via `interactivity`
+   * are never cleared even if listed. Used so e.g. clicking a protein row also
+   * clears stale `aa`/`tag` selections published by other components.
+   */
+  clearsSelections?: string[]
 }
 
 /**
  * Line plot component arguments.
+ *
+ * `mode` selects rendering behavior in-component:
+ * - 'default': classic stick spectrum (highlight + per-row annotation labels).
+ * - 'tagger': sequence-tag overlay with a derived two-level drill-down. Level is
+ *   DERIVED from the `tagger_mass` selection (null => level 0). Heavy math
+ *   (highlight masks, COG, sequence-arrow segments) is precomputed in Python and
+ *   arrives as `plotData` (level 0) + `taggerSegmentsKey` + `taggerChargesKey`.
  */
 export interface LinePlotComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
+  mode?: 'default' | 'tagger'
   title: string
+  /** Title shown at the annotated (level-1) drill-down (tagger). */
+  titleLevel1?: string
   xLabel?: string
+  /** X-axis label at the annotated (level-1) drill-down (tagger). */
+  xLabelLevel1?: string
   yLabel?: string
   styling?: LinePlotStyling
   config?: LinePlotConfig
@@ -79,8 +107,143 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   xColumn?: string // Column name for x-axis values
   yColumn?: string // Column name for y-axis values
   highlightColumn?: string // Column name for highlight mask (boolean)
+  /** Column name for the gold/selected mask (tagger). */
+  selectedColumn?: string
   annotationColumn?: string // Column name for annotation text
+  // --- tagger-specific ---
+  /** Draw mass-button rects/labels above highlighted peaks (level 0). */
+  taggerMassButtons?: boolean
+  /** allDataForDrawing key holding the level-0 sequence-arrow segments. */
+  taggerSegmentsKey?: string
+  /** allDataForDrawing key holding the level-1 charge clusters. */
+  taggerChargesKey?: string
+  /** allDataForDrawing key holding the level-1 full annotated spectrum. */
+  taggerLevel1Key?: string
+  /** Oracle level-1 charge-label x scaling factor (27.5). */
+  xPosScalingFactor?: number
+  // --- selective-highlight (FLASHApp parity), default mode ---
+  /**
+   * When true, the selection-driven selective highlight is active: the modebar
+   * toggle buttons are constructed and the client-side all-signal highlight runs.
+   * Off (absent) => existing default-plot behavior, byte-identical.
+   */
+  selectiveHighlightEnabled?: boolean
+  /**
+   * Enables the "Show/Hide Deconvolved Peaks" modebar button (annotated spectrum).
+   * When ON, the toggle cumulatively highlights ALL signal peaks.
+   */
+  deconvPeaksToggle?: boolean
   height?: number // Component height in pixels
+}
+
+/**
+ * Selective-highlight (FLASHApp parity) render-time payload, arriving via
+ * ``allDataForDrawing.selectiveHighlight``. The selective set is baked into the
+ * plot's ``highlight_mask`` (per-row); this carries the ALL-SIGNAL key-set (for
+ * the "Show Deconvolved Peaks" toggle), the id column those keys live in, and the
+ * toggle defaults. The toggles switch sets entirely client-side (no round-trip).
+ */
+export interface SelectiveHighlightPayload {
+  /** The id column the all-signal keys are matched against (first interactivity). */
+  idColumn?: string | null
+  /** Every signal peak's id (ALL-SIGNAL set for the toggle); null on the deconv path. */
+  allSignalKeys?: (number | string)[] | null
+  /** Toggle DEFAULT: z=N labels visible (oracle ON). */
+  annotationsVisible?: boolean
+  /** Toggle DEFAULT: deconvolved-peaks highlight (oracle OFF). */
+  deconvolvedPeaksHighlightMode?: boolean
+  /** Whether the "Show Deconvolved Peaks" button is enabled (annotated spectrum). */
+  deconvPeaksToggle?: boolean
+}
+
+/**
+ * Density (target/decoy KDE / FDR) plot component arguments.
+ *
+ * Static two-series plot fed a tidy long {x, y, group} frame; no interactivity.
+ */
+export interface DensityPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyDensityPlot'
+  mode: 'density'
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  /** Column names in the tidy long frame. */
+  xColumn: string
+  yColumn: string
+  categoryColumn: string
+  /** Value in categoryColumn that maps to the target (green) series. */
+  targetValue: string
+  /** Value in categoryColumn that maps to the decoy (red) series. */
+  decoyValue: string
+  /** Legend noun, e.g. "QScore" (default) or "ProteoformLevelQvalue". */
+  scoreLabel?: string
+  /** Explicit trace legend names; fall back to `${scoreLabel} (Target|Decoy)`. */
+  targetLabel?: string
+  decoyLabel?: string
+  styling?: { targetColor?: string; decoyColor?: string }
+  config?: Record<string, unknown>
+  height?: number
+}
+
+/**
+ * One level-0 sequence-arrow segment (tagger). Precomputed in Python.
+ */
+export interface TaggerSegment {
+  x_start: number
+  x_end: number
+  residue: string
+  delta: number
+  selected: boolean
+}
+
+/**
+ * One level-1 charge-cluster peak (tagger). `cog` is the precomputed
+ * intensity-weighted center-of-gravity m/z for the peak's charge group.
+ */
+export interface TaggerChargePeak {
+  mz: number
+  intensity: number
+  charge: number
+  cog: number
+  charge_label: string
+  selected: boolean
+  peak_id: number
+}
+
+/**
+ * Opaque TagData payload carried by the generic `tag` selection identifier
+ * (set by the tag table, read by Python). Mirrors the oracle TagData shape.
+ * Documentation-only — the generic store stores it as an opaque object value.
+ */
+export interface TaggerTagPayload {
+  sequence: string
+  nTerminal: boolean
+  masses: number[]
+  selectedAA: number
+  startPos: number
+  endPos: number
+}
+
+/**
+ * Generic per-peak annotation descriptor (render-time, data coordinates).
+ *
+ * Self-describing label independent of the per-row column model: any caller can
+ * emit `{x, text, color}` triplets. Charge labels are just `text="z="+charge`,
+ * `x=COG`. Arrives via `allDataForDrawing.peakAnnotations`.
+ */
+export interface PeakAnnotation {
+  /** Data-x of the label (e.g. intensity-weighted COG m/z). */
+  x: number
+  /** Label text (e.g. "z=12"). */
+  text: string
+  /** Badge fill; defaults to styling.highlightColor. */
+  color?: string
+  /** Optional hover text for an invisible hover point at the label. */
+  hover?: string
+  /** Optional group id for overlap-suppression scoping. */
+  group?: string | number
+  /** Optional explicit label y (defaults to the computed ypos band). */
+  y?: number
 }
 
 export interface LinePlotStyling {
@@ -146,6 +309,10 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
   precursorCharge?: number
   /** Interactivity mapping: identifier name -> column name for click handling. */
   interactivity?: InteractivityMapping
+  /** When true, render the internal-fragment map below the terminal sequence map. */
+  internalFragments?: boolean
+  /** Default tolerance/unit for the internal-fragment matcher. */
+  internalFragmentConfig?: { tolerance?: number; tolerancePpm?: boolean }
 }
 
 /**
@@ -228,15 +395,84 @@ export interface MirrorPlotStyling {
 }
 
 /**
+ * Plot3D component arguments (Plotly scatter3d).
+ */
+export interface Plot3DComponentArgs extends BaseComponentArgs {
+  componentType: 'Plotly3D'
+  /** Column name for the x-axis (neutral mass) */
+  xColumn: string
+  /** Column name for the y-axis (charge state) */
+  yColumn: string
+  /** Column name for the z-axis (intensity) */
+  zColumn: string
+  /** Categorical column mapping each point to a category (e.g. Signal/Noise) */
+  categoryColumn?: string
+  /**
+   * Column identifying sub-traces WITHIN each category (e.g. isotope index
+   * within a charge). When set, the line breaks (NaN gap) between consecutive
+   * distinct series values inside the same category, while still emitting one
+   * trace per category. Default undefined (one continuous polyline per category).
+   */
+  seriesColumn?: string
+  /** Map of category value -> color (default Signal #3366CC / Noise #DC3912) */
+  categoryColors?: Record<string, string>
+  /**
+   * Template for the trace legend name. When set, a trace's name is
+   * `categoryNameTemplate.replace('{}', category)` (e.g. `'Charge: {}'` ->
+   * `'Charge: 2'`). Default undefined (legend shows the bare category value).
+   */
+  categoryNameTemplate?: string
+  /** Plotly trace mode (render-time switch) */
+  traceMode?: 'lines' | 'markers' | 'lines+markers'
+  /** Render each point as a vertical stem (drop line) */
+  stem?: boolean
+  /** Baseline z value for stem triplets (clipped by z-axis range) */
+  stemBaseline?: number
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  zLabel?: string
+  /** y-axis tick spacing (integer charge ticks => 1) */
+  yDtick?: number
+  /** y-axis tick origin */
+  yTick0?: number
+  /** Initial scene camera eye */
+  cameraEye?: { x: number; y: number; z: number }
+  /** Log10-transform z (default false = linear) */
+  logZ?: boolean
+  /** Extra tidy columns surfaced on hover */
+  hoverColumns?: string[]
+  interactivity?: InteractivityMapping
+  height?: number
+  /**
+   * Dynamic-title (FLASHApp parity) scan+mass selection-identifier mapping, e.g.
+   * `{ scan: 'spectrum', mass: 'mass' }`. When set, the title is computed
+   * reactively from the selection store: '' if the scan selection is unset, else
+   * 'Precursor signals' if the mass selection is unset, else 'Mass signals'.
+   * When absent, the static `title` is used unchanged.
+   */
+  titleSelection?: { scan?: string; mass?: string } | null
+}
+
+/**
+ * Plot3D data format.
+ * Each entry is a row with x, y, z, optional series, and any additional
+ * columns needed for hover or interactivity.
+ */
+export type Plot3DData = Record<string, unknown>
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
   | TableComponentArgs
   | LinePlotComponentArgs
+  | DensityPlotComponentArgs
   | HeatmapComponentArgs
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
+  | Plot3DComponentArgs
 
 /**
  * Component layout entry.
@@ -270,6 +506,8 @@ export interface PlotData {
   x_values: number[]
   y_values: number[]
   highlight_mask?: boolean[]
+  /** Gold/selected mask (tagger level 0). */
+  selected_mask?: boolean[]
   annotations?: string[]
   // Allow dynamic interactivity columns like interactivity_peak_id
   [key: string]: unknown[] | undefined

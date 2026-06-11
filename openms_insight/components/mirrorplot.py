@@ -299,7 +299,11 @@ class MirrorPlot(BaseComponent):
         return list(self._filters_top.keys()) + list(self._filters_bottom.keys())
 
     def _get_cache_config(self) -> Dict[str, Any]:
-        """Configuration that affects cache validity."""
+        """HASH-AFFECTING (data-shaping) configuration.
+
+        Titles/labels are presentation-only and live in ``_get_render_config()``
+        so changing them does not invalidate the cache.
+        """
         return {
             "filters_top": self._filters_top,
             "filters_bottom": self._filters_bottom,
@@ -309,17 +313,22 @@ class MirrorPlot(BaseComponent):
             "y_column": self._y_column,
             "highlight_column": self._highlight_column,
             "annotation_column": self._annotation_column,
+            "styling": self._styling,
+            "plot_config": self._plot_config,
+        }
+
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation config: stored for reconstruction, excluded from hash."""
+        return {
             "title": self._title,
             "title_top": self._title_top,
             "title_bottom": self._title_bottom,
             "x_label": self._x_label,
             "y_label": self._y_label,
-            "styling": self._styling,
-            "plot_config": self._plot_config,
         }
 
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._filters_top = config.get("filters_top") or {}
         self._filters_bottom = config.get("filters_bottom") or {}
         self._filter_defaults_top = config.get("filter_defaults_top") or {}
@@ -328,11 +337,6 @@ class MirrorPlot(BaseComponent):
         self._y_column = config.get("y_column", "y")
         self._highlight_column = config.get("highlight_column")
         self._annotation_column = config.get("annotation_column")
-        self._title = config.get("title")
-        self._title_top = config.get("title_top")
-        self._title_bottom = config.get("title_bottom")
-        self._x_label = config.get("x_label", self._x_column)
-        self._y_label = config.get("y_label", self._y_column)
         self._styling = config.get("styling", {})
         self._plot_config = config.get("plot_config", {})
         # Dynamic state (not cached) — reset to None
@@ -340,6 +344,18 @@ class MirrorPlot(BaseComponent):
         self._bottom_dynamic_annotations = None
         self._top_dynamic_title = None
         self._bottom_dynamic_title = None
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation configuration from cached config.
+
+        Runs after ``_restore_cache_config`` so the x/y column label fallbacks
+        are available.
+        """
+        self._title = config.get("title")
+        self._title_top = config.get("title_top")
+        self._title_bottom = config.get("title_bottom")
+        self._x_label = config.get("x_label", self._x_column)
+        self._y_label = config.get("y_label", self._y_column)
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Filter shared data twice — once per side — and apply per-side annotations."""
@@ -725,7 +741,6 @@ class MirrorPlot(BaseComponent):
                     result[peak_id] = {
                         "highlight": True,
                         "annotation": row.get("annotation", ""),
-                        "color": row.get("highlight_color", "#E4572E"),
                     }
             return result
 
@@ -749,4 +764,4 @@ class MirrorPlot(BaseComponent):
 
 
 if TYPE_CHECKING:
-    from ..core.state import StateManager  # noqa: F401
+    from ..core.state import StateManager

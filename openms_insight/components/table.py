@@ -31,6 +31,18 @@ _LAST_SELECTION_KEY = "_svc_table_last_selection"
 # Session state key for tracking last sort/filter state per table component
 _LAST_SORT_FILTER_KEY = "_svc_table_last_sort_filter"
 
+# Structured constructor params stored in self._config (for subprocess
+# recreation / cache round-trip) that must NOT leak into _get_component_args as
+# stray snake_case top-level args — they are surfaced via dedicated camelCase
+# args instead. (Mirrors LinePlot._MANAGED_CONFIG_KEYS.) Only NEW params are
+# listed here; the pre-existing snake_case passthrough keys are intentionally
+# left untouched to keep the existing args contract byte-identical.
+_MANAGED_CONFIG_KEYS = frozenset(
+    {
+        "clears_selections",
+    }
+)
+
 
 @register_component("table")
 class Table(BaseComponent):
@@ -76,6 +88,7 @@ class Table(BaseComponent):
         filters: Optional[Dict[str, str]] = None,
         filter_defaults: Optional[Dict[str, Any]] = None,
         interactivity: Optional[Dict[str, str]] = None,
+        interval_filters: Optional[Dict[str, Any]] = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
         column_definitions: Optional[List[Dict[str, Any]]] = None,
@@ -88,6 +101,7 @@ class Table(BaseComponent):
         pagination: bool = True,
         page_size: int = 100,
         pagination_identifier: Optional[str] = None,
+        clears_selections: Optional[List[str]] = None,
         **kwargs,
     ):
         """
@@ -135,9 +149,24 @@ class Table(BaseComponent):
             pagination_identifier: State key for storing pagination state (page, sort,
                 filters). Default: "{cache_id}_page". Used by StateManager to track
                 pagination state across reruns.
+            clears_selections: Optional list of selection IDENTIFIER names to RESET
+                to the store's "unset" sentinel (None/undefined) whenever THIS
+                component's interactivity fires (a row is clicked). Default None =>
+                no-op (existing behavior byte-identical). Use this so clicking a row
+                also clears stale DEPENDENT selections published by other components
+                (e.g. a protein-row click clearing the residue/tag selections so the
+                downstream tag table / tagger overlay aren't left stale). The
+                identifiers this component itself sets via ``interactivity`` are never
+                cleared even if listed.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
+        # Interval (containment) filters: identifier -> (low_col, high_col). When
+        # the identifier's selection is present, keep rows where
+        # low_col <= value <= high_col; skipped when the selection is None (show
+        # all). Complements the equality ``filters`` for range/span narrowing
+        # (e.g. show tags spanning a clicked sequence residue).
+        self._interval_filters = interval_filters or {}
         self._title = title
         self._index_field = index_field
         self._go_to_fields = go_to_fields
@@ -148,6 +177,10 @@ class Table(BaseComponent):
         self._page_size = page_size
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
+        # Dependent selection identifiers to reset to "unset" (None) on every
+        # row click (in addition to the interactivity selections this table sets).
+        # Default empty => no-op.
+        self._clears_selections = list(clears_selections) if clears_selections else []
 
         super().__init__(
             cache_id=cache_id,
@@ -159,6 +192,7 @@ class Table(BaseComponent):
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
             # Pass component-specific params for subprocess recreation
+            interval_filters=self._interval_filters,
             column_definitions=column_definitions,
             title=title,
             index_field=index_field,
@@ -169,20 +203,26 @@ class Table(BaseComponent):
             pagination=pagination,
             page_size=page_size,
             pagination_identifier=self._pagination_identifier,
+            clears_selections=self._clears_selections,
             **kwargs,
         )
 
     def _get_cache_config(self) -> Dict[str, Any]:
         """
-        Get configuration that affects cache validity.
+        Get HASH-AFFECTING (data-shaping) configuration.
+
+        ``title`` is presentation-only (pure Vue passthrough) and lives in
+        ``_get_render_config()`` so retuning it does NOT invalidate the
+        (potentially large) table cache — consistent with the other plot
+        components (heatmap/mirrorplot/volcanoplot).
 
         Returns:
             Dict of config values that affect preprocessing
         """
         return {
             "column_definitions": self._column_definitions,
+            "interval_filters": self._interval_filters,
             "index_field": self._index_field,
-            "title": self._title,
             "go_to_fields": self._go_to_fields,
             "layout": self._layout,
             "default_row": self._default_row,
@@ -192,11 +232,24 @@ class Table(BaseComponent):
             "pagination_identifier": self._pagination_identifier,
         }
 
+    def _get_render_config(self) -> Dict[str, Any]:
+        """Presentation config: stored for reconstruction, excluded from hash.
+
+        ``clears_selections`` is an interaction-time behavior (which dependent
+        selections a row click resets); it does NOT shape the preprocessed data,
+        so it lives here (stored, excluded from the cache-key hash) rather than in
+        ``_get_cache_config()``.
+        """
+        return {
+            "title": self._title,
+            "clears_selections": self._clears_selections,
+        }
+
     def _restore_cache_config(self, config: Dict[str, Any]) -> None:
-        """Restore component-specific configuration from cached config."""
+        """Restore data-shaping configuration from cached config."""
         self._column_definitions = config.get("column_definitions")
+        self._interval_filters = config.get("interval_filters", {})
         self._index_field = config.get("index_field", "id")
-        self._title = config.get("title")
         self._go_to_fields = config.get("go_to_fields")
         self._layout = config.get("layout", "fitDataFill")
         self._default_row = config.get("default_row", 0)
@@ -206,6 +259,11 @@ class Table(BaseComponent):
         self._pagination_identifier = config.get(
             "pagination_identifier", f"{self._cache_id}_page"
         )
+
+    def _restore_render_config(self, config: Dict[str, Any]) -> None:
+        """Restore presentation configuration from cached config."""
+        self._title = config.get("title", self._title)
+        self._clears_selections = config.get("clears_selections", []) or []
 
     def get_state_dependencies(self) -> List[str]:
         """
@@ -224,6 +282,9 @@ class Table(BaseComponent):
         # Include interactivity identifiers for page navigation
         if self._interactivity:
             deps.extend(self._interactivity.keys())
+        # Interval-filter selections change which rows are shown
+        if self._interval_filters:
+            deps.extend(self._interval_filters.keys())
         return deps
 
     def get_initial_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -522,6 +583,12 @@ class Table(BaseComponent):
             for col in self._filters.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        # Include the low/high columns needed for interval filtering
+        if self._interval_filters:
+            for bounds in self._interval_filters.values():
+                for col in (bounds[0], bounds[1]):
+                    if col not in columns_to_select:
+                        columns_to_select.append(col)
 
         return columns_to_select if columns_to_select else None
 
@@ -611,6 +678,18 @@ class Table(BaseComponent):
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
 
+        # Apply interval (containment) filters: keep rows where
+        # low_col <= value <= high_col. Skipped when the selection is None (show
+        # all), so this is an optional narrowing on top of the equality filters.
+        for identifier, bounds in self._interval_filters.items():
+            value = state.get(identifier)
+            if value is None:
+                continue
+            low_col, high_col = bounds[0], bounds[1]
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            data = data.filter((pl.col(low_col) <= value) & (pl.col(high_col) >= value))
+
         # Get pagination state
         pagination_state = state.get(self._pagination_identifier)
         if pagination_state is None:
@@ -679,7 +758,14 @@ class Table(BaseComponent):
             if go_to_field and go_to_value is not None:
                 # Only convert to numeric if the target column is numeric
                 schema = data.collect_schema()
-                if go_to_field in schema and schema[go_to_field] in NUMERIC_DTYPES:
+                if go_to_field not in schema:
+                    # Column absent from the projection (e.g. an auto-detected
+                    # go-to field that isn't in the explicit column_definitions).
+                    # Searching pl.col(go_to_field) would raise ColumnNotFoundError,
+                    # so degrade to "not found" -- matching the oracle, whose
+                    # client-side findRowByValue() returns -1 for an absent field.
+                    go_to_not_found = True
+                elif schema[go_to_field] in NUMERIC_DTYPES:
                     try:
                         go_to_value = float(go_to_value)
                         if go_to_value.is_integer():
@@ -691,11 +777,20 @@ class Table(BaseComponent):
 
                 # Only search if we have a valid value (not already marked as not found)
                 if not go_to_not_found:
-                    # Find the row with row_number
+                    # Find the row with row_number, also pulling the interactivity
+                    # columns so we can propagate the cross-component selection to the
+                    # navigated row (parity with onRowClick / client-side go-to).
+                    # Dedupe (order-preserving) in case multiple identifiers map to
+                    # the same column - polars select() rejects duplicate names.
+                    interactivity_columns = list(
+                        dict.fromkeys(self._interactivity.values())
+                        if self._interactivity
+                        else []
+                    )
                     search_result = (
                         data.with_row_index("_row_num")
                         .filter(pl.col(go_to_field) == go_to_value)
-                        .select("_row_num")
+                        .select(["_row_num", *interactivity_columns])
                         .head(1)
                         .collect()
                     )
@@ -706,6 +801,31 @@ class Table(BaseComponent):
                         navigate_to_page = target_page
                         target_row_index = row_num % page_size
                         page = target_page  # Jump to target page
+
+                        # Propagate the cross-component selection to the target row.
+                        # Server-side go-to is authoritative for selection (Vue only
+                        # highlights the row), so without this downstream linked
+                        # components would not update to the navigated row.
+                        if self._interactivity:
+                            from openms_insight.core.state import (
+                                get_default_state_manager,
+                            )
+
+                            state_manager = get_default_state_manager()
+                            for identifier, column in self._interactivity.items():
+                                if column in search_result.columns:
+                                    target_value = search_result[column][0]
+                                    if hasattr(target_value, "item"):
+                                        target_value = target_value.item()
+                                    state_manager.set_selection(
+                                        identifier, target_value
+                                    )
+                                    # Keep the in-render state view consistent so the
+                                    # selection-navigation block below records this as
+                                    # the current selection. This prevents a spurious
+                                    # re-navigation (and a navigate<->select loop) on
+                                    # the next render once Vue clears go_to_request.
+                                    state[identifier] = target_value
                     else:
                         # Row not found - set flag for Vue to show "not found" feedback
                         go_to_not_found = True
@@ -975,8 +1095,18 @@ class Table(BaseComponent):
         if self._initial_sort:
             args["initialSort"] = self._initial_sort
 
-        # Add any extra config options
-        args.update(self._config)
+        # Dependent selection identifiers a row click resets to "unset". Surfaced
+        # as camelCase for Vue; only emitted when non-empty so the default-OFF case
+        # adds no arg (byte-identical existing behavior). The snake_case key is a
+        # managed config param filtered out of the _config merge below.
+        if self._clears_selections:
+            args["clearsSelections"] = list(self._clears_selections)
+
+        # Add any extra config options, excluding managed keys that are surfaced via
+        # dedicated camelCase args above (prevents a stray snake_case duplicate).
+        args.update(
+            {k: v for k, v in self._config.items() if k not in _MANAGED_CONFIG_KEYS}
+        )
 
         return args
 
@@ -1035,6 +1165,65 @@ class Table(BaseComponent):
                 "thousand": thousand,
                 "decimal": decimal,
             },
+        )
+
+    def with_fixed_format(
+        self,
+        field: str,
+        precision: int = 4,
+        min_length: int = 4,
+    ) -> "Table":
+        """
+        Format a numeric column with fixed decimal places, guarded by length.
+
+        Wraps the ``fixed`` registry formatter (reproduces the original
+        ``toFixedFormatter``): values whose string representation is longer than
+        ``min_length`` are rendered with ``precision`` decimals; shorter values
+        are returned untouched (no trailing-zero padding). Set ``min_length=0``
+        for an unconditional fixed-decimal render.
+
+        Args:
+            field: Column field name
+            precision: Number of decimal places (default: 4)
+            min_length: Min string length before reformatting (default: 4)
+
+        Returns:
+            Self for method chaining
+        """
+        return self.with_column_formatter(
+            field,
+            "fixed",
+            {"precision": precision, "minLength": min_length},
+        )
+
+    def with_placeholder(
+        self,
+        field: str,
+        sentinels=(-1,),
+        text: str = "-",
+        loose: bool = True,
+    ) -> "Table":
+        """
+        Replace sentinel "missing value" markers with placeholder text.
+
+        Wraps the ``placeholder`` registry formatter (generalizes the inline
+        ``value == -1 ? '-' : value``): cells matching any sentinel render
+        ``text``; all other values are rendered unchanged.
+
+        Args:
+            field: Column field name
+            sentinels: Values to replace with ``text`` (default: ``(-1,)``)
+            text: Replacement text rendered for a sentinel match (default: "-")
+            loose: Use loose (==) comparison when True, strict (===) when False
+                (default: True)
+
+        Returns:
+            Self for method chaining
+        """
+        return self.with_column_formatter(
+            field,
+            "placeholder",
+            {"sentinels": list(sentinels), "text": text, "loose": loose},
         )
 
     def with_progress_bar(

@@ -604,6 +604,42 @@ class TestTabulatorCacheBehavior:
         assert isinstance(data, dict)
         assert isinstance(data_hash, str)
 
+    def test_data_omitted_once_vue_holds_hash(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """M3: once Vue echoes the matching data hash, the bridge stops
+        re-sending the heavy DataFrame every rerun. It omits ``tableData`` and
+        sends ``dataChanged=False`` so Streamlit's component channel no longer
+        re-encodes it to Arrow IPC (Vue keeps its already-parsed copy)."""
+        vue_func = mock_streamlit_bridge["vue_func"]
+
+        # Real handshake: Vue echoes back whatever data hash Python sent (and
+        # only once it actually received data -- an empty hash means no data).
+        def echoing_vue(**kwargs):
+            return create_vue_response(
+                page=1,
+                page_size=100,
+                session_id=state_manager.session_id,
+                pagination_identifier="test_table_page",
+                vue_data_hash=kwargs.get("hash") or None,
+            )
+
+        vue_func.side_effect = echoing_vue
+
+        # miss -> send -> omit: a few stable same-page renders settle the
+        # handshake into the omit path (cache populated, hash echoed + matched).
+        for _ in range(4):
+            render_component(table_component, state_manager)
+
+        last = vue_func.call_args.kwargs
+        assert last["dataChanged"] is False
+        assert "tableData" not in last, "heavy data must be omitted once Vue holds it"
+        assert last["hash"], "hash must still be sent so Vue can confirm its copy"
+
+        # Sanity: the data WAS sent at least once before the omit path engaged.
+        sent_table = [c for c in vue_func.call_args_list if "tableData" in c.kwargs]
+        assert sent_table, "data should have been sent before the omit path engaged"
+
 
 # =============================================================================
 # TestTabulatorCounterLogic
@@ -1705,6 +1741,131 @@ class TestTableSelectionClearingOnInvalidFilter:
 
 
 # =============================================================================
+# TestPhase6IdempotenceGuard
+# =============================================================================
+
+
+class TestPhase6IdempotenceGuard:
+    """PHASE 6 rerun idempotence guard — the table-sort infinite-loop fix.
+
+    A sort echo with an advancing Vue counter keeps state_changed=True (via the
+    page override / cache miss); a naive ``if state_changed: st.rerun()`` then
+    ping-pongs setComponentValue <-> st.rerun forever. The guard suppresses the
+    rerun once a rendered state has already been DELIVERED to Vue, while never
+    dropping a genuine first delivery.
+    """
+
+    def test_no_rerun_for_already_delivered_state(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """A later render of an already-delivered state must NOT rerun, even when a
+        cache miss sets state_changed=True (this is what previously looped)."""
+        from openms_insight.rendering.bridge import _get_component_cache
+
+        session_id = state_manager.session_id
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=3,
+            pagination_identifier="test_table_page",
+        )
+
+        # Render 1: cache MISS -> caches page-2 data and reruns.
+        # Render 2: cache HIT  -> delivers page-2 data and records it as delivered.
+        render_component(table_component, state_manager)
+        render_component(table_component, state_manager)
+
+        # Force a cache miss for the SAME, already-delivered state. Without the
+        # guard, PHASE 5 sets state_changed=True and the bridge reruns forever.
+        _get_component_cache().clear()
+        mock_streamlit_bridge["rerun"].reset_mock()
+
+        render_component(table_component, state_manager)
+
+        assert not mock_streamlit_bridge["rerun"].called, (
+            "Bridge re-ran for an already-delivered state (sort echo loop)"
+        )
+
+    def test_rerun_still_fires_for_a_new_state(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """The guard must not over-suppress: a genuinely new rendered state (page
+        change) still reruns so its freshly cached data reaches Vue."""
+        session_id = state_manager.session_id
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=3,
+            pagination_identifier="test_table_page",
+        )
+        render_component(table_component, state_manager)  # settle page 2
+        render_component(table_component, state_manager)
+
+        # Vue navigates to a different page -> new rendered state -> must rerun.
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=4,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=4,
+            pagination_identifier="test_table_page",
+        )
+        mock_streamlit_bridge["rerun"].reset_mock()
+        render_component(table_component, state_manager)
+
+        assert mock_streamlit_bridge["rerun"].called, (
+            "Bridge failed to rerun for a new state (page change); data would be stale"
+        )
+
+    def test_no_data_resend_when_vue_already_holds_hash(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """Hash confirmation: when Vue has echoed back the hash it already holds,
+        PHASE 1 sends dataChanged=False so Vue reuses its parsed data instead of
+        re-parsing it (the redundant re-parse that made each round-trip slow)."""
+        from openms_insight.rendering.bridge import _VUE_ECHOED_HASH_KEY
+
+        session_id = state_manager.session_id
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=1,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=1,
+            pagination_identifier="test_table_page",
+        )
+        render_component(table_component, state_manager)  # cache miss -> caches data
+        render_component(
+            table_component, state_manager
+        )  # cache hit -> dataChanged=True
+
+        sent = mock_streamlit_bridge["vue_func"].call_args.kwargs
+        cached_hash = sent["hash"]
+        key = sent["key"]
+        assert cached_hash and sent["dataChanged"] is True
+
+        # Simulate Vue echoing back that exact hash (it now holds the data).
+        import streamlit as st
+
+        st.session_state[_VUE_ECHOED_HASH_KEY][key] = cached_hash
+
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=1,
+            page_size=100,
+            session_id=session_id,
+            pagination_counter=1,
+            pagination_identifier="test_table_page",
+        )
+        render_component(table_component, state_manager)
+
+        resent = mock_streamlit_bridge["vue_func"].call_args.kwargs
+        assert resent["hash"] == cached_hash
+        assert resent["dataChanged"] is False, (
+            "Vue already holds this hash; data should not be re-sent/re-parsed"
+        )
+
+
+# =============================================================================
 # TestLinePlotSelectionClearing
 # =============================================================================
 
@@ -1845,3 +2006,82 @@ class TestLinePlotSelectionClearing:
 
         # Rerun should be called (selection changed from 10 to None)
         mock_streamlit_bridge["rerun"].assert_called()
+
+
+# =============================================================================
+# TestBatchRerun (M5)
+# =============================================================================
+
+
+class TestBatchRerun:
+    """M5: batch_rerun() defers per-panel reruns so a linked grid reruns ONCE
+    after rendering all panels, instead of one rerun (one full-page pass) per
+    panel in a cross-link cascade."""
+
+    def test_batch_defers_then_reruns_once(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        from openms_insight.rendering.bridge import _PENDING_RERUN_KEY, batch_rerun
+
+        rerun = mock_streamlit_bridge["rerun"]
+        # A page change forces a state change -> PHASE 6 wants to rerun.
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=state_manager.session_id,
+            pagination_identifier="test_table_page",
+        )
+
+        with batch_rerun():
+            render_component(table_component, state_manager)
+            # Deferred: no rerun raised mid-pass; a pending rerun is recorded.
+            assert not rerun.called
+            assert (
+                mock_streamlit_bridge["session_state"].get(_PENDING_RERUN_KEY) is True
+            )
+
+        # Exactly one rerun, fired by the batch on exit.
+        assert rerun.call_count == 1
+
+    def test_without_batch_reruns_immediately(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """Outside a batch, render_component reruns immediately (unchanged
+        behavior for apps that don't wrap their grid in batch_rerun)."""
+        from openms_insight.rendering.bridge import batch_rerun  # noqa: F401
+
+        rerun = mock_streamlit_bridge["rerun"]
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=state_manager.session_id,
+            pagination_identifier="test_table_page",
+        )
+
+        render_component(table_component, state_manager)
+
+        assert rerun.called
+
+    def test_nested_batch_reruns_once_at_outermost(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """Re-entrant: a nested batch defers to the OUTERMOST block, which fires
+        exactly one rerun (an inner block must not rerun mid-grid)."""
+        from openms_insight.rendering.bridge import batch_rerun
+
+        rerun = mock_streamlit_bridge["rerun"]
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=state_manager.session_id,
+            pagination_identifier="test_table_page",
+        )
+
+        with batch_rerun():
+            with batch_rerun():
+                render_component(table_component, state_manager)
+                assert not rerun.called
+            # Inner block exited but we are still inside the outer batch.
+            assert not rerun.called
+        # Only the outermost exit fires the single rerun.
+        assert rerun.call_count == 1

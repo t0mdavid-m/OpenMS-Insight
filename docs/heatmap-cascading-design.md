@@ -243,16 +243,19 @@ Heatmap(
     x_column="retention_time",
     y_column="mz",
     intensity_column="intensity",
-    min_points=20000,      # Smallest level target
-    x_bins=400,            # Spatial grid resolution
+    min_points=10000,           # Smallest level target (default)
+    x_bins=400,                 # Spatial grid resolution (auto when None)
     y_bins=50,
-    use_streaming=True,    # Enable cascading (default)
+    downsample="streaming",     # Cascading strategy (default)
 )
 ```
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `min_points` | 20000 | Target size for smallest (most zoomed out) level |
-| `x_bins` | 400 | Horizontal grid resolution for binning |
-| `y_bins` | 50 | Vertical grid resolution for binning |
-| `use_streaming` | True | Use streaming cascading (recommended) |
+| `min_points` | 10000 | Target size for smallest (most zoomed out) level |
+| `x_bins` | None (auto) | Horizontal grid resolution for binning (auto-computed from `display_aspect_ratio`) |
+| `y_bins` | None (auto) | Vertical grid resolution for binning (auto-computed from `display_aspect_ratio`) |
+| `downsample` | `"streaming"` | Strategy: `"streaming"` (cascading, recommended) / `"eager"` / `"simple"` |
+
+> The deprecated `use_streaming` / `use_simple_downsample` booleans still work
+> for back-compat; prefer the single `downsample=` enum.

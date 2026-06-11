@@ -27,9 +27,11 @@ import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
 import TabulatorTable from './components/tabulator/TabulatorTable.vue'
 import PlotlyLineplot from './components/plotly/PlotlyLineplot.vue'
+import PlotlyDensityPlot from './components/plotly/PlotlyDensityPlot.vue'
 import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
 import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
 import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
+import Plotly3D from './components/plotly/plot3d/Plotly3D.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
 
 export default defineComponent({
@@ -37,9 +39,11 @@ export default defineComponent({
   components: {
     TabulatorTable,
     PlotlyLineplot,
+    PlotlyDensityPlot,
     PlotlyHeatmap,
     PlotlyMirrorPlot,
     PlotlyVolcano,
+    Plotly3D,
     SequenceView,
   },
   setup() {
@@ -145,9 +149,11 @@ export default defineComponent({
         debouncedSendState()
       }
     }, { immediate: true })
-    // Hash and annotation changes are sent immediately (data sync, not user interaction)
-    watch(() => streamlitDataStore.hash, () => sendStateToStreamlit())
-    watch(() => streamlitDataStore.annotations, () => sendStateToStreamlit(), { deep: true })
+    // Hash and annotation changes are data-sync echoes; debounce them too so a
+    // settling render that bumps several of (counter, hash, annotations) collapses
+    // into a single setComponentValue (each echo otherwise forces a Streamlit rerun).
+    watch(() => streamlitDataStore.hash, () => debouncedSendState())
+    watch(() => streamlitDataStore.annotations, () => debouncedSendState(), { deep: true })
     // RequestData needs immediate response - flush any pending debounced state first
     watch(() => streamlitDataStore.requestData, (newVal) => {
       if (newVal) {
@@ -198,12 +204,16 @@ export default defineComponent({
         case 'PlotlyLineplotUnified':
         case 'PlotlyLineplot':
           return PlotlyLineplot
+        case 'PlotlyDensityPlot':
+          return PlotlyDensityPlot
         case 'PlotlyHeatmap':
           return PlotlyHeatmap
         case 'PlotlyMirrorPlot':
           return PlotlyMirrorPlot
         case 'PlotlyVolcano':
           return PlotlyVolcano
+        case 'Plotly3D':
+          return Plotly3D
         case 'SequenceView':
           return SequenceView
         default:

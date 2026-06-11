@@ -135,9 +135,22 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
       }
 
       if (eventData.points && eventData.points.length > 0) {
-        const pointIndex = eventData.points[0].pointIndex
-        const data = getData()
-        const pointData = data[pointIndex]
+        const point = eventData.points[0]
+
+        // Resolve the clicked point's source row. Two cases:
+        // 1. Per-point customdata (multi-trace mode, e.g. categorical Heatmap):
+        //    each point carries a {column: value} record with exactly the
+        //    interactivity source values for that global row. This is required
+        //    because Plotly's pointIndex is PER-TRACE, so a flat index into the
+        //    combined data array would resolve the wrong row for any trace
+        //    beyond the first. (Same pattern as Plotly3D / PlotlyVolcano.)
+        // 2. Flat index (single-trace continuous mode): pointIndex maps 1:1 to
+        //    the combined data array, so look the row up directly.
+        const customData = point.customdata as unknown as Record<string, unknown> | undefined
+        const pointData =
+          customData && typeof customData === 'object'
+            ? customData
+            : getData()[point.pointIndex]
 
         if (pointData) {
           // Update selection store for each interactivity mapping
