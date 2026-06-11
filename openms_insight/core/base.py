@@ -474,7 +474,17 @@ class BaseComponent(ABC):
                     # Apply streaming-safe optimization (Float64→Float32 only)
                     # Int64 bounds checking would require collect(), breaking streaming
                     value = optimize_for_transfer_lazy(value)
-                    value.sink_parquet(filepath, compression="zstd")
+                    # Size row groups via the component hook so per-group min/max
+                    # statistics enable predicate pushdown (skipping non-matching
+                    # row groups) on filtered reads. Previously unwired, so writes
+                    # used Polars' default (often a single row group); honoring
+                    # _get_row_group_size() activates the intended per-component
+                    # tuning (e.g. mirrorplot/heatmap overrides).
+                    value.sink_parquet(
+                        filepath,
+                        compression="zstd",
+                        row_group_size=self._get_row_group_size(),
+                    )
                     manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
@@ -486,7 +496,14 @@ class BaseComponent(ABC):
                 else:
                     # Full optimization including Int64→Int32 with bounds checking
                     value = optimize_for_transfer(value)
-                    value.write_parquet(filepath, compression="zstd")
+                    # Honor the row-group hook (see sink_parquet branch above):
+                    # smaller, statistics-bearing row groups enable predicate
+                    # pushdown on filtered reads.
+                    value.write_parquet(
+                        filepath,
+                        compression="zstd",
+                        row_group_size=self._get_row_group_size(),
+                    )
                     manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value

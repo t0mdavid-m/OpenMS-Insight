@@ -1038,3 +1038,26 @@ class TestCreationCacheReuse:
             regenerate_cache=True,
         )
         assert len(calls) == 1
+
+
+class TestRowGroupSizing:
+    """M7: the cache writer now honors _get_row_group_size() so per-group
+    min/max statistics enable Polars predicate pushdown (row-group skipping) on
+    filtered reads. The hook existed but was never passed to the writers, so
+    writes used Polars' default (often a single row group)."""
+
+    def test_row_group_size_honored_on_write(
+        self, temp_cache_dir: Path, sample_table_data: pl.LazyFrame, monkeypatch
+    ):
+        import pyarrow.parquet as pq
+
+        # Force a tiny row-group size; sample_table_data has 5 rows -> 3 groups.
+        monkeypatch.setattr(Table, "_get_row_group_size", lambda self: 2)
+        Table(
+            cache_id="rg_table",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            index_field="id",
+        )
+        parquet = temp_cache_dir / "rg_table" / "preprocessed" / "data.parquet"
+        assert pq.ParquetFile(parquet).num_row_groups == 3
