@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -82,6 +83,13 @@ _BATCH_RESEND_KEY = "_svc_batch_resend"
 # already received. An echo of an already-applied sort/selection would otherwise
 # ping-pong setComponentValue <-> st.rerun forever (e.g. on a table column sort).
 _LAST_RENDERED_STATE_KEY = "_svc_last_rendered_state"
+
+# M5: cross-panel rerun batching. While _DEFER_RERUN flag is set (by a grid's
+# batch_rerun() context), PHASE 6 records a pending rerun instead of raising
+# st.rerun() mid-pass, so every panel renders in one pass and the grid reruns
+# ONCE at the end -- collapsing an N-panel cascade from N passes to ~1.
+_DEFER_RERUN_KEY = "_svc_defer_rerun"
+_PENDING_RERUN_KEY = "_svc_pending_rerun"
 
 # Bookkeeping keys in get_state_for_vue() that are NOT user-visible state. They
 # must be excluded from the PHASE 6 render snapshot, or their monotonic counters
@@ -934,12 +942,24 @@ def render_component(
         delivered[component_id] = render_snapshot
 
     if state_changed and not already_delivered:
-        if _DEBUG_STATE_SYNC:
-            _logger.warning(
-                f"[Bridge:{component._cache_id}] Phase6: RERUN triggered, "
-                f"next render will have cache HIT"
-            )
-        st.rerun()
+        if st.session_state.get(_DEFER_RERUN_KEY):
+            # M5: inside a grid batch -- record that a rerun is needed instead of
+            # raising st.rerun() now. The grid renders ALL panels in one pass
+            # (each downstream panel reads, via the shared StateManager, the
+            # upstream selection an earlier panel set in this SAME pass) and
+            # reruns ONCE at the end, collapsing an N-panel cascade to ~1 pass.
+            st.session_state[_PENDING_RERUN_KEY] = True
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase6: deferred rerun (batch)"
+                )
+        else:
+            if _DEBUG_STATE_SYNC:
+                _logger.warning(
+                    f"[Bridge:{component._cache_id}] Phase6: RERUN triggered, "
+                    f"next render will have cache HIT"
+                )
+            st.rerun()
     elif _DEBUG_STATE_SYNC:
         _logger.warning(
             f"[Bridge:{component._cache_id}] Phase6: No rerun needed, "
@@ -947,6 +967,37 @@ def render_component(
         )
 
     return result
+
+
+@contextmanager
+def batch_rerun():
+    """Batch a linked grid's cross-panel reruns into a single rerun.
+
+    Within this block, :func:`render_component` records a pending rerun (PHASE 6)
+    instead of calling ``st.rerun()`` immediately. A linked grid wraps its whole
+    panel loop in this context so every panel renders in ONE pass -- each
+    downstream panel reads, via the shared ``StateManager``, the upstream
+    selection an earlier panel set in this same pass -- and the grid reruns once
+    at the end if any panel changed state. This collapses a
+    scan->mass->spectra->3D cascade from one full-page pass per panel to ~1,
+    instead of the ratchet settling one panel per pass.
+
+    Re-entrant: only the outermost block performs the single deferred rerun.
+    Outside any such block (e.g. apps that don't batch), ``render_component``
+    reruns immediately, so behavior is unchanged for existing callers.
+    """
+    already_batching = st.session_state.get(_DEFER_RERUN_KEY, False)
+    st.session_state[_DEFER_RERUN_KEY] = True
+    if not already_batching:
+        st.session_state[_PENDING_RERUN_KEY] = False
+    try:
+        yield
+    finally:
+        st.session_state[_DEFER_RERUN_KEY] = already_batching
+    # Only the outermost batch fires the single deferred rerun (after the whole
+    # grid has rendered). st.rerun() raises, aborting the pass exactly once.
+    if not already_batching and st.session_state.pop(_PENDING_RERUN_KEY, False):
+        st.rerun()
 
 
 def _hash_data(data: Dict[str, Any]) -> str:

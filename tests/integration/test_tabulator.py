@@ -2006,3 +2006,82 @@ class TestLinePlotSelectionClearing:
 
         # Rerun should be called (selection changed from 10 to None)
         mock_streamlit_bridge["rerun"].assert_called()
+
+
+# =============================================================================
+# TestBatchRerun (M5)
+# =============================================================================
+
+
+class TestBatchRerun:
+    """M5: batch_rerun() defers per-panel reruns so a linked grid reruns ONCE
+    after rendering all panels, instead of one rerun (one full-page pass) per
+    panel in a cross-link cascade."""
+
+    def test_batch_defers_then_reruns_once(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        from openms_insight.rendering.bridge import _PENDING_RERUN_KEY, batch_rerun
+
+        rerun = mock_streamlit_bridge["rerun"]
+        # A page change forces a state change -> PHASE 6 wants to rerun.
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=state_manager.session_id,
+            pagination_identifier="test_table_page",
+        )
+
+        with batch_rerun():
+            render_component(table_component, state_manager)
+            # Deferred: no rerun raised mid-pass; a pending rerun is recorded.
+            assert not rerun.called
+            assert (
+                mock_streamlit_bridge["session_state"].get(_PENDING_RERUN_KEY) is True
+            )
+
+        # Exactly one rerun, fired by the batch on exit.
+        assert rerun.call_count == 1
+
+    def test_without_batch_reruns_immediately(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """Outside a batch, render_component reruns immediately (unchanged
+        behavior for apps that don't wrap their grid in batch_rerun)."""
+        from openms_insight.rendering.bridge import batch_rerun  # noqa: F401
+
+        rerun = mock_streamlit_bridge["rerun"]
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=state_manager.session_id,
+            pagination_identifier="test_table_page",
+        )
+
+        render_component(table_component, state_manager)
+
+        assert rerun.called
+
+    def test_nested_batch_reruns_once_at_outermost(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """Re-entrant: a nested batch defers to the OUTERMOST block, which fires
+        exactly one rerun (an inner block must not rerun mid-grid)."""
+        from openms_insight.rendering.bridge import batch_rerun
+
+        rerun = mock_streamlit_bridge["rerun"]
+        mock_streamlit_bridge["vue_func"].return_value = create_vue_response(
+            page=2,
+            page_size=100,
+            session_id=state_manager.session_id,
+            pagination_identifier="test_table_page",
+        )
+
+        with batch_rerun():
+            with batch_rerun():
+                render_component(table_component, state_manager)
+                assert not rerun.called
+            # Inner block exited but we are still inside the outer batch.
+            assert not rerun.called
+        # Only the outermost exit fires the single rerun.
+        assert rerun.call_count == 1
