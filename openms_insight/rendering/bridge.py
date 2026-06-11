@@ -645,18 +645,38 @@ def render_component(
 
     # Build payload - only send data if cache is valid for current state
     if cache_valid:
-        # Cache HIT - send cached data (it's correct for current state).
-        # Honor Vue's echoed hash: if Vue already holds this exact data, send
-        # dataChanged=False so it reuses its parsed copy instead of re-parsing
-        # (the bidirectional hash confirmation that was stored but never used).
+        # Cache HIT - data is correct for the current state.
+        # Honor Vue's echoed hash: if Vue already holds this exact data, reuse
+        # its parsed copy instead of re-sending (the bidirectional hash
+        # confirmation that was stored but never used).
         vue_has_hash = st.session_state[_VUE_ECHOED_HASH_KEY].get(key) == cached_hash
-        data_payload = {
-            **cached_data,
-            "selection_store": initial_state,
-            "hash": cached_hash,
-            "dataChanged": not vue_has_hash,
-            "awaitingFilter": False,
-        }
+        if vue_has_hash:
+            # M3: Vue already holds this exact data, so OMIT the cached
+            # DataFrames. Spreading them back into kwargs makes Streamlit's
+            # component channel re-encode them to Arrow IPC on EVERY rerun even
+            # though Vue discards them (dataChanged=False -> it keeps its parsed
+            # copy; see streamlit-data.ts !dataChanged+hasCache branch). Keep
+            # only the lightweight _plotConfig that branch still consults; it is
+            # stable here because a cache HIT requires filter AND annotation
+            # state to match (an annotation change takes the cache-MISS path).
+            data_payload = {
+                "selection_store": initial_state,
+                "hash": cached_hash,
+                "dataChanged": False,
+                "awaitingFilter": False,
+            }
+            if "_plotConfig" in cached_data:
+                data_payload["_plotConfig"] = cached_data["_plotConfig"]
+        else:
+            # Vue does not have this data yet -> send it. Vue echoes the hash
+            # back, enabling the omit path above on subsequent reruns.
+            data_payload = {
+                **cached_data,
+                "selection_store": initial_state,
+                "hash": cached_hash,
+                "dataChanged": True,
+                "awaitingFilter": False,
+            }
         if _DEBUG_STATE_SYNC:
             # Log pagination state for debugging
             pagination_key = next((k for k in state_keys if "page" in k.lower()), None)

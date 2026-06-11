@@ -604,6 +604,42 @@ class TestTabulatorCacheBehavior:
         assert isinstance(data, dict)
         assert isinstance(data_hash, str)
 
+    def test_data_omitted_once_vue_holds_hash(
+        self, table_component, state_manager, mock_streamlit_bridge
+    ):
+        """M3: once Vue echoes the matching data hash, the bridge stops
+        re-sending the heavy DataFrame every rerun. It omits ``tableData`` and
+        sends ``dataChanged=False`` so Streamlit's component channel no longer
+        re-encodes it to Arrow IPC (Vue keeps its already-parsed copy)."""
+        vue_func = mock_streamlit_bridge["vue_func"]
+
+        # Real handshake: Vue echoes back whatever data hash Python sent (and
+        # only once it actually received data -- an empty hash means no data).
+        def echoing_vue(**kwargs):
+            return create_vue_response(
+                page=1,
+                page_size=100,
+                session_id=state_manager.session_id,
+                pagination_identifier="test_table_page",
+                vue_data_hash=kwargs.get("hash") or None,
+            )
+
+        vue_func.side_effect = echoing_vue
+
+        # miss -> send -> omit: a few stable same-page renders settle the
+        # handshake into the omit path (cache populated, hash echoed + matched).
+        for _ in range(4):
+            render_component(table_component, state_manager)
+
+        last = vue_func.call_args.kwargs
+        assert last["dataChanged"] is False
+        assert "tableData" not in last, "heavy data must be omitted once Vue holds it"
+        assert last["hash"], "hash must still be sent so Vue can confirm its copy"
+
+        # Sanity: the data WAS sent at least once before the omit path engaged.
+        sent_table = [c for c in vue_func.call_args_list if "tableData" in c.kwargs]
+        assert sent_table, "data should have been sent before the omit path engaged"
+
 
 # =============================================================================
 # TestTabulatorCounterLogic
