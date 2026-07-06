@@ -1,43 +1,424 @@
-import pandas as pd
-import plotly.express as px
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+"""PCAPlot component for sample-level dimensionality reduction visualization."""
 
-def run_and_plot_pca(expr_df_pca: pd.DataFrame, group_map: dict):
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import polars as pl
+
+from ..core.base import BaseComponent
+from ..core.registry import register_component
+
+
+@register_component("pca")
+class PCAPlot(BaseComponent):
     """
-    OpenMS-Insight 내장용 PCA 계산 및 Plotly 객체 반환 함수
+    Interactive PCA (Principal Component Analysis) scatter plot for samples.
+
+    Computes PCA directly from a wide-format quantification matrix (rows =
+    features/proteins, one column per sample) plus a sample metadata table
+    (sample_id -> group), then renders sample scores colored by group.
+
+    No dedicated PCA Vue component exists yet, so rendering reuses the
+    PlotlyHeatmap frontend component in its categorical-coloring mode
+    (color points by discrete group instead of a continuous colorscale).
+
+    Which pair of principal components is displayed (pc_x/pc_y) can be
+    changed at render time without invalidating the cache, similar to how
+    VolcanoPlot handles its significance thresholds - PCA itself is only
+    recomputed when the underlying data/metadata/n_components change.
+
+    Example:
+        pca = PCAPlot(
+            cache_id="protein_pca",
+            data=quantification_data,   # wide: id_col + one column per sample
+            metadata=metadata_df,       # columns: sample_id, group
+            interactivity={'sample': 'sample_id'},
+            title="Sample PCA",
+        )
+        pca(state_manager=state, pc_x=1, pc_y=2)
     """
-    # 1. 데이터 전처리 및 PCA 실행
-    X = expr_df_pca.T
-    X_scaled = StandardScaler().fit_transform(X)
-    
-    pca = PCA(n_components=2)
-    pcs = pca.fit_transform(X_scaled)
-    
-    pca_df = pd.DataFrame(
-        pcs,
-        columns=["PC1", "PC2"],
-        index=X.index
-    )
-    
-    # 2. 그룹 매핑 (.mzML 확장자 제거 처리 포함)
-    norm_map = {k.replace(".mzML", ""): v for k, v in group_map.items()}
-    pca_df["Group"] = pca_df.index.map(norm_map)
-    
-    # 3. Plotly 시각화 객체 생성
-    fig_pca = px.scatter(
-        pca_df,
-        x="PC1",
-        y="PC2",
-        color="Group",
-        text=pca_df.index,
-    )
-    
-    fig_pca.update_traces(textposition="top center")
-    fig_pca.update_layout(
-        xaxis_title=f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)",
-        yaxis_title=f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)",
-        height=600,
-    )
-    
-    return fig_pca, expr_df_pca.shape[0]
+
+    _component_type: str = "pca"
+
+    def __init__(
+        self,
+        cache_id: str,
+        metadata: Optional[pl.DataFrame] = None,
+        data: Optional[pl.LazyFrame] = None,
+        data_path: Optional[str] = None,
+        sample_id_field: str = "sample_id",
+        group_field: str = "group",
+        n_components: int = 2,
+        pc_x: int = 1,
+        pc_y: int = 2,
+        standardize: bool = True,
+        filters: Optional[Dict[str, str]] = None,
+        filter_defaults: Optional[Dict[str, Any]] = None,
+        interactivity: Optional[Dict[str, str]] = None,
+        cache_path: str = ".",
+        regenerate_cache: bool = False,
+        title: Optional[str] = None,
+        x_label: Optional[str] = None,
+        y_label: Optional[str] = None,
+        category_colors: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the PCAPlot component.
+
+        Args:
+            cache_id: Unique identifier for this component's cache (MANDATORY).
+                Creates a folder {cache_path}/{cache_id}/ for cached data.
+            metadata: DataFrame mapping samples to groups. Must contain
+                sample_id_field and group_field columns. Required whenever
+                data/data_path is provided (creation mode).
+            data: Polars LazyFrame with the quantification matrix in wide
+                format (one row per feature/protein, one column per sample).
+                Optional if cache exists.
+            data_path: Path to parquet file (preferred for large datasets).
+            sample_id_field: Column in `metadata` naming the sample columns
+                to look up in `data` (default: "sample_id").
+            group_field: Column in `metadata` with the group/condition label
+                used for categorical coloring (default: "group").
+            n_components: Number of principal components to compute
+                (default: 2). Increase this to allow inspecting additional
+                component pairs at render time via pc_x/pc_y without
+                recomputing PCA.
+            pc_x: Which principal component to plot on the x-axis, 1-indexed
+                (default: 1, i.e. PC1). Can be overridden at render time.
+            pc_y: Which principal component to plot on the y-axis, 1-indexed
+                (default: 2, i.e. PC2). Can be overridden at render time.
+            standardize: If True (default), z-score each feature across
+                samples before fitting PCA (recommended when features are on
+                different scales).
+            filters: Mapping of identifier names to column names (of the
+                computed PCA table: sample_id_field, group_field, PC1..PCn)
+                for filtering.
+            filter_defaults: Default values for filter identifiers when no
+                selection is present in state.
+            interactivity: Mapping of identifier names to column names (of
+                the computed PCA table) for clicks.
+            cache_path: Base path for cache storage. Default "." (current dir).
+            regenerate_cache: If True, regenerate cache even if valid cache exists.
+            title: Plot title displayed above the plot.
+            x_label: X-axis label. Defaults to "PC{n} (xx.x%)" using the
+                explained variance ratio.
+            y_label: Y-axis label. Defaults to "PC{n} (xx.x%)" using the
+                explained variance ratio.
+            category_colors: Optional mapping of group values to colors
+                (e.g. {"Control": "#1f77b4", "Treatment": "#d62728"}).
+            **kwargs: Additional configuration options.
+        """
+        if (data is not None or data_path is not None) and metadata is None:
+            raise ValueError(
+                "PCAPlot requires 'metadata' (sample_id/group table) when "
+                "creating the cache (data= or data_path= provided)."
+            )
+
+        self._metadata = metadata
+        self._sample_id_field = sample_id_field
+        self._group_field = group_field
+        self._n_components = n_components
+        self._standardize = standardize
+        self._title = title
+        self._x_label = x_label
+        self._y_label = y_label
+        self._category_colors = category_colors or {}
+
+        # Render-time display selection (which PC pair to plot). Overridable
+        # per-call via __call__() without invalidating the cache.
+        self._current_pc_x = pc_x
+        self._current_pc_y = pc_y
+
+        super().__init__(
+            cache_id=cache_id,
+            data=data,
+            data_path=data_path,
+            filters=filters,
+            filter_defaults=filter_defaults,
+            interactivity=interactivity,
+            cache_path=cache_path,
+            regenerate_cache=regenerate_cache,
+            # Pass component-specific params for subprocess recreation
+            metadata=metadata,
+            sample_id_field=sample_id_field,
+            group_field=group_field,
+            n_components=n_components,
+            pc_x=pc_x,
+            pc_y=pc_y,
+            standardize=standardize,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            category_colors=category_colors,
+            **kwargs,
+        )
+
+    def _validate_mappings(self) -> None:
+        """Validate metadata presence; column-level checks happen after PCA runs.
+
+        filters/interactivity map to columns of the COMPUTED PCA scores table
+        (sample_id_field, group_field, PC1..PCn), not the raw wide-format
+        quantification data, so we can't validate them against raw_data's
+        schema the way BaseComponent does. See _preprocess() for the actual
+        column checks, run once the PCA output schema is known.
+        """
+        if self._raw_data is None:
+            return  # Skip validation when reconstructing from cache
+
+        if self._metadata is None:
+            raise ValueError(
+                "PCAPlot requires 'metadata' (DataFrame with sample_id/group "
+                "columns) in creation mode."
+            )
+
+        metadata_cols = set(self._metadata.columns)
+        if self._sample_id_field not in metadata_cols:
+            raise ValueError(
+                f"metadata is missing sample_id_field '{self._sample_id_field}'. "
+                f"Available columns: {sorted(metadata_cols)}"
+            )
+        if self._group_field not in metadata_cols:
+            raise ValueError(
+                f"metadata is missing group_field '{self._group_field}'. "
+                f"Available columns: {sorted(metadata_cols)}"
+            )
+
+    def _get_cache_config(self) -> Dict[str, Any]:
+        """Get configuration that affects cache validity."""
+        metadata_map: Dict[str, Any] = {}
+        if self._metadata is not None:
+            sample_ids = self._metadata.select(self._sample_id_field).to_series().to_list()
+            groups = self._metadata.select(self._group_field).to_series().to_list()
+            metadata_map = {str(sid): grp for sid, grp in zip(sample_ids, groups)}
+
+        return {
+            "metadata_map": metadata_map,
+            "sample_id_field": self._sample_id_field,
+            "group_field": self._group_field,
+            "n_components": self._n_components,
+            "standardize": self._standardize,
+            "title": self._title,
+            "x_label": self._x_label,
+            "y_label": self._y_label,
+            "category_colors": self._category_colors,
+            # Note: pc_x/pc_y are NOT included - they're render-time params
+        }
+
+    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+        """Restore component-specific configuration from cached config."""
+        self._sample_id_field = config.get("sample_id_field", "sample_id")
+        self._group_field = config.get("group_field", "group")
+        self._n_components = config.get("n_components", 2)
+        self._standardize = config.get("standardize", True)
+        self._title = config.get("title")
+        self._x_label = config.get("x_label")
+        self._y_label = config.get("y_label")
+        self._category_colors = config.get("category_colors", {})
+        self._metadata = None  # not needed after PCA has been precomputed
+
+        # Only set defaults if not already set by __init__ (reconstruction
+        # mode calls this without pc_x/pc_y ever being passed)
+        if not hasattr(self, "_current_pc_x"):
+            self._current_pc_x = 1
+        if not hasattr(self, "_current_pc_y"):
+            self._current_pc_y = 2
+
+    def _preprocess(self) -> None:
+        """Compute PCA from the wide-format quantification matrix.
+
+        Transposes the feature x sample matrix to sample x feature, optionally
+        standardizes each feature, fits sklearn's PCA, and stores per-sample
+        scores (PC1..PCn) alongside the sample's group label.
+        """
+        from sklearn.decomposition import PCA as SklearnPCA
+        from sklearn.preprocessing import StandardScaler
+
+        if self._raw_data is None:
+            raise ValueError("No data provided and no cache exists")
+        if self._metadata is None:
+            raise ValueError("PCAPlot requires 'metadata' to compute PCA")
+
+        schema_names = self._raw_data.collect_schema().names()
+
+        all_sample_ids = self._metadata.select(self._sample_id_field).to_series().to_list()
+        all_groups = self._metadata.select(self._group_field).to_series().to_list()
+        group_map = dict(zip(all_sample_ids, all_groups))
+
+        sample_ids = [sid for sid in all_sample_ids if sid in schema_names]
+        if len(sample_ids) < 2:
+            raise ValueError(
+                f"PCA requires at least 2 sample columns present in data; "
+                f"found {len(sample_ids)} matching metadata "
+                f"'{self._sample_id_field}' values. Available data columns: "
+                f"{schema_names}"
+            )
+
+        # Drop features with any missing value across the selected samples
+        matrix_df = self._raw_data.select(sample_ids).drop_nulls().collect()
+        n_features = matrix_df.height
+        n_samples = len(sample_ids)
+        if n_features < 2:
+            raise ValueError(
+                "PCA requires at least 2 complete (non-null) features across "
+                "all samples."
+            )
+
+        # features (rows) x samples (cols) -> samples (rows) x features (cols)
+        X = matrix_df.to_numpy().T.astype(np.float64)
+
+        if self._standardize:
+            X = StandardScaler().fit_transform(X)
+
+        max_components = min(n_samples, n_features)
+        n_components = max(1, min(self._n_components, max_components))
+
+        pca = SklearnPCA(n_components=n_components)
+        scores = pca.fit_transform(X)
+        variance_ratio = pca.explained_variance_ratio_.tolist()
+
+        pc_columns = [f"PC{i + 1}" for i in range(n_components)]
+        result: Dict[str, List[Any]] = {
+            self._sample_id_field: sample_ids,
+            self._group_field: [group_map.get(sid) for sid in sample_ids],
+        }
+        for i, col in enumerate(pc_columns):
+            result[col] = scores[:, i].tolist()
+
+        pca_df = pl.DataFrame(result)
+
+        # Overall distance from the origin across ALL computed PCs - used as
+        # a generic hover/render-order metric, independent of which two PCs
+        # are chosen for the x/y axes at render time.
+        pca_df = pca_df.with_columns(
+            pl.sum_horizontal([pl.col(c) ** 2 for c in pc_columns]).sqrt().alias(
+                "_pca_distance"
+            )
+        )
+
+        final_cols = set(pca_df.columns)
+        for identifier, column in {**self._filters, **self._interactivity}.items():
+            if column not in final_cols:
+                raise ValueError(
+                    f"Column '{column}' (for identifier '{identifier}') not "
+                    f"found in computed PCA data. Available columns: "
+                    f"{sorted(final_cols)}"
+                )
+
+        self._preprocessed_data = {
+            "pcaData": pca_df,
+            "variance_ratio": variance_ratio,
+            "n_components": n_components,
+            "pc_columns": pc_columns,
+        }
+
+    def get_variance_ratio(self) -> List[float]:
+        """Return the explained variance ratio for each computed principal component."""
+        return list(self._preprocessed_data.get("variance_ratio", []))
+
+    def get_pc_columns(self) -> List[str]:
+        """Return names of computed principal component columns (e.g. ['PC1', 'PC2'])."""
+        return list(self._preprocessed_data.get("pc_columns", []))
+
+    def _get_vue_component_name(self) -> str:
+        """Return the Vue component name (reuses PlotlyHeatmap's categorical mode)."""
+        return "PlotlyHeatmap"
+
+    def _get_data_key(self) -> str:
+        """Return the key for the primary data in Vue payload."""
+        return "heatmapData"
+
+    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare filtered PCA scores for Vue component."""
+        data = self._preprocessed_data["pcaData"]
+        df_polars = data.collect() if isinstance(data, pl.LazyFrame) else data
+
+        if self._filters:
+            from ..preprocessing.filtering import filter_and_collect_cached
+
+            df_pandas, data_hash = filter_and_collect_cached(
+                df_polars.lazy(),
+                self._filters,
+                state,
+                filter_defaults=self._filter_defaults,
+            )
+        else:
+            from ..preprocessing.filtering import compute_dataframe_hash
+
+            data_hash = compute_dataframe_hash(df_polars)
+            df_pandas = df_polars.to_pandas()
+
+        return {"heatmapData": df_pandas, "_hash": data_hash}
+
+    def _axis_label(
+        self, pc_index: int, base_label: Optional[str], variance_ratio: List[float]
+    ) -> str:
+        """Build an axis label like 'PC1 (43.2%)' unless overridden."""
+        if base_label:
+            return base_label
+        col = f"PC{pc_index}"
+        if 0 <= pc_index - 1 < len(variance_ratio):
+            return f"{col} ({variance_ratio[pc_index - 1] * 100:.1f}%)"
+        return col
+
+    def _get_component_args(self) -> Dict[str, Any]:
+        """Return configuration for the (reused) PlotlyHeatmap Vue component."""
+        variance_ratio = self._preprocessed_data.get("variance_ratio", [])
+        pc_columns = self._preprocessed_data.get("pc_columns", [])
+
+        pc_x_col = f"PC{self._current_pc_x}"
+        pc_y_col = f"PC{self._current_pc_y}"
+        if pc_x_col not in pc_columns or pc_y_col not in pc_columns:
+            raise ValueError(
+                f"pc_x={self._current_pc_x}/pc_y={self._current_pc_y} select "
+                f"components beyond the {len(pc_columns)} computed "
+                f"(n_components={self._n_components}). Available: {pc_columns}"
+            )
+
+        args: Dict[str, Any] = {
+            "componentType": self._get_vue_component_name(),
+            "xColumn": pc_x_col,
+            "yColumn": pc_y_col,
+            "intensityColumn": "_pca_distance",
+            "xLabel": self._axis_label(self._current_pc_x, self._x_label, variance_ratio),
+            "yLabel": self._axis_label(self._current_pc_y, self._y_label, variance_ratio),
+            "categoryColumn": self._group_field,
+            "categoryColors": self._category_colors,
+            "logScale": False,
+            "intensityLabel": "Distance from origin",
+            "zoomIdentifier": f"{self._cache_id}_zoom",
+            "interactivity": self._interactivity or {},
+        }
+        if self._title:
+            args["title"] = self._title
+        return args
+
+    def __call__(
+        self,
+        key: Optional[str] = None,
+        state_manager: Optional[Any] = None,
+        height: Optional[int] = None,
+        pc_x: Optional[int] = None,
+        pc_y: Optional[int] = None,
+    ) -> Any:
+        """
+        Render the PCA plot component.
+
+        Args:
+            key: Optional unique key for this component instance.
+            state_manager: StateManager for cross-component linking.
+            height: Optional height override in pixels.
+            pc_x: Which principal component to plot on the x-axis, 1-indexed.
+                Overrides the value set at construction time without
+                recomputing PCA (as long as it's within n_components).
+            pc_y: Which principal component to plot on the y-axis, 1-indexed.
+
+        Returns:
+            Component result for Streamlit rendering.
+        """
+        if pc_x is not None:
+            self._current_pc_x = pc_x
+        if pc_y is not None:
+            self._current_pc_y = pc_y
+
+        return super().__call__(key=key, state_manager=state_manager, height=height)

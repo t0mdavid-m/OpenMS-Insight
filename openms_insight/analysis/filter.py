@@ -6,8 +6,26 @@ def filter_low_abundance(
     group_column: str = "group",
     threshold_percentile: float = 10.0
 ) -> pl.LazyFrame:
-    """Filter low-abundance rows based on per-group median. 
-    Keeps rows where AT LEAST ONE biological group's median is above the threshold percentile cutoff.
+    """Filter low-abundance rows based on per-group median.
+
+    Keeps rows where AT LEAST ONE biological group's median is above the
+    threshold percentile cutoff.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column and a group
+            column (name given by `group_column`) mapping each sample to
+            its biological group.
+        group_column: Column in `metadata` naming the biological group for
+            each sample (default: "group").
+        threshold_percentile: Percentile (0-100) of each group's own median
+            distribution used as that group's abundance cutoff
+            (default: 10.0).
+
+    Returns:
+        `quantification_data` filtered to rows passing the cutoff in at
+        least one group, with the temporary per-group median columns
+        dropped. Returned unchanged if `metadata` has no usable groups.
     """
     # 1. Extract unique group names from metadata
     unique_groups = metadata.select(group_column).to_series().unique().drop_nulls().to_list()
@@ -52,7 +70,27 @@ def filter_low_repeatability(
     max_missing_ratio: float = 0.5
 ) -> pl.LazyFrame:
     """Filter rows based on missing-value ratio per group.
-    Keeps rows where AT LEAST ONE biological group satisfies the repeatability threshold.
+
+    Keeps rows where AT LEAST ONE biological group satisfies the
+    repeatability threshold. Zeros are treated as missing values, alongside
+    explicit nulls.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column and a group
+            column (name given by `group_column`) mapping each sample to
+            its biological group.
+        group_column: Column in `metadata` naming the biological group for
+            each sample (default: "group").
+        max_missing_ratio: Maximum fraction (0-1) of samples within a group
+            allowed to be missing/zero for a row to still pass that group's
+            repeatability check (default: 0.5).
+
+    Returns:
+        `quantification_data` filtered to rows passing the repeatability
+        check in at least one group, with the temporary per-group status
+        columns dropped. Returned unchanged if `metadata` has no usable
+        groups.
     """
     # 1. Extract unique group names from metadata
     unique_groups = metadata.select(group_column).to_series().unique().drop_nulls().to_list()
@@ -96,7 +134,28 @@ def filter_low_variance(
     group_column: str = "group",
     threshold_percentile: float = 10.0
 ) -> pl.LazyFrame:
-    """Filter rows based on per-group variance to avoid discarding group-specific variable features."""
+    """Filter rows based on per-group variance.
+
+    Uses a per-group variance cutoff (rather than a single global one) so
+    that features which are only variable within one specific group are not
+    discarded just because their overall/other-group variance is low.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column and a group
+            column (name given by `group_column`) mapping each sample to
+            its biological group.
+        group_column: Column in `metadata` naming the biological group for
+            each sample (default: "group").
+        threshold_percentile: Percentile (0-100) of each group's own
+            variance distribution used as that group's variance cutoff
+            (default: 10.0).
+
+    Returns:
+        `quantification_data` filtered to rows passing the cutoff in at
+        least one group, with the temporary per-group variance columns
+        dropped. Returned unchanged if `metadata` has no usable groups.
+    """
     # 1. Extract unique group names from metadata
     unique_groups = metadata.select(group_column).to_series().unique().drop_nulls().to_list()
     unique_groups = [g for g in unique_groups if g not in ["", "NA"]]

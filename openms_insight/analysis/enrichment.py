@@ -7,12 +7,34 @@ from scipy.stats import fisher_exact
 from collections import defaultdict
 
 def get_clean_uniprot(name):
-    """Cleans FASTA-style UniProt headers to extract the core accession ID."""
+    """Cleans FASTA-style UniProt headers to extract the core accession ID.
+
+    Args:
+        name: Raw identifier, e.g. "sp|Q99287|SEY1_YEAST" or a bare
+            accession with no "|" separators.
+
+    Returns:
+        The accession segment (e.g. "Q99287") if the FASTA-style "|"
+        format is present, otherwise `name` unchanged (stringified).
+    """
     parts = str(name).split("|")
     return parts[1] if len(parts) >= 2 else parts[0]
 
 def extract_go_terms(go_data, go_type):
-    """Parses nested dictionary schema from MyGene.info API response."""
+    """Parses nested dictionary schema from MyGene.info API response.
+
+    Args:
+        go_data: The "go" field of a single MyGene.info query result, as
+            returned by `mygene.MyGeneInfo().querymany(..., fields="go")`.
+            Expected to be a dict keyed by GO category, or falsy/malformed
+            if the gene has no GO annotations.
+        go_type: Which GO category to extract - "BP" (Biological Process),
+            "CC" (Cellular Component), or "MF" (Molecular Function).
+
+    Returns:
+        List of unique GO term names for `go_type`, or an empty list if
+        `go_data` isn't a dict or has no entry for `go_type`.
+    """
     if not isinstance(go_data, dict) or go_type not in go_data:
         return []
     terms = go_data[go_type]
@@ -21,7 +43,29 @@ def extract_go_terms(go_data, go_type):
     return list({t.get("term") for t in terms if "term" in t})
 
 def run_go_category(res_go, fg_set, bg_set, go_type):
-    """Calculates hypergeometric enrichment for a specific GO category (BP, CC, MF)."""
+    """Runs hypergeometric (Fisher's exact) enrichment for one GO category.
+
+    For each GO term annotated in the background set, tests whether it is
+    over-represented in the foreground (significant) set relative to the
+    background, via a one-sided Fisher's exact test on the term's 2x2
+    contingency table.
+
+    Args:
+        res_go: DataFrame of MyGene.info results with a "query" column
+            (protein ID) and a "{go_type}_terms" column (list of GO term
+            names per protein), as produced by `extract_go_terms`.
+        fg_set: Set of protein IDs considered "foreground" (e.g. proteins
+            passing significance/fold-change cutoffs).
+        bg_set: Set of protein IDs considered "background" (typically all
+            annotated proteins in the input data).
+        go_type: Which GO category to test - "BP", "CC", or "MF".
+
+    Returns:
+        Tuple of `(fig, df)`: a Plotly horizontal bar chart of the top 20
+        terms by p-value, and the underlying DataFrame with columns
+        "GO_Term", "Count", "GeneRatio", "p_value", "-log10(p)". Returns
+        `(None, None)` if no foreground-annotated GO terms were found.
+    """
     go2fg = defaultdict(set)
     go2bg = defaultdict(set)
 
@@ -78,9 +122,36 @@ def run_go_category(res_go, fg_set, bg_set, go_type):
     return fig, df
 
 def calculate_go_enrichment(final_report: pl.DataFrame, id_col: str, target_p_col: str, p_cutoff: float = 0.05, fc_cutoff: float = 1.0):
-    """
-    Main orchestration function for GO enrichment pipeline.
-    Filters profiles, queries MyGene.info, and executes Fisher's exact tests.
+    """Runs the full GO enrichment pipeline: filter, annotate, test.
+
+    Unlike the other `analysis/` modules, this makes a live network call to
+    the MyGene.info API and builds Plotly figures directly, so it takes an
+    eager `pl.DataFrame` (not a `LazyFrame`) and returns a status string
+    instead of raising, so callers can distinguish "not enough data" from
+    a hard error without a try/except.
+
+    Args:
+        final_report: Statistics table (eager DataFrame) with an ID column
+            and columns for adjusted p-value and log2 fold change.
+        id_col: Column in `final_report` with protein identifiers, in
+            FASTA-style ("sp|ACCESSION|NAME") or bare accession form - see
+            `get_clean_uniprot`.
+        target_p_col: Column in `final_report` holding the p-value (or
+            adjusted p-value) used for the significance cutoff.
+        p_cutoff: Maximum p-value for a protein to count as "foreground"/
+            significant (default: 0.05).
+        fc_cutoff: Minimum absolute log2 fold change for a protein to count
+            as "foreground"/significant (default: 1.0).
+
+    Returns:
+        Tuple of `(status, payload)`:
+            - `("empty_data", None)` if no rows have non-null p-value/log2FC.
+            - `("insufficient_proteins", fg_count)` if fewer than 3 proteins
+              meet the significance cutoffs (`fg_count` is an int).
+            - `("success", result_dict)` otherwise, where `result_dict` has
+              keys "bg_count" (int), "fg_count" (int), and "categories"
+              (dict keyed by "BP"/"CC"/"MF", each value a dict with "fig"
+              and "df" as returned by `run_go_category`).
     """
     # 1. Filter non-null entries via Polars
     analysis_ready = final_report.filter(

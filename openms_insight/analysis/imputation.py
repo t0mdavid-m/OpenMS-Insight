@@ -6,8 +6,28 @@ def impute_mar(
     group_column: str = "group",
     strategy: str = "median"
 ) -> pl.LazyFrame:
-    """1. MAR (Missing At Random) Imputation.
-    Fill missing values based on characteristics (mean or median) of biological groups.
+    """MAR (Missing At Random) imputation.
+
+    Fills missing values (both explicit nulls and zeros, which are treated
+    as missing) using a per-biological-group statistic (mean or median
+    computed from the other samples in the same group).
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column and a group
+            column (name given by `group_column`) mapping each sample to
+            its biological group.
+        group_column: Column in `metadata` naming the biological group for
+            each sample (default: "group").
+        strategy: Either "mean" or "median" (default: "median") - which
+            per-group statistic to fill missing values with.
+
+    Returns:
+        `quantification_data` with zeros converted to nulls and missing
+        values filled from their group's mean/median.
+
+    Raises:
+        ValueError: If `strategy` is not "mean" or "median".
     """
     unique_groups = metadata.select(group_column).to_series().unique().drop_nulls().to_list()
     unique_groups = [g for g in unique_groups if g not in ["", "NA"]]
@@ -46,8 +66,28 @@ def impute_smallest_value(
     metadata: pl.DataFrame,
     scope: str = "row"
 ) -> pl.LazyFrame:
-    """2. Smallest Value Imputation (MNAR - Missing Not At Random).
-    Fill values below the detection limit with the smallest observed value.
+    """MNAR (Missing Not At Random) imputation via smallest observed value.
+
+    Fills values below the detection limit (both explicit nulls and zeros,
+    which are treated as missing) with the smallest observed value, on the
+    assumption that missingness in MS data is often due to values falling
+    below the instrument's detection limit rather than random loss.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column.
+        scope: Either "row" (default) to fill with that row/feature's own
+            minimum across samples - falling back to the global minimum for
+            rows that are entirely missing - or "global" to always fill
+            with the smallest value observed anywhere in the data.
+
+    Returns:
+        `quantification_data` with zeros converted to nulls and missing
+        values filled per `scope`. Returned unchanged if `metadata` has no
+        sample columns.
+
+    Raises:
+        ValueError: If `scope` is not "row" or "global".
     """
     sample_cols = metadata.select("sample_id").to_series().to_list()
     if not sample_cols:

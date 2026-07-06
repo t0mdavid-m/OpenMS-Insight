@@ -7,9 +7,36 @@ def calculate_statistical_tests(
     metadata: pl.DataFrame,
     method: str = "limma_like"
 ) -> pl.LazyFrame:
-    """
-    🔬 Pure Polars Stream Engine for Mass Spectrometry Statistics.
-    - Maintains 100% Non-blocking Lazy Graphs with explicit return_dtypes.
+    """Computes per-row differential expression statistics between groups.
+
+    Adds `log2FC`, `stat`, and `p-value` columns. All methods are
+    implemented as Polars lazy expressions (only the final p-value
+    computation, which needs SciPy, drops into `map_batches`), so the
+    resulting graph stays lazy end-to-end until `.collect()` is called.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column and a "group"
+            column mapping each sample to its biological group.
+        method: One of:
+            - "limma_like": Empirical Bayes variance-moderated t-test (2
+              groups) or F-test (3+ groups). Shrinks each row's variance
+              towards a common prior, improving stability for small sample
+              sizes.
+            - "welch": Welch's t-test (unequal variances). Requires exactly
+              2 groups.
+            - "paired": Paired t-test for dependent samples. Requires
+              exactly 2 groups of equal size.
+            - "anova": Standard one-way ANOVA F-test. Requires 3+ groups.
+
+    Returns:
+        `quantification_data` with `log2FC`, `stat`, and `p-value` columns
+        added, and any temporary working columns dropped.
+
+    Raises:
+        ValueError: If `method` is unknown, or if the group count doesn't
+            satisfy the chosen method's requirement (e.g. "welch"/"paired"
+            need exactly 2 groups, "anova" needs 3+).
     """
     sample_cols = metadata.select("sample_id").to_series().to_list()
     unique_groups = sorted(metadata.select("group").unique().to_series().to_list())
@@ -145,7 +172,8 @@ def calculate_statistical_tests(
         n_pairs = len(g1_samples)
         diff_exprs = [pl.col(g2_s) - pl.col(g1_s) for g1_s, g2_s in zip(g1_samples, g2_samples)]
 
-        # FIXED: Changed input from pl.DataFrame to pl.Series and applied .struct.unnest() to resolve the paired crash
+        # map_batches passes a single pl.Series of structs (not a DataFrame),
+        # so fields must be unnested before they can be pulled out as arrays.
         def compute_paired_pvalue(s: pl.Series) -> pl.Series:
             struct_df = s.struct.unnest()
             t_stats = struct_df["stat"].to_numpy()
@@ -162,7 +190,8 @@ def calculate_statistical_tests(
                 (pl.col("log2FC") / (pl.col("_diff_sd") / np.sqrt(n_pairs))).alias("stat")
             ])
             .with_columns([
-                # FIXED: Required structural variables are mapped into pl.struct block
+                # Bundle stat (and any other fields the p-value function needs)
+                # into a struct so map_batches receives them as one Series.
                 pl.struct(["stat"]).map_batches(compute_paired_pvalue, return_dtype=pl.Float64).alias("p-value")
             ])
             .drop(["_diff_sd"])
@@ -173,7 +202,8 @@ def calculate_statistical_tests(
         grand_mean_expr = pl.sum_horizontal([pl.col(f"_mean_{g}") * pl.col(f"_n_{g}") for g in unique_groups]) / total_samples
         ss_within_expr = pl.sum_horizontal([f"_ss_{g}" for g in unique_groups])
         
-        # FIXED: Changed input from pl.DataFrame to pl.Series and applied .struct.unnest() to prevent future potential crashes
+        # map_batches passes a single pl.Series of structs (not a DataFrame),
+        # so fields must be unnested before they can be pulled out as arrays.
         def compute_anova_pvalue(s: pl.Series) -> pl.Series:
             struct_df = s.struct.unnest()
             f_stats = struct_df["stat"].to_numpy()
@@ -198,7 +228,8 @@ def calculate_statistical_tests(
                 (pl.col(f"_mean_{unique_groups[-1]}") - pl.col(f"_mean_{unique_groups[0]}")).abs().alias("log2FC")
             ])
             .with_columns([
-                # FIXED: Required structural variables are mapped into pl.struct block
+                # Bundle stat (and any other fields the p-value function needs)
+                # into a struct so map_batches receives them as one Series.
                 pl.struct(["stat"]).map_batches(compute_anova_pvalue, return_dtype=pl.Float64).alias("p-value")
             ])
             .drop(["_grand_mean", "_ss_within", "_ss_between"])
@@ -208,7 +239,23 @@ def calculate_statistical_tests(
 
 
 def adjust_fdr_lazy(quantification_data: pl.LazyFrame, strategy: str = "BH") -> pl.LazyFrame:
-    """Mathematically Sound FDR Alignment Matrix inside Polars Graph Trees."""
+    """Adjusts p-values for multiple testing, adding a `p-adj` column.
+
+    Requires a `p-value` column, typically produced by
+    `calculate_statistical_tests`.
+
+    Args:
+        quantification_data: Data containing a `p-value` column.
+        strategy: One of "None" (copies `p-value` through unchanged),
+            "Bonferroni" (multiplies by the number of tests, clipped to
+            [0, 1]), "BH" (Benjamini-Hochberg step-up procedure, default).
+
+    Returns:
+        `quantification_data` with a `p-adj` column added.
+
+    Raises:
+        ValueError: If `strategy` is not one of the supported values.
+    """
     if strategy == "None":
         return quantification_data.with_columns(pl.col("p-value").alias("p-adj"))
 

@@ -5,7 +5,22 @@ def transform_data(
     metadata: pl.DataFrame,
     strategy: str
 ) -> pl.LazyFrame:
-    """Applies mathematical transformations to sample columns dynamically."""
+    """Applies a mathematical transformation to every sample column.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column.
+        strategy: One of "None", "log2", "log10", "square_root",
+            "cube_root". "log2"/"log10" add 1 before taking the log to
+            avoid `-inf` for zero-intensity values.
+
+    Returns:
+        `quantification_data` with each sample column transformed in place.
+        Returned unchanged if `strategy` is falsy or "None".
+
+    Raises:
+        ValueError: If `strategy` is not one of the supported values.
+    """
     if not strategy or strategy == "None":
         return quantification_data
 
@@ -33,7 +48,30 @@ def normalize_samples(
     id_col: str,
     reference_feature: str | None = None
 ) -> pl.LazyFrame:
-    """Performs sample alignment and column-wise size factor corrections."""
+    """Aligns samples via column-wise size-factor correction.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column.
+        strategy: One of "None", "sum", "median", "pqn" (Probabilistic
+            Quotient Normalization), "reference_feature", "quantile".
+        id_col: Column in `quantification_data` identifying each row
+            (feature/protein). Only used by the "reference_feature"
+            strategy to look up `reference_feature`.
+        reference_feature: Row identifier (matched against `id_col`) to use
+            as the normalization reference. Required when
+            `strategy="reference_feature"`; ignored otherwise.
+
+    Returns:
+        `quantification_data` with each sample column normalized in place
+        and any temporary working columns dropped. Returned unchanged if
+        `strategy` is falsy or "None".
+
+    Raises:
+        ValueError: If `strategy` is not one of the supported values, or if
+            `strategy="reference_feature"` and `reference_feature` is not
+            provided or not found in `quantification_data`.
+    """
     if not strategy or strategy == "None":
         return quantification_data
 
@@ -167,17 +205,34 @@ def normalize_samples(
         )
 
     elif strategy == "quantile":
-        # Complete Quantile Normalization requires strict ranking and sorting shapes.
-        # To maintain streaming structure, we map structural indices.
-        # Quantile normalization is typically non-lazy friendly, but we optimize it using Polars expressions:
-        return quantification_data.with_columns([
-            pl.concat_list(sample_cols).list.sort().list.median().alias("_q_template")
+        # Quantile normalization: reshape every sample column to share the same
+        # value distribution. The reference distribution is the row-wise mean,
+        # across samples, of each sample's sorted values (i.e. the average of
+        # the smallest values across samples, the average of the 2nd-smallest
+        # values across samples, and so on). Each sample's original values are
+        # then replaced by the reference value at their own rank position.
+        #
+        # Ties are broken by row order (`rank(method="ordinal")` assigns unique
+        # 1..n ranks), which is a simplification versus tools like R's
+        # `preprocessCore::normalize.quantiles`, which average tied ranks.
+        sorted_cols = [f"_sorted_{col}" for col in sample_cols]
+        rank_cols = [f"_rank_{col}" for col in sample_cols]
+
+        with_sorted = quantification_data.with_columns([
+            pl.col(col).sort().alias(sorted_col)
+            for col, sorted_col in zip(sample_cols, sorted_cols)
         ]).with_columns([
-            # Map values safely to their identical structural target rank
-            pl.col(col).rank("dense").cast(pl.Int64).alias(f"_rank_{col}")
-            for col in sample_cols
-        ]).drop(["_q_template"]) # Fallback wrapper if required; for massive files, standardizing profiles is recommended.
-        
+            pl.mean_horizontal(sorted_cols).alias("_qref")
+        ]).with_columns([
+            (pl.col(col).rank(method="ordinal").cast(pl.Int64) - 1).alias(rank_col)
+            for col, rank_col in zip(sample_cols, rank_cols)
+        ])
+
+        return with_sorted.with_columns([
+            pl.col("_qref").gather(pl.col(rank_col)).alias(col)
+            for col, rank_col in zip(sample_cols, rank_cols)
+        ]).drop(sorted_cols + rank_cols + ["_qref"])
+
     else:
         raise ValueError(f"Unknown sample normalization strategy: {strategy}")
 
@@ -186,7 +241,24 @@ def scale_data(
     metadata: pl.DataFrame,
     strategy: str
 ) -> pl.LazyFrame:
-    """Applies row-wise/protein-wise centering and variance scaling."""
+    """Applies row-wise (per-feature) centering and/or variance scaling.
+
+    Args:
+        quantification_data: Wide-format data with one column per sample.
+        metadata: Sample metadata with a "sample_id" column.
+        strategy: One of "None", "mean_centering", "auto_scaling"
+            (mean-centering + unit variance), "pareto_scaling"
+            (mean-centering + sqrt(std) scaling), "range_scaling"
+            (min-max scaling to [0, 1]).
+
+    Returns:
+        `quantification_data` with each sample column scaled in place and
+        any temporary working columns dropped. Returned unchanged if
+        `strategy` is falsy or "None".
+
+    Raises:
+        ValueError: If `strategy` is not one of the supported values.
+    """
     if not strategy or strategy == "None":
         return quantification_data
 
