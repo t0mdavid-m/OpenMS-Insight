@@ -366,6 +366,22 @@ export default defineComponent({
   },
 
   methods: {
+    /**
+     * This composite figure hand-wires 4 regions (heatmap, column
+     * dendrogram, row dendrogram, group bar) via manual axis anchors
+     * rather than Plotly's grid subplot system, and some axes (the
+     * dendrograms' distance axes) have no fixed range. Mouse-wheel zoom
+     * (scrollZoom) recomputes axis ranges on the fly and gets confused by
+     * this non-standard layout, blanking out the traces. This component
+     * isn't designed for interactive zooming in the first place (unlike
+     * the scattergl Heatmap, which uses zoom for level-of-detail
+     * downsampling), so it's disabled here rather than fixed at the
+     * layout level.
+     */
+    getHeatmapPlotConfig(): Partial<Plotly.Config> {
+      return { ...this.getPlotConfig(), scrollZoom: false }
+    },
+
     async renderPlot(): Promise<void> {
       try {
         const element = document.getElementById(this.id)
@@ -375,10 +391,10 @@ export default defineComponent({
         }
 
         if (!this.plotInitialized) {
-          await Plotly.newPlot(this.id, this.data, this.layout, this.getPlotConfig())
+          await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
           this.plotInitialized = true
         } else {
-          await Plotly.react(this.id, this.data, this.layout, this.getPlotConfig())
+          await Plotly.react(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
         }
 
         this.$nextTick(() => {
