@@ -134,6 +134,37 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
 }
 
 /**
+ * PCA plot component arguments.
+ */
+export interface PCAPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyPca'
+  /** Column name for the x-axis principal component (e.g. "PC1") */
+  xColumn: string
+  /** Column name for the y-axis principal component (e.g. "PC2") */
+  yColumn: string
+  xLabel?: string
+  yLabel?: string
+  title?: string
+  /** Column with the discrete group/condition label used for coloring */
+  groupColumn?: string
+  /** Map of group values to colors (e.g. { "Control": "#1f77b4", "Treated": "#d62728" }) */
+  groupColors?: Record<string, string>
+  /** Column with sample identifiers, shown in hover text */
+  sampleIdColumn?: string
+  /** Draw a 95% confidence ellipse per group (default: true; needs >=3 points/group) */
+  showEllipses?: boolean
+  interactivity?: InteractivityMapping
+  height?: number
+}
+
+/**
+ * PCA plot data format.
+ * Each entry is a row with the PC columns, group column, sample id column,
+ * and any additional columns needed for interactivity.
+ */
+export type PCAData = Record<string, unknown>
+
+/**
  * SequenceView component arguments.
  */
 export interface SequenceViewComponentArgs extends BaseComponentArgs {
@@ -281,6 +312,7 @@ export type ComponentArgs =
   | LinePlotComponentArgs
   | HeatmapComponentArgs
   | ClusteredHeatmapComponentArgs
+  | PCAPlotComponentArgs
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs

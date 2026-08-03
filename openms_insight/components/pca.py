@@ -18,9 +18,9 @@ class PCAPlot(BaseComponent):
     features/proteins, one column per sample) plus a sample metadata table
     (sample_id -> group), then renders sample scores colored by group.
 
-    No dedicated PCA Vue component exists yet, so rendering reuses the
-    PlotlyHeatmap frontend component in its categorical-coloring mode
-    (color points by discrete group instead of a continuous colorscale).
+    Rendering is handled by the dedicated PlotlyPca Vue component: one
+    marker trace per group (for a proper legend), optional 95% confidence
+    ellipses per group, and zero-reference lines on both axes.
 
     Which pair of principal components is displayed (pc_x/pc_y) can be
     changed at render time without invalidating the cache, similar to how
@@ -60,7 +60,8 @@ class PCAPlot(BaseComponent):
         title: Optional[str] = None,
         x_label: Optional[str] = None,
         y_label: Optional[str] = None,
-        category_colors: Optional[Dict[str, str]] = None,
+        group_colors: Optional[Dict[str, str]] = None,
+        show_ellipses: bool = True,
         **kwargs,
     ):
         """
@@ -105,8 +106,10 @@ class PCAPlot(BaseComponent):
                 explained variance ratio.
             y_label: Y-axis label. Defaults to "PC{n} (xx.x%)" using the
                 explained variance ratio.
-            category_colors: Optional mapping of group values to colors
+            group_colors: Optional mapping of group values to colors
                 (e.g. {"Control": "#1f77b4", "Treatment": "#d62728"}).
+            show_ellipses: If True (default), draw a 95% confidence ellipse
+                per group (only drawn for groups with >= 3 samples).
             **kwargs: Additional configuration options.
         """
         if (data is not None or data_path is not None) and metadata is None:
@@ -123,7 +126,8 @@ class PCAPlot(BaseComponent):
         self._title = title
         self._x_label = x_label
         self._y_label = y_label
-        self._category_colors = category_colors or {}
+        self._group_colors = group_colors or {}
+        self._show_ellipses = show_ellipses
 
         # Render-time display selection (which PC pair to plot). Overridable
         # per-call via __call__() without invalidating the cache.
@@ -150,7 +154,8 @@ class PCAPlot(BaseComponent):
             title=title,
             x_label=x_label,
             y_label=y_label,
-            category_colors=category_colors,
+            group_colors=group_colors,
+            show_ellipses=show_ellipses,
             **kwargs,
         )
 
@@ -201,7 +206,8 @@ class PCAPlot(BaseComponent):
             "title": self._title,
             "x_label": self._x_label,
             "y_label": self._y_label,
-            "category_colors": self._category_colors,
+            "group_colors": self._group_colors,
+            "show_ellipses": self._show_ellipses,
             # Note: pc_x/pc_y are NOT included - they're render-time params
         }
 
@@ -214,7 +220,8 @@ class PCAPlot(BaseComponent):
         self._title = config.get("title")
         self._x_label = config.get("x_label")
         self._y_label = config.get("y_label")
-        self._category_colors = config.get("category_colors", {})
+        self._group_colors = config.get("group_colors", {})
+        self._show_ellipses = config.get("show_ellipses", True)
         self._metadata = None  # not needed after PCA has been precomputed
 
         # Only set defaults if not already set by __init__ (reconstruction
@@ -287,15 +294,6 @@ class PCAPlot(BaseComponent):
 
         pca_df = pl.DataFrame(result)
 
-        # Overall distance from the origin across ALL computed PCs - used as
-        # a generic hover/render-order metric, independent of which two PCs
-        # are chosen for the x/y axes at render time.
-        pca_df = pca_df.with_columns(
-            pl.sum_horizontal([pl.col(c) ** 2 for c in pc_columns]).sqrt().alias(
-                "_pca_distance"
-            )
-        )
-
         final_cols = set(pca_df.columns)
         for identifier, column in {**self._filters, **self._interactivity}.items():
             if column not in final_cols:
@@ -321,12 +319,12 @@ class PCAPlot(BaseComponent):
         return list(self._preprocessed_data.get("pc_columns", []))
 
     def _get_vue_component_name(self) -> str:
-        """Return the Vue component name (reuses PlotlyHeatmap's categorical mode)."""
-        return "PlotlyHeatmap"
+        """Return the Vue component name."""
+        return "PlotlyPca"
 
     def _get_data_key(self) -> str:
         """Return the key for the primary data in Vue payload."""
-        return "heatmapData"
+        return "pcaData"
 
     def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare filtered PCA scores for Vue component."""
@@ -348,7 +346,7 @@ class PCAPlot(BaseComponent):
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 
-        return {"heatmapData": df_pandas, "_hash": data_hash}
+        return {"pcaData": df_pandas, "_hash": data_hash}
 
     def _axis_label(
         self, pc_index: int, base_label: Optional[str], variance_ratio: List[float]
@@ -362,7 +360,7 @@ class PCAPlot(BaseComponent):
         return col
 
     def _get_component_args(self) -> Dict[str, Any]:
-        """Return configuration for the (reused) PlotlyHeatmap Vue component."""
+        """Return configuration for the PlotlyPca Vue component."""
         variance_ratio = self._preprocessed_data.get("variance_ratio", [])
         pc_columns = self._preprocessed_data.get("pc_columns", [])
 
@@ -379,14 +377,12 @@ class PCAPlot(BaseComponent):
             "componentType": self._get_vue_component_name(),
             "xColumn": pc_x_col,
             "yColumn": pc_y_col,
-            "intensityColumn": "_pca_distance",
             "xLabel": self._axis_label(self._current_pc_x, self._x_label, variance_ratio),
             "yLabel": self._axis_label(self._current_pc_y, self._y_label, variance_ratio),
-            "categoryColumn": self._group_field,
-            "categoryColors": self._category_colors,
-            "logScale": False,
-            "intensityLabel": "Distance from origin",
-            "zoomIdentifier": f"{self._cache_id}_zoom",
+            "groupColumn": self._group_field,
+            "groupColors": self._group_colors,
+            "sampleIdColumn": self._sample_id_field,
+            "showEllipses": self._show_ellipses,
             "interactivity": self._interactivity or {},
         }
         if self._title:

@@ -31,6 +31,7 @@ import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
 import PlotlyClusteredHeatmap from './components/plotly/PlotlyClusteredHeatmap.vue'
 import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
 import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
+import PlotlyPca from './components/plotly/PlotlyPca.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
 
 export default defineComponent({
@@ -42,6 +43,7 @@ export default defineComponent({
     PlotlyClusteredHeatmap,
     PlotlyMirrorPlot,
     PlotlyVolcano,
+    PlotlyPca,
     SequenceView,
   },
   setup() {
@@ -208,6 +210,8 @@ export default defineComponent({
           return PlotlyMirrorPlot
         case 'PlotlyVolcano':
           return PlotlyVolcano
+        case 'PlotlyPca':
+          return PlotlyPca
         case 'SequenceView':
           return SequenceView
         default:

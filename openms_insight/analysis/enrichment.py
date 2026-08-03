@@ -188,6 +188,14 @@ def calculate_go_enrichment(final_report: pl.DataFrame, id_col: str, target_p_co
     if "notfound" in res_go.columns:
         res_go = res_go[res_go["notfound"] != True]
 
+    # MyGene.info may return zero hits with a "go" field at all (e.g. for
+    # organisms/genes with sparse GO annotation coverage, such as many
+    # bacterial species). Treat that the same as "no GO data for anyone"
+    # instead of crashing, so callers still get a clean "no terms found"
+    # result rather than an unhandled KeyError.
+    if "go" not in res_go.columns:
+        res_go["go"] = None
+
     # 4. Map GO annotations
     for go_type in ["BP", "CC", "MF"]:
         res_go[f"{go_type}_terms"] = res_go["go"].apply(lambda x: extract_go_terms(x, go_type))
