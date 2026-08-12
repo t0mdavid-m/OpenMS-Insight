@@ -17,7 +17,7 @@ const DEFAULT_STYLING = {
   unhighlightedColor: 'lightblue',
 }
 
-export interface SideData {
+interface SideData {
   x: number[]
   y: number[] // POSITIVE values from Python; we negate for bottom in render() (Task 12)
   highlight?: boolean[]
@@ -25,14 +25,14 @@ export interface SideData {
   interactivityValues?: Record<string, unknown[]>
 }
 
-export interface AnnotatedPeak {
+interface AnnotatedPeak {
   x: number
   y: number
   label: string
   index: number
 }
 
-export interface AnnotationBox {
+interface AnnotationBox {
   x: number
   y: number
   width: number
