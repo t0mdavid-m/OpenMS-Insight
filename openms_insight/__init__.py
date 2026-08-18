@@ -19,7 +19,7 @@ from .core.registry import get_component_class, register_component
 from .core.state import StateManager
 from .rendering.bridge import clear_component_annotations, get_component_annotations
 
-__version__ = "0.1.11"
+__version__ = "0.2.0"
 
 __all__ = [
     # Core
