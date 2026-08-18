@@ -38,10 +38,10 @@ state_manager = StateManager()
 table = Table(
     cache_id="items_table",
     data_path="items.parquet",
-    interactivity={'item': 'item_id'},
+    interactivity={"item": "item_id"},
     column_definitions=[
-        {'field': 'item_id', 'title': 'ID', 'sorter': 'number'},
-        {'field': 'name', 'title': 'Name'},
+        {"field": "item_id", "title": "ID", "sorter": "number"},
+        {"field": "name", "title": "Name"},
     ],
 )
 table(state_manager=state_manager)
@@ -50,9 +50,9 @@ table(state_manager=state_manager)
 plot = LinePlot(
     cache_id="values_plot",
     data_path="values.parquet",
-    filters={'item': 'item_id'},
-    x_column='x',
-    y_column='y',
+    filters={"item": "item_id"},
+    x_column="x",
+    y_column="y",
 )
 plot(state_manager=state_manager)
 ```
@@ -70,33 +70,33 @@ Components communicate through **identifiers** using three mechanisms:
 master = Table(
     cache_id="spectra",
     data_path="spectra.parquet",
-    interactivity={'spectrum': 'scan_id'},  # Click -> sets spectrum=scan_id
+    interactivity={"spectrum": "scan_id"},  # Click -> sets spectrum=scan_id
 )
 
 # Detail table: filters by 'spectrum', sets 'peak' on click
 detail = Table(
     cache_id="peaks",
     data_path="peaks.parquet",
-    filters={'spectrum': 'scan_id'},        # Filters where scan_id = selected spectrum
-    interactivity={'peak': 'peak_id'},      # Click -> sets peak=peak_id
+    filters={"spectrum": "scan_id"},  # Filters where scan_id = selected spectrum
+    interactivity={"peak": "peak_id"},  # Click -> sets peak=peak_id
 )
 
 # Plot: filters by 'spectrum', highlights selected 'peak'
 plot = LinePlot(
     cache_id="plot",
     data_path="peaks.parquet",
-    filters={'spectrum': 'scan_id'},
-    interactivity={'peak': 'peak_id'},
-    x_column='mass',
-    y_column='intensity',
+    filters={"spectrum": "scan_id"},
+    interactivity={"peak": "peak_id"},
+    x_column="mass",
+    y_column="intensity",
 )
 
 # Table with filter defaults - shows unannotated data when no identification selected
 annotations = Table(
     cache_id="annotations",
     data_path="annotations.parquet",
-    filters={'identification': 'id_idx'},
-    filter_defaults={'identification': -1},  # Use -1 when identification is None
+    filters={"identification": "id_idx"},
+    filter_defaults={"identification": -1},  # Use -1 when identification is None
 )
 ```
 
@@ -112,16 +112,22 @@ Interactive table using Tabulator.js with filtering dialogs, sorting, pagination
 Table(
     cache_id="spectra_table",
     data_path="spectra.parquet",
-    interactivity={'spectrum': 'scan_id'},
+    interactivity={"spectrum": "scan_id"},
     column_definitions=[
-        {'field': 'scan_id', 'title': 'Scan', 'sorter': 'number'},
-        {'field': 'rt', 'title': 'RT (min)', 'sorter': 'number', 'hozAlign': 'right',
-         'formatter': 'money', 'formatterParams': {'precision': 2, 'symbol': ''}},
-        {'field': 'precursor_mz', 'title': 'm/z', 'sorter': 'number'},
+        {"field": "scan_id", "title": "Scan", "sorter": "number"},
+        {
+            "field": "rt",
+            "title": "RT (min)",
+            "sorter": "number",
+            "hozAlign": "right",
+            "formatter": "money",
+            "formatterParams": {"precision": 2, "symbol": ""},
+        },
+        {"field": "precursor_mz", "title": "m/z", "sorter": "number"},
     ],
-    index_field='scan_id',
-    go_to_fields=['scan_id'],
-    initial_sort=[{'column': 'scan_id', 'dir': 'asc'}],
+    index_field="scan_id",
+    go_to_fields=["scan_id"],
+    initial_sort=[{"column": "scan_id", "dir": "asc"}],
     default_row=0,
     pagination=True,
     page_size=100,
@@ -143,11 +149,27 @@ In addition to Tabulator's built-in formatters, these custom formatters are avai
 - `badge`: Colored pill/badge for categorical values - use `formatterParams: {colorMap: {"Up": "#FF0000"}, defaultColor: "#888"}`
 
 ```python
-column_definitions=[
-    {'field': 'pvalue', 'title': 'P-value', 'formatter': 'scientific', 'formatterParams': {'precision': 2}},
-    {'field': 'log2fc', 'title': 'Log2 FC', 'formatter': 'signed', 'formatterParams': {'precision': 3}},
-    {'field': 'regulation', 'title': 'Status', 'formatter': 'badge',
-     'formatterParams': {'colorMap': {'Up': '#d62728', 'Down': '#1f77b4', 'NS': '#888888'}}},
+column_definitions = [
+    {
+        "field": "pvalue",
+        "title": "P-value",
+        "formatter": "scientific",
+        "formatterParams": {"precision": 2},
+    },
+    {
+        "field": "log2fc",
+        "title": "Log2 FC",
+        "formatter": "signed",
+        "formatterParams": {"precision": 3},
+    },
+    {
+        "field": "regulation",
+        "title": "Status",
+        "formatter": "badge",
+        "formatterParams": {
+            "colorMap": {"Up": "#d62728", "Down": "#1f77b4", "NS": "#888888"}
+        },
+    },
 ]
 ```
 
@@ -159,19 +181,19 @@ Stick-style line plot using Plotly.js for mass spectra visualization.
 LinePlot(
     cache_id="spectrum_plot",
     data_path="peaks.parquet",
-    filters={'spectrum': 'scan_id'},
-    interactivity={'peak': 'peak_id'},
-    x_column='mass',
-    y_column='intensity',
-    highlight_column='is_annotated',
-    annotation_column='ion_label',
+    filters={"spectrum": "scan_id"},
+    interactivity={"peak": "peak_id"},
+    x_column="mass",
+    y_column="intensity",
+    highlight_column="is_annotated",
+    annotation_column="ion_label",
     title="MS/MS Spectrum",
     x_label="m/z",
     y_label="Intensity",
     styling={
-        'highlightColor': '#E4572E',
-        'selectedColor': '#F3A712',
-        'unhighlightedColor': 'lightblue',
+        "highlightColor": "#E4572E",
+        "selectedColor": "#F3A712",
+        "unhighlightedColor": "lightblue",
     },
 )
 ```
@@ -192,13 +214,13 @@ from openms_insight import MirrorPlot
 mirror = MirrorPlot(
     cache_id="mirror",
     data_path="peaks.parquet",
-    filters_top={'spectrum_a': 'scan_id'},      # top half follows spectrum_a
-    filters_bottom={'spectrum_b': 'scan_id'},   # bottom half follows spectrum_b
-    interactivity={'selected_peak': 'peak_id'}, # click in either half -> shared
-    x_column='mass',
-    y_column='intensity',                       # positive for both halves
-    highlight_column='is_annotated',
-    annotation_column='ion_label',
+    filters_top={"spectrum_a": "scan_id"},  # top half follows spectrum_a
+    filters_bottom={"spectrum_b": "scan_id"},  # bottom half follows spectrum_b
+    interactivity={"selected_peak": "peak_id"},  # click in either half -> shared
+    x_column="mass",
+    y_column="intensity",  # positive for both halves
+    highlight_column="is_annotated",
+    annotation_column="ion_label",
     title_top="Experimental",
     title_bottom="Reference",
     x_label="m/z",
@@ -230,17 +252,17 @@ mirror(state_manager=state_manager, height=600)
 Heatmap(
     cache_id="peaks_heatmap",
     data_path="all_peaks.parquet",
-    x_column='retention_time',
-    y_column='mass',
-    intensity_column='intensity',
-    interactivity={'spectrum': 'scan_id', 'peak': 'peak_id'},
+    x_column="retention_time",
+    y_column="mass",
+    intensity_column="intensity",
+    interactivity={"spectrum": "scan_id", "peak": "peak_id"},
     min_points=30000,
     x_bins=400,
     y_bins=50,
     title="Peak Map",
     x_label="Retention Time (min)",
     y_label="m/z",
-    colorscale='Portland',
+    colorscale="Portland",
 )
 ```
 
@@ -259,12 +281,12 @@ Heatmap(
 Heatmap(
     cache_id="psm_scores",
     data_path="psm_data.parquet",
-    x_column='rt',
-    y_column='mz',
-    intensity_column='score',
-    log_scale=False,              # Linear color mapping
-    intensity_label='Score',      # Custom colorbar label
-    colorscale='Blues',
+    x_column="rt",
+    y_column="mz",
+    intensity_column="score",
+    log_scale=False,  # Linear color mapping
+    intensity_label="Score",  # Custom colorbar label
+    colorscale="Blues",
 )
 ```
 
@@ -275,14 +297,14 @@ For identification results where lower scores indicate better matches (e.g., e-v
 Heatmap(
     cache_id="psm_evalue",
     data_path="psm_data.parquet",
-    x_column='rt',
-    y_column='mz',
-    intensity_column='e_value',
-    log_scale=True,               # Log scale for e-values
-    low_values_on_top=True,       # Keep/show low e-values (best hits)
-    reversescale=True,            # Bright color = low value = best
-    intensity_label='E-value',
-    colorscale='Portland',
+    x_column="rt",
+    y_column="mz",
+    intensity_column="e_value",
+    log_scale=True,  # Log scale for e-values
+    low_values_on_top=True,  # Keep/show low e-values (best hits)
+    reversescale=True,  # Bright color = low value = best
+    intensity_label="E-value",
+    colorscale="Portland",
 )
 ```
 
@@ -293,14 +315,14 @@ Use `category_column` for discrete coloring by category instead of continuous in
 Heatmap(
     cache_id="samples_heatmap",
     data_path="samples.parquet",
-    x_column='retention_time',
-    y_column='mass',
-    intensity_column='intensity',
-    category_column='sample_group',  # Color by category instead of intensity
-    category_colors={                 # Optional custom colors
-        'Control': '#1f77b4',
-        'Treatment_A': '#ff7f0e',
-        'Treatment_B': '#2ca02c',
+    x_column="retention_time",
+    y_column="mass",
+    intensity_column="intensity",
+    category_column="sample_group",  # Color by category instead of intensity
+    category_colors={  # Optional custom colors
+        "Control": "#1f77b4",
+        "Treatment_A": "#ff7f0e",
+        "Treatment_B": "#2ca02c",
     },
 )
 ```
@@ -315,22 +337,22 @@ from openms_insight import VolcanoPlot
 VolcanoPlot(
     cache_id="de_volcano",
     data_path="differential_expression.parquet",
-    log2fc_column='log2FC',
-    pvalue_column='pvalue',
-    label_column='protein_name',       # Optional: labels for significant points
-    filters={'comparison': 'comparison_id'},
-    interactivity={'protein': 'protein_id'},
+    log2fc_column="log2FC",
+    pvalue_column="pvalue",
+    label_column="protein_name",  # Optional: labels for significant points
+    filters={"comparison": "comparison_id"},
+    interactivity={"protein": "protein_id"},
     title="Differential Expression",
     x_label="Log2 Fold Change",
     y_label="-log10(p-value)",
-    up_color='#d62728',               # Color for up-regulated
-    down_color='#1f77b4',             # Color for down-regulated
-    ns_color='#888888',               # Color for not significant
+    up_color="#d62728",  # Color for up-regulated
+    down_color="#1f77b4",  # Color for down-regulated
+    ns_color="#888888",  # Color for not significant
 )(
     state_manager=state_manager,
-    fc_threshold=1.0,                  # Fold change threshold (render-time)
-    p_threshold=0.05,                  # P-value threshold (render-time)
-    max_labels=20,                     # Max labels to show
+    fc_threshold=1.0,  # Fold change threshold (render-time)
+    p_threshold=0.05,  # P-value threshold (render-time)
+    max_labels=20,  # Max labels to show
 )
 ```
 
@@ -353,9 +375,9 @@ Peptide sequence visualization with fragment ion matching. Supports both dynamic
 SequenceView(
     cache_id="peptide_view",
     sequence_data_path="sequences.parquet",  # columns: scan_id, sequence, precursor_charge
-    peaks_data_path="peaks.parquet",         # columns: scan_id, peak_id, mass, intensity
-    filters={'spectrum': 'scan_id'},
-    interactivity={'peak': 'peak_id'},
+    peaks_data_path="peaks.parquet",  # columns: scan_id, peak_id, mass, intensity
+    filters={"spectrum": "scan_id"},
+    interactivity={"peak": "peak_id"},
     deconvolved=False,  # peaks are m/z values, consider charge states
     title="Fragment Coverage",
 )
@@ -364,8 +386,8 @@ SequenceView(
 SequenceView(
     cache_id="static_peptide",
     sequence_data=("PEPTIDEK", 2),  # (sequence, charge) tuple
-    peaks_data=peaks_df,            # Optional: LazyFrame with mass, intensity columns
-    deconvolved=True,               # peaks are neutral masses
+    peaks_data=peaks_df,  # Optional: LazyFrame with mass, intensity columns
+    deconvolved=True,  # peaks are neutral masses
 )
 
 # Simplest: just a sequence string
@@ -441,7 +463,7 @@ Components can be reconstructed from cache using only `cache_id` and `cache_path
 table = Table(
     cache_id="my_table",
     data_path="data.parquet",
-    filters={'spectrum': 'scan_id'},
+    filters={"spectrum": "scan_id"},
     column_definitions=[...],
     cache_path="./cache",
 )

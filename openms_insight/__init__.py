@@ -5,9 +5,11 @@ This package provides reusable, interactive Streamlit components backed by Vue.j
 visualizations with cross-component selection state management.
 """
 
+from .components.clustered_heatmap import ClusteredHeatmap
 from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
+from .components.pca import PCAPlot
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.table import Table
 from .components.volcanoplot import VolcanoPlot
@@ -30,10 +32,12 @@ __all__ = [
     "Table",
     "LinePlot",
     "Heatmap",
+    "ClusteredHeatmap",
     "VolcanoPlot",
     "SequenceView",
     "SequenceViewResult",
     "MirrorPlot",
+    "PCAPlot",
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",

@@ -93,9 +93,7 @@ if pagination_id:
 # Filter result to owned keys (preserve _ prefixed metadata)
 if result:
     filtered_result = {
-        k: v
-        for k, v in result.items()
-        if k.startswith("_") or k in owned_keys
+        k: v for k, v in result.items() if k.startswith("_") or k in owned_keys
     }
 else:
     filtered_result = result

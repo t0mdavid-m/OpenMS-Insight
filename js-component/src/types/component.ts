@@ -134,6 +134,37 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
 }
 
 /**
+ * PCA plot component arguments.
+ */
+export interface PCAPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyPca'
+  /** Column name for the x-axis principal component (e.g. "PC1") */
+  xColumn: string
+  /** Column name for the y-axis principal component (e.g. "PC2") */
+  yColumn: string
+  xLabel?: string
+  yLabel?: string
+  title?: string
+  /** Column with the discrete group/condition label used for coloring */
+  groupColumn?: string
+  /** Map of group values to colors (e.g. { "Control": "#1f77b4", "Treated": "#d62728" }) */
+  groupColors?: Record<string, string>
+  /** Column with sample identifiers, shown in hover text */
+  sampleIdColumn?: string
+  /** Draw a 95% confidence ellipse per group (default: true; needs >=3 points/group) */
+  showEllipses?: boolean
+  interactivity?: InteractivityMapping
+  height?: number
+}
+
+/**
+ * PCA plot data format.
+ * Each entry is a row with the PC columns, group column, sample id column,
+ * and any additional columns needed for interactivity.
+ */
+export type PCAData = Record<string, unknown>
+
+/**
  * SequenceView component arguments.
  */
 export interface SequenceViewComponentArgs extends BaseComponentArgs {
@@ -192,6 +223,52 @@ export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
 export type HeatmapData = Record<string, unknown>
 
 /**
+ * Dendrogram line-segment coordinates, in the same format
+ * `scipy.cluster.hierarchy.dendrogram(..., no_plot=True)` produces:
+ * each index into `icoord`/`dcoord` is one line segment of the tree, as
+ * parallel x/y coordinate arrays (4 points per segment).
+ */
+export interface DendrogramData {
+  leafOrder: number[]
+  icoord: number[][]
+  dcoord: number[][]
+}
+
+/**
+ * ClusteredHeatmap component arguments.
+ */
+export interface ClusteredHeatmapComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyClusteredHeatmap'
+  idCol: string
+  /** Row labels (e.g. protein names), in clustered/rendered order. */
+  rowLabels: string[]
+  /** Column labels (e.g. sample names), in clustered/rendered order. */
+  colLabels: string[]
+  /** Row (left-side) dendrogram, or null if row clustering was skipped. */
+  rowDendrogram: DendrogramData | null
+  /** Column (top) dendrogram, or null if column clustering was skipped. */
+  colDendrogram: DendrogramData | null
+  /** Group label per column (same order as colLabels), or null entries if no metadata was provided. */
+  colGroups: (string | null)[]
+  /** Map of group value -> color, for the group annotation bar. */
+  groupColors: Record<string, string>
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  /** Named Plotly colorscale (e.g. "RdBu") or a custom [fraction, color] stop list. */
+  colorscale?: string | Array<[number, string]>
+  reversescale?: boolean
+  intensityLabel?: string
+  height?: number
+}
+
+/**
+ * ClusteredHeatmap matrix row format.
+ * Each entry has the id column plus one numeric field per sample column.
+ */
+export type ClusteredHeatmapData = Record<string, unknown>
+
+/**
  * VolcanoPlot data format.
  * Each entry is a row with log2fc, neglog10p, pvalue, label, and any
  * additional columns needed for interactivity.
@@ -234,6 +311,8 @@ export type ComponentArgs =
   | TableComponentArgs
   | LinePlotComponentArgs
   | HeatmapComponentArgs
+  | ClusteredHeatmapComponentArgs
+  | PCAPlotComponentArgs
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
