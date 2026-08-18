@@ -279,6 +279,23 @@ class ClusteredHeatmap(BaseComponent):
 
         values = df.select(col_labels).to_numpy().astype(np.float64)
 
+        # scipy's linkage rejects non-finite values with an error that never
+        # mentions the caller's data. Only clustering needs a complete matrix —
+        # an unclustered heatmap renders gaps perfectly well — so check just
+        # the axes that are actually about to be clustered.
+        will_cluster = (self._row_cluster and len(row_labels) >= 2) or (
+            self._col_cluster and len(col_labels) >= 2
+        )
+        if will_cluster and not np.isfinite(values).all():
+            incomplete = int((~np.isfinite(values)).any(axis=1).sum())
+            raise ValueError(
+                f"ClusteredHeatmap cannot cluster a matrix containing missing "
+                f"values; {incomplete} of {len(row_labels)} rows contain them. "
+                f"Impute first, e.g. with "
+                f"openms_insight.analysis.imputation.impute_mar(), or pass "
+                f"row_cluster=False and col_cluster=False."
+            )
+
         row_dendrogram: Optional[Dict[str, Any]] = None
         if self._row_cluster and len(row_labels) >= 2:
             row_dendrogram = self._compute_dendrogram(values)
