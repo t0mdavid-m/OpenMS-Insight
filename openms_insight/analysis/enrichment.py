@@ -128,9 +128,9 @@ def run_go_category(res_go, fg_set, bg_set, go_type):
         color_continuous_scale="Viridis",
     )
     fig.update_layout(
-        yaxis=dict(autorange="reversed"),
+        yaxis={"autorange": "reversed"},
         height=500,
-        margin=dict(l=10, r=10, t=40, b=10),
+        margin={"l": 10, "r": 10, "t": 40, "b": 10},
     )
     return fig, df
 
@@ -211,7 +211,7 @@ def calculate_go_enrichment(
     res_go = pd.DataFrame(res_list)
 
     if "notfound" in res_go.columns:
-        res_go = res_go[res_go["notfound"] != True]
+        res_go = res_go[res_go["notfound"].ne(True)]
 
     # MyGene.info may return zero hits with a "go" field at all (e.g. for
     # organisms/genes with sparse GO annotation coverage, such as many
@@ -224,7 +224,7 @@ def calculate_go_enrichment(
     # 4. Map GO annotations
     for go_type in ["BP", "CC", "MF"]:
         res_go[f"{go_type}_terms"] = res_go["go"].apply(
-            lambda x: extract_go_terms(x, go_type)
+            lambda x, go_type=go_type: extract_go_terms(x, go_type)
         )
 
     annotated_ids = set(res_go["query"].astype(str))
