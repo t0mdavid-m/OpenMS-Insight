@@ -1,10 +1,18 @@
-import polars as pl
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import mygene
-from scipy.stats import fisher_exact
 from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+import polars as pl
+from scipy.stats import fisher_exact
+
+try:
+    import mygene
+    import plotly.express as px
+except ImportError as exc:
+    raise ImportError(
+        "GO enrichment requires the optional 'analysis' extra:\n"
+        "    pip install openms-insight[analysis]"
+    ) from exc
 
 def get_clean_uniprot(name):
     """Cleans FASTA-style UniProt headers to extract the core accession ID.
