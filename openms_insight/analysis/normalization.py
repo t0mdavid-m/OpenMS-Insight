@@ -1,3 +1,5 @@
+from typing import Optional
+
 import polars as pl
 
 
@@ -46,7 +48,7 @@ def normalize_samples(
     metadata: pl.DataFrame,
     strategy: str,
     id_col: str,
-    reference_feature: str | None = None,
+    reference_feature: Optional[str] = None,
 ) -> pl.LazyFrame:
     """Aligns samples via column-wise size-factor correction.
 
