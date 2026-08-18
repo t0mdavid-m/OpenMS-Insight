@@ -67,6 +67,13 @@ def calculate_statistical_tests(
 
     lazy_base = quantification_data.with_columns(group_stats_exprs)
 
+    # Per-group working columns added by `group_stats_exprs` above. Every
+    # branch must drop these before returning, so the output holds only the
+    # caller's columns plus log2FC / stat / p-value.
+    group_temp_cols = [
+        col for g in unique_groups for col in (f"_mean_{g}", f"_n_{g}", f"_ss_{g}")
+    ]
+
     # Advanced Mathematical Method Routing
     if method == "limma_like":
         df_residual = total_samples - group_count
@@ -118,7 +125,10 @@ def calculate_statistical_tests(
                         .alias("p-value")
                     ]
                 )
-                .drop(["_sigma_sq", "_s0_sq", "_moderated_var", "_updated_df"])
+                .drop(
+                    ["_sigma_sq", "_s0_sq", "_moderated_var", "_updated_df"]
+                    + group_temp_cols
+                )
             )
         else:
             grand_mean_expr = (
@@ -179,6 +189,7 @@ def calculate_statistical_tests(
                         "_grand_mean",
                         "_ss_between",
                     ]
+                    + group_temp_cols
                 )
             )
 
@@ -239,7 +250,7 @@ def calculate_statistical_tests(
                     .alias("p-value")
                 ]
             )
-            .drop(["_v1", "_v2"])
+            .drop(["_v1", "_v2"] + group_temp_cols)
         )
 
     # Implementation Layer: Paired t-test (Dependent Samples) Execution Block
@@ -304,7 +315,7 @@ def calculate_statistical_tests(
                     .alias("p-value")
                 ]
             )
-            .drop(["_diff_sd"])
+            .drop(["_diff_sd"] + group_temp_cols)
         )
 
     elif method == "anova":
@@ -369,7 +380,7 @@ def calculate_statistical_tests(
                     .alias("p-value")
                 ]
             )
-            .drop(["_grand_mean", "_ss_within", "_ss_between"])
+            .drop(["_grand_mean", "_ss_within", "_ss_between"] + group_temp_cols)
         )
     else:
         raise ValueError(f"Unknown method strategy: {method}")
