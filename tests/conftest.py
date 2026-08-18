@@ -175,3 +175,118 @@ def pagination_test_data() -> pl.LazyFrame:
             "priority": [i % 5 + 1 for i in range(500)],
         }
     )
+
+
+@pytest.fixture
+def sample_quantification_data() -> pl.LazyFrame:
+    """Wide-format quantification matrix for the analysis pipeline tests.
+
+    Deliberately imperfect: ``f4`` carries missing values, so imputation and
+    the missing-ratio filters have something to act on, and ``f3`` is constant
+    in every group, which exercises the degenerate-variance paths. The other
+    four features are complete, which leaves PCAPlot enough rows after its
+    ``drop_nulls()``.
+    """
+    return pl.LazyFrame(
+        {
+            "feature": ["f1", "f2", "f3", "f4", "f5"],
+            "s1": [1.0, 5.0, 2.0, None, 8.0],
+            "s2": [1.2, 5.1, 2.0, 3.0, 8.2],
+            "s3": [1.1, 5.3, 2.0, 3.2, 7.9],
+            "s4": [3.0, 5.2, 2.0, None, 1.0],
+            "s5": [3.1, 4.9, 2.0, 3.1, 1.1],
+            "s6": [2.9, 5.0, 2.0, 3.3, 1.2],
+        }
+    )
+
+
+@pytest.fixture
+def sample_quantification_metadata() -> pl.DataFrame:
+    """Two balanced groups, for the welch / paired / limma_like paths."""
+    return pl.DataFrame(
+        {
+            "sample_id": ["s1", "s2", "s3", "s4", "s5", "s6"],
+            "group": ["A", "A", "A", "B", "B", "B"],
+        }
+    )
+
+
+@pytest.fixture
+def sample_quantification_metadata_3group() -> pl.DataFrame:
+    """Three balanced groups, for the ANOVA and limma_like F-test paths."""
+    return pl.DataFrame(
+        {
+            "sample_id": ["s1", "s2", "s3", "s4", "s5", "s6"],
+            "group": ["A", "A", "B", "B", "C", "C"],
+        }
+    )
+
+
+@pytest.fixture
+def assert_analysis_contract():
+    """Shape assertions shared by the analysis pipeline tests.
+
+    Checks only what the modules document about themselves: the result stays
+    lazy, no ``_``-prefixed working column leaks into it, and the caller's own
+    columns survive. Nothing here asserts a statistical value.
+    """
+
+    def _assert(result, source, *, required=(), rows=None, max_rows=None):
+        assert isinstance(result, pl.LazyFrame), (
+            f"expected a LazyFrame, got {type(result).__name__}"
+        )
+        out = result.collect()
+        src = source.collect() if isinstance(source, pl.LazyFrame) else source
+
+        leaked = [c for c in out.columns if c.startswith("_")]
+        assert not leaked, f"temporary working columns leaked into output: {leaked}"
+
+        dropped = [c for c in src.columns if c not in out.columns]
+        assert not dropped, f"caller columns missing from output: {dropped}"
+
+        for column in required:
+            assert column in out.columns, f"documented output column {column!r} missing"
+
+        if rows is not None:
+            assert out.height == rows, f"expected {rows} rows, got {out.height}"
+        if max_rows is not None:
+            assert out.height <= max_rows, f"row count grew to {out.height}"
+        return out
+
+    return _assert
+
+
+@pytest.fixture
+def unusable_metadata() -> pl.DataFrame:
+    """Metadata carrying no usable group labels.
+
+    ``analysis.filter`` treats null, ``""`` and ``"NA"`` as unusable and
+    documents that such metadata turns every filter into a pass-through.
+    """
+    return pl.DataFrame(
+        {
+            "sample_id": ["s1", "s2", "s3", "s4", "s5", "s6"],
+            "group": ["NA", "NA", "NA", "NA", "NA", "NA"],
+        }
+    )
+
+
+@pytest.fixture
+def sample_quantification_data_complete() -> pl.LazyFrame:
+    """The expression matrix with no missing values.
+
+    ClusteredHeatmap clusters via scipy's linkage, which requires a complete
+    matrix; components under test here should not be exercising the missing
+    value path.
+    """
+    return pl.LazyFrame(
+        {
+            "feature": ["f1", "f2", "f3", "f4", "f5"],
+            "s1": [1.0, 5.0, 2.0, 3.4, 8.0],
+            "s2": [1.2, 5.1, 2.0, 3.0, 8.2],
+            "s3": [1.1, 5.3, 2.0, 3.2, 7.9],
+            "s4": [3.0, 5.2, 2.0, 3.5, 1.0],
+            "s5": [3.1, 4.9, 2.0, 3.1, 1.1],
+            "s6": [2.9, 5.0, 2.0, 3.3, 1.2],
+        }
+    )

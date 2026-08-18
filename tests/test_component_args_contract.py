@@ -5,37 +5,23 @@ which is required by App.vue for component selection.
 """
 
 import pytest
-
-from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
-
-
-@pytest.mark.parametrize(
-    "ComponentClass,data_fixture,extra_kwargs",
-    [
-        (Table, "sample_table_data", {}),
-        (
-            LinePlot,
-            "sample_lineplot_data",
-            {"x_column": "mass", "y_column": "intensity"},
-        ),
-        (
-            Heatmap,
-            "sample_heatmap_data",
-            {
-                "x_column": "retention_time",
-                "y_column": "mz",
-                "intensity_column": "intensity",
-            },
-        ),
-        (
-            VolcanoPlot,
-            "sample_volcanoplot_data",
-            {"log2fc_column": "log2FC", "pvalue_column": "pvalue"},
-        ),
-    ],
+from component_cases import (
+    COMPONENT_ARGNAMES,
+    COMPONENT_CASES,
+    COMPONENT_IDS,
+    build_kwargs,
 )
+
+
+@pytest.mark.parametrize(COMPONENT_ARGNAMES, COMPONENT_CASES, ids=COMPONENT_IDS)
 def test_get_component_args_includes_component_type(
-    mock_streamlit, temp_cache_dir, request, ComponentClass, data_fixture, extra_kwargs
+    mock_streamlit,
+    temp_cache_dir,
+    request,
+    ComponentClass,
+    data_fixture,
+    extra_kwargs,
+    fixture_kwargs,
 ):
     """_get_component_args must include componentType for Vue component selection."""
     data = request.getfixturevalue(data_fixture)
@@ -44,7 +30,7 @@ def test_get_component_args_includes_component_type(
         cache_id=f"test_{ComponentClass.__name__}_args",
         data=data,
         cache_path=str(temp_cache_dir),
-        **extra_kwargs,
+        **build_kwargs(request, extra_kwargs, fixture_kwargs),
     )
 
     args = component._get_component_args()

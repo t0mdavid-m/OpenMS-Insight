@@ -5,37 +5,23 @@ _hash key, which is required by bridge.py._prepare_vue_data_cached().
 """
 
 import pytest
-
-from openms_insight import Heatmap, LinePlot, Table, VolcanoPlot
-
-
-@pytest.mark.parametrize(
-    "ComponentClass,data_fixture,extra_kwargs",
-    [
-        (Table, "sample_table_data", {}),
-        (
-            LinePlot,
-            "sample_lineplot_data",
-            {"x_column": "mass", "y_column": "intensity"},
-        ),
-        (
-            Heatmap,
-            "sample_heatmap_data",
-            {
-                "x_column": "retention_time",
-                "y_column": "mz",
-                "intensity_column": "intensity",
-            },
-        ),
-        (
-            VolcanoPlot,
-            "sample_volcanoplot_data",
-            {"log2fc_column": "log2FC", "pvalue_column": "pvalue"},
-        ),
-    ],
+from component_cases import (
+    COMPONENT_ARGNAMES,
+    COMPONENT_CASES,
+    COMPONENT_IDS,
+    build_kwargs,
 )
+
+
+@pytest.mark.parametrize(COMPONENT_ARGNAMES, COMPONENT_CASES, ids=COMPONENT_IDS)
 def test_prepare_vue_data_returns_dict_with_hash(
-    mock_streamlit, temp_cache_dir, request, ComponentClass, data_fixture, extra_kwargs
+    mock_streamlit,
+    temp_cache_dir,
+    request,
+    ComponentClass,
+    data_fixture,
+    extra_kwargs,
+    fixture_kwargs,
 ):
     """_prepare_vue_data must return dict with _hash key, not tuple."""
     data = request.getfixturevalue(data_fixture)
@@ -44,7 +30,7 @@ def test_prepare_vue_data_returns_dict_with_hash(
         cache_id=f"test_{ComponentClass.__name__}_contract",
         data=data,
         cache_path=str(temp_cache_dir),
-        **extra_kwargs,
+        **build_kwargs(request, extra_kwargs, fixture_kwargs),
     )
 
     result = component._prepare_vue_data({})
