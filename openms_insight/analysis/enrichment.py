@@ -14,6 +14,7 @@ except ImportError as exc:
         "    pip install openms-insight[analysis]"
     ) from exc
 
+
 def get_clean_uniprot(name):
     """Cleans FASTA-style UniProt headers to extract the core accession ID.
 
@@ -27,6 +28,7 @@ def get_clean_uniprot(name):
     """
     parts = str(name).split("|")
     return parts[1] if len(parts) >= 2 else parts[0]
+
 
 def extract_go_terms(go_data, go_type):
     """Parses nested dictionary schema from MyGene.info API response.
@@ -49,6 +51,7 @@ def extract_go_terms(go_data, go_type):
     if isinstance(terms, dict):
         terms = [terms]
     return list({t.get("term") for t in terms if "term" in t})
+
 
 def run_go_category(res_go, fg_set, bg_set, go_type):
     """Runs hypergeometric (Fisher's exact) enrichment for one GO category.
@@ -98,12 +101,14 @@ def run_go_category(res_go, fg_set, bg_set, go_type):
 
         # Hypergeometric test via Fisher's Exact Test
         _, p = fisher_exact([[a, b], [c, d]], alternative="greater")
-        records.append({
-            "GO_Term": term,
-            "Count": a,
-            "GeneRatio": f"{a}/{N_fg}",
-            "p_value": p,
-        })
+        records.append(
+            {
+                "GO_Term": term,
+                "Count": a,
+                "GeneRatio": f"{a}/{N_fg}",
+                "p_value": p,
+            }
+        )
 
     df = pd.DataFrame(records)
     if df.empty:
@@ -120,7 +125,7 @@ def run_go_category(res_go, fg_set, bg_set, go_type):
         orientation="h",
         title=f"GO Enrichment: {go_type}",
         color="-log10(p)",
-        color_continuous_scale="Viridis"
+        color_continuous_scale="Viridis",
     )
     fig.update_layout(
         yaxis=dict(autorange="reversed"),
@@ -129,7 +134,14 @@ def run_go_category(res_go, fg_set, bg_set, go_type):
     )
     return fig, df
 
-def calculate_go_enrichment(final_report: pl.DataFrame, id_col: str, target_p_col: str, p_cutoff: float = 0.05, fc_cutoff: float = 1.0):
+
+def calculate_go_enrichment(
+    final_report: pl.DataFrame,
+    id_col: str,
+    target_p_col: str,
+    p_cutoff: float = 0.05,
+    fc_cutoff: float = 1.0,
+):
     """Runs the full GO enrichment pipeline: filter, annotate, test.
 
     Unlike the other `analysis/` modules, this makes a live network call to
@@ -171,13 +183,18 @@ def calculate_go_enrichment(final_report: pl.DataFrame, id_col: str, target_p_co
 
     # 2. Extract clean UniProt accessions using Polars element mapping
     analysis_ready = analysis_ready.with_columns(
-        pl.col(id_col).map_elements(get_clean_uniprot, return_dtype=pl.String).alias("UniProt")
+        pl.col(id_col)
+        .map_elements(get_clean_uniprot, return_dtype=pl.String)
+        .alias("UniProt")
     )
 
-    bg_ids = analysis_ready.select("UniProt").drop_nulls().unique().to_series().to_list()
+    bg_ids = (
+        analysis_ready.select("UniProt").drop_nulls().unique().to_series().to_list()
+    )
     fg_ids = (
-        analysis_ready
-        .filter((pl.col(target_p_col) < p_cutoff) & (pl.col("log2FC").abs() >= fc_cutoff))
+        analysis_ready.filter(
+            (pl.col(target_p_col) < p_cutoff) & (pl.col("log2FC").abs() >= fc_cutoff)
+        )
         .select("UniProt")
         .drop_nulls()
         .unique()
@@ -192,7 +209,7 @@ def calculate_go_enrichment(final_report: pl.DataFrame, id_col: str, target_p_co
     mg = mygene.MyGeneInfo()
     res_list = mg.querymany(bg_ids, scopes="uniprot", fields="go", as_dataframe=False)
     res_go = pd.DataFrame(res_list)
-    
+
     if "notfound" in res_go.columns:
         res_go = res_go[res_go["notfound"] != True]
 
@@ -206,7 +223,9 @@ def calculate_go_enrichment(final_report: pl.DataFrame, id_col: str, target_p_co
 
     # 4. Map GO annotations
     for go_type in ["BP", "CC", "MF"]:
-        res_go[f"{go_type}_terms"] = res_go["go"].apply(lambda x: extract_go_terms(x, go_type))
+        res_go[f"{go_type}_terms"] = res_go["go"].apply(
+            lambda x: extract_go_terms(x, go_type)
+        )
 
     annotated_ids = set(res_go["query"].astype(str))
     fg_set = annotated_ids.intersection(fg_ids)
@@ -221,5 +240,5 @@ def calculate_go_enrichment(final_report: pl.DataFrame, id_col: str, target_p_co
     return "success", {
         "bg_count": len(bg_ids),
         "fg_count": len(fg_ids),
-        "categories": results
+        "categories": results,
     }

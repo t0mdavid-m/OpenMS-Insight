@@ -188,7 +188,9 @@ class ClusteredHeatmap(BaseComponent):
         """Get configuration that affects cache validity."""
         metadata_map: Dict[str, Any] = {}
         if self._metadata is not None:
-            sample_ids = self._metadata.select(self._sample_id_field).to_series().to_list()
+            sample_ids = (
+                self._metadata.select(self._sample_id_field).to_series().to_list()
+            )
             groups = self._metadata.select(self._group_field).to_series().to_list()
             metadata_map = {str(sid): grp for sid, grp in zip(sample_ids, groups)}
 
@@ -294,23 +296,35 @@ class ClusteredHeatmap(BaseComponent):
         col_groups: List[Optional[str]] = [None] * len(col_labels)
         group_colors = dict(self._group_colors)
         if self._metadata is not None:
-            sample_ids = self._metadata.select(self._sample_id_field).to_series().to_list()
+            sample_ids = (
+                self._metadata.select(self._sample_id_field).to_series().to_list()
+            )
             groups = self._metadata.select(self._group_field).to_series().to_list()
             group_map = dict(zip(sample_ids, groups))
             col_groups = [group_map.get(c) for c in col_labels]
 
             default_palette = [
-                "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-                "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+                "#1f77b4",
+                "#ff7f0e",
+                "#2ca02c",
+                "#d62728",
+                "#9467bd",
+                "#8c564b",
+                "#e377c2",
+                "#7f7f7f",
+                "#bcbd22",
+                "#17becf",
             ]
             unique_groups = sorted({g for g in col_groups if g is not None})
             for i, g in enumerate(unique_groups):
                 if g not in group_colors:
                     group_colors[g] = default_palette[i % len(default_palette)]
 
-        matrix_df = pl.DataFrame(values, schema=col_labels).with_columns(
-            pl.Series(self._id_col, row_labels)
-        ).select([self._id_col] + col_labels)
+        matrix_df = (
+            pl.DataFrame(values, schema=col_labels)
+            .with_columns(pl.Series(self._id_col, row_labels))
+            .select([self._id_col] + col_labels)
+        )
 
         self._preprocessed_data = {
             "matrix": matrix_df,

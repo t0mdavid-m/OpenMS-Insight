@@ -193,7 +193,9 @@ class PCAPlot(BaseComponent):
         """Get configuration that affects cache validity."""
         metadata_map: Dict[str, Any] = {}
         if self._metadata is not None:
-            sample_ids = self._metadata.select(self._sample_id_field).to_series().to_list()
+            sample_ids = (
+                self._metadata.select(self._sample_id_field).to_series().to_list()
+            )
             groups = self._metadata.select(self._group_field).to_series().to_list()
             metadata_map = {str(sid): grp for sid, grp in zip(sample_ids, groups)}
 
@@ -248,7 +250,9 @@ class PCAPlot(BaseComponent):
 
         schema_names = self._raw_data.collect_schema().names()
 
-        all_sample_ids = self._metadata.select(self._sample_id_field).to_series().to_list()
+        all_sample_ids = (
+            self._metadata.select(self._sample_id_field).to_series().to_list()
+        )
         all_groups = self._metadata.select(self._group_field).to_series().to_list()
         group_map = dict(zip(all_sample_ids, all_groups))
 
@@ -377,8 +381,12 @@ class PCAPlot(BaseComponent):
             "componentType": self._get_vue_component_name(),
             "xColumn": pc_x_col,
             "yColumn": pc_y_col,
-            "xLabel": self._axis_label(self._current_pc_x, self._x_label, variance_ratio),
-            "yLabel": self._axis_label(self._current_pc_y, self._y_label, variance_ratio),
+            "xLabel": self._axis_label(
+                self._current_pc_x, self._x_label, variance_ratio
+            ),
+            "yLabel": self._axis_label(
+                self._current_pc_y, self._y_label, variance_ratio
+            ),
             "groupColumn": self._group_field,
             "groupColors": self._group_colors,
             "sampleIdColumn": self._sample_id_field,

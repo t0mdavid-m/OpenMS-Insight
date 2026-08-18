@@ -1,9 +1,8 @@
 import polars as pl
 
+
 def transform_data(
-    quantification_data: pl.LazyFrame,
-    metadata: pl.DataFrame,
-    strategy: str
+    quantification_data: pl.LazyFrame, metadata: pl.DataFrame, strategy: str
 ) -> pl.LazyFrame:
     """Applies a mathematical transformation to every sample column.
 
@@ -41,12 +40,13 @@ def transform_data(
 
     return quantification_data.with_columns(exprs)
 
+
 def normalize_samples(
     quantification_data: pl.LazyFrame,
     metadata: pl.DataFrame,
     strategy: str,
     id_col: str,
-    reference_feature: str | None = None
+    reference_feature: str | None = None,
 ) -> pl.LazyFrame:
     """Aligns samples via column-wise size-factor correction.
 
@@ -81,54 +81,66 @@ def normalize_samples(
         # Calculate target mean of all column sums lazily
         col_sums = [pl.col(col).sum() for col in sample_cols]
         target_sum_expr = pl.sum_horizontal(col_sums) / len(sample_cols)
-        
-        return quantification_data.with_columns([
-            (pl.col(col) / pl.col(col).sum() * target_sum_expr).alias(col)
-            for col in sample_cols
-        ])
+
+        return quantification_data.with_columns(
+            [
+                (pl.col(col) / pl.col(col).sum() * target_sum_expr).alias(col)
+                for col in sample_cols
+            ]
+        )
 
     elif strategy == "median":
         # Align columns based on global median target using list aggregation
         col_medians = [pl.col(col).median() for col in sample_cols]
         target_median_expr = pl.sum_horizontal(col_medians) / len(sample_cols)
-        
-        return quantification_data.with_columns([
-            (pl.col(col) + (target_median_expr - pl.col(col).median())).alias(col)
-            for col in sample_cols
-        ])
+
+        return quantification_data.with_columns(
+            [
+                (pl.col(col) + (target_median_expr - pl.col(col).median())).alias(col)
+                for col in sample_cols
+            ]
+        )
 
     elif strategy == "pqn":
         # Probabilistic Quotient Normalization
         # 1. Create a reference pseudo-spectrum (row-wise median across samples)
-        lazy_ref = quantification_data.with_columns([
-            pl.concat_list(sample_cols).list.median().alias("_pqn_ref")
-        ])
-        
+        lazy_ref = quantification_data.with_columns(
+            [pl.concat_list(sample_cols).list.median().alias("_pqn_ref")]
+        )
+
         # 2. Calculate quotients for each column relative to the reference
         # Avoid division by zero by nullifying 0
         quotient_exprs = [
-            (pl.col(col) / pl.when(pl.col("_pqn_ref") == 0).then(None).otherwise(pl.col("_pqn_ref"))).alias(f"_q_{col}")
+            (
+                pl.col(col)
+                / pl.when(pl.col("_pqn_ref") == 0)
+                .then(None)
+                .otherwise(pl.col("_pqn_ref"))
+            ).alias(f"_q_{col}")
             for col in sample_cols
         ]
         lazy_quotients = lazy_ref.with_columns(quotient_exprs)
-        
+
         # 3. Median of quotients per sample is the dilution factor
         dilution_exprs = [
             pl.col(f"_q_{col}").median().fill_null(1.0).alias(f"_d_{col}")
             for col in sample_cols
         ]
-        
+
         # 4. Final division inside the lazy chain and clean up temp columns
         final_exprs = [
             (pl.col(col) / pl.col(f"_d_{col}").first()).alias(col)
             for col in sample_cols
         ]
-        
-        temp_cols = [f"_q_{col}" for col in sample_cols] + [f"_d_{col}" for col in sample_cols] + ["_pqn_ref"]
-        
+
+        temp_cols = (
+            [f"_q_{col}" for col in sample_cols]
+            + [f"_d_{col}" for col in sample_cols]
+            + ["_pqn_ref"]
+        )
+
         return (
-            lazy_quotients
-            .with_columns(dilution_exprs)
+            lazy_quotients.with_columns(dilution_exprs)
             .with_columns(final_exprs)
             .drop(temp_cols)
         )
@@ -145,8 +157,7 @@ def normalize_samples(
         # Validate that the reference protein exists
         # ------------------------------------------------------------
         reference_count = (
-            quantification_data
-            .filter(pl.col(id_col) == reference_feature)
+            quantification_data.filter(pl.col(id_col) == reference_feature)
             .select(pl.len().alias("count"))
             .collect()
             .item()
@@ -161,25 +172,16 @@ def normalize_samples(
         # Extract reference protein rows
         # If duplicated, use mean intensity across duplicates
         # ------------------------------------------------------------
-        reference_row = (
-            quantification_data
-            .filter(pl.col(id_col) == reference_feature)
-        )
+        reference_row = quantification_data.filter(pl.col(id_col) == reference_feature)
 
-        ref_exprs = [
-            pl.col(col).mean().alias(f"_ref_{col}")
-            for col in sample_cols
-        ]
+        ref_exprs = [pl.col(col).mean().alias(f"_ref_{col}") for col in sample_cols]
 
         reference_values = reference_row.select(ref_exprs)
 
         # ------------------------------------------------------------
         # Attach reference values to every row
         # ------------------------------------------------------------
-        joined = quantification_data.join(
-            reference_values,
-            how="cross"
-        )
+        joined = quantification_data.join(reference_values, how="cross")
 
         # ------------------------------------------------------------
         # Normalize each sample column
@@ -188,8 +190,7 @@ def normalize_samples(
         normalized_exprs = [
             (
                 pl.col(col)
-                /
-                pl.when(pl.col(f"_ref_{col}") == 0)
+                / pl.when(pl.col(f"_ref_{col}") == 0)
                 .then(None)
                 .otherwise(pl.col(f"_ref_{col}"))
             ).alias(col)
@@ -198,11 +199,7 @@ def normalize_samples(
 
         temp_cols = [f"_ref_{col}" for col in sample_cols]
 
-        return (
-            joined
-            .with_columns(normalized_exprs)
-            .drop(temp_cols)
-        )
+        return joined.with_columns(normalized_exprs).drop(temp_cols)
 
     elif strategy == "quantile":
         # Quantile normalization: reshape every sample column to share the same
@@ -218,28 +215,37 @@ def normalize_samples(
         sorted_cols = [f"_sorted_{col}" for col in sample_cols]
         rank_cols = [f"_rank_{col}" for col in sample_cols]
 
-        with_sorted = quantification_data.with_columns([
-            pl.col(col).sort().alias(sorted_col)
-            for col, sorted_col in zip(sample_cols, sorted_cols)
-        ]).with_columns([
-            pl.mean_horizontal(sorted_cols).alias("_qref")
-        ]).with_columns([
-            (pl.col(col).rank(method="ordinal").cast(pl.Int64) - 1).alias(rank_col)
-            for col, rank_col in zip(sample_cols, rank_cols)
-        ])
+        with_sorted = (
+            quantification_data.with_columns(
+                [
+                    pl.col(col).sort().alias(sorted_col)
+                    for col, sorted_col in zip(sample_cols, sorted_cols)
+                ]
+            )
+            .with_columns([pl.mean_horizontal(sorted_cols).alias("_qref")])
+            .with_columns(
+                [
+                    (pl.col(col).rank(method="ordinal").cast(pl.Int64) - 1).alias(
+                        rank_col
+                    )
+                    for col, rank_col in zip(sample_cols, rank_cols)
+                ]
+            )
+        )
 
-        return with_sorted.with_columns([
-            pl.col("_qref").gather(pl.col(rank_col)).alias(col)
-            for col, rank_col in zip(sample_cols, rank_cols)
-        ]).drop(sorted_cols + rank_cols + ["_qref"])
+        return with_sorted.with_columns(
+            [
+                pl.col("_qref").gather(pl.col(rank_col)).alias(col)
+                for col, rank_col in zip(sample_cols, rank_cols)
+            ]
+        ).drop(sorted_cols + rank_cols + ["_qref"])
 
     else:
         raise ValueError(f"Unknown sample normalization strategy: {strategy}")
 
+
 def scale_data(
-    quantification_data: pl.LazyFrame,
-    metadata: pl.DataFrame,
-    strategy: str
+    quantification_data: pl.LazyFrame, metadata: pl.DataFrame, strategy: str
 ) -> pl.LazyFrame:
     """Applies row-wise (per-feature) centering and/or variance scaling.
 
@@ -265,37 +271,62 @@ def scale_data(
     sample_cols = metadata.select("sample_id").to_series().to_list()
 
     # Pre-calculate horizontal structural vectors (Mean & Std Dev per row)
-    lazy_metrics = quantification_data.with_columns([
-        pl.mean_horizontal(sample_cols).alias("_row_mean"),
-        pl.concat_list(sample_cols).list.var().sqrt().alias("_row_std")
-    ]).with_columns([
-        # Prevent division by zero errors
-        pl.when(pl.col("_row_std") == 0).then(1.0).otherwise(pl.col("_row_std")).alias("_row_std")
-    ])
+    lazy_metrics = quantification_data.with_columns(
+        [
+            pl.mean_horizontal(sample_cols).alias("_row_mean"),
+            pl.concat_list(sample_cols).list.var().sqrt().alias("_row_std"),
+        ]
+    ).with_columns(
+        [
+            # Prevent division by zero errors
+            pl.when(pl.col("_row_std") == 0)
+            .then(1.0)
+            .otherwise(pl.col("_row_std"))
+            .alias("_row_std")
+        ]
+    )
 
     if strategy == "mean_centering":
-        scaled_lazy = lazy_metrics.with_columns([
-            (pl.col(col) - pl.col("_row_mean")).alias(col) for col in sample_cols
-        ])
+        scaled_lazy = lazy_metrics.with_columns(
+            [(pl.col(col) - pl.col("_row_mean")).alias(col) for col in sample_cols]
+        )
     elif strategy == "auto_scaling":
-        scaled_lazy = lazy_metrics.with_columns([
-            ((pl.col(col) - pl.col("_row_mean")) / pl.col("_row_std")).alias(col) for col in sample_cols
-        ])
+        scaled_lazy = lazy_metrics.with_columns(
+            [
+                ((pl.col(col) - pl.col("_row_mean")) / pl.col("_row_std")).alias(col)
+                for col in sample_cols
+            ]
+        )
     elif strategy == "pareto_scaling":
-        scaled_lazy = lazy_metrics.with_columns([
-            ((pl.col(col) - pl.col("_row_mean")) / pl.col("_row_std").sqrt()).alias(col) for col in sample_cols
-        ])
+        scaled_lazy = lazy_metrics.with_columns(
+            [
+                ((pl.col(col) - pl.col("_row_mean")) / pl.col("_row_std").sqrt()).alias(
+                    col
+                )
+                for col in sample_cols
+            ]
+        )
     elif strategy == "range_scaling":
-        lazy_range = quantification_data.with_columns([
-            pl.min_horizontal(sample_cols).alias("_row_min"),
-            pl.max_horizontal(sample_cols).alias("_row_max")
-        ]).with_columns([
-            pl.when(pl.col("_row_max") - pl.col("_row_min") == 0).then(1.0).otherwise(pl.col("_row_max") - pl.col("_row_min")).alias("_row_range")
-        ])
-        
-        scaled_lazy = lazy_range.with_columns([
-            ((pl.col(col) - pl.col("_row_min")) / pl.col("_row_range")).alias(col) for col in sample_cols
-        ])
+        lazy_range = quantification_data.with_columns(
+            [
+                pl.min_horizontal(sample_cols).alias("_row_min"),
+                pl.max_horizontal(sample_cols).alias("_row_max"),
+            ]
+        ).with_columns(
+            [
+                pl.when(pl.col("_row_max") - pl.col("_row_min") == 0)
+                .then(1.0)
+                .otherwise(pl.col("_row_max") - pl.col("_row_min"))
+                .alias("_row_range")
+            ]
+        )
+
+        scaled_lazy = lazy_range.with_columns(
+            [
+                ((pl.col(col) - pl.col("_row_min")) / pl.col("_row_range")).alias(col)
+                for col in sample_cols
+            ]
+        )
         return scaled_lazy.drop(["_row_min", "_row_max", "_row_range"])
     else:
         raise ValueError(f"Unknown data scaling strategy: {strategy}")
