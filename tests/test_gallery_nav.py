@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Set
 
 GALLERY_DIR = Path(__file__).resolve().parent.parent / "gallery"
 APP = GALLERY_DIR / "app.py"
 CONTENT_DIR = GALLERY_DIR / "content"
 
 
-def _pages_listed_in_app() -> Set[str]:
+def _pages_listed_in_app() -> set[str]:
     """Filenames passed to ``st.Page(Path("content", ...))`` in app.py."""
     tree = ast.parse(APP.read_text(encoding="utf-8"))
     listed = set()

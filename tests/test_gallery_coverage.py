@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Dict, Set
 
 import pytest
 
@@ -18,12 +17,12 @@ from openms_insight.core.registry import list_registered_components
 CONTENT_DIR = Path(__file__).resolve().parent.parent / "gallery" / "content"
 
 
-def _class_to_registry_name() -> Dict[str, str]:
+def _class_to_registry_name() -> dict[str, str]:
     """Map component class name -> registered name, e.g. ``Table`` -> ``table``."""
     return {cls.__name__: name for name, cls in list_registered_components().items()}
 
 
-def _components_used(page: Path, class_names: Set[str]) -> Set[str]:
+def _components_used(page: Path, class_names: set[str]) -> set[str]:
     """Component classes constructed anywhere in a page, found statically."""
     tree = ast.parse(page.read_text(encoding="utf-8"))
     used = set()
@@ -48,7 +47,7 @@ def test_content_directory_exists() -> None:
 
 def test_every_registered_component_has_an_example() -> None:
     class_to_name = _class_to_registry_name()
-    demonstrated: Set[str] = set()
+    demonstrated: set[str] = set()
     for page in CONTENT_DIR.glob("*.py"):
         for class_name in _components_used(page, set(class_to_name)):
             demonstrated.add(class_to_name[class_name])

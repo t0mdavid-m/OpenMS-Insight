@@ -102,6 +102,65 @@
       "description": "Peptide sequence, precursor charge and score per spectrum.",
       "derived_from": "msms.txt",
       "transformation": "One row per selected PSM."
+    },
+    "pxd044981/samples.parquet": {
+      "rows": 15,
+      "columns": [
+        "sample_id",
+        "group",
+        "replicate"
+      ],
+      "description": "Sample metadata: 15 DDA runs, 5 UPS2 spike-in levels x 3 replicates.",
+      "derived_from": "evidence.txt (raw file names)",
+      "transformation": "Parsed the spike-in level and replicate number out of each raw file name."
+    },
+    "pxd044981/quant_matrix.parquet": {
+      "rows": 2062,
+      "columns": [
+        "protein_id",
+        "ratio01_1",
+        "ratio01_2",
+        "ratio01_3",
+        "ratio02_1",
+        "ratio02_2",
+        "ratio02_3",
+        "ratio04_1",
+        "ratio04_2",
+        "ratio04_3",
+        "ratio08_1",
+        "ratio08_2",
+        "ratio08_3",
+        "ratio10_1",
+        "ratio10_2",
+        "ratio10_3"
+      ],
+      "description": "Protein quantification matrix: 2062 proteins x 15 runs of log2 median-normalised intensity.",
+      "derived_from": "evidence.txt",
+      "transformation": "Removed reverse hits and contaminants; summed evidence intensities per (leading razor protein, raw file); log2-transformed and median-normalised each run; kept only proteins quantified in every run, since PCA and hierarchical clustering both reject missing values."
+    },
+    "pxd044981/spike_in_matrix.parquet": {
+      "rows": 22,
+      "columns": [
+        "protein_id",
+        "ratio01_1",
+        "ratio01_2",
+        "ratio01_3",
+        "ratio02_1",
+        "ratio02_2",
+        "ratio02_3",
+        "ratio04_1",
+        "ratio04_2",
+        "ratio04_3",
+        "ratio08_1",
+        "ratio08_2",
+        "ratio08_3",
+        "ratio10_1",
+        "ratio10_2",
+        "ratio10_3"
+      ],
+      "description": "The 22 UPS2 spike-in proteins from the quantification matrix -- the subset whose abundance is known to vary by design, against a background that is not.",
+      "derived_from": "quant_matrix.parquet",
+      "transformation": "Selected proteins whose accession carries the UPS2 'ups' suffix."
     }
   }
 }

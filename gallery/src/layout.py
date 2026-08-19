@@ -12,7 +12,8 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from typing import Any, Callable, Optional, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import polars as pl
 import streamlit as st
@@ -85,10 +86,10 @@ def render(
     title: str,
     summary: str,
     example: Callable[[StateManager], Any],
-    component: Optional[type] = None,
+    component: type | None = None,
     used: Sequence[str] = (),
     tables: Sequence[str] = (),
-    notes: Optional[str] = None,
+    notes: str | None = None,
 ) -> None:
     """Render one example page: the live component, then its source and context."""
     st.title(title)

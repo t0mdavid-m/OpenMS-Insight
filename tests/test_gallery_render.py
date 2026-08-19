@@ -18,8 +18,8 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, List
 
 import pytest
 
@@ -35,7 +35,7 @@ sync_playwright = pytest.importorskip(
 ).sync_playwright
 
 # Streamlit derives a page's URL slug from its filename; "home" is the default page.
-PAGE_SLUGS: List[str] = sorted(
+PAGE_SLUGS: list[str] = sorted(
     p.stem for p in CONTENT_DIR.glob("*.py") if p.stem != "home"
 )
 
@@ -149,7 +149,7 @@ def browser():
 def _load_and_check(browser, base_url: str, slug: str, screenshot: bool):
     """Load one page once. Returns (painted, console errors)."""
     page = browser.new_page(viewport={"width": 1440, "height": 1200})
-    errors: List[str] = []
+    errors: list[str] = []
     page.on(
         "console",
         lambda message: (

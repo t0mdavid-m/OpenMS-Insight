@@ -35,12 +35,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import sys
 import tarfile
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -59,7 +60,7 @@ MIN_REPLICATES = 2  # per group, to admit a protein to the test
 # --------------------------------------------------------------------------- #
 # FLASHApp: top-down FLASHDeconv results
 # --------------------------------------------------------------------------- #
-def derive_flashdeconv(src: Path, out: Path) -> Dict[str, Any]:
+def derive_flashdeconv(src: Path, out: Path) -> dict[str, Any]:
     """Explode FLASHApp's per-scan cache format into long tables."""
     out.mkdir(parents=True, exist_ok=True)
 
@@ -162,7 +163,7 @@ def derive_flashdeconv(src: Path, out: Path) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # PXD044981: differential abundance for the volcano plot
 # --------------------------------------------------------------------------- #
-def derive_volcano(txt: Path, out: Path) -> Dict[str, Any]:
+def derive_volcano(txt: Path, out: Path) -> dict[str, Any]:
     """Protein-level differential abundance from MaxQuant evidence.txt.
 
     MaxQuant merged the three replicate runs of each spike-in ratio into a single
@@ -205,7 +206,10 @@ def derive_volcano(txt: Path, out: Path) -> Dict[str, Any]:
         .pivot(values="intensity", index="Leading razor protein", on="Raw file")
     )
 
-    run_columns = [c for c in matrix.columns if c != "Leading razor protein"]
+    # Sorted: polars does not guarantee pivot column order, and the order feeds
+    # median normalisation and the t-test, so leaving it to chance makes the
+    # derived numbers differ in the last decimals between runs.
+    run_columns = sorted(c for c in matrix.columns if c != "Leading razor protein")
     log_intensity = np.log2(matrix.select(run_columns).to_numpy())
     # Median-normalise each run to remove loading differences between injections.
     log_intensity = (
@@ -253,15 +257,99 @@ def derive_volcano(txt: Path, out: Path) -> Dict[str, Any]:
             .alias("spike_in")
         )
         .with_columns(pl.col("gene").fill_null(""))
-        .sort("padj")
+        # protein_id breaks ties so re-derivation is reproducible: polars does
+        # not guarantee group_by/pivot ordering, and padj ties are common.
+        .sort(["padj", "protein_id"])
     )
     proteins.write_parquet(out / "proteins.parquet", compression="zstd")
+
+    # The same normalised matrix, kept as a matrix, for the components that take one:
+    # PCA and the clustered heatmap. The volcano compares only the extreme pair of
+    # spike-in levels, but all five are present, so a sample map has something to show.
+    sample_ids, groups, replicates = [], [], []
+    for run in run_columns:
+        match = re.search(r"(ratio\d+)_DDA(?:_(\d+))?$", run)
+        if match is None:
+            raise SystemExit(f"Unrecognised run name, cannot derive a sample id: {run}")
+        ratio, replicate = match.group(1), int(match.group(2) or 1)
+        sample_ids.append(f"{ratio}_{replicate}")
+        groups.append(ratio)
+        replicates.append(replicate)
+
+    order = sorted(range(len(run_columns)), key=lambda i: (groups[i], replicates[i]))
+    samples = pl.DataFrame(
+        {
+            "sample_id": [sample_ids[i] for i in order],
+            "group": [groups[i] for i in order],
+            "replicate": [replicates[i] for i in order],
+        }
+    )
+    samples.write_parquet(out / "samples.parquet", compression="zstd")
+
+    # PCA and hierarchical clustering both reject missing values, so restrict to
+    # proteins quantified in every run rather than imputing. That is a real choice with
+    # a real cost -- proteins present only at high spike-in levels drop out -- and it
+    # belongs in the manifest rather than hidden in an example.
+    complete = ~np.isnan(log_intensity).any(axis=1)
+    quant = pl.DataFrame(
+        {"protein_id": matrix["Leading razor protein"].filter(pl.Series(complete))}
+    ).with_columns(
+        [
+            pl.Series(sample_ids[i], log_intensity[complete, i]).cast(pl.Float32)
+            for i in order
+        ]
+    )
+    quant = quant.sort("protein_id")
+    quant.write_parquet(out / "quant_matrix.parquet", compression="zstd")
+
+    spike_in = quant.filter(pl.col("protein_id").str.to_lowercase().str.contains("ups"))
+    spike_in.write_parquet(out / "spike_in_matrix.parquet", compression="zstd")
 
     n_spike = int(proteins["spike_in"].sum())
     significant = proteins.filter(
         (pl.col("padj") < 0.05) & (pl.col("log2FC").abs() > 1)
     )
+    matrix_note = (
+        "Removed reverse hits and contaminants; summed evidence intensities per "
+        "(leading razor protein, raw file); log2-transformed and median-normalised "
+        "each run; kept only proteins quantified in every run, since PCA and "
+        "hierarchical clustering both reject missing values."
+    )
     return {
+        "samples.parquet": {
+            "rows": samples.height,
+            "columns": samples.columns,
+            "description": (
+                f"Sample metadata: {samples.height} DDA runs, "
+                f"{samples['group'].n_unique()} UPS2 spike-in levels x "
+                f"{samples['replicate'].n_unique()} replicates."
+            ),
+            "derived_from": "evidence.txt (raw file names)",
+            "transformation": "Parsed the spike-in level and replicate number out of "
+            "each raw file name.",
+        },
+        "quant_matrix.parquet": {
+            "rows": quant.height,
+            "columns": quant.columns,
+            "description": (
+                f"Protein quantification matrix: {quant.height} proteins x "
+                f"{samples.height} runs of log2 median-normalised intensity."
+            ),
+            "derived_from": "evidence.txt",
+            "transformation": matrix_note,
+        },
+        "spike_in_matrix.parquet": {
+            "rows": spike_in.height,
+            "columns": spike_in.columns,
+            "description": (
+                f"The {spike_in.height} UPS2 spike-in proteins from the "
+                f"quantification matrix -- the subset whose abundance is known to "
+                f"vary by design, against a background that is not."
+            ),
+            "derived_from": "quant_matrix.parquet",
+            "transformation": "Selected proteins whose accession carries the UPS2 "
+            "'ups' suffix.",
+        },
         "proteins.parquet": {
             "rows": proteins.height,
             "columns": proteins.columns,
@@ -280,14 +368,14 @@ def derive_volcano(txt: Path, out: Path) -> Dict[str, Any]:
                 "median-normalised each run; Welch t-test across three replicates "
                 "per group; Benjamini-Hochberg FDR correction."
             ),
-        }
+        },
     }
 
 
 # --------------------------------------------------------------------------- #
 # PXD044981: fragment spectra for SequenceView and MirrorPlot
 # --------------------------------------------------------------------------- #
-def derive_psms(txt: Path, out: Path) -> Dict[str, Any]:
+def derive_psms(txt: Path, out: Path) -> dict[str, Any]:
     """Fragment peak lists for the showcase peptide, one row per peak."""
     psms = (
         pl.scan_csv(txt / "msms.txt", separator="\t", infer_schema_length=0)
@@ -325,7 +413,9 @@ def derive_psms(txt: Path, out: Path) -> Dict[str, Any]:
         masses = [float(x) for x in psm["Masses"].split(";") if x]
         intensities = [float(x) for x in psm["Intensities"].split(";") if x]
         ions = (psm["Matches"] or "").split(";")
-        for i, (mass, intensity) in enumerate(zip(masses, intensities)):
+        # strict: these are parallel MaxQuant fields, so a length mismatch is a
+        # data problem worth failing on rather than silently truncating.
+        for i, (mass, intensity) in enumerate(zip(masses, intensities, strict=True)):
             peak_rows.append(
                 {
                     "scan_id": scan_id,

@@ -14,7 +14,7 @@ import functools
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import polars as pl
 
@@ -57,6 +57,16 @@ def scan(name: str) -> pl.LazyFrame:
     return pl.scan_parquet(data(name))
 
 
+def table(name: str) -> pl.DataFrame:
+    """A table from the example dataset, read into memory.
+
+    Exactly ``pl.read_parquet(<path>)``. Components that take a lazy frame should use
+    :func:`scan`; this exists for the few parameters that want a small eager table,
+    such as the sample metadata handed to ``PCAPlot`` and ``ClusteredHeatmap``.
+    """
+    return pl.read_parquet(data(name))
+
+
 def use_cache_dir() -> None:
     """Point the process at a writable cache directory.
 
@@ -68,12 +78,12 @@ def use_cache_dir() -> None:
 
 
 @functools.lru_cache(maxsize=1)
-def manifest() -> Dict[str, Any]:
+def manifest() -> dict[str, Any]:
     """The provenance manifest shipped with the dataset."""
     with (DATA_DIR / "manifest.json").open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def table_info(name: str) -> Dict[str, Any]:
+def table_info(name: str) -> dict[str, Any]:
     """Manifest entry for one table, e.g. ``"flashdeconv/scans.parquet"``."""
     return manifest()["tables"].get(name, {})

@@ -40,6 +40,12 @@ PAGES = {
         st.Page(Path("content", "heatmap.py"), title="Heatmap", icon="🔥"),
         st.Page(Path("content", "volcano.py"), title="Volcano plot", icon="🌋"),
         st.Page(Path("content", "sequence_view.py"), title="Sequence view", icon="🧬"),
+        st.Page(Path("content", "pca.py"), title="PCA", icon="🎯"),
+        st.Page(
+            Path("content", "clustered_heatmap.py"),
+            title="Clustered heatmap",
+            icon="🧊",
+        ),
     ],
     "Linking components": [
         st.Page(
