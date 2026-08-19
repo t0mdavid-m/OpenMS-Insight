@@ -1,6 +1,6 @@
 """Shared utilities for scatter-based components (Heatmap, VolcanoPlot)."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 import polars as pl
@@ -12,10 +12,10 @@ def build_scatter_columns(
     x_column: str,
     y_column: str,
     value_column: str,
-    interactivity: Optional[Dict[str, str]] = None,
-    filters: Optional[Dict[str, str]] = None,
-    extra_columns: Optional[List[str]] = None,
-) -> List[str]:
+    interactivity: dict[str, str] | None = None,
+    filters: dict[str, str] | None = None,
+    extra_columns: list[str] | None = None,
+) -> list[str]:
     """
     Build list of columns needed for scatter-based component.
 
@@ -61,14 +61,14 @@ def prepare_scatter_data(
     x_column: str,
     y_column: str,
     value_column: str,
-    filters: Optional[Dict[str, str]],
-    state: Dict[str, Any],
-    filter_defaults: Optional[Dict[str, Any]] = None,
-    interactivity: Optional[Dict[str, str]] = None,
-    extra_columns: Optional[List[str]] = None,
+    filters: dict[str, str] | None,
+    state: dict[str, Any],
+    filter_defaults: dict[str, Any] | None = None,
+    interactivity: dict[str, str] | None = None,
+    extra_columns: list[str] | None = None,
     sort_by_value: bool = True,
     sort_ascending: bool = True,
-) -> Tuple[pd.DataFrame, str]:
+) -> tuple[pd.DataFrame, str]:
     """
     Prepare scatter data for Vue component.
 

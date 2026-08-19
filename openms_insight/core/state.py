@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -83,7 +83,7 @@ class StateManager:
             state["pagination_counter"] = legacy_counter
 
     @property
-    def _state(self) -> Dict[str, Any]:
+    def _state(self) -> dict[str, Any]:
         """Get the internal state dict from session_state."""
         import streamlit as st
 
@@ -163,7 +163,7 @@ class StateManager:
             return True
         return False
 
-    def get_all_selections(self) -> Dict[str, Any]:
+    def get_all_selections(self) -> dict[str, Any]:
         """
         Get all current selections.
 
@@ -172,7 +172,7 @@ class StateManager:
         """
         return self._state["selections"].copy()
 
-    def get_state_for_vue(self) -> Dict[str, Any]:
+    def get_state_for_vue(self) -> dict[str, Any]:
         """
         Get state dict formatted for sending to Vue component.
 
@@ -191,7 +191,7 @@ class StateManager:
         state.update(self._state["selections"])
         return state
 
-    def update_from_vue(self, vue_state: Dict[str, Any]) -> bool:
+    def update_from_vue(self, vue_state: dict[str, Any]) -> bool:
         """
         Update state from Vue component return value.
 

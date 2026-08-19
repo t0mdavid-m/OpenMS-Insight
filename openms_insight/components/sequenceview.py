@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 import polars as pl
 
@@ -18,7 +18,7 @@ PROTON_MASS = 1.007276
 CACHE_VERSION = 1
 
 
-def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
+def parse_openms_sequence(sequence_str: str) -> tuple[list[str], list[float | None]]:
     """Parse OpenMS sequence format to extract residues and modification mass shifts.
 
     Converts e.g. 'SHC(Carbamidomethyl)IAEVEK' to:
@@ -78,7 +78,7 @@ def parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[f
 
 def calculate_fragment_masses_pyopenms(
     sequence_str: str,
-) -> Dict[str, List[List[float]]]:
+) -> dict[str, list[list[float]]]:
     """Calculate theoretical fragment masses using pyOpenMS TheoreticalSpectrumGenerator.
 
     Args:
@@ -177,7 +177,7 @@ def calculate_fragment_masses_pyopenms(
 
 def _calculate_fragment_masses_simple(
     sequence_str: str,
-) -> Dict[str, List[List[float]]]:
+) -> dict[str, list[list[float]]]:
     """Fallback fragment calculation without pyOpenMS."""
     # Amino acid monoisotopic masses
     AA_MASSES = {
@@ -323,7 +323,7 @@ class SequenceViewResult:
             containing fragment annotations computed by Vue. None if not yet available.
     """
 
-    annotations: Optional[pl.DataFrame] = None
+    annotations: pl.DataFrame | None = None
 
 
 @register_component("sequence_view")
@@ -358,16 +358,16 @@ class SequenceView:
     def __init__(
         self,
         cache_id: str,
-        sequence_data: Optional[Union[pl.LazyFrame, Tuple[str, int], str]] = None,
-        sequence_data_path: Optional[str] = None,
-        peaks_data: Optional[pl.LazyFrame] = None,
-        peaks_data_path: Optional[str] = None,
-        filters: Optional[Dict[str, str]] = None,
-        interactivity: Optional[Dict[str, str]] = None,
+        sequence_data: pl.LazyFrame | tuple[str, int] | str | None = None,
+        sequence_data_path: str | None = None,
+        peaks_data: pl.LazyFrame | None = None,
+        peaks_data_path: str | None = None,
+        filters: dict[str, str] | None = None,
+        interactivity: dict[str, str] | None = None,
         deconvolved: bool = False,
-        annotation_config: Optional[Dict[str, Any]] = None,
+        annotation_config: dict[str, Any] | None = None,
         cache_path: str = ".",
-        title: Optional[str] = None,
+        title: str | None = None,
         height: int = 400,
         **kwargs,
     ):
@@ -456,8 +456,8 @@ class SequenceView:
                     "Provide either 'sequence_data' or 'sequence_data_path', not both"
                 )
 
-            self._source_sequence_data: Optional[pl.LazyFrame] = None
-            self._source_static_sequence: Optional[str] = None
+            self._source_sequence_data: pl.LazyFrame | None = None
+            self._source_static_sequence: str | None = None
             self._source_static_charge: int = 1
 
             if sequence_data_path is not None:
@@ -477,7 +477,7 @@ class SequenceView:
                     "Provide either 'peaks_data' or 'peaks_data_path', not both"
                 )
 
-            self._source_peaks_data: Optional[pl.LazyFrame] = None
+            self._source_peaks_data: pl.LazyFrame | None = None
             if peaks_data_path is not None:
                 self._source_peaks_data = pl.scan_parquet(peaks_data_path)
             elif peaks_data is not None:
@@ -500,7 +500,7 @@ class SequenceView:
                 pl.scan_parquet(peaks_path) if peaks_path.exists() else None
             )
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """Get all configuration to store in cache."""
         return {
             "version": CACHE_VERSION,
@@ -521,7 +521,7 @@ class SequenceView:
             return False
 
         try:
-            with open(config_file, "r") as f:
+            with open(config_file) as f:
                 cached_config = json.load(f)
             # Just check version matches
             return cached_config.get("version") == CACHE_VERSION
@@ -532,7 +532,7 @@ class SequenceView:
         """Load all configuration and data from cache."""
         config_file = self._cache_dir / ".cache_config.json"
 
-        with open(config_file, "r") as f:
+        with open(config_file) as f:
             config = json.load(f)
 
         # Restore all configuration
@@ -639,7 +639,7 @@ class SequenceView:
         df = optimize_for_transfer(df)
         df.write_parquet(output_path, compression="zstd")
 
-    def _get_sequence_for_state(self, state: Dict[str, Any]) -> Tuple[str, int]:
+    def _get_sequence_for_state(self, state: dict[str, Any]) -> tuple[str, int]:
         """Get sequence and charge for current state.
 
         Reads from cached sequences.parquet with predicate pushdown.
@@ -673,7 +673,7 @@ class SequenceView:
 
         return "", 1
 
-    def _get_peaks_for_state(self, state: Dict[str, Any]) -> pl.DataFrame:
+    def _get_peaks_for_state(self, state: dict[str, Any]) -> pl.DataFrame:
         """Get filtered peaks data for current state.
 
         Reads from cached peaks.parquet with predicate pushdown.
@@ -712,7 +712,7 @@ class SequenceView:
         except Exception:
             return pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64})
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """
         Prepare data for Vue component.
 
@@ -753,8 +753,8 @@ class SequenceView:
 
         # Extract arrays from peaks DataFrame for Vue
         # Vue expects observedMasses and peakIds as separate arrays
-        observed_masses: List[float] = []
-        peak_ids: List[int] = []
+        observed_masses: list[float] = []
+        peak_ids: list[int] = []
         precursor_mass: float = 0.0
 
         if peaks_df.height > 0:
@@ -785,9 +785,9 @@ class SequenceView:
         """Return the key used to send primary data to Vue."""
         return "sequenceData"
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """Get component arguments to send to Vue."""
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "height": self._height,
             "deconvolved": self._deconvolved,
@@ -803,27 +803,27 @@ class SequenceView:
         return args
 
     @property
-    def peaks_data(self) -> Optional[pl.LazyFrame]:
+    def peaks_data(self) -> pl.LazyFrame | None:
         """Return the cached peaks LazyFrame for linked components."""
         return self._cached_peaks
 
-    def get_filters_mapping(self) -> Dict[str, str]:
+    def get_filters_mapping(self) -> dict[str, str]:
         """Return the filters identifier-to-column mapping."""
         return self._filters.copy()
 
-    def get_interactivity_mapping(self) -> Dict[str, str]:
+    def get_interactivity_mapping(self) -> dict[str, str]:
         """Return the interactivity identifier-to-column mapping."""
         return self._interactivity.copy()
 
-    def get_state_dependencies(self) -> List[str]:
+    def get_state_dependencies(self) -> list[str]:
         """Return list of state keys that affect this component's data."""
         return list(self._filters.keys())
 
     def __call__(
         self,
-        key: Optional[str] = None,
+        key: str | None = None,
         state_manager: Optional["StateManager"] = None,
-        height: Optional[int] = None,
+        height: int | None = None,
     ) -> SequenceViewResult:
         """
         Render the component in Streamlit.

@@ -7,7 +7,6 @@ Supports both streaming (lazy) and eager downsampling approaches.
 """
 
 import math
-from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
@@ -22,9 +21,9 @@ except ImportError:
 
 def compute_optimal_bins(
     target_points: int,
-    x_range: Tuple[float, float],
-    y_range: Tuple[float, float],
-) -> Tuple[int, int]:
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+) -> tuple[int, int]:
     """
     Compute optimal x_bins, y_bins for even spatial distribution.
 
@@ -73,7 +72,7 @@ def compute_optimal_bins(
     return x_bins, y_bins
 
 
-def compute_compression_levels(min_size: int, total: int) -> List[int]:
+def compute_compression_levels(min_size: int, total: int) -> list[int]:
     """
     Compute logarithmically-spaced compression level target sizes.
 
@@ -126,7 +125,7 @@ def compute_compression_levels(min_size: int, total: int) -> List[int]:
 
 
 def downsample_2d(
-    data: Union[pl.LazyFrame, pl.DataFrame],
+    data: pl.LazyFrame | pl.DataFrame,
     max_points: int = 20000,
     x_column: str = "x",
     y_column: str = "y",
@@ -235,7 +234,7 @@ def downsample_2d(
 
 
 def downsample_2d_simple(
-    data: Union[pl.LazyFrame, pl.DataFrame],
+    data: pl.LazyFrame | pl.DataFrame,
     max_points: int = 20000,
     intensity_column: str = "intensity",
     descending: bool = True,
@@ -262,15 +261,15 @@ def downsample_2d_simple(
 
 
 def downsample_2d_streaming(
-    data: Union[pl.LazyFrame, pl.DataFrame],
+    data: pl.LazyFrame | pl.DataFrame,
     max_points: int = 20000,
     x_column: str = "x",
     y_column: str = "y",
     intensity_column: str = "intensity",
     x_bins: int = 400,
     y_bins: int = 50,
-    x_range: Optional[tuple] = None,
-    y_range: Optional[tuple] = None,
+    x_range: tuple | None = None,
+    y_range: tuple | None = None,
     descending: bool = True,
 ) -> pl.LazyFrame:
     """
@@ -364,7 +363,7 @@ def downsample_2d_streaming(
 
 
 def get_data_range(
-    data: Union[pl.LazyFrame, pl.DataFrame],
+    data: pl.LazyFrame | pl.DataFrame,
     x_column: str,
     y_column: str,
 ) -> tuple:
