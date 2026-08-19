@@ -144,6 +144,44 @@ def clear_component_annotations() -> None:
         st.session_state[_COMPONENT_ANNOTATIONS_KEY].clear()
 
 
+# Attributes under which components store per-render annotations. LinePlot keeps a
+# single set; MirrorPlot keeps one per side. Both must be visible here, or the cached
+# payload path silently drops annotations for the components it misses.
+_DYNAMIC_ANNOTATION_ATTRS = (
+    "_dynamic_annotations",
+    "_top_dynamic_annotations",
+    "_bottom_dynamic_annotations",
+)
+
+
+def _get_dynamic_annotations(
+    component: "BaseComponent",
+) -> list[tuple[str, dict[Any, Any]]] | None:
+    """
+    Collect a component's dynamic annotation dicts, whichever shape it uses.
+
+    Args:
+        component: The component to inspect
+
+    Returns:
+        List of (attribute name, annotations) pairs, or None if there are none.
+        The attribute name is carried so the hash can tell the sides apart --
+        moving a label from the top spectrum to the bottom must invalidate the cache.
+    """
+    present = [
+        (attr, annotations)
+        for attr, annotations in (
+            (attr, getattr(component, attr, None))
+            for attr in _DYNAMIC_ANNOTATION_ATTRS
+        )
+        # Annotations are always dicts. Requiring that (rather than "not None") keeps
+        # test doubles, whose auto-created attributes are truthy, from being mistaken
+        # for real annotations.
+        if isinstance(annotations, dict)
+    ]
+    return present or None
+
+
 def _compute_annotation_hash(component: "BaseComponent") -> str | None:
     """
     Compute hash of component's dynamic annotations, if any.
@@ -154,11 +192,13 @@ def _compute_annotation_hash(component: "BaseComponent") -> str | None:
     Returns:
         Short hash string if annotations exist, None otherwise
     """
-    annotations = getattr(component, "_dynamic_annotations", None)
-    if annotations is None:
+    annotation_sets = _get_dynamic_annotations(component)
+    if annotation_sets is None:
         return None
-    # Hash the sorted keys (sufficient for change detection)
-    return hashlib.md5(str(sorted(annotations.keys())).encode()).hexdigest()[:8]
+    # Hash each set's sorted keys alongside the attribute it came from, so the same
+    # labels on a different side produce a different hash.
+    keys = [(attr, sorted(annotations.keys())) for attr, annotations in annotation_sets]
+    return hashlib.md5(str(keys).encode()).hexdigest()[:8]
 
 
 def _get_cached_vue_data(
@@ -241,10 +281,9 @@ def _prepare_vue_data_cached(
     Returns:
         Tuple of (vue_data dict, data_hash string)
     """
-    # Check if component has dynamic annotations (e.g., LinePlot linked to SequenceView)
-    has_dynamic_annotations = (
-        getattr(component, "_dynamic_annotations", None) is not None
-    )
+    # Check if component has dynamic annotations (e.g., LinePlot linked to
+    # SequenceView, or MirrorPlot with per-side annotations)
+    has_dynamic_annotations = _get_dynamic_annotations(component) is not None
 
     # Try cache first (works for ALL components now)
     cached = _get_cached_vue_data(component_id, filter_state_hashable)
