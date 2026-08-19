@@ -5,6 +5,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.cache import atomic_write
 from ..core.registry import register_component
 from ..preprocessing.compression import (
     compute_compression_levels,
@@ -338,7 +339,11 @@ class Heatmap(BaseComponent):
         # First: save full resolution as the largest level
         full_res_path = cache_dir / f"{prefix}_{num_compressed}.parquet"
         full_res = source_data.sort([self._x_column, self._y_column])
-        full_res.sink_parquet(full_res_path, compression="zstd")
+        # Atomic: a reader with this level mapped must not have it truncated underneath
+        # it. The cascade reads each level back to build the next, so the file is only
+        # scanned after the rename has completed.
+        with atomic_write(full_res_path) as tmp:
+            full_res.sink_parquet(tmp, compression="zstd")
         print(
             f"[HEATMAP] Saved {prefix}_{num_compressed} ({total:,} pts)",
             file=sys.stderr,
@@ -379,7 +384,8 @@ class Heatmap(BaseComponent):
 
             # Sort and save immediately
             level = level.sort([self._x_column, self._y_column])
-            level.sink_parquet(level_path, compression="zstd")
+            with atomic_write(level_path) as tmp:
+                level.sink_parquet(tmp, compression="zstd")
 
             print(
                 f"[HEATMAP] Saved {prefix}_{level_idx} (target {target_size:,} pts)",

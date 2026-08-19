@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import polars as pl
 
-from .cache import CacheMissError, get_cache_dir
+from .cache import CacheMissError, atomic_write, cache_lock, get_cache_dir
 
 if TYPE_CHECKING:
     from .state import StateManager
@@ -159,44 +159,49 @@ class BaseComponent(ABC):
             # Heatmap's auto-computed x_bins/y_bins) and so is not reproducible here.
             self._input_config_hash = self._compute_config_hash()
 
-            if (
-                not regenerate_cache
-                and self._cache_exists()
-                and self._cached_input_config_matches(self._input_config_hash)
-            ):
-                # Same cache_id, same configuration: the work is already on disk.
-                # Under Streamlit this is the common case, since the page script
-                # reconstructs every component on every rerun.
-                self._raw_data = None
-                self._load_from_cache()
-                return
+            # Hold the lock across the check AND the build. Streamlit runs script
+            # threads concurrently, so without this two of them rewrite the same
+            # Parquet files while polars has them mapped -- and the loser of the race
+            # would redo work that the winner has already finished.
+            with cache_lock(self._cache_dir):
+                if (
+                    not regenerate_cache
+                    and self._cache_exists()
+                    and self._cached_input_config_matches(self._input_config_hash)
+                ):
+                    # Same cache_id, same configuration: the work is already on disk.
+                    # Under Streamlit this is the common case, since the page script
+                    # reconstructs every component on every rerun.
+                    self._raw_data = None
+                    self._load_from_cache()
+                    return
 
-            if data_path is not None:
-                # Subprocess preprocessing - memory released after cache creation
-                from .subprocess_preprocess import preprocess_component
+                if data_path is not None:
+                    # Subprocess preprocessing - memory released after cache creation
+                    from .subprocess_preprocess import preprocess_component
 
-                preprocess_component(
-                    type(self),
-                    data_path=data_path,
-                    cache_id=cache_id,
-                    cache_path=cache_path,
-                    filters=filters,
-                    filter_defaults=filter_defaults,
-                    interactivity=interactivity,
-                    # The decision to rebuild was made above; the child must not
-                    # re-apply the guard and decide otherwise, or regenerate_cache
-                    # would silently do nothing on this path.
-                    regenerate_cache=True,
-                    **kwargs,
-                )
-                self._raw_data = None
-                self._load_from_cache()
-            else:
-                # In-process preprocessing
-                self._raw_data = data
-                self._validate_mappings()
-                self._preprocess()
-                self._save_to_cache()
+                    preprocess_component(
+                        type(self),
+                        data_path=data_path,
+                        cache_id=cache_id,
+                        cache_path=cache_path,
+                        filters=filters,
+                        filter_defaults=filter_defaults,
+                        interactivity=interactivity,
+                        # The decision to rebuild was made above; the child must not
+                        # re-apply the guard and decide otherwise, or regenerate_cache
+                        # would silently do nothing on this path.
+                        regenerate_cache=True,
+                        **kwargs,
+                    )
+                    self._raw_data = None
+                    self._load_from_cache()
+                else:
+                    # In-process preprocessing
+                    self._raw_data = data
+                    self._validate_mappings()
+                    self._preprocess()
+                    self._save_to_cache()
 
     def _validate_mappings(self) -> None:
         """Validate that filter and interactivity columns exist in the data schema."""
@@ -425,7 +430,8 @@ class BaseComponent(ABC):
                     # Apply streaming-safe optimization (Float64→Float32 only)
                     # Int64 bounds checking would require collect(), breaking streaming
                     value = optimize_for_transfer_lazy(value)
-                    value.sink_parquet(filepath, compression="zstd")
+                    with atomic_write(filepath) as tmp:
+                        value.sink_parquet(tmp, compression="zstd")
                     manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
@@ -437,14 +443,17 @@ class BaseComponent(ABC):
                 else:
                     # Full optimization including Int64→Int32 with bounds checking
                     value = optimize_for_transfer(value)
-                    value.write_parquet(filepath, compression="zstd")
+                    with atomic_write(filepath) as tmp:
+                        value.write_parquet(tmp, compression="zstd")
                     manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
 
-        # Write manifest
-        with open(self._get_manifest_path(), "w") as f:
-            json.dump(manifest, f, indent=2)
+        # Write manifest last and atomically: it is what _cache_exists() and the reuse
+        # check read, so a torn one would make an otherwise complete cache unusable.
+        with atomic_write(self._get_manifest_path()) as tmp:
+            with open(tmp, "w") as f:
+                json.dump(manifest, f, indent=2)
 
         # Release memory - data is now safely on disk
         self._preprocessed_data = {}

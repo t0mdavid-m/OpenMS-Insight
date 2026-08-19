@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import polars as pl
 
+from ..core.cache import atomic_write, cache_lock
 from ..core.registry import register_component
 from ..preprocessing.filtering import optimize_for_transfer
 
@@ -489,35 +490,37 @@ class SequenceView:
 
             # Reuse the cache on disk when it was built from this configuration.
             # Without this, every Streamlit rerun re-parses the sequence, re-matches
-            # fragments and rewrites the Parquet files.
+            # fragments and rewrites the Parquet files. The lock spans the check and
+            # the build so concurrent script threads cannot write the same files.
             self._input_config_hash = self._compute_input_config_hash()
-            if (
-                not regenerate_cache
-                and self._cache_exists()
-                and self._cached_input_config_matches(self._input_config_hash)
-            ):
+            with cache_lock(self._cache_dir):
+                if (
+                    not regenerate_cache
+                    and self._cache_exists()
+                    and self._cached_input_config_matches(self._input_config_hash)
+                ):
+                    self._source_sequence_data = None
+                    self._source_static_sequence = None
+                    self._source_peaks_data = None
+                    self._load_from_cache()
+                    return
+
+                # Create and save cache
+                self._create_cache()
+
+                # Discard source references - only cache is used from now on
                 self._source_sequence_data = None
                 self._source_static_sequence = None
                 self._source_peaks_data = None
-                self._load_from_cache()
-                return
 
-            # Create and save cache
-            self._create_cache()
-
-            # Discard source references - only cache is used from now on
-            self._source_sequence_data = None
-            self._source_static_sequence = None
-            self._source_peaks_data = None
-
-            # Load cached LazyFrames for reading
-            self._cached_sequences = pl.scan_parquet(
-                self._cache_dir / "sequences.parquet"
-            )
-            peaks_path = self._cache_dir / "peaks.parquet"
-            self._cached_peaks = (
-                pl.scan_parquet(peaks_path) if peaks_path.exists() else None
-            )
+                # Load cached LazyFrames for reading
+                self._cached_sequences = pl.scan_parquet(
+                    self._cache_dir / "sequences.parquet"
+                )
+                peaks_path = self._cache_dir / "peaks.parquet"
+                self._cached_peaks = (
+                    pl.scan_parquet(peaks_path) if peaks_path.exists() else None
+                )
 
     def _get_cache_config(self) -> dict[str, Any]:
         """Get all configuration to store in cache."""
@@ -632,14 +635,16 @@ class SequenceView:
         self._preprocess_sequences()
         self._preprocess_peaks()
 
-        # Write config, with the reuse key alongside it
+        # Write config last and atomically: it is what _cache_exists() and the reuse
+        # check read, so a torn one would make an otherwise complete cache unusable.
         config_file = self._cache_dir / ".cache_config.json"
         stored = {
             **self._get_cache_config(),
             "input_config_hash": getattr(self, "_input_config_hash", None),
         }
-        with open(config_file, "w") as f:
-            json.dump(stored, f, indent=2)
+        with atomic_write(config_file) as tmp:
+            with open(tmp, "w") as f:
+                json.dump(stored, f, indent=2)
 
     def _preprocess_sequences(self) -> None:
         """Preprocess and cache sequence data."""
@@ -674,9 +679,11 @@ class SequenceView:
                 }
             )
 
-        # Optimize types and write
+        # Optimize types and write. Atomic: a concurrent reader must not observe a
+        # truncated file, and polars may have this one memory-mapped.
         df = optimize_for_transfer(df)
-        df.write_parquet(output_path, compression="zstd")
+        with atomic_write(output_path) as tmp:
+            df.write_parquet(tmp, compression="zstd")
 
     def _preprocess_peaks(self) -> None:
         """Preprocess and cache peaks data."""
@@ -706,9 +713,11 @@ class SequenceView:
 
         df = lf.collect()
 
-        # Optimize types and write
+        # Optimize types and write. Atomic: a concurrent reader must not observe a
+        # truncated file, and polars may have this one memory-mapped.
         df = optimize_for_transfer(df)
-        df.write_parquet(output_path, compression="zstd")
+        with atomic_write(output_path) as tmp:
+            df.write_parquet(tmp, compression="zstd")
 
     def _get_sequence_for_state(self, state: dict[str, Any]) -> tuple[str, int]:
         """Get sequence and charge for current state.
