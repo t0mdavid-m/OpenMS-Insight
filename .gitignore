@@ -70,3 +70,7 @@ CLAUDE.md
 /plot/
 /spectra/
 /app.py
+
+# Gallery
+gallery/.cache/
+screenshots/

@@ -1,0 +1,23 @@
+# Keep the build context small and reproducible.
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage*
+
+# Built artefacts are produced inside the image, never copied from the host.
+js-component/node_modules
+js-component/dist
+openms_insight/js-component
+
+# Local component caches and scratch output.
+gallery/.cache
+tools/**/out
+docs
+tests

@@ -1,0 +1,12 @@
+# Pinned runtime dependencies for the gallery image.
+#
+# Pins are deliberate: the deployed image should be the image that was tested
+# (see docs/adr/0003-scheduled-rebuild-without-restart-hook.md). Because pinning
+# means the scheduled rebuild cannot discover that a new release broke us,
+# Dependabot raises version bumps as pull requests instead, where the full example
+# suite runs against the new version.
+streamlit==1.61.1
+polars==1.43.2
+pandas==3.0.5
+pyarrow==24.0.0
+numpy==2.4.6
