@@ -563,6 +563,34 @@ heatmap = Heatmap(
 
 **Why this matters:** Memory allocators like mimalloc (used by Polars) retain freed memory for performance. For large datasets, this can cause memory usage to stay high even after preprocessing completes. Running preprocessing in a subprocess guarantees all memory is returned to the OS when the subprocess exits.
 
+## Caching
+
+A `cache_id` identifies one **(data, config)** pair. Constructing a component whose cache already exists with the same configuration reuses it and skips preprocessing entirely — which is what makes it safe to build components at the top of a Streamlit script, where the whole script reruns on every interaction:
+
+```python
+# Runs preprocessing once. Every rerun after that loads the cache.
+table = Table(
+    cache_id="spectra",
+    data=pl.scan_parquet("spectra.parquet"),
+    cache_path="./cache",
+    index_field="scan_id",
+)
+```
+
+**Changing the data does not invalidate the cache.** The configuration is hashed, but the data behind a LazyFrame cannot be without collecting it — which is the expense the cache exists to avoid. Give new data a new `cache_id`, or force a rebuild:
+
+```python
+table = Table(
+    cache_id="spectra",
+    data=pl.scan_parquet("todays_spectra.parquet"),
+    cache_path="./cache",
+    index_field="scan_id",
+    regenerate_cache=True,  # rebuild even though the config is unchanged
+)
+```
+
+Render-only settings such as `title` and `colorscale` currently take part in the cache key, so changing one rebuilds the cache rather than being ignored. That is wasteful but safe.
+
 ## Cache Reconstruction
 
 Components can be reconstructed from cache using only `cache_id` and `cache_path`. All configuration is restored from the cached manifest:

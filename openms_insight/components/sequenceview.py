@@ -369,6 +369,7 @@ class SequenceView:
         cache_path: str = ".",
         title: str | None = None,
         height: int = 400,
+        regenerate_cache: bool = False,
         **kwargs,
     ):
         """
@@ -398,6 +399,9 @@ class SequenceView:
             cache_path: Base path for cache storage.
             title: Optional title displayed above the sequence.
             height: Component height in pixels.
+            regenerate_cache: If True, rebuild the cache even when one matching this
+                configuration already exists. Needed when the data behind a
+                LazyFrame or file source changed but cache_id and config did not.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
@@ -483,6 +487,21 @@ class SequenceView:
             elif peaks_data is not None:
                 self._source_peaks_data = peaks_data
 
+            # Reuse the cache on disk when it was built from this configuration.
+            # Without this, every Streamlit rerun re-parses the sequence, re-matches
+            # fragments and rewrites the Parquet files.
+            self._input_config_hash = self._compute_input_config_hash()
+            if (
+                not regenerate_cache
+                and self._cache_exists()
+                and self._cached_input_config_matches(self._input_config_hash)
+            ):
+                self._source_sequence_data = None
+                self._source_static_sequence = None
+                self._source_peaks_data = None
+                self._load_from_cache()
+                return
+
             # Create and save cache
             self._create_cache()
 
@@ -511,6 +530,54 @@ class SequenceView:
             "deconvolved": self._deconvolved,
             "annotation_config": self._annotation_config,
         }
+
+    def _compute_input_config_hash(self) -> str:
+        """
+        Reuse key for the cache, computed from the configuration as passed in.
+
+        Includes the literal sequence when one was supplied directly. That is this
+        component's data rather than its configuration, but it is a short string,
+        hashing it is free, and a changed peptide under an unchanged cache_id is the
+        mistake most likely to be made here.
+
+        LazyFrame and file sources cannot be hashed without reading them, which is the
+        expense the cache exists to avoid, so they follow the same contract as every
+        other component: new data needs a new cache_id or regenerate_cache=True.
+
+        Returns:
+            Hex digest of the configuration.
+        """
+        payload = {
+            **self._get_cache_config(),
+            "static_sequence": self._source_static_sequence,
+            "static_charge": self._source_static_charge,
+            "has_sequence_frame": self._source_sequence_data is not None,
+            "has_peaks": self._source_peaks_data is not None,
+        }
+        serialized = json.dumps(payload, sort_keys=True, default=str)
+        return hashlib.sha256(serialized.encode()).hexdigest()
+
+    def _cached_input_config_matches(self, input_config_hash: str) -> bool:
+        """
+        Check whether the cache on disk was built from this configuration.
+
+        Returns:
+            True if the cached config records the same hash. False when it is
+            unreadable, or predates this field -- in which case the cache is rebuilt
+            so that it gains one, rather than assuming a match.
+        """
+        config_file = self._cache_dir / ".cache_config.json"
+        try:
+            with open(config_file) as f:
+                cached = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        stored = cached.get("input_config_hash")
+        if stored is None:
+            return False
+
+        return bool(stored == input_config_hash)
 
     def _cache_exists(self) -> bool:
         """Check if a valid cache exists that can be loaded."""
@@ -565,10 +632,14 @@ class SequenceView:
         self._preprocess_sequences()
         self._preprocess_peaks()
 
-        # Write config
+        # Write config, with the reuse key alongside it
         config_file = self._cache_dir / ".cache_config.json"
+        stored = {
+            **self._get_cache_config(),
+            "input_config_hash": getattr(self, "_input_config_hash", None),
+        }
         with open(config_file, "w") as f:
-            json.dump(self._get_cache_config(), f, indent=2)
+            json.dump(stored, f, indent=2)
 
     def _preprocess_sequences(self) -> None:
         """Preprocess and cache sequence data."""

@@ -171,8 +171,7 @@ def _get_dynamic_annotations(
     present = [
         (attr, annotations)
         for attr, annotations in (
-            (attr, getattr(component, attr, None))
-            for attr in _DYNAMIC_ANNOTATION_ATTRS
+            (attr, getattr(component, attr, None)) for attr in _DYNAMIC_ANNOTATION_ATTRS
         )
         # Annotations are always dicts. Requiring that (rather than "not None") keeps
         # test doubles, whose auto-created attributes are truthy, from being mistaken

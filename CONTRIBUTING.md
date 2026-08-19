@@ -182,6 +182,10 @@ In linked spectrum views, the component highlights peaks whose IDs appear in the
 
 A mandatory unique string identifier for on-disk caching. Creates a folder at `{cache_path}/{cache_id}/`. Must be stable across reruns but unique per logical component instance.
 
+A `cache_id` identifies one **(data, config)** pair. Constructing a component whose cache already exists with the same configuration reuses it and skips `_preprocess()` entirely — that is what makes it safe to build components at the top of a Streamlit script, which reruns on every interaction. The reuse key is `input_config_hash` in the manifest: the same hash as `config_hash`, but taken *before* `_preprocess()` runs, because preprocessing overwrites parts of `_get_cache_config()` (see the note under that method) and the post-hash therefore cannot be recomputed at the check point. A manifest without the field rebuilds, so caches written by older versions are never trusted.
+
+**Changed data under an unchanged `cache_id` and config is not detected.** Hashing a LazyFrame means collecting it, which is the expense the cache exists to avoid. New data needs a new `cache_id` or `regenerate_cache=True`.
+
 ### data_path vs data
 
 Two ways to provide input data:
@@ -396,6 +400,8 @@ def _get_cache_config(self) -> Dict[str, Any]:
 **Exclude**: Styling, colors, UI labels, or anything only used at render time. Including these causes unnecessary cache rebuilds. For example, `title` and `styling` dicts should generally be excluded unless they affect preprocessing.
 
 > **Note**: Looking at existing components, some (like LinePlot) include title/styling in cache config for simplicity even though they don't strictly affect preprocessing. This works but means changing a title forces a cache rebuild. For components with expensive preprocessing, keep cache config minimal.
+
+> **Careful**: if `_preprocess()` writes back to an attribute that appears here — Table auto-detects `column_definitions`, Heatmap auto-computes `x_bins`/`y_bins` — then this method returns different values before and after preprocessing. That is why cache reuse is keyed on `input_config_hash`, captured beforehand, rather than on `config_hash`. Deriving config during preprocessing is fine; just don't assume the two hashes agree.
 
 #### `_restore_cache_config(config)`
 

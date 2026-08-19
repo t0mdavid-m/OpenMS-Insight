@@ -64,14 +64,26 @@ class BaseComponent(ABC):
 
         1. **Creation mode** (data provided): Creates cache with specified config.
            All configuration (filters, interactivity, component-specific) is stored.
+           If a cache built from the same configuration already exists, it is reused
+           and preprocessing is skipped -- this is what makes it safe to construct a
+           component at the top of a Streamlit script, which reruns on every
+           interaction.
 
         2. **Reconstruction mode** (no data): Loads everything from cache.
            Only cache_id and cache_path are needed. All configuration is restored
            from the cached manifest. Any other parameters passed are ignored.
 
+        **Cache freshness.** A cache_id identifies one (data, config) pair. The
+        configuration is hashed, but the data behind a LazyFrame cannot be without
+        collecting it -- which is the expense the cache exists to avoid. So changing
+        the data while keeping cache_id and configuration identical will silently
+        serve the old cache. Give new data a new cache_id, or pass
+        regenerate_cache=True.
+
         Args:
             cache_id: Unique identifier for this component's cache (MANDATORY).
                 Creates a folder {cache_path}/{cache_id}/ for cached data.
+                Identifies one (data, config) pair -- see Cache freshness above.
             data: Polars LazyFrame with source data. Required for creation mode.
             data_path: Path to parquet file with source data. Preferred over
                 data= for large datasets as preprocessing runs in a subprocess
@@ -89,7 +101,9 @@ class BaseComponent(ABC):
                 When user clicks/selects, sets 'my_selection' to the clicked
                 row's mass value.
             cache_path: Base path for cache storage. Default "." (current dir).
-            regenerate_cache: If True, regenerate cache even if valid cache exists.
+            regenerate_cache: If True, rebuild the cache even when one matching this
+                configuration already exists. Needed when the data changed but
+                cache_id and configuration did not.
             **kwargs: Component-specific configuration options
         """
         # Validate inputs
@@ -139,6 +153,24 @@ class BaseComponent(ABC):
             self._interactivity = interactivity or {}
             self._config = kwargs
 
+            # Reuse key for the cache on disk, captured BEFORE preprocessing runs.
+            # It cannot be `config_hash`, which is computed afterwards and contains
+            # values preprocessing derived (Table's auto-detected column_definitions,
+            # Heatmap's auto-computed x_bins/y_bins) and so is not reproducible here.
+            self._input_config_hash = self._compute_config_hash()
+
+            if (
+                not regenerate_cache
+                and self._cache_exists()
+                and self._cached_input_config_matches(self._input_config_hash)
+            ):
+                # Same cache_id, same configuration: the work is already on disk.
+                # Under Streamlit this is the common case, since the page script
+                # reconstructs every component on every rerun.
+                self._raw_data = None
+                self._load_from_cache()
+                return
+
             if data_path is not None:
                 # Subprocess preprocessing - memory released after cache creation
                 from .subprocess_preprocess import preprocess_component
@@ -151,6 +183,10 @@ class BaseComponent(ABC):
                     filters=filters,
                     filter_defaults=filter_defaults,
                     interactivity=interactivity,
+                    # The decision to rebuild was made above; the child must not
+                    # re-apply the guard and decide otherwise, or regenerate_cache
+                    # would silently do nothing on this path.
+                    regenerate_cache=True,
                     **kwargs,
                 )
                 self._raw_data = None
@@ -265,6 +301,31 @@ class BaseComponent(ABC):
 
         return True
 
+    def _cached_input_config_matches(self, input_config_hash: str) -> bool:
+        """
+        Check whether the cache on disk was built from this configuration.
+
+        Args:
+            input_config_hash: Hash of the configuration as passed to __init__,
+                computed before preprocessing.
+
+        Returns:
+            True if the cached manifest records the same hash. False when the
+            manifest is unreadable, or predates this field -- in which case the
+            cache is rebuilt so that it gains one, rather than assuming a match.
+        """
+        try:
+            with open(self._get_manifest_path()) as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        stored = manifest.get("input_config_hash")
+        if stored is None:
+            return False
+
+        return bool(stored == input_config_hash)
+
     def _load_from_cache(self) -> None:
         """Load all configuration and preprocessed data from cache.
 
@@ -333,6 +394,11 @@ class BaseComponent(ABC):
             "component_type": self._component_type,
             "created_at": datetime.now().isoformat(),
             "config_hash": self._compute_config_hash(),
+            # Reuse key: the same hash taken from the configuration as passed in,
+            # before preprocessing derived anything from it. See __init__.
+            "input_config_hash": getattr(
+                self, "_input_config_hash", self._compute_config_hash()
+            ),
             "config": self._get_cache_config(),
             "filters": self._filters,
             "filter_defaults": self._filter_defaults,
