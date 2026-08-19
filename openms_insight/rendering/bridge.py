@@ -394,6 +394,29 @@ def get_vue_component_function():
     return _vue_component_func
 
 
+def _get_validation_filter_groups(
+    component: "BaseComponent",
+) -> list[tuple[dict[str, str], dict[str, Any]]]:
+    """Filter groups to validate interactivity selections against.
+
+    A group is one independently filtered view of the component's data. Most
+    components have exactly one; a MirrorPlot has one per side. Components that
+    predate the hook fall back to their flat filters.
+    """
+    getter = getattr(component, "get_validation_filter_groups", None)
+    if callable(getter):
+        groups: list[tuple[dict[str, str], dict[str, Any]]] = getter()
+        if groups:
+            return groups
+
+    return [
+        (
+            getattr(component, "_filters", None) or {},
+            getattr(component, "_filter_defaults", None) or {},
+        )
+    ]
+
+
 def _validate_interactivity_selections(
     component: "BaseComponent",
     state_manager: "StateManager",
@@ -418,8 +441,7 @@ def _validate_interactivity_selections(
     if not interactivity:
         return False
 
-    filters = getattr(component, "_filters", None) or {}
-    filter_defaults = getattr(component, "_filter_defaults", None) or {}
+    filter_groups = _get_validation_filter_groups(component)
 
     # Get the preprocessed data
     preprocessed = getattr(component, "_preprocessed_data", None)
@@ -437,21 +459,47 @@ def _validate_interactivity_selections(
     if isinstance(data, pl.DataFrame):
         data = data.lazy()
 
-    # Apply filters to get the filtered dataset
-    for identifier, column in filters.items():
-        selected_value = state.get(identifier)
-        if selected_value is None and identifier in filter_defaults:
-            selected_value = filter_defaults[identifier]
+    # Apply filters to get the filtered dataset.
+    #
+    # Each group is one view of the data, and a selection is valid if it survives in
+    # ANY of them. Components with a single set of filters have exactly one group, so
+    # this reduces to the plain conjunction it always was. A MirrorPlot has one group
+    # per side: ANDing the two together would ask for rows where scan_id equals both
+    # the top and the bottom scan at once, which is never satisfiable, so every
+    # selection would be judged missing and cleared the moment it was made.
+    group_predicates: list[pl.Expr] = []
+    for filters, filter_defaults in filter_groups:
+        if not filters:
+            # An unfiltered view shows every row, so the union admits everything and
+            # there is nothing any other group could rule out.
+            group_predicates = []
+            break
 
-        if selected_value is None:
-            # Awaiting filter - no data to validate against
-            return False
+        predicate = None
+        for identifier, column in filters.items():
+            selected_value = state.get(identifier)
+            if selected_value is None and identifier in filter_defaults:
+                selected_value = filter_defaults[identifier]
 
-        # Convert float to int for integer columns (type mismatch handling)
-        if isinstance(selected_value, float) and selected_value.is_integer():
-            selected_value = int(selected_value)
+            if selected_value is None:
+                # Awaiting filter - no data to validate against
+                return False
 
-        data = data.filter(pl.col(column) == selected_value)
+            # Convert float to int for integer columns (type mismatch handling)
+            if isinstance(selected_value, float) and selected_value.is_integer():
+                selected_value = int(selected_value)
+
+            term = pl.col(column) == selected_value
+            predicate = term if predicate is None else (predicate & term)
+
+        if predicate is not None:
+            group_predicates.append(predicate)
+
+    if group_predicates:
+        combined = group_predicates[0]
+        for predicate in group_predicates[1:]:
+            combined = combined | predicate
+        data = data.filter(combined)
 
     # Collect all checks to validate
     state_changed = False
@@ -479,6 +527,10 @@ def _validate_interactivity_selections(
         return False
 
     # Build single query with all existence checks
+    #
+    # An empty frame clears every selection, and that is deliberate: it means the
+    # component displays no rows at all, so nothing in it can still be selected. See
+    # TestTableSelectionClearingOnInvalidFilter in tests/integration/test_tabulator.py.
     existence_exprs = [
         (pl.col(column) == value).any().alias(identifier)
         for identifier, column, value in checks_to_validate

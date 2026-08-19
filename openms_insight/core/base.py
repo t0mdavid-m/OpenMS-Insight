@@ -184,6 +184,25 @@ class BaseComponent(ABC):
                     f"Available columns: {column_names}"
                 )
 
+    def get_validation_filter_groups(
+        self,
+    ) -> list[tuple[dict[str, str], dict[str, Any]]]:
+        """
+        Filter groups used to validate interactivity selections.
+
+        A group is one independently filtered view of this component's data, given as
+        ``(filters, filter_defaults)``. The bridge clears an interactivity selection
+        only when it is absent from *every* group, so a component that shows several
+        differently-filtered views at once keeps selections belonging to any of them.
+
+        Most components show a single view and need not override this. MirrorPlot does,
+        because its two halves filter independently.
+
+        Returns:
+            List of (filters, filter_defaults) pairs, one per view.
+        """
+        return [(self._filters, self._filter_defaults)]
+
     def _get_cache_config(self) -> dict[str, Any]:
         """
         Get configuration that affects cache validity.

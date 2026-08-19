@@ -298,6 +298,22 @@ class MirrorPlot(BaseComponent):
         """Both per-side filter identifiers; interactivity excluded so clicks don't invalidate cache."""
         return list(self._filters_top.keys()) + list(self._filters_bottom.keys())
 
+    def get_validation_filter_groups(
+        self,
+    ) -> list[tuple[dict[str, str], dict[str, Any]]]:
+        """One group per half, because the two sides filter independently.
+
+        The base class receives a union of both sides' filters, which loses track of
+        which side each one belongs to. Validating against that union conjunctively
+        asks for rows matching the top *and* the bottom filter simultaneously -- for
+        the usual case of two different scans on one column that matches nothing, so
+        every peak selection would be cleared as soon as it was made.
+        """
+        return [
+            (self._filters_top, self._filter_defaults_top),
+            (self._filters_bottom, self._filter_defaults_bottom),
+        ]
+
     def _get_cache_config(self) -> dict[str, Any]:
         """Configuration that affects cache validity."""
         return {
