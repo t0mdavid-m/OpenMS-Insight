@@ -8,13 +8,13 @@ subprocess ensures all memory is returned to the OS when the subprocess exits.
 import multiprocessing
 import os
 import traceback
-from typing import Any, Dict, Type
+from typing import Any
 
 
 def _preprocess_worker(
-    component_class: Type,
+    component_class: type,
     data_path: str,
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     error_queue: multiprocessing.Queue,
 ) -> None:
     """Worker function that runs in subprocess to do preprocessing."""
@@ -35,7 +35,7 @@ def _preprocess_worker(
 
 
 def preprocess_component(
-    component_class: Type,
+    component_class: type,
     data_path: str,
     cache_id: str,
     cache_path: str,

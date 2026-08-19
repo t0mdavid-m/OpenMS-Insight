@@ -1,7 +1,7 @@
 # OpenMS-Insight
 
 [![PyPI version](https://badge.fury.io/py/openms-insight.svg)](https://badge.fury.io/py/openms-insight)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://github.com/t0mdavid-m/OpenMS-Insight/actions/workflows/tests.yml/badge.svg)](https://github.com/t0mdavid-m/OpenMS-Insight/actions/workflows/tests.yml)
 
 Interactive visualization components for mass spectrometry data in Streamlit, backed by Vue.js.

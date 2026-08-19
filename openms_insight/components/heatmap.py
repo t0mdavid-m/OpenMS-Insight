@@ -1,6 +1,6 @@
 """Heatmap component using Plotly scattergl."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import polars as pl
 
@@ -18,7 +18,7 @@ from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect
 
 
 # Cache key only includes zoom state (not other selections)
-def _make_zoom_cache_key(zoom: Optional[Dict[str, Any]]) -> tuple:
+def _make_zoom_cache_key(zoom: dict[str, Any] | None) -> tuple:
     """Create hashable cache key from zoom state."""
     if zoom is None:
         return (None,)
@@ -67,34 +67,34 @@ class Heatmap(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        x_column: Optional[str] = None,
-        y_column: Optional[str] = None,
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
-        intensity_column: Optional[str] = None,
-        filters: Optional[Dict[str, str]] = None,
-        filter_defaults: Optional[Dict[str, Any]] = None,
-        interactivity: Optional[Dict[str, str]] = None,
+        x_column: str | None = None,
+        y_column: str | None = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
+        intensity_column: str | None = None,
+        filters: dict[str, str] | None = None,
+        filter_defaults: dict[str, Any] | None = None,
+        interactivity: dict[str, str] | None = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
         min_points: int = 10000,
         display_aspect_ratio: float = 16 / 9,
-        x_bins: Optional[int] = None,
-        y_bins: Optional[int] = None,
+        x_bins: int | None = None,
+        y_bins: int | None = None,
         zoom_identifier: str = "heatmap_zoom",
-        title: Optional[str] = None,
-        x_label: Optional[str] = None,
-        y_label: Optional[str] = None,
+        title: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
         colorscale: str = "Portland",
         reversescale: bool = False,
         use_simple_downsample: bool = False,
         use_streaming: bool = True,
-        categorical_filters: Optional[List[str]] = None,
-        category_column: Optional[str] = None,
-        category_colors: Optional[Dict[str, str]] = None,
+        categorical_filters: list[str] | None = None,
+        category_column: str | None = None,
+        category_colors: dict[str, str] | None = None,
         log_scale: bool = True,
         low_values_on_top: bool = False,
-        intensity_label: Optional[str] = None,
+        intensity_label: str | None = None,
         **kwargs,
     ):
         """
@@ -210,7 +210,7 @@ class Heatmap(BaseComponent):
             **kwargs,
         )
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """
         Get configuration that affects cache validity.
 
@@ -240,7 +240,7 @@ class Heatmap(BaseComponent):
             # Note: category_colors is render-time styling, doesn't affect cache
         }
 
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
         self._x_column = config.get("x_column")
         self._y_column = config.get("y_column")
@@ -750,7 +750,7 @@ class Heatmap(BaseComponent):
         self,
         filter_id: str,
         filter_value: Any,
-    ) -> Tuple[list, Optional[pl.LazyFrame]]:
+    ) -> tuple[list, pl.LazyFrame | None]:
         """
         Get compression levels for a specific categorical filter value.
 
@@ -779,8 +779,8 @@ class Heatmap(BaseComponent):
         return levels, None  # Full resolution included in cached levels
 
     def _get_levels_for_state(
-        self, state: Dict[str, Any]
-    ) -> Tuple[list, Optional[pl.LazyFrame]]:
+        self, state: dict[str, Any]
+    ) -> tuple[list, pl.LazyFrame | None]:
         """
         Get appropriate compression levels based on current filter state.
 
@@ -831,7 +831,7 @@ class Heatmap(BaseComponent):
         """Return the key used to send primary data to Vue."""
         return "heatmapData"
 
-    def _is_no_zoom(self, zoom: Optional[Dict[str, Any]]) -> bool:
+    def _is_no_zoom(self, zoom: dict[str, Any] | None) -> bool:
         """Check if zoom state represents no zoom (full view)."""
         if zoom is None:
             return True
@@ -841,11 +841,11 @@ class Heatmap(BaseComponent):
 
     def _select_level_for_zoom(
         self,
-        zoom: Dict[str, Any],
-        state: Dict[str, Any],
+        zoom: dict[str, Any],
+        state: dict[str, Any],
         levels: list,
-        filtered_raw: Optional[pl.LazyFrame],
-        non_categorical_filters: Dict[str, str],
+        filtered_raw: pl.LazyFrame | None,
+        non_categorical_filters: dict[str, str],
     ) -> pl.DataFrame:
         """
         Select appropriate resolution level based on zoom range.
@@ -958,7 +958,7 @@ class Heatmap(BaseComponent):
         # Even largest level has fewer points than threshold
         return last_filtered if last_filtered is not None else pl.DataFrame()
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """
         Prepare heatmap data for Vue component.
 
@@ -1091,14 +1091,14 @@ class Heatmap(BaseComponent):
             "_hash": data_hash,
         }
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """
         Get component arguments to send to Vue.
 
         Returns:
             Dict with all heatmap configuration for Vue
         """
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "xColumn": self._x_column,
             "yColumn": self._y_column,
@@ -1132,9 +1132,9 @@ class Heatmap(BaseComponent):
 
     def with_styling(
         self,
-        colorscale: Optional[str] = None,
-        x_label: Optional[str] = None,
-        y_label: Optional[str] = None,
+        colorscale: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
     ) -> "Heatmap":
         """
         Update heatmap styling.

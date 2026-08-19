@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import polars as pl
 
@@ -71,23 +71,23 @@ class Table(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
-        filters: Optional[Dict[str, str]] = None,
-        filter_defaults: Optional[Dict[str, Any]] = None,
-        interactivity: Optional[Dict[str, str]] = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
+        filters: dict[str, str] | None = None,
+        filter_defaults: dict[str, Any] | None = None,
+        interactivity: dict[str, str] | None = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
-        column_definitions: Optional[List[Dict[str, Any]]] = None,
-        title: Optional[str] = None,
+        column_definitions: list[dict[str, Any]] | None = None,
+        title: str | None = None,
         index_field: str = "id",
-        go_to_fields: Optional[List[str]] = None,
+        go_to_fields: list[str] | None = None,
         layout: str = "fitDataFill",
         default_row: int = 0,
-        initial_sort: Optional[List[Dict[str, Any]]] = None,
+        initial_sort: list[dict[str, Any]] | None = None,
         pagination: bool = True,
         page_size: int = 100,
-        pagination_identifier: Optional[str] = None,
+        pagination_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -172,7 +172,7 @@ class Table(BaseComponent):
             **kwargs,
         )
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """
         Get configuration that affects cache validity.
 
@@ -192,7 +192,7 @@ class Table(BaseComponent):
             "pagination_identifier": self._pagination_identifier,
         }
 
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
         self._column_definitions = config.get("column_definitions")
         self._index_field = config.get("index_field", "id")
@@ -207,7 +207,7 @@ class Table(BaseComponent):
             "pagination_identifier", f"{self._cache_id}_page"
         )
 
-    def get_state_dependencies(self) -> List[str]:
+    def get_state_dependencies(self) -> list[str]:
         """
         Return list of state keys that affect this component's data.
 
@@ -226,7 +226,7 @@ class Table(BaseComponent):
             deps.extend(self._interactivity.keys())
         return deps
 
-    def get_initial_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def get_initial_selection(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """
         Compute the initial selection for this table WITHOUT triggering Vue updates.
 
@@ -323,8 +323,8 @@ class Table(BaseComponent):
         if self._column_definitions is None:
             # Auto-generate column definitions from schema
             self._column_definitions = []
-            for name, dtype in zip(schema.names(), schema.dtypes()):
-                col_def: Dict[str, Any] = {
+            for name, dtype in zip(schema.names(), schema.dtypes(), strict=True):
+                col_def: dict[str, Any] = {
                     "field": name,
                     "title": name.replace("_", " ").title(),
                     "headerTooltip": True,
@@ -358,9 +358,9 @@ class Table(BaseComponent):
 
         # Compute column metadata for server-side filter dialogs
         # This is computed once at preprocessing time and cached
-        column_metadata: Dict[str, Dict[str, Any]] = {}
-        for name, dtype in zip(schema.names(), schema.dtypes()):
-            meta: Dict[str, Any] = {}
+        column_metadata: dict[str, dict[str, Any]] = {}
+        for name, dtype in zip(schema.names(), schema.dtypes(), strict=True):
+            meta: dict[str, Any] = {}
 
             if dtype in (
                 pl.Int8,
@@ -446,7 +446,7 @@ class Table(BaseComponent):
         # Base class will use sink_parquet() to stream without full materialization
         self._preprocessed_data["data"] = data  # Keep lazy
 
-    def _auto_detect_go_to_fields(self, data: pl.LazyFrame) -> List[str]:
+    def _auto_detect_go_to_fields(self, data: pl.LazyFrame) -> list[str]:
         """
         Auto-detect columns suitable for go-to navigation.
 
@@ -499,7 +499,7 @@ class Table(BaseComponent):
 
         return candidates
 
-    def _get_columns_to_select(self) -> Optional[List[str]]:
+    def _get_columns_to_select(self) -> list[str] | None:
         """Get list of columns needed for this table."""
         if not self._column_definitions:
             return None
@@ -533,7 +533,7 @@ class Table(BaseComponent):
         """Return the key used to send primary data to Vue."""
         return "tableData"
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """
         Prepare table data for Vue component with server-side pagination.
 
@@ -885,7 +885,7 @@ class Table(BaseComponent):
         # Compute auto-selection from first row (before pagination)
         # This provides the first row's values for interactivity columns
         # so downstream components can receive initial data when filters change
-        auto_selection: Dict[str, Any] = {}
+        auto_selection: dict[str, Any] = {}
         if self._interactivity and total_rows > 0:
             # Get the first row of sorted/filtered data
             first_row = data.head(1).collect()
@@ -906,7 +906,7 @@ class Table(BaseComponent):
         data_hash = compute_dataframe_hash(df_polars)
 
         # Build result
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "tableData": df_polars.to_pandas(),
             "_hash": data_hash,
             "_pagination": {
@@ -935,7 +935,7 @@ class Table(BaseComponent):
         )
         return result
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """
         Get component arguments to send to Vue.
 
@@ -950,7 +950,7 @@ class Table(BaseComponent):
         # Get column metadata for filter dialogs (computed during preprocessing)
         column_metadata = self._preprocessed_data.get("column_metadata", {})
 
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "columnDefinitions": column_defs,
             "tableIndexField": self._index_field,
@@ -984,7 +984,7 @@ class Table(BaseComponent):
         self,
         field: str,
         formatter: str,
-        formatter_params: Optional[Dict[str, Any]] = None,
+        formatter_params: dict[str, Any] | None = None,
     ) -> "Table":
         """
         Add or update a column formatter.
@@ -1042,7 +1042,7 @@ class Table(BaseComponent):
         field: str,
         min_val: float = 0,
         max_val: float = 100,
-        color: Optional[str] = None,
+        color: str | None = None,
     ) -> "Table":
         """
         Format a column as a progress bar.
@@ -1056,7 +1056,7 @@ class Table(BaseComponent):
         Returns:
             Self for method chaining
         """
-        params: Dict[str, Any] = {"min": min_val, "max": max_val}
+        params: dict[str, Any] = {"min": min_val, "max": max_val}
         if color:
             params["color"] = color
         return self.with_column_formatter(field, "progress", params)

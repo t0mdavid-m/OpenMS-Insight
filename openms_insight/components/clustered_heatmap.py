@@ -1,6 +1,6 @@
 """ClusteredHeatmap component: a real grid heatmap with optional row/column dendrograms."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -42,10 +42,10 @@ class ClusteredHeatmap(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        id_col: Optional[str] = None,
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
-        metadata: Optional[pl.DataFrame] = None,
+        id_col: str | None = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
+        metadata: pl.DataFrame | None = None,
         sample_id_field: str = "sample_id",
         group_field: str = "group",
         row_cluster: bool = True,
@@ -54,13 +54,13 @@ class ClusteredHeatmap(BaseComponent):
         linkage_metric: str = "euclidean",
         cache_path: str = ".",
         regenerate_cache: bool = False,
-        title: Optional[str] = None,
-        x_label: Optional[str] = None,
-        y_label: Optional[str] = None,
+        title: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
         colorscale: str = "RdBu",
         reversescale: bool = True,
-        intensity_label: Optional[str] = None,
-        group_colors: Optional[Dict[str, str]] = None,
+        intensity_label: str | None = None,
+        group_colors: dict[str, str] | None = None,
         **kwargs,
     ):
         """
@@ -184,15 +184,17 @@ class ClusteredHeatmap(BaseComponent):
                     f"Available columns: {sorted(metadata_cols)}"
                 )
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """Get configuration that affects cache validity."""
-        metadata_map: Dict[str, Any] = {}
+        metadata_map: dict[str, Any] = {}
         if self._metadata is not None:
             sample_ids = (
                 self._metadata.select(self._sample_id_field).to_series().to_list()
             )
             groups = self._metadata.select(self._group_field).to_series().to_list()
-            metadata_map = {str(sid): grp for sid, grp in zip(sample_ids, groups)}
+            metadata_map = {
+                str(sid): grp for sid, grp in zip(sample_ids, groups, strict=True)
+            }
 
         return {
             "id_col": self._id_col,
@@ -212,7 +214,7 @@ class ClusteredHeatmap(BaseComponent):
             "group_colors": self._group_colors,
         }
 
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
         self._id_col = config.get("id_col")
         self._sample_id_field = config.get("sample_id_field", "sample_id")
@@ -230,7 +232,7 @@ class ClusteredHeatmap(BaseComponent):
         self._group_colors = config.get("group_colors", {})
         self._metadata = None  # not needed after clustering has been precomputed
 
-    def _compute_dendrogram(self, matrix: np.ndarray) -> Dict[str, Any]:
+    def _compute_dendrogram(self, matrix: np.ndarray) -> dict[str, Any]:
         """Run hierarchical clustering and return leaf order + line coordinates.
 
         Args:
@@ -296,28 +298,28 @@ class ClusteredHeatmap(BaseComponent):
                 f"row_cluster=False and col_cluster=False."
             )
 
-        row_dendrogram: Optional[Dict[str, Any]] = None
+        row_dendrogram: dict[str, Any] | None = None
         if self._row_cluster and len(row_labels) >= 2:
             row_dendrogram = self._compute_dendrogram(values)
             row_order = row_dendrogram["leafOrder"]
             values = values[row_order, :]
             row_labels = [row_labels[i] for i in row_order]
 
-        col_dendrogram: Optional[Dict[str, Any]] = None
+        col_dendrogram: dict[str, Any] | None = None
         if self._col_cluster and len(col_labels) >= 2:
             col_dendrogram = self._compute_dendrogram(values.T)
             col_order = col_dendrogram["leafOrder"]
             values = values[:, col_order]
             col_labels = [col_labels[i] for i in col_order]
 
-        col_groups: List[Optional[str]] = [None] * len(col_labels)
+        col_groups: list[str | None] = [None] * len(col_labels)
         group_colors = dict(self._group_colors)
         if self._metadata is not None:
             sample_ids = (
                 self._metadata.select(self._sample_id_field).to_series().to_list()
             )
             groups = self._metadata.select(self._group_field).to_series().to_list()
-            group_map = dict(zip(sample_ids, groups))
+            group_map = dict(zip(sample_ids, groups, strict=True))
             col_groups = [group_map.get(c) for c in col_labels]
 
             default_palette = [
@@ -353,11 +355,11 @@ class ClusteredHeatmap(BaseComponent):
             "group_colors": group_colors,
         }
 
-    def get_row_labels(self) -> List[str]:
+    def get_row_labels(self) -> list[str]:
         """Return row labels in clustered (or original) order."""
         return list(self._preprocessed_data.get("row_labels", []))
 
-    def get_col_labels(self) -> List[str]:
+    def get_col_labels(self) -> list[str]:
         """Return column labels in clustered (or original) order."""
         return list(self._preprocessed_data.get("col_labels", []))
 
@@ -369,7 +371,7 @@ class ClusteredHeatmap(BaseComponent):
         """Return the key for the primary data in Vue payload."""
         return "heatmapMatrix"
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """Prepare the (already reordered) matrix for the Vue component.
 
         No filtering/interactivity in this first version - the full matrix
@@ -386,9 +388,9 @@ class ClusteredHeatmap(BaseComponent):
 
         return {"heatmapMatrix": df_pandas, "_hash": data_hash}
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """Return configuration for the Vue component."""
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "idCol": self._id_col,
             "rowLabels": self.get_row_labels(),

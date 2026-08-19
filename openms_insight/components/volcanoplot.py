@@ -1,6 +1,6 @@
 """VolcanoPlot component for differential expression visualization."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import polars as pl
 
@@ -54,17 +54,17 @@ class VolcanoPlot(BaseComponent):
         cache_id: str,
         log2fc_column: str = "log2FC",
         pvalue_column: str = "pvalue",
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
-        label_column: Optional[str] = None,
-        filters: Optional[Dict[str, str]] = None,
-        filter_defaults: Optional[Dict[str, Any]] = None,
-        interactivity: Optional[Dict[str, str]] = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
+        label_column: str | None = None,
+        filters: dict[str, str] | None = None,
+        filter_defaults: dict[str, Any] | None = None,
+        interactivity: dict[str, str] | None = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
-        title: Optional[str] = None,
-        x_label: Optional[str] = None,
-        y_label: Optional[str] = None,
+        title: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
         up_color: str = "#E74C3C",
         down_color: str = "#3498DB",
         ns_color: str = "#95A5A6",
@@ -154,7 +154,7 @@ class VolcanoPlot(BaseComponent):
                 f"Available columns: {sorted(available)}"
             )
 
-    def _get_component_config_hash_inputs(self) -> Dict[str, Any]:
+    def _get_component_config_hash_inputs(self) -> dict[str, Any]:
         """Get inputs for component config hash (cache invalidation)."""
         return {
             "log2fc_column": self._log2fc_column,
@@ -163,7 +163,7 @@ class VolcanoPlot(BaseComponent):
             # Note: thresholds are NOT included - they're render-time params
         }
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """Get configuration that affects cache validity."""
         return {
             "log2fc_column": self._log2fc_column,
@@ -179,7 +179,7 @@ class VolcanoPlot(BaseComponent):
             "threshold_line_style": self._threshold_line_style,
         }
 
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
         self._log2fc_column = config.get("log2fc_column", "log2FC")
         self._pvalue_column = config.get("pvalue_column", "pvalue")
@@ -242,7 +242,7 @@ class VolcanoPlot(BaseComponent):
         """Return the key for the primary data in Vue payload."""
         return "volcanoData"
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """Prepare filtered data for Vue component.
 
         Uses shared prepare_scatter_data for filtering and conversion.
@@ -312,7 +312,7 @@ class VolcanoPlot(BaseComponent):
 
             return {"volcanoData": df_pandas, "_hash": data_hash}
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """Return configuration for Vue component."""
         return {
             "componentType": self._get_vue_component_name(),
@@ -337,9 +337,9 @@ class VolcanoPlot(BaseComponent):
 
     def __call__(
         self,
-        key: Optional[str] = None,
-        state_manager: Optional[Any] = None,
-        height: Optional[int] = None,
+        key: str | None = None,
+        state_manager: Any | None = None,
+        height: int | None = None,
         fc_threshold: float = 1.0,
         p_threshold: float = 0.05,
         max_labels: int = 10,

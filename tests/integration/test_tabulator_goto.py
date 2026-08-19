@@ -23,7 +23,7 @@ Test Categories:
     - TestGoToEdgeCases: Edge cases and special scenarios
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import patch
 
 import polars as pl
@@ -46,12 +46,12 @@ class MockSessionState(dict):
 def create_goto_state(
     page: int = 1,
     page_size: int = 100,
-    column_filters: Optional[List[Dict[str, Any]]] = None,
-    sort_column: Optional[str] = None,
+    column_filters: list[dict[str, Any]] | None = None,
+    sort_column: str | None = None,
     sort_dir: str = "asc",
-    go_to_request: Optional[Dict[str, Any]] = None,
+    go_to_request: dict[str, Any] | None = None,
     pagination_identifier: str = "test_goto_table_page",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create pagination state dict with go_to_request support.
 
@@ -67,7 +67,7 @@ def create_goto_state(
     Returns:
         Dict with pagination state including go_to_request
     """
-    state: Dict[str, Any] = {
+    state: dict[str, Any] = {
         pagination_identifier: {
             "page": page,
             "page_size": page_size,

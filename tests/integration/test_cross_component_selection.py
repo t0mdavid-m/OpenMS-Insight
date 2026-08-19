@@ -17,7 +17,7 @@ Test Categories:
     - TestCrossComponentSelectionWithSort: Cross-component selection with active sorting
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 from unittest.mock import Mock, patch
 
 import polars as pl
@@ -48,12 +48,12 @@ def create_vue_response(
     page_size: int = 100,
     selection_counter: int = 0,
     pagination_counter: int = 0,
-    session_id: Optional[float] = None,
+    session_id: float | None = None,
     pagination_identifier: str = "test_table_page",
     request_data: bool = False,
-    vue_data_hash: Optional[str] = None,
+    vue_data_hash: str | None = None,
     **selections,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create Vue component return matching real format.
 

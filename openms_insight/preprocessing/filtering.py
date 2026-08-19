@@ -1,7 +1,7 @@
 """Data filtering utilities for selection-based filtering."""
 
 import hashlib
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import pandas as pd
 import polars as pl
@@ -80,7 +80,7 @@ def optimize_for_transfer_lazy(lf: pl.LazyFrame) -> pl.LazyFrame:
     schema = lf.collect_schema()
     casts = []
 
-    for col, dtype in zip(schema.names(), schema.dtypes()):
+    for col, dtype in zip(schema.names(), schema.dtypes(), strict=True):
         # Only Float64 → Float32 is safe without bounds checking
         if dtype == pl.Float64:
             casts.append(pl.col(col).cast(pl.Float32))
@@ -92,10 +92,10 @@ def optimize_for_transfer_lazy(lf: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def _make_cache_key(
-    filters: Dict[str, str],
-    state: Dict[str, Any],
-    filter_defaults: Optional[Dict[str, Any]] = None,
-) -> Tuple[Tuple[str, Any], ...]:
+    filters: dict[str, str],
+    state: dict[str, Any],
+    filter_defaults: dict[str, Any] | None = None,
+) -> tuple[tuple[str, Any], ...]:
     """
     Create a hashable cache key from filters and state.
 
@@ -191,10 +191,10 @@ def compute_dataframe_hash(df: pl.DataFrame) -> str:
 
 def _filter_and_collect(
     data: pl.LazyFrame,
-    filters_tuple: Tuple[Tuple[str, str], ...],
-    state_tuple: Tuple[Tuple[str, Any], ...],
-    columns_tuple: Optional[Tuple[str, ...]] = None,
-) -> Tuple[pd.DataFrame, str]:
+    filters_tuple: tuple[tuple[str, str], ...],
+    state_tuple: tuple[tuple[str, Any], ...],
+    columns_tuple: tuple[str, ...] | None = None,
+) -> tuple[pd.DataFrame, str]:
     """
     Filter data and collect.
 
@@ -255,12 +255,12 @@ def _filter_and_collect(
 
 
 def filter_and_collect_cached(
-    data: Union[pl.LazyFrame, pl.DataFrame],
-    filters: Dict[str, str],
-    state: Dict[str, Any],
-    columns: Optional[List[str]] = None,
-    filter_defaults: Optional[Dict[str, Any]] = None,
-) -> Tuple[pd.DataFrame, str]:
+    data: pl.LazyFrame | pl.DataFrame,
+    filters: dict[str, str],
+    state: dict[str, Any],
+    columns: list[str] | None = None,
+    filter_defaults: dict[str, Any] | None = None,
+) -> tuple[pd.DataFrame, str]:
     """
     Filter data based on selection state and collect, with caching.
 
@@ -302,9 +302,9 @@ def filter_and_collect_cached(
 
 
 def filter_by_selection(
-    data: Union[pl.LazyFrame, pl.DataFrame],
-    interactivity: Dict[str, str],
-    state: Dict[str, Any],
+    data: pl.LazyFrame | pl.DataFrame,
+    interactivity: dict[str, str],
+    state: dict[str, Any],
 ) -> pl.LazyFrame:
     """
     Filter data based on selection state and interactivity mapping.
@@ -333,7 +333,7 @@ def filter_by_selection(
 
 
 def filter_by_index(
-    data: Union[pl.LazyFrame, pl.DataFrame],
+    data: pl.LazyFrame | pl.DataFrame,
     index_column: str,
     index_value: Any,
 ) -> pl.LazyFrame:
@@ -355,7 +355,7 @@ def filter_by_index(
 
 
 def filter_by_range(
-    data: Union[pl.LazyFrame, pl.DataFrame],
+    data: pl.LazyFrame | pl.DataFrame,
     x_column: str,
     y_column: str,
     x_range: tuple,
@@ -386,8 +386,8 @@ def filter_by_range(
 
 
 def slice_by_row_index(
-    data: Union[pl.LazyFrame, pl.DataFrame],
-    row_index: Optional[int],
+    data: pl.LazyFrame | pl.DataFrame,
+    row_index: int | None,
 ) -> pl.DataFrame:
     """
     Slice data to a single row by row position.

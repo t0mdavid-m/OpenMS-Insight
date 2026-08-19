@@ -1,6 +1,6 @@
 """Line plot component using Plotly.js."""
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import polars as pl
 
@@ -47,22 +47,22 @@ class LinePlot(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
-        filters: Optional[Dict[str, str]] = None,
-        filter_defaults: Optional[Dict[str, Any]] = None,
-        interactivity: Optional[Dict[str, str]] = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
+        filters: dict[str, str] | None = None,
+        filter_defaults: dict[str, Any] | None = None,
+        interactivity: dict[str, str] | None = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
         x_column: str = "x",
         y_column: str = "y",
-        title: Optional[str] = None,
-        x_label: Optional[str] = None,
-        y_label: Optional[str] = None,
-        highlight_column: Optional[str] = None,
-        annotation_column: Optional[str] = None,
-        styling: Optional[Dict[str, Any]] = None,
-        config: Optional[Dict[str, Any]] = None,
+        title: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
+        highlight_column: str | None = None,
+        annotation_column: str | None = None,
+        styling: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -115,8 +115,8 @@ class LinePlot(BaseComponent):
         self._plot_config = config or {}
 
         # Dynamic annotations set at render time (not cached)
-        self._dynamic_annotations: Optional[Dict[str, Any]] = None
-        self._dynamic_title: Optional[str] = None
+        self._dynamic_annotations: dict[str, Any] | None = None
+        self._dynamic_title: str | None = None
 
         super().__init__(
             cache_id=cache_id,
@@ -140,7 +140,7 @@ class LinePlot(BaseComponent):
             **kwargs,
         )
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """
         Get configuration that affects cache validity.
 
@@ -159,7 +159,7 @@ class LinePlot(BaseComponent):
             "plot_config": self._plot_config,
         }
 
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
         self._x_column = config.get("x_column", "x")
         self._y_column = config.get("y_column", "y")
@@ -258,7 +258,7 @@ class LinePlot(BaseComponent):
         """Return the key used to send primary data to Vue."""
         return "plotData"
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """
         Prepare plot data for Vue component.
 
@@ -366,7 +366,7 @@ class LinePlot(BaseComponent):
             "_plotConfig": self._build_plot_config(highlight_col, annotation_col),
         }
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """
         Get component arguments to send to Vue.
 
@@ -400,7 +400,7 @@ class LinePlot(BaseComponent):
         # Use dynamic title if set, otherwise static title
         title = self._dynamic_title if self._dynamic_title else (self._title or "")
 
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "title": title,
             "xLabel": self._x_label,
@@ -423,9 +423,9 @@ class LinePlot(BaseComponent):
 
     def with_styling(
         self,
-        highlight_color: Optional[str] = None,
-        selected_color: Optional[str] = None,
-        unhighlighted_color: Optional[str] = None,
+        highlight_color: str | None = None,
+        selected_color: str | None = None,
+        unhighlighted_color: str | None = None,
     ) -> "LinePlot":
         """
         Update plot styling.
@@ -448,9 +448,9 @@ class LinePlot(BaseComponent):
 
     def with_annotations(
         self,
-        background_color: Optional[str] = None,
-        button_color: Optional[str] = None,
-        selected_button_color: Optional[str] = None,
+        background_color: str | None = None,
+        button_color: str | None = None,
+        selected_button_color: str | None = None,
     ) -> "LinePlot":
         """
         Configure annotation styling.
@@ -479,8 +479,8 @@ class LinePlot(BaseComponent):
 
     def set_dynamic_annotations(
         self,
-        annotations: Optional[Dict[int, Dict[str, Any]]] = None,
-        title: Optional[str] = None,
+        annotations: dict[int, dict[str, Any]] | None = None,
+        title: str | None = None,
     ) -> "LinePlot":
         """
         Set dynamic annotations to be applied at render time.
@@ -527,9 +527,9 @@ class LinePlot(BaseComponent):
 
     def _build_plot_config(
         self,
-        highlight_col: Optional[str],
-        annotation_col: Optional[str],
-    ) -> Dict[str, Any]:
+        highlight_col: str | None,
+        annotation_col: str | None,
+    ) -> dict[str, Any]:
         """
         Build _plotConfig dict for Vue component.
 
@@ -551,7 +551,7 @@ class LinePlot(BaseComponent):
             },
         }
 
-    def _strip_dynamic_columns(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _strip_dynamic_columns(self, vue_data: dict[str, Any]) -> dict[str, Any]:
         """
         Strip dynamic annotation columns from vue_data for caching.
 
@@ -579,7 +579,7 @@ class LinePlot(BaseComponent):
         vue_data.pop("_plotConfig", None)
         return vue_data
 
-    def _apply_fresh_annotations(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_fresh_annotations(self, vue_data: dict[str, Any]) -> dict[str, Any]:
         """
         Apply current dynamic annotations to cached base vue_data.
 
@@ -650,10 +650,10 @@ class LinePlot(BaseComponent):
         sequence_view: "SequenceView",
         cache_id: str,
         cache_path: str = ".",
-        title: Optional[str] = None,
+        title: str | None = None,
         x_label: str = "m/z",
         y_label: str = "Intensity",
-        styling: Optional[Dict[str, Any]] = None,
+        styling: dict[str, Any] | None = None,
         **kwargs,
     ) -> "LinePlot":
         """
@@ -739,16 +739,16 @@ class LinePlot(BaseComponent):
         )
 
         # Store reference to sequence view key for annotation lookup
-        plot._linked_sequence_view_key: Optional[str] = None
+        plot._linked_sequence_view_key: str | None = None
 
         return plot
 
     def __call__(
         self,
-        key: Optional[str] = None,
+        key: str | None = None,
         state_manager: Optional["StateManager"] = None,
-        height: Optional[int] = None,
-        sequence_view_key: Optional[str] = None,
+        height: int | None = None,
+        sequence_view_key: str | None = None,
     ) -> Any:
         """
         Render the component in Streamlit.

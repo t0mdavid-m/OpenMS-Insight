@@ -1,12 +1,12 @@
 """Component type registry for serialization and deserialization."""
 
-from typing import TYPE_CHECKING, Dict, Type
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .base import BaseComponent
 
 # Global registry mapping component type names to their classes
-_COMPONENT_REGISTRY: Dict[str, Type["BaseComponent"]] = {}
+_COMPONENT_REGISTRY: dict[str, type["BaseComponent"]] = {}
 
 
 def register_component(name: str):
@@ -25,7 +25,7 @@ def register_component(name: str):
             ...
     """
 
-    def decorator(cls: Type["BaseComponent"]) -> Type["BaseComponent"]:
+    def decorator(cls: type["BaseComponent"]) -> type["BaseComponent"]:
         if name in _COMPONENT_REGISTRY:
             raise ValueError(
                 f"Component type '{name}' is already registered to "
@@ -38,7 +38,7 @@ def register_component(name: str):
     return decorator
 
 
-def get_component_class(name: str) -> Type["BaseComponent"]:
+def get_component_class(name: str) -> type["BaseComponent"]:
     """
     Get a component class by its registered name.
 
@@ -60,7 +60,7 @@ def get_component_class(name: str) -> Type["BaseComponent"]:
     return _COMPONENT_REGISTRY[name]
 
 
-def list_registered_components() -> Dict[str, Type["BaseComponent"]]:
+def list_registered_components() -> dict[str, type["BaseComponent"]]:
     """
     Get all registered component types.
 

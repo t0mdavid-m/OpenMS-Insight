@@ -278,7 +278,8 @@ def calculate_statistical_tests(
 
         n_pairs = len(g1_samples)
         diff_exprs = [
-            pl.col(g2_s) - pl.col(g1_s) for g1_s, g2_s in zip(g1_samples, g2_samples)
+            pl.col(g2_s) - pl.col(g1_s)
+            for g1_s, g2_s in zip(g1_samples, g2_samples, strict=True)
         ]
 
         # map_batches passes a single pl.Series of structs (not a DataFrame),

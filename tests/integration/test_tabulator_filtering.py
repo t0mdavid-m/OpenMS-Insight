@@ -22,7 +22,7 @@ Test Categories:
     - TestColumnFilterClear: Clear filter behavior
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -44,11 +44,11 @@ class MockSessionState(dict):
 def create_filter_state(
     page: int = 1,
     page_size: int = 100,
-    column_filters: Optional[List[Dict[str, Any]]] = None,
-    sort_column: Optional[str] = None,
+    column_filters: list[dict[str, Any]] | None = None,
+    sort_column: str | None = None,
     sort_dir: str = "asc",
     pagination_identifier: str = "test_filter_table_page",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create pagination state dict with column filters.
 
@@ -63,7 +63,7 @@ def create_filter_state(
     Returns:
         Dict with pagination state including column filters
     """
-    state: Dict[str, Any] = {
+    state: dict[str, Any] = {
         pagination_identifier: {
             "page": page,
             "page_size": page_size,

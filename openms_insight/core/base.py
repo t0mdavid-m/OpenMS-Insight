@@ -5,7 +5,7 @@ import json
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import polars as pl
 
@@ -48,11 +48,11 @@ class BaseComponent(ABC):
     def __init__(
         self,
         cache_id: str,
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
-        filters: Optional[Dict[str, str]] = None,
-        filter_defaults: Optional[Dict[str, Any]] = None,
-        interactivity: Optional[Dict[str, str]] = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
+        filters: dict[str, str] | None = None,
+        filter_defaults: dict[str, Any] | None = None,
+        interactivity: dict[str, str] | None = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
         **kwargs,
@@ -98,7 +98,7 @@ class BaseComponent(ABC):
 
         self._cache_id = cache_id
         self._cache_dir = get_cache_dir(cache_path, cache_id)
-        self._preprocessed_data: Dict[str, Any] = {}
+        self._preprocessed_data: dict[str, Any] = {}
 
         # Determine mode: reconstruction (no data) or creation (data provided)
         has_data = data is not None or data_path is not None
@@ -184,7 +184,7 @@ class BaseComponent(ABC):
                     f"Available columns: {column_names}"
                 )
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """
         Get configuration that affects cache validity.
 
@@ -233,7 +233,7 @@ class BaseComponent(ABC):
         try:
             with open(manifest_path) as f:
                 manifest = json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             return False
 
         # Check version
@@ -284,7 +284,7 @@ class BaseComponent(ABC):
             self._preprocessed_data[key] = value
 
     @abstractmethod
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """
         Restore component-specific configuration from cached config dict.
 
@@ -410,7 +410,7 @@ class BaseComponent(ABC):
         pass
 
     @abstractmethod
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """
         Prepare data payload for Vue component.
 
@@ -423,7 +423,7 @@ class BaseComponent(ABC):
         pass
 
     @abstractmethod
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """
         Get component arguments to send to Vue.
 
@@ -432,27 +432,27 @@ class BaseComponent(ABC):
         """
         pass
 
-    def get_filters_mapping(self) -> Dict[str, str]:
+    def get_filters_mapping(self) -> dict[str, str]:
         """Return the filters identifier-to-column mapping."""
         return self._filters.copy()
 
-    def get_filter_defaults(self) -> Dict[str, Any]:
+    def get_filter_defaults(self) -> dict[str, Any]:
         """Return the filter defaults mapping."""
         return self._filter_defaults.copy()
 
-    def get_interactivity_mapping(self) -> Dict[str, str]:
+    def get_interactivity_mapping(self) -> dict[str, str]:
         """Return the interactivity identifier-to-column mapping."""
         return self._interactivity.copy()
 
-    def get_filter_identifiers(self) -> List[str]:
+    def get_filter_identifiers(self) -> list[str]:
         """Return list of filter identifiers this component uses."""
         return list(self._filters.keys())
 
-    def get_interactivity_identifiers(self) -> List[str]:
+    def get_interactivity_identifiers(self) -> list[str]:
         """Return list of interactivity identifiers this component sets."""
         return list(self._interactivity.keys())
 
-    def get_state_dependencies(self) -> List[str]:
+    def get_state_dependencies(self) -> list[str]:
         """
         Return list of state keys that affect this component's data.
 
@@ -467,7 +467,7 @@ class BaseComponent(ABC):
         """
         return list(self._filters.keys())
 
-    def get_initial_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def get_initial_selection(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """
         Compute initial selection values for this component.
 
@@ -487,7 +487,7 @@ class BaseComponent(ABC):
         """
         return None
 
-    def _get_primary_data(self) -> Optional[pl.LazyFrame]:
+    def _get_primary_data(self) -> pl.LazyFrame | None:
         """
         Get the primary data for operations.
 
@@ -498,9 +498,9 @@ class BaseComponent(ABC):
 
     def __call__(
         self,
-        key: Optional[str] = None,
+        key: str | None = None,
         state_manager: Optional["StateManager"] = None,
-        height: Optional[int] = None,
+        height: int | None = None,
     ) -> Any:
         """
         Render the component in Streamlit.

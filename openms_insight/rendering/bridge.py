@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import polars as pl
@@ -78,7 +78,7 @@ _COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
 _BATCH_RESEND_KEY = "_svc_batch_resend"
 
 
-def _get_component_cache() -> Dict[str, Any]:
+def _get_component_cache() -> dict[str, Any]:
     """Get per-component data cache from session state."""
     if _COMPONENT_DATA_CACHE_KEY not in st.session_state:
         st.session_state[_COMPONENT_DATA_CACHE_KEY] = {}
@@ -96,7 +96,7 @@ def clear_component_cache() -> None:
 
 
 def _store_component_annotations(
-    component_key: str, annotations: Dict[str, Any]
+    component_key: str, annotations: dict[str, Any]
 ) -> None:
     """
     Store annotations returned by a Vue component.
@@ -110,7 +110,7 @@ def _store_component_annotations(
     st.session_state[_COMPONENT_ANNOTATIONS_KEY][component_key] = annotations
 
 
-def get_component_annotations(component_key: Optional[str]) -> Optional[pl.DataFrame]:
+def get_component_annotations(component_key: str | None) -> pl.DataFrame | None:
     """
     Get annotations stored by a Vue component.
 
@@ -144,7 +144,7 @@ def clear_component_annotations() -> None:
         st.session_state[_COMPONENT_ANNOTATIONS_KEY].clear()
 
 
-def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
+def _compute_annotation_hash(component: "BaseComponent") -> str | None:
     """
     Compute hash of component's dynamic annotations, if any.
 
@@ -163,8 +163,8 @@ def _compute_annotation_hash(component: "BaseComponent") -> Optional[str]:
 
 def _get_cached_vue_data(
     component_id: str,
-    filter_state_hashable: Tuple[Tuple[str, Any], ...],
-) -> Optional[Tuple[Dict[str, Any], str, Optional[str]]]:
+    filter_state_hashable: tuple[tuple[str, Any], ...],
+) -> tuple[dict[str, Any], str, str | None] | None:
     """
     Get cached Vue data for component if filter state matches.
 
@@ -194,10 +194,10 @@ def _get_cached_vue_data(
 
 def _set_cached_vue_data(
     component_id: str,
-    filter_state_hashable: Tuple[Tuple[str, Any], ...],
-    vue_data: Dict[str, Any],
+    filter_state_hashable: tuple[tuple[str, Any], ...],
+    vue_data: dict[str, Any],
     data_hash: str,
-    ann_hash: Optional[str] = None,
+    ann_hash: str | None = None,
 ) -> None:
     """
     Cache Vue data for component, replacing any previous entry.
@@ -218,9 +218,9 @@ def _set_cached_vue_data(
 def _prepare_vue_data_cached(
     component: "BaseComponent",
     component_id: str,
-    filter_state_hashable: Tuple[Tuple[str, Any], ...],
-    state_dict: Dict[str, Any],
-) -> Tuple[Dict[str, Any], str]:
+    filter_state_hashable: tuple[tuple[str, Any], ...],
+    state_dict: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
     """
     Prepare Vue data with per-component caching.
 
@@ -358,7 +358,7 @@ def get_vue_component_function():
 def _validate_interactivity_selections(
     component: "BaseComponent",
     state_manager: "StateManager",
-    state: Dict[str, Any],
+    state: dict[str, Any],
 ) -> bool:
     """
     Validate that interactivity selections still exist in filtered data.
@@ -465,8 +465,8 @@ def _validate_interactivity_selections(
 def render_component(
     component: "BaseComponent",
     state_manager: "StateManager",
-    key: Optional[str] = None,
-    height: Optional[int] = None,
+    key: str | None = None,
+    height: int | None = None,
 ) -> Any:
     """
     Render a component in Streamlit.
@@ -807,7 +807,7 @@ def render_component(
     return result
 
 
-def _hash_data(data: Dict[str, Any]) -> str:
+def _hash_data(data: dict[str, Any]) -> str:
     """
     Compute hash of data payload for change detection.
 

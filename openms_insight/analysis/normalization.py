@@ -1,5 +1,3 @@
-from typing import Optional
-
 import polars as pl
 
 
@@ -48,7 +46,7 @@ def normalize_samples(
     metadata: pl.DataFrame,
     strategy: str,
     id_col: str,
-    reference_feature: Optional[str] = None,
+    reference_feature: str | None = None,
 ) -> pl.LazyFrame:
     """Aligns samples via column-wise size-factor correction.
 
@@ -221,7 +219,7 @@ def normalize_samples(
             quantification_data.with_columns(
                 [
                     pl.col(col).sort().alias(sorted_col)
-                    for col, sorted_col in zip(sample_cols, sorted_cols)
+                    for col, sorted_col in zip(sample_cols, sorted_cols, strict=True)
                 ]
             )
             .with_columns([pl.mean_horizontal(sorted_cols).alias("_qref")])
@@ -230,7 +228,7 @@ def normalize_samples(
                     (pl.col(col).rank(method="ordinal").cast(pl.Int64) - 1).alias(
                         rank_col
                     )
-                    for col, rank_col in zip(sample_cols, rank_cols)
+                    for col, rank_col in zip(sample_cols, rank_cols, strict=True)
                 ]
             )
         )
@@ -238,7 +236,7 @@ def normalize_samples(
         return with_sorted.with_columns(
             [
                 pl.col("_qref").gather(pl.col(rank_col)).alias(col)
-                for col, rank_col in zip(sample_cols, rank_cols)
+                for col, rank_col in zip(sample_cols, rank_cols, strict=True)
             ]
         ).drop(sorted_cols + rank_cols + ["_qref"])
 

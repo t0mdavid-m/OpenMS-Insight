@@ -1,7 +1,7 @@
 """Mirror plot component using Plotly.js — two spectra, one figure."""
 
 import hashlib
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import polars as pl
 
@@ -41,32 +41,32 @@ class MirrorPlot(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
         # Per-side selection
-        filters_top: Optional[Dict[str, str]] = None,
-        filter_defaults_top: Optional[Dict[str, Any]] = None,
-        filters_bottom: Optional[Dict[str, str]] = None,
-        filter_defaults_bottom: Optional[Dict[str, Any]] = None,
+        filters_top: dict[str, str] | None = None,
+        filter_defaults_top: dict[str, Any] | None = None,
+        filters_bottom: dict[str, str] | None = None,
+        filter_defaults_bottom: dict[str, Any] | None = None,
         # Shared click
-        interactivity: Optional[Dict[str, str]] = None,
+        interactivity: dict[str, str] | None = None,
         # Cache
         cache_path: str = ".",
         regenerate_cache: bool = False,
         # Schema (shared)
         x_column: str = "x",
         y_column: str = "y",
-        highlight_column: Optional[str] = None,
-        annotation_column: Optional[str] = None,
+        highlight_column: str | None = None,
+        annotation_column: str | None = None,
         # Labels
-        title: Optional[str] = None,
-        title_top: Optional[str] = None,
-        title_bottom: Optional[str] = None,
-        x_label: Optional[str] = None,
-        y_label: Optional[str] = None,
+        title: str | None = None,
+        title_top: str | None = None,
+        title_bottom: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
         # Visuals
-        styling: Optional[Dict[str, Any]] = None,
-        config: Optional[Dict[str, Any]] = None,
+        styling: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -142,10 +142,10 @@ class MirrorPlot(BaseComponent):
         self._plot_config = config or {}
 
         # Dynamic state (never cached)
-        self._top_dynamic_annotations: Optional[Dict[Any, Dict[str, Any]]] = None
-        self._bottom_dynamic_annotations: Optional[Dict[Any, Dict[str, Any]]] = None
-        self._top_dynamic_title: Optional[str] = None
-        self._bottom_dynamic_title: Optional[str] = None
+        self._top_dynamic_annotations: dict[Any, dict[str, Any]] | None = None
+        self._bottom_dynamic_annotations: dict[Any, dict[str, Any]] | None = None
+        self._top_dynamic_title: str | None = None
+        self._bottom_dynamic_title: str | None = None
 
         # Union for parent-class invariants
         union_filters = {**self._filters_top, **self._filters_bottom}
@@ -294,11 +294,11 @@ class MirrorPlot(BaseComponent):
     def _get_data_key(self) -> str:
         return "plotDataTop"
 
-    def get_state_dependencies(self) -> List[str]:
+    def get_state_dependencies(self) -> list[str]:
         """Both per-side filter identifiers; interactivity excluded so clicks don't invalidate cache."""
         return list(self._filters_top.keys()) + list(self._filters_bottom.keys())
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """Configuration that affects cache validity."""
         return {
             "filters_top": self._filters_top,
@@ -318,7 +318,7 @@ class MirrorPlot(BaseComponent):
             "plot_config": self._plot_config,
         }
 
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
         self._filters_top = config.get("filters_top") or {}
         self._filters_bottom = config.get("filters_bottom") or {}
@@ -341,7 +341,7 @@ class MirrorPlot(BaseComponent):
         self._top_dynamic_title = None
         self._bottom_dynamic_title = None
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """Filter shared data twice — once per side — and apply per-side annotations."""
         # Build column projection (deduped, preserving order)
         projection: list[str] = [self._x_column, self._y_column]
@@ -426,7 +426,7 @@ class MirrorPlot(BaseComponent):
     def _apply_annotations_to_df(
         self,
         df_pandas,
-        annotations: Dict[Any, Dict[str, Any]],
+        annotations: dict[Any, dict[str, Any]],
     ):
         """Apply dynamic annotations to a pandas DataFrame (per-side helper)."""
         df_pandas = df_pandas.copy()
@@ -458,11 +458,11 @@ class MirrorPlot(BaseComponent):
 
     def _build_plot_config(
         self,
-        top_highlight_col: Optional[str] = None,
-        top_annotation_col: Optional[str] = None,
-        bot_highlight_col: Optional[str] = None,
-        bot_annotation_col: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        top_highlight_col: str | None = None,
+        top_annotation_col: str | None = None,
+        bot_highlight_col: str | None = None,
+        bot_annotation_col: str | None = None,
+    ) -> dict[str, Any]:
         """
         Plot config sent alongside data — Vue uses it to map columns per side.
 
@@ -492,7 +492,7 @@ class MirrorPlot(BaseComponent):
             },
         }
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         default_styling = {
             "highlightColor": "#E4572E",
             "selectedColor": "#F3A712",
@@ -524,7 +524,7 @@ class MirrorPlot(BaseComponent):
             else (self._title_bottom or "")
         )
 
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "title": self._title or "",
             "titleTop": title_top,
@@ -549,8 +549,8 @@ class MirrorPlot(BaseComponent):
 
     def set_top_dynamic_annotations(
         self,
-        annotations: Optional[Dict[Any, Dict[str, Any]]],
-        title: Optional[str] = None,
+        annotations: dict[Any, dict[str, Any]] | None,
+        title: str | None = None,
     ) -> "MirrorPlot":
         """Apply per-render annotations to the top spectrum only.
 
@@ -568,8 +568,8 @@ class MirrorPlot(BaseComponent):
 
     def set_bottom_dynamic_annotations(
         self,
-        annotations: Optional[Dict[Any, Dict[str, Any]]],
-        title: Optional[str] = None,
+        annotations: dict[Any, dict[str, Any]] | None,
+        title: str | None = None,
     ) -> "MirrorPlot":
         """Apply per-render annotations to the bottom spectrum only.
 
@@ -587,7 +587,7 @@ class MirrorPlot(BaseComponent):
 
     def clear_dynamic_annotations(
         self,
-        side: Optional[Literal["top", "bottom"]] = None,
+        side: Literal["top", "bottom"] | None = None,
     ) -> "MirrorPlot":
         """Clear dynamic annotations for one or both sides.
 
@@ -605,7 +605,7 @@ class MirrorPlot(BaseComponent):
             self._bottom_dynamic_title = None
         return self
 
-    def _strip_dynamic_columns(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _strip_dynamic_columns(self, vue_data: dict[str, Any]) -> dict[str, Any]:
         """Drop dynamic annotation columns from both DataFrames before caching.
 
         Called by bridge.py when storing vue_data in the runtime cache, so
@@ -628,7 +628,7 @@ class MirrorPlot(BaseComponent):
         vue_data.pop("_plotConfig", None)
         return vue_data
 
-    def _apply_fresh_annotations(self, vue_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_fresh_annotations(self, vue_data: dict[str, Any]) -> dict[str, Any]:
         """Re-apply current top/bottom dynamic annotations to cached base vue_data.
 
         Called by bridge.py on cache hits when dynamic annotations are active.
@@ -688,11 +688,11 @@ class MirrorPlot(BaseComponent):
 
     def __call__(
         self,
-        key: Optional[str] = None,
+        key: str | None = None,
         state_manager: Optional["StateManager"] = None,
-        height: Optional[int] = None,
-        sequence_view_top_key: Optional[str] = None,
-        sequence_view_bottom_key: Optional[str] = None,
+        height: int | None = None,
+        sequence_view_top_key: str | None = None,
+        sequence_view_bottom_key: str | None = None,
     ) -> Any:
         """Render the component.
 
@@ -714,11 +714,11 @@ class MirrorPlot(BaseComponent):
         if state_manager is None:
             state_manager = get_default_state_manager()
 
-        def _annotations_from_sv(sv_key: str) -> Optional[Dict[Any, Dict[str, Any]]]:
+        def _annotations_from_sv(sv_key: str) -> dict[Any, dict[str, Any]] | None:
             df = get_component_annotations(sv_key)
             if df is None or df.height == 0:
                 return None
-            result: Dict[Any, Dict[str, Any]] = {}
+            result: dict[Any, dict[str, Any]] = {}
             for row in df.iter_rows(named=True):
                 peak_id = row.get("peak_id")
                 if peak_id is not None:

@@ -1,6 +1,6 @@
 """PCAPlot component for sample-level dimensionality reduction visualization."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -43,24 +43,24 @@ class PCAPlot(BaseComponent):
     def __init__(
         self,
         cache_id: str,
-        metadata: Optional[pl.DataFrame] = None,
-        data: Optional[pl.LazyFrame] = None,
-        data_path: Optional[str] = None,
+        metadata: pl.DataFrame | None = None,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
         sample_id_field: str = "sample_id",
         group_field: str = "group",
         n_components: int = 2,
         pc_x: int = 1,
         pc_y: int = 2,
         standardize: bool = True,
-        filters: Optional[Dict[str, str]] = None,
-        filter_defaults: Optional[Dict[str, Any]] = None,
-        interactivity: Optional[Dict[str, str]] = None,
+        filters: dict[str, str] | None = None,
+        filter_defaults: dict[str, Any] | None = None,
+        interactivity: dict[str, str] | None = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
-        title: Optional[str] = None,
-        x_label: Optional[str] = None,
-        y_label: Optional[str] = None,
-        group_colors: Optional[Dict[str, str]] = None,
+        title: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
+        group_colors: dict[str, str] | None = None,
         show_ellipses: bool = True,
         **kwargs,
     ):
@@ -189,15 +189,17 @@ class PCAPlot(BaseComponent):
                 f"Available columns: {sorted(metadata_cols)}"
             )
 
-    def _get_cache_config(self) -> Dict[str, Any]:
+    def _get_cache_config(self) -> dict[str, Any]:
         """Get configuration that affects cache validity."""
-        metadata_map: Dict[str, Any] = {}
+        metadata_map: dict[str, Any] = {}
         if self._metadata is not None:
             sample_ids = (
                 self._metadata.select(self._sample_id_field).to_series().to_list()
             )
             groups = self._metadata.select(self._group_field).to_series().to_list()
-            metadata_map = {str(sid): grp for sid, grp in zip(sample_ids, groups)}
+            metadata_map = {
+                str(sid): grp for sid, grp in zip(sample_ids, groups, strict=True)
+            }
 
         return {
             "metadata_map": metadata_map,
@@ -213,7 +215,7 @@ class PCAPlot(BaseComponent):
             # Note: pc_x/pc_y are NOT included - they're render-time params
         }
 
-    def _restore_cache_config(self, config: Dict[str, Any]) -> None:
+    def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
         self._sample_id_field = config.get("sample_id_field", "sample_id")
         self._group_field = config.get("group_field", "group")
@@ -254,7 +256,7 @@ class PCAPlot(BaseComponent):
             self._metadata.select(self._sample_id_field).to_series().to_list()
         )
         all_groups = self._metadata.select(self._group_field).to_series().to_list()
-        group_map = dict(zip(all_sample_ids, all_groups))
+        group_map = dict(zip(all_sample_ids, all_groups, strict=True))
 
         sample_ids = [sid for sid in all_sample_ids if sid in schema_names]
         if len(sample_ids) < 2:
@@ -289,7 +291,7 @@ class PCAPlot(BaseComponent):
         variance_ratio = pca.explained_variance_ratio_.tolist()
 
         pc_columns = [f"PC{i + 1}" for i in range(n_components)]
-        result: Dict[str, List[Any]] = {
+        result: dict[str, list[Any]] = {
             self._sample_id_field: sample_ids,
             self._group_field: [group_map.get(sid) for sid in sample_ids],
         }
@@ -314,11 +316,11 @@ class PCAPlot(BaseComponent):
             "pc_columns": pc_columns,
         }
 
-    def get_variance_ratio(self) -> List[float]:
+    def get_variance_ratio(self) -> list[float]:
         """Return the explained variance ratio for each computed principal component."""
         return list(self._preprocessed_data.get("variance_ratio", []))
 
-    def get_pc_columns(self) -> List[str]:
+    def get_pc_columns(self) -> list[str]:
         """Return names of computed principal component columns (e.g. ['PC1', 'PC2'])."""
         return list(self._preprocessed_data.get("pc_columns", []))
 
@@ -330,7 +332,7 @@ class PCAPlot(BaseComponent):
         """Return the key for the primary data in Vue payload."""
         return "pcaData"
 
-    def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         """Prepare filtered PCA scores for Vue component."""
         data = self._preprocessed_data["pcaData"]
         df_polars = data.collect() if isinstance(data, pl.LazyFrame) else data
@@ -353,7 +355,7 @@ class PCAPlot(BaseComponent):
         return {"pcaData": df_pandas, "_hash": data_hash}
 
     def _axis_label(
-        self, pc_index: int, base_label: Optional[str], variance_ratio: List[float]
+        self, pc_index: int, base_label: str | None, variance_ratio: list[float]
     ) -> str:
         """Build an axis label like 'PC1 (43.2%)' unless overridden."""
         if base_label:
@@ -363,7 +365,7 @@ class PCAPlot(BaseComponent):
             return f"{col} ({variance_ratio[pc_index - 1] * 100:.1f}%)"
         return col
 
-    def _get_component_args(self) -> Dict[str, Any]:
+    def _get_component_args(self) -> dict[str, Any]:
         """Return configuration for the PlotlyPca Vue component."""
         variance_ratio = self._preprocessed_data.get("variance_ratio", [])
         pc_columns = self._preprocessed_data.get("pc_columns", [])
@@ -377,7 +379,7 @@ class PCAPlot(BaseComponent):
                 f"(n_components={self._n_components}). Available: {pc_columns}"
             )
 
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "xColumn": pc_x_col,
             "yColumn": pc_y_col,
@@ -399,11 +401,11 @@ class PCAPlot(BaseComponent):
 
     def __call__(
         self,
-        key: Optional[str] = None,
-        state_manager: Optional[Any] = None,
-        height: Optional[int] = None,
-        pc_x: Optional[int] = None,
-        pc_y: Optional[int] = None,
+        key: str | None = None,
+        state_manager: Any | None = None,
+        height: int | None = None,
+        pc_x: int | None = None,
+        pc_y: int | None = None,
     ) -> Any:
         """
         Render the PCA plot component.
