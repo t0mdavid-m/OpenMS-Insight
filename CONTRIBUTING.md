@@ -20,7 +20,7 @@ Technologies used are Python, TypeScript, Streamlit, and Vue 3.
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.10+
 - Node.js (for building/developing the Vue frontend)
 - A working Streamlit installation
 
