@@ -16,14 +16,27 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
 - **Mirror plot component** for paired-spectrum comparison with independent per-side filtering and shared click selection
 - **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
+- **Clustered heatmap component** (Plotly) for feature-by-sample matrices, with row/column dendrograms and a group annotation bar
 - **Volcano plot component** for differential expression visualization with significance thresholds
+- **PCA component** for sample-level dimensionality reduction with per-group coloring and confidence ellipses
 - **Sequence view component** for peptide visualization with fragment ion matching and auto-zoom
+- **Differential expression analysis** (`openms_insight.analysis`) - filtering, imputation, normalization, statistical testing and GO enrichment over Polars LazyFrames
 
 ## Installation
 
 ```bash
 pip install openms-insight
 ```
+
+GO enrichment ([`openms_insight.analysis.enrichment`](#go-enrichment)) needs two
+additional packages:
+
+```bash
+pip install "openms-insight[analysis]"
+```
+
+Everything else - every component, and the rest of `openms_insight.analysis` -
+works with the base install.
 
 ## Quick Start
 
@@ -38,10 +51,10 @@ state_manager = StateManager()
 table = Table(
     cache_id="items_table",
     data_path="items.parquet",
-    interactivity={'item': 'item_id'},
+    interactivity={"item": "item_id"},
     column_definitions=[
-        {'field': 'item_id', 'title': 'ID', 'sorter': 'number'},
-        {'field': 'name', 'title': 'Name'},
+        {"field": "item_id", "title": "ID", "sorter": "number"},
+        {"field": "name", "title": "Name"},
     ],
 )
 table(state_manager=state_manager)
@@ -50,9 +63,9 @@ table(state_manager=state_manager)
 plot = LinePlot(
     cache_id="values_plot",
     data_path="values.parquet",
-    filters={'item': 'item_id'},
-    x_column='x',
-    y_column='y',
+    filters={"item": "item_id"},
+    x_column="x",
+    y_column="y",
 )
 plot(state_manager=state_manager)
 ```
@@ -70,33 +83,33 @@ Components communicate through **identifiers** using three mechanisms:
 master = Table(
     cache_id="spectra",
     data_path="spectra.parquet",
-    interactivity={'spectrum': 'scan_id'},  # Click -> sets spectrum=scan_id
+    interactivity={"spectrum": "scan_id"},  # Click -> sets spectrum=scan_id
 )
 
 # Detail table: filters by 'spectrum', sets 'peak' on click
 detail = Table(
     cache_id="peaks",
     data_path="peaks.parquet",
-    filters={'spectrum': 'scan_id'},        # Filters where scan_id = selected spectrum
-    interactivity={'peak': 'peak_id'},      # Click -> sets peak=peak_id
+    filters={"spectrum": "scan_id"},  # Filters where scan_id = selected spectrum
+    interactivity={"peak": "peak_id"},  # Click -> sets peak=peak_id
 )
 
 # Plot: filters by 'spectrum', highlights selected 'peak'
 plot = LinePlot(
     cache_id="plot",
     data_path="peaks.parquet",
-    filters={'spectrum': 'scan_id'},
-    interactivity={'peak': 'peak_id'},
-    x_column='mass',
-    y_column='intensity',
+    filters={"spectrum": "scan_id"},
+    interactivity={"peak": "peak_id"},
+    x_column="mass",
+    y_column="intensity",
 )
 
 # Table with filter defaults - shows unannotated data when no identification selected
 annotations = Table(
     cache_id="annotations",
     data_path="annotations.parquet",
-    filters={'identification': 'id_idx'},
-    filter_defaults={'identification': -1},  # Use -1 when identification is None
+    filters={"identification": "id_idx"},
+    filter_defaults={"identification": -1},  # Use -1 when identification is None
 )
 ```
 
@@ -112,16 +125,22 @@ Interactive table using Tabulator.js with filtering dialogs, sorting, pagination
 Table(
     cache_id="spectra_table",
     data_path="spectra.parquet",
-    interactivity={'spectrum': 'scan_id'},
+    interactivity={"spectrum": "scan_id"},
     column_definitions=[
-        {'field': 'scan_id', 'title': 'Scan', 'sorter': 'number'},
-        {'field': 'rt', 'title': 'RT (min)', 'sorter': 'number', 'hozAlign': 'right',
-         'formatter': 'money', 'formatterParams': {'precision': 2, 'symbol': ''}},
-        {'field': 'precursor_mz', 'title': 'm/z', 'sorter': 'number'},
+        {"field": "scan_id", "title": "Scan", "sorter": "number"},
+        {
+            "field": "rt",
+            "title": "RT (min)",
+            "sorter": "number",
+            "hozAlign": "right",
+            "formatter": "money",
+            "formatterParams": {"precision": 2, "symbol": ""},
+        },
+        {"field": "precursor_mz", "title": "m/z", "sorter": "number"},
     ],
-    index_field='scan_id',
-    go_to_fields=['scan_id'],
-    initial_sort=[{'column': 'scan_id', 'dir': 'asc'}],
+    index_field="scan_id",
+    go_to_fields=["scan_id"],
+    initial_sort=[{"column": "scan_id", "dir": "asc"}],
     default_row=0,
     pagination=True,
     page_size=100,
@@ -143,11 +162,27 @@ In addition to Tabulator's built-in formatters, these custom formatters are avai
 - `badge`: Colored pill/badge for categorical values - use `formatterParams: {colorMap: {"Up": "#FF0000"}, defaultColor: "#888"}`
 
 ```python
-column_definitions=[
-    {'field': 'pvalue', 'title': 'P-value', 'formatter': 'scientific', 'formatterParams': {'precision': 2}},
-    {'field': 'log2fc', 'title': 'Log2 FC', 'formatter': 'signed', 'formatterParams': {'precision': 3}},
-    {'field': 'regulation', 'title': 'Status', 'formatter': 'badge',
-     'formatterParams': {'colorMap': {'Up': '#d62728', 'Down': '#1f77b4', 'NS': '#888888'}}},
+column_definitions = [
+    {
+        "field": "pvalue",
+        "title": "P-value",
+        "formatter": "scientific",
+        "formatterParams": {"precision": 2},
+    },
+    {
+        "field": "log2fc",
+        "title": "Log2 FC",
+        "formatter": "signed",
+        "formatterParams": {"precision": 3},
+    },
+    {
+        "field": "regulation",
+        "title": "Status",
+        "formatter": "badge",
+        "formatterParams": {
+            "colorMap": {"Up": "#d62728", "Down": "#1f77b4", "NS": "#888888"}
+        },
+    },
 ]
 ```
 
@@ -159,19 +194,19 @@ Stick-style line plot using Plotly.js for mass spectra visualization.
 LinePlot(
     cache_id="spectrum_plot",
     data_path="peaks.parquet",
-    filters={'spectrum': 'scan_id'},
-    interactivity={'peak': 'peak_id'},
-    x_column='mass',
-    y_column='intensity',
-    highlight_column='is_annotated',
-    annotation_column='ion_label',
+    filters={"spectrum": "scan_id"},
+    interactivity={"peak": "peak_id"},
+    x_column="mass",
+    y_column="intensity",
+    highlight_column="is_annotated",
+    annotation_column="ion_label",
     title="MS/MS Spectrum",
     x_label="m/z",
     y_label="Intensity",
     styling={
-        'highlightColor': '#E4572E',
-        'selectedColor': '#F3A712',
-        'unhighlightedColor': 'lightblue',
+        "highlightColor": "#E4572E",
+        "selectedColor": "#F3A712",
+        "unhighlightedColor": "lightblue",
     },
 )
 ```
@@ -192,13 +227,13 @@ from openms_insight import MirrorPlot
 mirror = MirrorPlot(
     cache_id="mirror",
     data_path="peaks.parquet",
-    filters_top={'spectrum_a': 'scan_id'},      # top half follows spectrum_a
-    filters_bottom={'spectrum_b': 'scan_id'},   # bottom half follows spectrum_b
-    interactivity={'selected_peak': 'peak_id'}, # click in either half -> shared
-    x_column='mass',
-    y_column='intensity',                       # positive for both halves
-    highlight_column='is_annotated',
-    annotation_column='ion_label',
+    filters_top={"spectrum_a": "scan_id"},  # top half follows spectrum_a
+    filters_bottom={"spectrum_b": "scan_id"},  # bottom half follows spectrum_b
+    interactivity={"selected_peak": "peak_id"},  # click in either half -> shared
+    x_column="mass",
+    y_column="intensity",  # positive for both halves
+    highlight_column="is_annotated",
+    annotation_column="ion_label",
     title_top="Experimental",
     title_bottom="Reference",
     x_label="m/z",
@@ -230,17 +265,17 @@ mirror(state_manager=state_manager, height=600)
 Heatmap(
     cache_id="peaks_heatmap",
     data_path="all_peaks.parquet",
-    x_column='retention_time',
-    y_column='mass',
-    intensity_column='intensity',
-    interactivity={'spectrum': 'scan_id', 'peak': 'peak_id'},
+    x_column="retention_time",
+    y_column="mass",
+    intensity_column="intensity",
+    interactivity={"spectrum": "scan_id", "peak": "peak_id"},
     min_points=30000,
     x_bins=400,
     y_bins=50,
     title="Peak Map",
     x_label="Retention Time (min)",
     y_label="m/z",
-    colorscale='Portland',
+    colorscale="Portland",
 )
 ```
 
@@ -259,12 +294,12 @@ Heatmap(
 Heatmap(
     cache_id="psm_scores",
     data_path="psm_data.parquet",
-    x_column='rt',
-    y_column='mz',
-    intensity_column='score',
-    log_scale=False,              # Linear color mapping
-    intensity_label='Score',      # Custom colorbar label
-    colorscale='Blues',
+    x_column="rt",
+    y_column="mz",
+    intensity_column="score",
+    log_scale=False,  # Linear color mapping
+    intensity_label="Score",  # Custom colorbar label
+    colorscale="Blues",
 )
 ```
 
@@ -275,14 +310,14 @@ For identification results where lower scores indicate better matches (e.g., e-v
 Heatmap(
     cache_id="psm_evalue",
     data_path="psm_data.parquet",
-    x_column='rt',
-    y_column='mz',
-    intensity_column='e_value',
-    log_scale=True,               # Log scale for e-values
-    low_values_on_top=True,       # Keep/show low e-values (best hits)
-    reversescale=True,            # Bright color = low value = best
-    intensity_label='E-value',
-    colorscale='Portland',
+    x_column="rt",
+    y_column="mz",
+    intensity_column="e_value",
+    log_scale=True,  # Log scale for e-values
+    low_values_on_top=True,  # Keep/show low e-values (best hits)
+    reversescale=True,  # Bright color = low value = best
+    intensity_label="E-value",
+    colorscale="Portland",
 )
 ```
 
@@ -293,17 +328,70 @@ Use `category_column` for discrete coloring by category instead of continuous in
 Heatmap(
     cache_id="samples_heatmap",
     data_path="samples.parquet",
-    x_column='retention_time',
-    y_column='mass',
-    intensity_column='intensity',
-    category_column='sample_group',  # Color by category instead of intensity
-    category_colors={                 # Optional custom colors
-        'Control': '#1f77b4',
-        'Treatment_A': '#ff7f0e',
-        'Treatment_B': '#2ca02c',
+    x_column="retention_time",
+    y_column="mass",
+    intensity_column="intensity",
+    category_column="sample_group",  # Color by category instead of intensity
+    category_colors={  # Optional custom colors
+        "Control": "#1f77b4",
+        "Treatment_A": "#ff7f0e",
+        "Treatment_B": "#2ca02c",
     },
 )
 ```
+
+### ClusteredHeatmap
+
+Grid heatmap for categorical axes (e.g. proteins against samples), with optional
+hierarchical clustering and dendrograms on either axis.
+
+Use this rather than `Heatmap` when both axes are labels rather than numbers.
+`Heatmap` is a scattergl point cloud built for continuous axes (RT vs m/z) and
+millions of points; `ClusteredHeatmap` renders an actual grid and ships the whole
+matrix in one payload, so it expects tens to low-thousands of cells and has no
+pagination, filtering or zoom machinery.
+
+```python
+from openms_insight import ClusteredHeatmap
+
+ClusteredHeatmap(
+    cache_id="protein_heatmap",
+    data_path="quantification.parquet",  # wide: id_col + one column per sample
+    id_col="ProteinName",
+    metadata=metadata_df,  # columns: sample_id, group
+    row_cluster=True,
+    col_cluster=True,
+    linkage_method="average",
+    linkage_metric="euclidean",
+    title="Protein Abundance",
+    colorscale="RdBu",
+    reversescale=True,
+    group_colors={"Control": "#1f77b4", "Treatment": "#d62728"},
+)(state_manager=state_manager, height=600)
+```
+
+**Key parameters:**
+- `id_col`: Column naming each row (e.g. protein name). Every other column is treated as a sample column
+- `metadata`: Optional `sample_id` -> `group` table. When given, a group color bar is drawn above the heatmap
+- `row_cluster` / `col_cluster`: Cluster that axis and draw its dendrogram (left for rows, top for columns). Skipped automatically when the axis has fewer than 2 entries
+- `linkage_method` / `linkage_metric`: Passed through to `scipy.cluster.hierarchy.linkage`
+- `colorscale`, `reversescale`, `intensity_label`: Cell color mapping and colorbar label
+- `group_colors`: Map group value -> color for the annotation bar. Groups without an explicit color get one from a default palette
+
+**No `filters` or `interactivity`.** Unlike the other components, `ClusteredHeatmap`
+does not participate in cross-component linking: the clustered layout depends on the
+full matrix, so there is nothing sensible to filter. Both arguments are accepted (they are
+part of the shared signature) but have no effect on what is rendered.
+
+**The matrix must be complete when clustering.** Hierarchical clustering cannot
+compute distances across missing values, so the component raises a `ValueError`
+naming the number of affected rows. Impute first (see
+[Differential Expression Analysis](#differential-expression-analysis)), or pass
+`row_cluster=False, col_cluster=False` to render an incomplete matrix as-is.
+
+**Mouse-wheel zoom is disabled** here. The layout anchors the heatmap, both
+dendrograms and the group bar to manually positioned axes, which `scrollZoom`
+re-ranges inconsistently. Use the mode bar's box zoom instead.
 
 ### VolcanoPlot
 
@@ -315,22 +403,22 @@ from openms_insight import VolcanoPlot
 VolcanoPlot(
     cache_id="de_volcano",
     data_path="differential_expression.parquet",
-    log2fc_column='log2FC',
-    pvalue_column='pvalue',
-    label_column='protein_name',       # Optional: labels for significant points
-    filters={'comparison': 'comparison_id'},
-    interactivity={'protein': 'protein_id'},
+    log2fc_column="log2FC",
+    pvalue_column="pvalue",
+    label_column="protein_name",  # Optional: labels for significant points
+    filters={"comparison": "comparison_id"},
+    interactivity={"protein": "protein_id"},
     title="Differential Expression",
     x_label="Log2 Fold Change",
     y_label="-log10(p-value)",
-    up_color='#d62728',               # Color for up-regulated
-    down_color='#1f77b4',             # Color for down-regulated
-    ns_color='#888888',               # Color for not significant
+    up_color="#d62728",  # Color for up-regulated
+    down_color="#1f77b4",  # Color for down-regulated
+    ns_color="#888888",  # Color for not significant
 )(
     state_manager=state_manager,
-    fc_threshold=1.0,                  # Fold change threshold (render-time)
-    p_threshold=0.05,                  # P-value threshold (render-time)
-    max_labels=20,                     # Max labels to show
+    fc_threshold=1.0,  # Fold change threshold (render-time)
+    p_threshold=0.05,  # P-value threshold (render-time)
+    max_labels=20,  # Max labels to show
 )
 ```
 
@@ -344,6 +432,49 @@ VolcanoPlot(
 
 **Render-time thresholds:** The `fc_threshold` and `p_threshold` are passed via `__call__()`, not `__init__()`. This allows instant threshold adjustment without cache invalidation.
 
+### PCAPlot
+
+Sample-level PCA scatter plot, computed directly from a wide quantification matrix.
+
+```python
+from openms_insight import PCAPlot
+
+PCAPlot(
+    cache_id="protein_pca",
+    data_path="quantification.parquet",  # wide: id_col + one column per sample
+    metadata=metadata_df,  # columns: sample_id, group
+    n_components=4,  # compute 4 PCs, display any pair of them
+    standardize=True,  # z-score each feature before fitting
+    interactivity={"sample": "sample_id"},
+    title="Sample PCA",
+    group_colors={"Control": "#1f77b4", "Treatment": "#d62728"},
+    show_ellipses=True,
+)(
+    state_manager=state_manager,
+    pc_x=1,  # x-axis component, 1-indexed (render-time)
+    pc_y=2,  # y-axis component, 1-indexed (render-time)
+)
+```
+
+**Key parameters:**
+- `metadata`: `sample_id` -> `group` table. Required whenever `data` or `data_path` is given
+- `n_components`: How many principal components to compute. Set above 2 to browse further component pairs without recomputing
+- `standardize`: Z-score each feature across samples before fitting (default `True`; recommended when features are on different scales)
+- `show_ellipses`: Draw a 95% confidence ellipse per group. Only drawn for groups with at least 3 samples
+- `group_colors`: Map group value -> color. Each group is its own trace, so the legend is clickable
+- `pc_x`, `pc_y`: Which components to plot (passed at render time, not cached)
+
+`filters` and `interactivity` map to columns of the *computed* score table -
+`sample_id`, `group`, and `PC1`..`PCn` - not to columns of the input matrix.
+
+**Render-time component selection:** like `VolcanoPlot`'s thresholds, `pc_x` and
+`pc_y` are passed via `__call__()`. Switching from PC1/PC2 to PC1/PC3 re-renders
+immediately; PCA itself is only recomputed when the data, metadata or
+`n_components` change.
+
+Axis labels default to `PC{n} (xx.x%)` from each component's explained variance
+ratio.
+
 ### SequenceView
 
 Peptide sequence visualization with fragment ion matching. Supports both dynamic (filtered by selection) and static sequences.
@@ -353,9 +484,9 @@ Peptide sequence visualization with fragment ion matching. Supports both dynamic
 SequenceView(
     cache_id="peptide_view",
     sequence_data_path="sequences.parquet",  # columns: scan_id, sequence, precursor_charge
-    peaks_data_path="peaks.parquet",         # columns: scan_id, peak_id, mass, intensity
-    filters={'spectrum': 'scan_id'},
-    interactivity={'peak': 'peak_id'},
+    peaks_data_path="peaks.parquet",  # columns: scan_id, peak_id, mass, intensity
+    filters={"spectrum": "scan_id"},
+    interactivity={"peak": "peak_id"},
     deconvolved=False,  # peaks are m/z values, consider charge states
     title="Fragment Coverage",
 )
@@ -364,8 +495,8 @@ SequenceView(
 SequenceView(
     cache_id="static_peptide",
     sequence_data=("PEPTIDEK", 2),  # (sequence, charge) tuple
-    peaks_data=peaks_df,            # Optional: LazyFrame with mass, intensity columns
-    deconvolved=True,               # peaks are neutral masses
+    peaks_data=peaks_df,  # Optional: LazyFrame with mass, intensity columns
+    deconvolved=True,  # peaks are neutral masses
 )
 
 # Simplest: just a sequence string
@@ -441,7 +572,7 @@ Components can be reconstructed from cache using only `cache_id` and `cache_path
 table = Table(
     cache_id="my_table",
     data_path="data.parquet",
-    filters={'spectrum': 'scan_id'},
+    filters={"spectrum": "scan_id"},
     column_definitions=[...],
     cache_path="./cache",
 )
@@ -465,6 +596,148 @@ state_manager = StateManager()
 
 table(state_manager=state_manager, height=300)
 plot(state_manager=state_manager, height=400)
+```
+
+## Differential Expression Analysis
+
+`openms_insight.analysis` is the pipeline that feeds `VolcanoPlot`, `PCAPlot` and
+`ClusteredHeatmap`: filtering, imputation, normalization, statistical testing and
+GO enrichment.
+
+It sits outside the component architecture and is deliberately not re-exported from
+the package root, so import the modules directly. Note that `analysis.filter`
+shadows the builtin `filter` if you import it under its bare name - the example
+below aliases it:
+
+```python
+import polars as pl
+
+from openms_insight.analysis import filter as feature_filter
+from openms_insight.analysis import imputation, normalization, statistics
+```
+
+Every function takes a **wide-format** `pl.LazyFrame` (one row per feature, one
+column per sample) plus a **sample metadata** `pl.DataFrame` with `sample_id` and
+`group` columns, and returns a `LazyFrame`. Nothing is collected until you ask for
+it.
+
+```python
+data = pl.scan_parquet("quantification.parquet")  # ProteinName, S1 .. S6
+metadata = pl.DataFrame(
+    {
+        "sample_id": ["S1", "S2", "S3", "S4", "S5", "S6"],
+        "group": ["Control"] * 3 + ["Treatment"] * 3,
+    }
+)
+
+data = feature_filter.filter_low_abundance(data, metadata, threshold_percentile=10.0)
+data = feature_filter.filter_low_repeatability(data, metadata, max_missing_ratio=0.5)
+data = imputation.impute_mar(data, metadata, strategy="median")
+data = normalization.transform_data(data, metadata, "log2")
+data = normalization.normalize_samples(data, metadata, "median", id_col="ProteinName")
+data = normalization.scale_data(data, metadata, "auto_scaling")
+
+results = statistics.calculate_statistical_tests(data, metadata, method="limma_like")
+results = statistics.adjust_fdr_lazy(results, strategy="BH")
+
+report = results.collect()  # adds log2FC, stat, p-value, p-adj
+```
+
+### Filtering
+
+| Function | Keeps a row when |
+|----------|------------------|
+| `filter_low_abundance` | at least one group's median clears that group's `threshold_percentile` cutoff |
+| `filter_low_repeatability` | at least one group has no more than `max_missing_ratio` of its samples missing |
+| `filter_low_variance` | at least one group's variance clears that group's `threshold_percentile` cutoff |
+
+All three apply their cutoff **per group** and keep the row if any single group
+passes, so a feature that varies only within one condition is not discarded for
+having low variance overall. Zeros count as missing. A metadata table with no
+usable groups leaves the data unchanged rather than filtering everything away.
+
+### Imputation
+
+- `impute_mar(data, metadata, strategy="median")` - missing at random: fill from the feature's own mean or median **within the same group**
+- `impute_smallest_value(data, metadata, scope="row")` - missing not at random: fill with the smallest observed value, per feature (`"row"`) or across the whole matrix (`"global"`), on the assumption that missing MS values fall below the detection limit
+
+Both treat explicit nulls and zeros as missing.
+
+### Normalization
+
+| Function | Operates on | Strategies |
+|----------|-------------|------------|
+| `transform_data` | each value | `"log2"`, `"log10"` (both add 1 first, so zeros do not become `-inf`), `"square_root"`, `"cube_root"` |
+| `normalize_samples` | whole samples (columns) | `"sum"`, `"median"`, `"pqn"`, `"reference_feature"`, `"quantile"` |
+| `scale_data` | each feature (row) | `"mean_centering"`, `"auto_scaling"` (Z-score), `"pareto_scaling"`, `"range_scaling"` |
+
+All three accept `"None"` and return the input unchanged, which makes them easy to
+wire straight to a Streamlit selectbox. `"reference_feature"` additionally needs
+`reference_feature=` naming a row in `id_col`.
+
+### Statistical testing
+
+`calculate_statistical_tests(data, metadata, method=...)` adds `log2FC`, `stat` and
+`p-value`:
+
+| Method | Test | Groups |
+|--------|------|--------|
+| `"limma_like"` (default) | Empirical Bayes variance-moderated t-test / F-test | 2 / 3+ |
+| `"welch"` | Welch's t-test (unequal variances) | exactly 2 |
+| `"paired"` | Paired t-test | exactly 2, equal size |
+| `"anova"` | One-way ANOVA F-test | 3+ |
+
+`limma_like` shrinks each feature's variance towards a common prior, which is what
+makes small-n experiments usable. Everything is expressed as lazy Polars operations
+and only drops into SciPy for the final p-value.
+
+`adjust_fdr_lazy(results, strategy=...)` then adds `p-adj`, using `"BH"`
+(Benjamini-Hochberg, the default), `"Bonferroni"`, or `"None"` to copy `p-value`
+through unchanged.
+
+The result feeds `VolcanoPlot` directly:
+
+```python
+VolcanoPlot(
+    cache_id="de_volcano",
+    data=results,
+    log2fc_column="log2FC",
+    pvalue_column="p-adj",
+    label_column="ProteinName",
+)(state_manager=state_manager, fc_threshold=1.0, p_threshold=0.05)
+```
+
+### GO enrichment
+
+`calculate_go_enrichment` annotates UniProt accessions via
+[MyGene.info](https://mygene.info) and runs Fisher's exact test per GO term, for
+each of the BP, CC and MF categories.
+
+It is the odd one out in this module: it makes a live network call, takes an
+**eager** `pl.DataFrame`, and returns a `(status, payload)` tuple instead of raising,
+so callers can tell "not enough significant proteins" apart from a hard failure.
+
+```python
+from openms_insight.analysis.enrichment import calculate_go_enrichment
+
+status, payload = calculate_go_enrichment(
+    report,  # eager DataFrame with an ID column, log2FC, and a p-value column
+    id_col="ProteinName",
+    target_p_col="p-adj",
+    p_cutoff=0.05,
+    fc_cutoff=1.0,
+)
+
+if status == "success":
+    for category, result in payload["categories"].items():
+        st.plotly_chart(result["fig"])  # "BP" | "CC" | "MF"
+```
+
+`status` is `"success"`, `"insufficient_proteins"` (fewer than 3 proteins pass the
+cutoffs) or `"empty_data"`. This function needs the `analysis` extra:
+
+```bash
+pip install "openms-insight[analysis]"
 ```
 
 ---

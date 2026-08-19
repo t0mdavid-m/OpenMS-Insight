@@ -26,6 +26,7 @@ wheels/
 env/
 venv/
 ENV/
+myenv/
 
 # IDE
 .idea/
@@ -62,3 +63,10 @@ Thumbs.db
 # Logs
 *.log
 CLAUDE.md
+
+# Local analysis cache / scratch data
+/.data/
+/peaks/
+/plot/
+/spectra/
+/app.py

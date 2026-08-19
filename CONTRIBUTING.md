@@ -346,8 +346,8 @@ def _prepare_vue_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     return {
-        "myData": df_pandas,    # Key must match _get_data_key()
-        "_hash": data_hash,      # REQUIRED: used for change detection
+        "myData": df_pandas,  # Key must match _get_data_key()
+        "_hash": data_hash,  # REQUIRED: used for change detection
     }
 ```
 
@@ -661,7 +661,7 @@ Return a dict of parameters that affect the preprocessed data. The base class ha
 ```python
 def _get_cache_config(self) -> Dict[str, Any]:
     return {
-        "x_column": self._x_column,       # YES: changes which columns are stored
+        "x_column": self._x_column,  # YES: changes which columns are stored
         "downsample_n": self._downsample,  # YES: changes data content
         # "title": self._title,            # NO: only affects rendering
         # "styling": self._styling,        # NO: only affects rendering
@@ -747,40 +747,57 @@ tests/
 ```python
 @pytest.fixture
 def sample_mycomponent_data() -> pl.LazyFrame:
-    return pl.LazyFrame({
-        "x": [1.0, 2.0, 3.0],
-        "y": [10.0, 20.0, 30.0],
-        "group_id": [1, 1, 2],
-    })
+    return pl.LazyFrame(
+        {
+            "x": [1.0, 2.0, 3.0],
+            "y": [10.0, 20.0, 30.0],
+            "group_id": [1, 1, 2],
+        }
+    )
 ```
 
 2. **Create contract tests** in `test_mycomponent_contract.py` verifying the Python-Vue interface:
 
 ```python
 class TestMyComponentContract:
-    def test_component_args_keys(self, mock_streamlit, sample_mycomponent_data, tmp_path):
+    def test_component_args_keys(
+        self, mock_streamlit, sample_mycomponent_data, tmp_path
+    ):
         comp = MyComponent(
-            cache_id="test", data=sample_mycomponent_data,
-            cache_path=str(tmp_path), x_column="x", y_column="y",
+            cache_id="test",
+            data=sample_mycomponent_data,
+            cache_path=str(tmp_path),
+            x_column="x",
+            y_column="y",
         )
         args = comp._get_component_args()
         assert "componentType" in args
         assert args["componentType"] == "MyComponent"
         assert "xColumn" in args
 
-    def test_prepare_vue_data_structure(self, mock_streamlit, sample_mycomponent_data, tmp_path):
+    def test_prepare_vue_data_structure(
+        self, mock_streamlit, sample_mycomponent_data, tmp_path
+    ):
         comp = MyComponent(
-            cache_id="test", data=sample_mycomponent_data,
-            cache_path=str(tmp_path), x_column="x", y_column="y",
+            cache_id="test",
+            data=sample_mycomponent_data,
+            cache_path=str(tmp_path),
+            x_column="x",
+            y_column="y",
         )
         vue_data = comp._prepare_vue_data({})
         assert "myData" in vue_data
         assert "_hash" in vue_data
 
-    def test_cache_config_round_trips(self, mock_streamlit, sample_mycomponent_data, tmp_path):
+    def test_cache_config_round_trips(
+        self, mock_streamlit, sample_mycomponent_data, tmp_path
+    ):
         comp = MyComponent(
-            cache_id="test", data=sample_mycomponent_data,
-            cache_path=str(tmp_path), x_column="custom_x", y_column="custom_y",
+            cache_id="test",
+            data=sample_mycomponent_data,
+            cache_path=str(tmp_path),
+            x_column="custom_x",
+            y_column="custom_y",
         )
         config = comp._get_cache_config()
         assert config["x_column"] == "custom_x"
@@ -796,8 +813,11 @@ class TestMyComponentContract:
 def test_reconstruction(self, mock_streamlit, sample_mycomponent_data, tmp_path):
     # Create and cache
     MyComponent(
-        cache_id="test", data=sample_mycomponent_data,
-        cache_path=str(tmp_path), x_column="x", y_column="y",
+        cache_id="test",
+        data=sample_mycomponent_data,
+        cache_path=str(tmp_path),
+        x_column="x",
+        y_column="y",
         filters={"group": "group_id"},
     )
 

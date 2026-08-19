@@ -243,10 +243,10 @@ Heatmap(
     x_column="retention_time",
     y_column="mz",
     intensity_column="intensity",
-    min_points=20000,      # Smallest level target
-    x_bins=400,            # Spatial grid resolution
+    min_points=20000,  # Smallest level target
+    x_bins=400,  # Spatial grid resolution
     y_bins=50,
-    use_streaming=True,    # Enable cascading (default)
+    use_streaming=True,  # Enable cascading (default)
 )
 ```
 

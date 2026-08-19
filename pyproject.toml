@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openms-insight"
-version = "0.1.14"
+version = "0.2.0"
 description = "Interactive visualization components for mass spectrometry data in Streamlit"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -40,10 +40,18 @@ dependencies = [
     "streamlit>=1.20.0",
     "polars>=0.19.0",
     "pandas>=1.5.0",
-    "numpy>=1.21.0",
+    "numpy",
+    "scipy",
+    "scikit-learn>=1.0",
 ]
 
 [project.optional-dependencies]
+# GO enrichment (openms_insight.analysis.enrichment) only. Not needed by any
+# component exported from openms_insight/__init__.py.
+analysis = [
+    "mygene",
+    "plotly",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
