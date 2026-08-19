@@ -103,5 +103,6 @@ never change.
 _Avoid_: preprocessing, ETL, data pipeline
 
 > Note: **preprocessing** already means something specific in this codebase — the
-> component's own conversion of input data into its Parquet cache, which happens once per
-> (data, config) pair and is reused on later constructions. Do not use it for derivation.
+> component's own conversion of input data into its Parquet cache, which happens once
+> per (data, config) pair and is reused on later constructions. Do not use it for
+> derivation.

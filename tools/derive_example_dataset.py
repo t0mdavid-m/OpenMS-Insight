@@ -76,16 +76,36 @@ def derive_flashdeconv(src: Path, out: Path) -> Dict[str, Any]:
     ).sort("scan_id")
     scans.write_parquet(out / "scans.parquet", compression="zstd")
 
-    # MS1 map: already long (mass, rt, intensity) -- only renamed and downcast.
+    # MS1 map: already long (mass, rt, intensity). Carries only a retention time, so
+    # attach the scan each point was acquired in -- that gives the heatmap the same
+    # 'scan' identifier the scan table and spectrum plot use, and turns clicking the
+    # map into a real cross-component link rather than a dead end.
+    #
+    # The join key is retention time rounded to 2 dp, matching the scan table above.
+    # Consecutive MS1 scans here are ~4 s apart, so 10 ms of rounding cannot make the
+    # match ambiguous. Rounding is applied before the Float32 downcast: 2 dp is not
+    # representable in Float32, so rounding afterwards would not line up.
+    ms1_scans = scans.filter(pl.col("ms_level") == 1).select(
+        pl.col("rt").alias("_rt_key"), "scan_id"
+    )
     ms1 = (
         pl.read_parquet(src / "ms1_raw_heatmap.pq")
+        .with_columns(pl.col("rt").cast(pl.Float64).round(2).alias("_rt_key"))
+        .join(ms1_scans, on="_rt_key", how="left")
         .select(
             pl.col("rt").cast(pl.Float32),
             pl.col("mass").cast(pl.Float32),
             pl.col("intensity").cast(pl.Float32),
+            pl.col("scan_id").cast(pl.Int32),
         )
         .sort("rt")
     )
+    unmatched = ms1["scan_id"].null_count()
+    if unmatched:
+        raise RuntimeError(
+            f"{unmatched} MS1 map points did not match a scan on retention time. "
+            "The rounding used for the join no longer lines up with the scan table."
+        )
     ms1.write_parquet(out / "ms1_map.parquet", compression="zstd")
 
     # Deconvolved peaks: one row per scan with list columns -> one row per peak.
@@ -121,9 +141,12 @@ def derive_flashdeconv(src: Path, out: Path) -> Dict[str, Any]:
         "ms1_map.parquet": {
             "rows": ms1.height,
             "columns": ms1.columns,
-            "description": "MS1 retention-time x neutral-mass intensity map.",
-            "derived_from": "ms1_raw_heatmap.pq",
-            "transformation": "Renamed and downcast to Float32; sorted by rt.",
+            "description": "MS1 retention-time x neutral-mass intensity map, with "
+            "the scan each point was acquired in.",
+            "derived_from": "ms1_raw_heatmap.pq + scan_table.pq",
+            "transformation": "Renamed and downcast to Float32; joined scan_id on "
+            "retention time rounded to 2 dp (MS1 scans are ~4 s apart, so the "
+            "match is unambiguous); sorted by rt.",
         },
         "deconv_peaks.parquet": {
             "rows": peaks.height,

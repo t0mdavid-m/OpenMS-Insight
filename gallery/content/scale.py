@@ -23,6 +23,7 @@ def example(sm):
         y_column="mass",
         intensity_column="intensity",
         min_points=detail,
+        interactivity={"scan": "scan_id"},
         x_label="Retention time (s)",
         y_label="Neutral mass (Da)",
     )(state_manager=sm)
@@ -37,7 +38,15 @@ layout.render(
     ),
     example=example,
     component=Heatmap,
-    used=["cache_id", "data", "x_column", "y_column", "intensity_column", "min_points"],
+    used=[
+        "cache_id",
+        "data",
+        "x_column",
+        "y_column",
+        "intensity_column",
+        "min_points",
+        "interactivity",
+    ],
     tables=["flashdeconv/ms1_map.parquet"],
     notes=(
         "Being straight about the numbers: this example dataset holds 608,134 points, "

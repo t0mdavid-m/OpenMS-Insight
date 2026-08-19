@@ -39,11 +39,12 @@
       "columns": [
         "rt",
         "mass",
-        "intensity"
+        "intensity",
+        "scan_id"
       ],
-      "description": "MS1 retention-time x neutral-mass intensity map.",
-      "derived_from": "ms1_raw_heatmap.pq",
-      "transformation": "Renamed and downcast to Float32; sorted by rt."
+      "description": "MS1 retention-time x neutral-mass intensity map, with the scan each point was acquired in.",
+      "derived_from": "ms1_raw_heatmap.pq + scan_table.pq",
+      "transformation": "Renamed and downcast to Float32; joined scan_id on retention time rounded to 2 dp (MS1 scans are ~4 s apart, so the match is unambiguous); sorted by rt."
     },
     "flashdeconv/deconv_peaks.parquet": {
       "rows": 9924,

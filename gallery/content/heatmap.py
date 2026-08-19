@@ -13,6 +13,7 @@ def example(sm):
         x_column="rt",
         y_column="mass",
         intensity_column="intensity",
+        interactivity={"scan": "scan_id"},
         x_label="Retention time (s)",
         y_label="Neutral mass (Da)",
         colorscale="Portland",
@@ -34,6 +35,7 @@ layout.render(
         "x_column",
         "y_column",
         "intensity_column",
+        "interactivity",
         "x_label",
         "y_label",
         "colorscale",
@@ -42,6 +44,11 @@ layout.render(
     notes=(
         "Nothing in this example mentions downsampling. Preprocessing builds the "
         "resolution levels once, by cascading each level down from the one above it, "
-        "so the raw points are read a single time."
+        "so the raw points are read a single time.\n\n"
+        "Clicking a point sets the same `scan` identifier the scan table writes on "
+        "the linking page — watch **Live selection state** below. That works because "
+        "downsampling *selects* rows rather than aggregating them: every point drawn "
+        "is a real row of the source table, carrying every column, so a clicked point "
+        "still knows which scan it came from."
     ),
 )
