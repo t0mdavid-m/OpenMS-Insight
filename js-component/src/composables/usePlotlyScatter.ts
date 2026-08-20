@@ -135,9 +135,29 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
       }
 
       if (eventData.points && eventData.points.length > 0) {
-        const pointIndex = eventData.points[0].pointIndex
+        const point = eventData.points[0]
         const data = getData()
-        const pointData = data[pointIndex]
+
+        // Plotly reports pointIndex relative to the trace the point belongs to, so it
+        // is a row index only on a single-trace plot. Components that spread their rows
+        // across several traces attach the flat row index as customdata; prefer it.
+        // Without this, clicking a point in a volcano plot's second trace reads a row
+        // from the start of the array and silently reports the wrong protein.
+        const customIndex = point.customdata
+        const hasRowIndex = typeof customIndex === 'number'
+
+        if (!hasRowIndex && point.curveNumber > 0) {
+          // Multi-trace plot with no index map: pointIndex cannot be resolved to a row,
+          // and guessing would write a plausible but wrong value into shared selection
+          // state. Do nothing instead.
+          console.warn(
+            `[usePlotlyScatter] Click ignored: trace ${point.curveNumber} carries no ` +
+              `customdata row index. Multi-trace plots must attach one.`,
+          )
+          return
+        }
+
+        const pointData = data[hasRowIndex ? customIndex : point.pointIndex]
 
         if (pointData) {
           // Update selection store for each interactivity mapping

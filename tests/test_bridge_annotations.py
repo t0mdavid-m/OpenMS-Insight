@@ -1,8 +1,11 @@
 """Tests for annotation handling in bridge.py - specifically the clearing bug."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from openms_insight.rendering.bridge import (
+    _compute_annotation_hash,
+    _get_dynamic_annotations,
     _store_component_annotations,
     get_component_annotations,
 )
@@ -175,3 +178,62 @@ def test_prepare_vue_data_cached_includes_plot_config_when_annotations_cleared()
         assert plot_config["highlightColumn"] is None, (
             "highlightColumn should be None when annotations cleared"
         )
+
+
+class TestPerSideDynamicAnnotationDetection:
+    """MirrorPlot keeps annotations per side, and the bridge must notice.
+
+    Regression test for a bug where the bridge detected dynamic annotations by
+    looking only at ``_dynamic_annotations`` -- LinePlot's attribute. MirrorPlot
+    stores ``_top_dynamic_annotations``/``_bottom_dynamic_annotations``, so it was
+    never detected: on every cache hit the bridge took the no-annotations branch and
+    rebuilt _plotConfig without the dynamic columns, silently discarding the fragment
+    labels handed over by a linked SequenceView.
+    """
+
+    def test_lineplot_style_annotations_are_detected(self):
+        component = SimpleNamespace(_dynamic_annotations={1: {"annotation": "b2"}})
+        assert _get_dynamic_annotations(component) is not None
+        assert _compute_annotation_hash(component) is not None
+
+    def test_top_side_annotations_are_detected(self):
+        component = SimpleNamespace(_top_dynamic_annotations={1: {"annotation": "b2"}})
+        assert _get_dynamic_annotations(component) is not None
+        assert _compute_annotation_hash(component) is not None
+
+    def test_bottom_side_annotations_are_detected(self):
+        component = SimpleNamespace(
+            _bottom_dynamic_annotations={7: {"annotation": "y3"}}
+        )
+        assert _get_dynamic_annotations(component) is not None
+        assert _compute_annotation_hash(component) is not None
+
+    def test_component_without_annotations_is_not_detected(self):
+        component = SimpleNamespace(
+            _dynamic_annotations=None,
+            _top_dynamic_annotations=None,
+            _bottom_dynamic_annotations=None,
+        )
+        assert _get_dynamic_annotations(component) is None
+        assert _compute_annotation_hash(component) is None
+
+    def test_hash_distinguishes_the_two_sides(self):
+        """Top-only and bottom-only annotations must not hash alike."""
+        top = SimpleNamespace(_top_dynamic_annotations={1: {"annotation": "b2"}})
+        bottom = SimpleNamespace(_bottom_dynamic_annotations={1: {"annotation": "b2"}})
+        assert _compute_annotation_hash(top) != _compute_annotation_hash(bottom)
+
+    def test_hash_changes_when_annotations_change(self):
+        component = SimpleNamespace(_top_dynamic_annotations={1: {"annotation": "b2"}})
+        before = _compute_annotation_hash(component)
+        component._top_dynamic_annotations = {1: {}, 2: {}}
+        assert _compute_annotation_hash(component) != before
+
+    def test_both_sides_hash_together(self):
+        """Annotating both sides must differ from annotating either one alone."""
+        both = SimpleNamespace(
+            _top_dynamic_annotations={1: {}},
+            _bottom_dynamic_annotations={2: {}},
+        )
+        top_only = SimpleNamespace(_top_dynamic_annotations={1: {}})
+        assert _compute_annotation_hash(both) != _compute_annotation_hash(top_only)

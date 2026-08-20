@@ -144,6 +144,43 @@ def clear_component_annotations() -> None:
         st.session_state[_COMPONENT_ANNOTATIONS_KEY].clear()
 
 
+# Attributes under which components store per-render annotations. LinePlot keeps a
+# single set; MirrorPlot keeps one per side. Both must be visible here, or the cached
+# payload path silently drops annotations for the components it misses.
+_DYNAMIC_ANNOTATION_ATTRS = (
+    "_dynamic_annotations",
+    "_top_dynamic_annotations",
+    "_bottom_dynamic_annotations",
+)
+
+
+def _get_dynamic_annotations(
+    component: "BaseComponent",
+) -> list[tuple[str, dict[Any, Any]]] | None:
+    """
+    Collect a component's dynamic annotation dicts, whichever shape it uses.
+
+    Args:
+        component: The component to inspect
+
+    Returns:
+        List of (attribute name, annotations) pairs, or None if there are none.
+        The attribute name is carried so the hash can tell the sides apart --
+        moving a label from the top spectrum to the bottom must invalidate the cache.
+    """
+    present = [
+        (attr, annotations)
+        for attr, annotations in (
+            (attr, getattr(component, attr, None)) for attr in _DYNAMIC_ANNOTATION_ATTRS
+        )
+        # Annotations are always dicts. Requiring that (rather than "not None") keeps
+        # test doubles, whose auto-created attributes are truthy, from being mistaken
+        # for real annotations.
+        if isinstance(annotations, dict)
+    ]
+    return present or None
+
+
 def _compute_annotation_hash(component: "BaseComponent") -> str | None:
     """
     Compute hash of component's dynamic annotations, if any.
@@ -154,11 +191,13 @@ def _compute_annotation_hash(component: "BaseComponent") -> str | None:
     Returns:
         Short hash string if annotations exist, None otherwise
     """
-    annotations = getattr(component, "_dynamic_annotations", None)
-    if annotations is None:
+    annotation_sets = _get_dynamic_annotations(component)
+    if annotation_sets is None:
         return None
-    # Hash the sorted keys (sufficient for change detection)
-    return hashlib.md5(str(sorted(annotations.keys())).encode()).hexdigest()[:8]
+    # Hash each set's sorted keys alongside the attribute it came from, so the same
+    # labels on a different side produce a different hash.
+    keys = [(attr, sorted(annotations.keys())) for attr, annotations in annotation_sets]
+    return hashlib.md5(str(keys).encode()).hexdigest()[:8]
 
 
 def _get_cached_vue_data(
@@ -241,10 +280,9 @@ def _prepare_vue_data_cached(
     Returns:
         Tuple of (vue_data dict, data_hash string)
     """
-    # Check if component has dynamic annotations (e.g., LinePlot linked to SequenceView)
-    has_dynamic_annotations = (
-        getattr(component, "_dynamic_annotations", None) is not None
-    )
+    # Check if component has dynamic annotations (e.g., LinePlot linked to
+    # SequenceView, or MirrorPlot with per-side annotations)
+    has_dynamic_annotations = _get_dynamic_annotations(component) is not None
 
     # Try cache first (works for ALL components now)
     cached = _get_cached_vue_data(component_id, filter_state_hashable)
@@ -355,6 +393,29 @@ def get_vue_component_function():
     return _vue_component_func
 
 
+def _get_validation_filter_groups(
+    component: "BaseComponent",
+) -> list[tuple[dict[str, str], dict[str, Any]]]:
+    """Filter groups to validate interactivity selections against.
+
+    A group is one independently filtered view of the component's data. Most
+    components have exactly one; a MirrorPlot has one per side. Components that
+    predate the hook fall back to their flat filters.
+    """
+    getter = getattr(component, "get_validation_filter_groups", None)
+    if callable(getter):
+        groups: list[tuple[dict[str, str], dict[str, Any]]] = getter()
+        if groups:
+            return groups
+
+    return [
+        (
+            getattr(component, "_filters", None) or {},
+            getattr(component, "_filter_defaults", None) or {},
+        )
+    ]
+
+
 def _validate_interactivity_selections(
     component: "BaseComponent",
     state_manager: "StateManager",
@@ -379,8 +440,7 @@ def _validate_interactivity_selections(
     if not interactivity:
         return False
 
-    filters = getattr(component, "_filters", None) or {}
-    filter_defaults = getattr(component, "_filter_defaults", None) or {}
+    filter_groups = _get_validation_filter_groups(component)
 
     # Get the preprocessed data
     preprocessed = getattr(component, "_preprocessed_data", None)
@@ -398,21 +458,47 @@ def _validate_interactivity_selections(
     if isinstance(data, pl.DataFrame):
         data = data.lazy()
 
-    # Apply filters to get the filtered dataset
-    for identifier, column in filters.items():
-        selected_value = state.get(identifier)
-        if selected_value is None and identifier in filter_defaults:
-            selected_value = filter_defaults[identifier]
+    # Apply filters to get the filtered dataset.
+    #
+    # Each group is one view of the data, and a selection is valid if it survives in
+    # ANY of them. Components with a single set of filters have exactly one group, so
+    # this reduces to the plain conjunction it always was. A MirrorPlot has one group
+    # per side: ANDing the two together would ask for rows where scan_id equals both
+    # the top and the bottom scan at once, which is never satisfiable, so every
+    # selection would be judged missing and cleared the moment it was made.
+    group_predicates: list[pl.Expr] = []
+    for filters, filter_defaults in filter_groups:
+        if not filters:
+            # An unfiltered view shows every row, so the union admits everything and
+            # there is nothing any other group could rule out.
+            group_predicates = []
+            break
 
-        if selected_value is None:
-            # Awaiting filter - no data to validate against
-            return False
+        predicate = None
+        for identifier, column in filters.items():
+            selected_value = state.get(identifier)
+            if selected_value is None and identifier in filter_defaults:
+                selected_value = filter_defaults[identifier]
 
-        # Convert float to int for integer columns (type mismatch handling)
-        if isinstance(selected_value, float) and selected_value.is_integer():
-            selected_value = int(selected_value)
+            if selected_value is None:
+                # Awaiting filter - no data to validate against
+                return False
 
-        data = data.filter(pl.col(column) == selected_value)
+            # Convert float to int for integer columns (type mismatch handling)
+            if isinstance(selected_value, float) and selected_value.is_integer():
+                selected_value = int(selected_value)
+
+            term = pl.col(column) == selected_value
+            predicate = term if predicate is None else (predicate & term)
+
+        if predicate is not None:
+            group_predicates.append(predicate)
+
+    if group_predicates:
+        combined = group_predicates[0]
+        for predicate in group_predicates[1:]:
+            combined = combined | predicate
+        data = data.filter(combined)
 
     # Collect all checks to validate
     state_changed = False
@@ -440,6 +526,10 @@ def _validate_interactivity_selections(
         return False
 
     # Build single query with all existence checks
+    #
+    # An empty frame clears every selection, and that is deliberate: it means the
+    # component displays no rows at all, so nothing in it can still be selected. See
+    # TestTableSelectionClearingOnInvalidFilter in tests/integration/test_tabulator.py.
     existence_exprs = [
         (pl.col(column) == value).any().alias(identifier)
         for identifier, column, value in checks_to_validate
@@ -820,7 +910,10 @@ def _hash_data(data: dict[str, Any]) -> str:
     Returns:
         SHA256 hash string
     """
-    from ..preprocessing.filtering import compute_dataframe_hash
+    from ..preprocessing.filtering import (
+        compute_dataframe_hash,
+        compute_pandas_dataframe_hash,
+    )
 
     hash_parts = []
     for key, value in sorted(data.items()):
@@ -832,9 +925,9 @@ def _hash_data(data: dict[str, Any]) -> str:
         ):
             continue
         if isinstance(value, pd.DataFrame):
-            # Efficient hash for DataFrames
-            df_polars = pl.from_pandas(value)
-            hash_parts.append(f"{key}:{compute_dataframe_hash(df_polars)}")
+            # Hash pandas directly. Converting to polars first crashes the interpreter
+            # when two renders overlap -- see compute_pandas_dataframe_hash.
+            hash_parts.append(f"{key}:{compute_pandas_dataframe_hash(value)}")
         elif isinstance(value, pl.DataFrame):
             hash_parts.append(f"{key}:{compute_dataframe_hash(value)}")
         elif isinstance(value, (list, dict)):

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import polars as pl
 
-from .cache import CacheMissError, get_cache_dir
+from .cache import CacheMissError, atomic_write, cache_lock, get_cache_dir
 
 if TYPE_CHECKING:
     from .state import StateManager
@@ -64,14 +64,26 @@ class BaseComponent(ABC):
 
         1. **Creation mode** (data provided): Creates cache with specified config.
            All configuration (filters, interactivity, component-specific) is stored.
+           If a cache built from the same configuration already exists, it is reused
+           and preprocessing is skipped -- this is what makes it safe to construct a
+           component at the top of a Streamlit script, which reruns on every
+           interaction.
 
         2. **Reconstruction mode** (no data): Loads everything from cache.
            Only cache_id and cache_path are needed. All configuration is restored
            from the cached manifest. Any other parameters passed are ignored.
 
+        **Cache freshness.** A cache_id identifies one (data, config) pair. The
+        configuration is hashed, but the data behind a LazyFrame cannot be without
+        collecting it -- which is the expense the cache exists to avoid. So changing
+        the data while keeping cache_id and configuration identical will silently
+        serve the old cache. Give new data a new cache_id, or pass
+        regenerate_cache=True.
+
         Args:
             cache_id: Unique identifier for this component's cache (MANDATORY).
                 Creates a folder {cache_path}/{cache_id}/ for cached data.
+                Identifies one (data, config) pair -- see Cache freshness above.
             data: Polars LazyFrame with source data. Required for creation mode.
             data_path: Path to parquet file with source data. Preferred over
                 data= for large datasets as preprocessing runs in a subprocess
@@ -89,7 +101,9 @@ class BaseComponent(ABC):
                 When user clicks/selects, sets 'my_selection' to the clicked
                 row's mass value.
             cache_path: Base path for cache storage. Default "." (current dir).
-            regenerate_cache: If True, regenerate cache even if valid cache exists.
+            regenerate_cache: If True, rebuild the cache even when one matching this
+                configuration already exists. Needed when the data changed but
+                cache_id and configuration did not.
             **kwargs: Component-specific configuration options
         """
         # Validate inputs
@@ -139,28 +153,55 @@ class BaseComponent(ABC):
             self._interactivity = interactivity or {}
             self._config = kwargs
 
-            if data_path is not None:
-                # Subprocess preprocessing - memory released after cache creation
-                from .subprocess_preprocess import preprocess_component
+            # Reuse key for the cache on disk, captured BEFORE preprocessing runs.
+            # It cannot be `config_hash`, which is computed afterwards and contains
+            # values preprocessing derived (Table's auto-detected column_definitions,
+            # Heatmap's auto-computed x_bins/y_bins) and so is not reproducible here.
+            self._input_config_hash = self._compute_config_hash()
 
-                preprocess_component(
-                    type(self),
-                    data_path=data_path,
-                    cache_id=cache_id,
-                    cache_path=cache_path,
-                    filters=filters,
-                    filter_defaults=filter_defaults,
-                    interactivity=interactivity,
-                    **kwargs,
-                )
-                self._raw_data = None
-                self._load_from_cache()
-            else:
-                # In-process preprocessing
-                self._raw_data = data
-                self._validate_mappings()
-                self._preprocess()
-                self._save_to_cache()
+            # Hold the lock across the check AND the build. Streamlit runs script
+            # threads concurrently, so without this two of them rewrite the same
+            # Parquet files while polars has them mapped -- and the loser of the race
+            # would redo work that the winner has already finished.
+            with cache_lock(self._cache_dir):
+                if (
+                    not regenerate_cache
+                    and self._cache_exists()
+                    and self._cached_input_config_matches(self._input_config_hash)
+                ):
+                    # Same cache_id, same configuration: the work is already on disk.
+                    # Under Streamlit this is the common case, since the page script
+                    # reconstructs every component on every rerun.
+                    self._raw_data = None
+                    self._load_from_cache()
+                    return
+
+                if data_path is not None:
+                    # Subprocess preprocessing - memory released after cache creation
+                    from .subprocess_preprocess import preprocess_component
+
+                    preprocess_component(
+                        type(self),
+                        data_path=data_path,
+                        cache_id=cache_id,
+                        cache_path=cache_path,
+                        filters=filters,
+                        filter_defaults=filter_defaults,
+                        interactivity=interactivity,
+                        # The decision to rebuild was made above; the child must not
+                        # re-apply the guard and decide otherwise, or regenerate_cache
+                        # would silently do nothing on this path.
+                        regenerate_cache=True,
+                        **kwargs,
+                    )
+                    self._raw_data = None
+                    self._load_from_cache()
+                else:
+                    # In-process preprocessing
+                    self._raw_data = data
+                    self._validate_mappings()
+                    self._preprocess()
+                    self._save_to_cache()
 
     def _validate_mappings(self) -> None:
         """Validate that filter and interactivity columns exist in the data schema."""
@@ -183,6 +224,25 @@ class BaseComponent(ABC):
                     f"Interactivity column '{column}' for identifier '{identifier}' not found in data. "
                     f"Available columns: {column_names}"
                 )
+
+    def get_validation_filter_groups(
+        self,
+    ) -> list[tuple[dict[str, str], dict[str, Any]]]:
+        """
+        Filter groups used to validate interactivity selections.
+
+        A group is one independently filtered view of this component's data, given as
+        ``(filters, filter_defaults)``. The bridge clears an interactivity selection
+        only when it is absent from *every* group, so a component that shows several
+        differently-filtered views at once keeps selections belonging to any of them.
+
+        Most components show a single view and need not override this. MirrorPlot does,
+        because its two halves filter independently.
+
+        Returns:
+            List of (filters, filter_defaults) pairs, one per view.
+        """
+        return [(self._filters, self._filter_defaults)]
 
     def _get_cache_config(self) -> dict[str, Any]:
         """
@@ -245,6 +305,31 @@ class BaseComponent(ABC):
             return False
 
         return True
+
+    def _cached_input_config_matches(self, input_config_hash: str) -> bool:
+        """
+        Check whether the cache on disk was built from this configuration.
+
+        Args:
+            input_config_hash: Hash of the configuration as passed to __init__,
+                computed before preprocessing.
+
+        Returns:
+            True if the cached manifest records the same hash. False when the
+            manifest is unreadable, or predates this field -- in which case the
+            cache is rebuilt so that it gains one, rather than assuming a match.
+        """
+        try:
+            with open(self._get_manifest_path()) as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        stored = manifest.get("input_config_hash")
+        if stored is None:
+            return False
+
+        return bool(stored == input_config_hash)
 
     def _load_from_cache(self) -> None:
         """Load all configuration and preprocessed data from cache.
@@ -314,6 +399,11 @@ class BaseComponent(ABC):
             "component_type": self._component_type,
             "created_at": datetime.now().isoformat(),
             "config_hash": self._compute_config_hash(),
+            # Reuse key: the same hash taken from the configuration as passed in,
+            # before preprocessing derived anything from it. See __init__.
+            "input_config_hash": getattr(
+                self, "_input_config_hash", self._compute_config_hash()
+            ),
             "config": self._get_cache_config(),
             "filters": self._filters,
             "filter_defaults": self._filter_defaults,
@@ -340,7 +430,8 @@ class BaseComponent(ABC):
                     # Apply streaming-safe optimization (Float64→Float32 only)
                     # Int64 bounds checking would require collect(), breaking streaming
                     value = optimize_for_transfer_lazy(value)
-                    value.sink_parquet(filepath, compression="zstd")
+                    with atomic_write(filepath) as tmp:
+                        value.sink_parquet(tmp, compression="zstd")
                     manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
@@ -352,14 +443,17 @@ class BaseComponent(ABC):
                 else:
                     # Full optimization including Int64→Int32 with bounds checking
                     value = optimize_for_transfer(value)
-                    value.write_parquet(filepath, compression="zstd")
+                    with atomic_write(filepath) as tmp:
+                        value.write_parquet(tmp, compression="zstd")
                     manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
 
-        # Write manifest
-        with open(self._get_manifest_path(), "w") as f:
-            json.dump(manifest, f, indent=2)
+        # Write manifest last and atomically: it is what _cache_exists() and the reuse
+        # check read, so a torn one would make an otherwise complete cache unusable.
+        with atomic_write(self._get_manifest_path()) as tmp:
+            with open(tmp, "w") as f:
+                json.dump(manifest, f, indent=2)
 
         # Release memory - data is now safely on disk
         self._preprocessed_data = {}

@@ -445,6 +445,10 @@ export default defineComponent({
           },
           hovertext,
           hoverinfo: 'x+y+text',
+          // Flat row index per point. Plotly's pointIndex is relative to the trace, so
+          // without this a click on any category but the first resolves to the wrong
+          // row. See setupClickHandler in usePlotlyScatter.ts.
+          customdata: indices,
         } as Plotly.Data)
       }
 

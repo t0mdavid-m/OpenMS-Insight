@@ -1,6 +1,7 @@
 """Data filtering utilities for selection-based filtering."""
 
 import hashlib
+import threading
 from typing import Any
 
 import pandas as pd
@@ -187,6 +188,83 @@ def compute_dataframe_hash(df: pl.DataFrame) -> str:
 
     hash_input = "|".join(hash_parts).encode()
     return hashlib.sha256(hash_input).hexdigest()
+
+
+def compute_pandas_dataframe_hash(df: pd.DataFrame) -> str:
+    """
+    Compute an efficient hash for a pandas DataFrame, without converting it.
+
+    Mirrors :func:`compute_dataframe_hash` -- shape, column names, first and last row,
+    per-column sums -- but reads them straight off pandas.
+
+    Converting to polars first is what this exists to avoid: ``pl.from_pandas()``
+    parallelises Series construction across polars' own thread pool, and two Streamlit
+    script threads hashing at the same moment crash the interpreter with an access
+    violation inside ``numpy_to_pyseries``. Nothing about hashing needs the conversion.
+
+    The two functions need not agree on the hash of equivalent data, and do not: a
+    payload key keeps its type across renders, so hashes are only ever compared
+    like-for-like.
+
+    Args:
+        df: pandas DataFrame to hash
+
+    Returns:
+        SHA256 hash string
+    """
+    hash_parts = [
+        str(df.shape),
+        str(list(df.columns)),
+    ]
+
+    if len(df) > 0:
+        hash_parts.append(str(df.head(1).to_dict("records")[0]))
+        hash_parts.append(str(df.tail(1).to_dict("records")[0]))
+
+        for col in df.columns:
+            series = df[col]
+            if pd.api.types.is_bool_dtype(series):
+                # Count True values for boolean columns (important for annotations)
+                try:
+                    hash_parts.append(f"{col}_bool:{int(series.sum())}")
+                except Exception:
+                    pass
+            elif pd.api.types.is_numeric_dtype(series):
+                try:
+                    hash_parts.append(f"{col}:{series.sum()}")
+                except Exception:
+                    pass
+            elif str(col).startswith("_dynamic"):
+                # Hash content of dynamic string columns (annotations)
+                try:
+                    non_empty = [v for v in series.tolist() if v != ""]
+                    if non_empty:
+                        hash_parts.append(f"{col}_str:{hash(tuple(non_empty))}")
+                except Exception:
+                    pass
+
+    hash_input = "|".join(hash_parts).encode()
+    return hashlib.sha256(hash_input).hexdigest()
+
+
+# Serializes pl.from_pandas across threads. See compute_pandas_dataframe_hash for why:
+# concurrent conversions corrupt memory. Where a polars frame is genuinely needed the
+# conversion cannot be dropped, so it is made non-concurrent instead. The critical
+# section is short next to the render it belongs to.
+_from_pandas_lock = threading.Lock()
+
+
+def from_pandas_safe(df: pd.DataFrame) -> pl.DataFrame:
+    """Convert pandas to polars without racing another thread doing the same.
+
+    Args:
+        df: pandas DataFrame to convert
+
+    Returns:
+        The equivalent polars DataFrame.
+    """
+    with _from_pandas_lock:
+        return pl.from_pandas(df)
 
 
 def _filter_and_collect(
