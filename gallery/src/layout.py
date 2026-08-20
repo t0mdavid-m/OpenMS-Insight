@@ -24,6 +24,10 @@ from . import dataset
 
 REPO_URL = "https://github.com/t0mdavid-m/OpenMS-Insight"
 
+# Every example table fits under this except the MS1 map (608,134 rows), so in
+# practice one table is truncated and the rest are shown in full.
+PREVIEW_ROW_LIMIT = 10_000
+
 
 def source_of(fn: Callable[..., Any]) -> str:
     """The body of ``fn``, dedented, with its ``def`` line removed.
@@ -70,20 +74,33 @@ def _options(component: type, shown: Sequence[str]) -> None:
 
 
 def _data_preview(tables: Sequence[str]) -> None:
-    """The source tables behind a page, as they sit on disk.
+    """The source tables behind a page, whole and scrollable.
 
-    This is provenance, not a mirror of what is drawn above: a component that filters
-    (a plot showing one scan, say) draws a subset of these rows, so the caption says
-    which five of how many are being shown.
+    Every table is shown in full, because a five-row sample invites the reader to
+    assume that is all there is -- the component above is drawing hundreds or
+    thousands of these rows. The one exception is the 608k-point MS1 map, which is
+    truncated because sending it row-wise to the browser costs more than the page it
+    documents; the caption always says which case applies.
+
+    This is still the source table, not a mirror of what is drawn: a component that
+    filters (a plot showing one scan) draws a subset of these rows.
     """
     for name in tables:
         info = dataset.table_info(name)
         st.markdown(f"**`{name}`** — {info.get('description', '')}")
         frame = pl.read_parquet(dataset.data(name))
-        st.dataframe(frame.head(5), width="stretch", hide_index=True)
+        st.dataframe(
+            frame.head(PREVIEW_ROW_LIMIT), width="stretch", hide_index=True, height=320
+        )
+        truncated = frame.height > PREVIEW_ROW_LIMIT
+        counted = (
+            f"First {PREVIEW_ROW_LIMIT:,} of {frame.height:,} rows"
+            if truncated
+            else f"All {frame.height:,} rows"
+        )
         st.caption(
-            f"First 5 of {frame.height:,} rows · derived from "
-            f"`{info.get('derived_from', '?')}` · {info.get('transformation', '')}"
+            f"{counted} · derived from `{info.get('derived_from', '?')}` · "
+            f"{info.get('transformation', '')}"
         )
 
 

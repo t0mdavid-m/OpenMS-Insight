@@ -21,7 +21,7 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from unittest.mock import patch
 
 import numpy as np
@@ -37,6 +37,19 @@ DATA_DIR = GALLERY_DIR / "data"
 pytest.importorskip("streamlit.testing.v1", reason="requires Streamlit's test harness")
 
 PAGES = sorted(p.stem for p in CONTENT_DIR.glob("*.py") if p.stem != "home")
+
+
+def declared_tables(page: str) -> list[str]:
+    """The ``tables=`` list a page hands to ``layout.render``."""
+    import ast
+
+    tree = ast.parse((CONTENT_DIR / f"{page}.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "render":
+            for keyword in node.keywords:
+                if keyword.arg == "tables":
+                    return [element.value for element in keyword.value.elts]
+    return []
 
 
 def source(name: str) -> pl.DataFrame:
@@ -119,9 +132,16 @@ def _recording_into(sink: list[dict[str, Any]]) -> Callable[[], Callable[..., No
     return lambda: recorder
 
 
+class GalleryRun(NamedTuple):
+    """One pass over every page: what it sent to Vue, and what it rendered."""
+
+    payloads: dict[str, list[dict[str, Any]]]
+    apps: dict[str, Any]
+
+
 @pytest.fixture(scope="module")
-def payloads(tmp_path_factory) -> dict[str, list[dict[str, Any]]]:
-    """Run every page and record what it sends to Vue.
+def gallery(tmp_path_factory) -> GalleryRun:
+    """Run every page once and keep both halves of what it produced.
 
     One module-scoped run: preprocessing the 608k-point MS1 map is the expensive part
     and every page after the first reuses the cache it builds.
@@ -133,6 +153,7 @@ def payloads(tmp_path_factory) -> dict[str, list[dict[str, Any]]]:
     os.chdir(cache_dir)
 
     captured: dict[str, list[dict[str, Any]]] = {}
+    rendered: dict[str, Any] = {}
     try:
         for page in PAGES:
             calls: list[dict[str, Any]] = []
@@ -155,9 +176,16 @@ def payloads(tmp_path_factory) -> dict[str, list[dict[str, Any]]]:
                 str(e.value) for e in app.exception
             )
             captured[page] = calls
+            rendered[page] = app
     finally:
         os.chdir(original_cwd)
-    return captured
+    return GalleryRun(captured, rendered)
+
+
+@pytest.fixture(scope="module")
+def payloads(gallery: GalleryRun) -> dict[str, list[dict[str, Any]]]:
+    """What each page handed to Vue."""
+    return gallery.payloads
 
 
 def payload_of(
@@ -213,23 +241,52 @@ class TestSourceTables:
         A name that misses the manifest still renders, silently, with an empty
         description and an unknown provenance line.
         """
-        import ast
-
         from src import dataset  # noqa: PLC0415
 
-        tree = ast.parse((CONTENT_DIR / f"{page}.py").read_text(encoding="utf-8"))
-        declared: list[str] = []
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and getattr(node.func, "attr", "") == "render"
-            ):
-                for keyword in node.keywords:
-                    if keyword.arg == "tables":
-                        declared = [element.value for element in keyword.value.elts]
-        for name in declared:
+        for name in declared_tables(page):
             assert dataset.table_info(name), f"{page} previews unknown table {name}"
             assert Path(dataset.data(name)).exists()
+
+
+class TestDataExpander:
+    """The **Data** section shows the table, not a sample of it.
+
+    A five-row head reads as "this is the dataset" while the component above draws
+    hundreds or thousands of rows, which is exactly the wrong impression to leave.
+    """
+
+    @pytest.mark.parametrize("page", PAGES)
+    def test_each_previewed_table_is_shown_in_full(self, page: str, gallery) -> None:
+        from src.layout import PREVIEW_ROW_LIMIT  # noqa: PLC0415
+
+        rendered = {
+            tuple(frame.value.columns): frame.value
+            for frame in gallery.apps[page].dataframe
+        }
+        for name in declared_tables(page):
+            table = source(name.removesuffix(".parquet"))
+            shown = rendered.get(tuple(table.columns))
+            assert shown is not None, f"{page} renders no preview for {name}"
+            assert len(shown) == min(table.height, PREVIEW_ROW_LIMIT), (
+                f"{page} previews {len(shown)} of {table.height} rows of {name}"
+            )
+
+    def test_the_caption_says_whether_anything_was_left_out(self, gallery) -> None:
+        from src.layout import PREVIEW_ROW_LIMIT  # noqa: PLC0415
+
+        captions = {
+            page: [c.value for c in app.caption if "rows ·" in str(c.value)]
+            for page, app in gallery.apps.items()
+        }
+        assert captions["table"] == [
+            f"All {source('flashdeconv/scans').height:,} rows · derived from "
+            "`scan_table.pq` · Renamed to snake_case and downcast; no filtering."
+        ]
+        # The MS1 map is the one table too large to hand to the browser whole.
+        assert captions["heatmap"][0].startswith(
+            f"First {PREVIEW_ROW_LIMIT:,} of "
+            f"{source('flashdeconv/ms1_map').height:,} rows"
+        )
 
 
 class TestTable:
