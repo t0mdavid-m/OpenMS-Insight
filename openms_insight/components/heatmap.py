@@ -15,7 +15,11 @@ from ..preprocessing.compression import (
     downsample_2d_streaming,
     get_data_range,
 )
-from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
+from ..preprocessing.filtering import (
+    compute_dataframe_hash,
+    filter_and_collect_cached,
+    from_pandas_safe,
+)
 
 
 # Cache key only includes zoom state (not other selections)
@@ -904,7 +908,8 @@ class Heatmap(BaseComponent):
                     state,
                     filter_defaults=self._filter_defaults,
                 )
-                filtered = pl.from_pandas(df_pandas)
+                # Guarded: concurrent pandas->polars conversion corrupts memory.
+                filtered = from_pandas_safe(df_pandas)
             else:
                 filtered = filtered_lazy.collect()
 

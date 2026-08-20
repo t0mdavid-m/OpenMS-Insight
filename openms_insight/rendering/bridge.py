@@ -910,7 +910,10 @@ def _hash_data(data: dict[str, Any]) -> str:
     Returns:
         SHA256 hash string
     """
-    from ..preprocessing.filtering import compute_dataframe_hash
+    from ..preprocessing.filtering import (
+        compute_dataframe_hash,
+        compute_pandas_dataframe_hash,
+    )
 
     hash_parts = []
     for key, value in sorted(data.items()):
@@ -922,9 +925,9 @@ def _hash_data(data: dict[str, Any]) -> str:
         ):
             continue
         if isinstance(value, pd.DataFrame):
-            # Efficient hash for DataFrames
-            df_polars = pl.from_pandas(value)
-            hash_parts.append(f"{key}:{compute_dataframe_hash(df_polars)}")
+            # Hash pandas directly. Converting to polars first crashes the interpreter
+            # when two renders overlap -- see compute_pandas_dataframe_hash.
+            hash_parts.append(f"{key}:{compute_pandas_dataframe_hash(value)}")
         elif isinstance(value, pl.DataFrame):
             hash_parts.append(f"{key}:{compute_dataframe_hash(value)}")
         elif isinstance(value, (list, dict)):
