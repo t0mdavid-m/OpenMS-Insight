@@ -26,7 +26,7 @@ def example(sm):
 layout.render(
     title="Mirror plot",
     summary=(
-        "Two MS2 spectra of the same 11,874 Da proteoform, acquired six seconds apart. "
+        "Two MS2 spectra of the same 11,874 Da proteoform, acquired 2.4 seconds apart. "
         "Each half filters independently, so they can show any two spectra; a click "
         "selects a peak on either side."
     ),

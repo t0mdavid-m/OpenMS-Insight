@@ -70,14 +70,20 @@ def _options(component: type, shown: Sequence[str]) -> None:
 
 
 def _data_preview(tables: Sequence[str]) -> None:
+    """The source tables behind a page, as they sit on disk.
+
+    This is provenance, not a mirror of what is drawn above: a component that filters
+    (a plot showing one scan, say) draws a subset of these rows, so the caption says
+    which five of how many are being shown.
+    """
     for name in tables:
         info = dataset.table_info(name)
         st.markdown(f"**`{name}`** — {info.get('description', '')}")
         frame = pl.read_parquet(dataset.data(name))
         st.dataframe(frame.head(5), width="stretch", hide_index=True)
         st.caption(
-            f"{frame.height:,} rows · derived from `{info.get('derived_from', '?')}` · "
-            f"{info.get('transformation', '')}"
+            f"First 5 of {frame.height:,} rows · derived from "
+            f"`{info.get('derived_from', '?')}` · {info.get('transformation', '')}"
         )
 
 

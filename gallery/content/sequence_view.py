@@ -39,7 +39,10 @@ layout.render(
     notes=(
         "Fragment matching happens in the browser, not in Python. The component "
         "returns the matches it found, which is what lets another component annotate "
-        "itself with them — see **Sequence → mirror plot**. Peaks here are "
+        "itself with them — see **Sequence → mirror plot**.\n\n"
+        "The sequence and charge are written out as literals above; they come from "
+        "`psm_sequences` (shown under **Data**), which this example never has to read. "
+        "Peaks here are "
         "singly-charged m/z values, so `deconvolved` stays at its default of `False` "
         "and charge states 1 to 2 are considered."
     ),
