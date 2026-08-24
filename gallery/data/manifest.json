@@ -1,0 +1,166 @@
+{
+  "name": "openms-insight-example-data",
+  "version": "v1",
+  "generated": "2026-08-19",
+  "license": "BSD-3-Clause (OpenMS); source data as cited below",
+  "sources": {
+    "flashapp": {
+      "repository": "https://github.com/OpenMS/FLASHApp",
+      "path": "example-data/workspaces/default/flashdeconv/cache/files/example_fd/",
+      "kind": "Top-down FLASHDeconv results (internal cache format)",
+      "sample": "TODO: provenance of example_fd.mzML not documented upstream; confirm with FLASHApp maintainers."
+    },
+    "pxd044981": {
+      "accession": "PXD044981",
+      "title": "Benchmarking DIA data analysis workflows",
+      "url": "https://www.ebi.ac.uk/pride/archive/projects/PXD044981",
+      "doi": "10.1021/acs.jproteome.4c00048",
+      "file": "DDA.7z -> combined_DDA_LFQ_MBR_onlyUPS2Excl2023",
+      "kind": "MaxQuant search results from DDA runs",
+      "design": "UPS2 protein standard spiked into constant yeast background at five ratios, three replicate DDA runs each; Q Exactive HF."
+    }
+  },
+  "tables": {
+    "flashdeconv/scans.parquet": {
+      "rows": 317,
+      "columns": [
+        "scan_id",
+        "ms_level",
+        "rt",
+        "precursor_mass",
+        "n_masses"
+      ],
+      "description": "One row per MS scan: retention time, MS level, precursor mass and deconvolved mass count.",
+      "derived_from": "scan_table.pq",
+      "transformation": "Renamed to snake_case and downcast; no filtering."
+    },
+    "flashdeconv/ms1_map.parquet": {
+      "rows": 608134,
+      "columns": [
+        "rt",
+        "mass",
+        "intensity",
+        "scan_id"
+      ],
+      "description": "MS1 retention-time x neutral-mass intensity map, with the scan each point was acquired in.",
+      "derived_from": "ms1_raw_heatmap.pq + scan_table.pq",
+      "transformation": "Renamed and downcast to Float32; joined scan_id on retention time rounded to 2 dp (MS1 scans are ~4 s apart, so the match is unambiguous); sorted by rt."
+    },
+    "flashdeconv/deconv_peaks.parquet": {
+      "rows": 9924,
+      "columns": [
+        "scan_id",
+        "peak_id",
+        "mass",
+        "intensity"
+      ],
+      "description": "Deconvolved neutral-mass peaks, one row per peak.",
+      "derived_from": "deconv_spectrum.pq + scan_table.pq",
+      "transformation": "Exploded nested list columns into long format and joined scan numbers; assigned a stable peak_id."
+    },
+    "pxd044981/proteins.parquet": {
+      "rows": 2463,
+      "columns": [
+        "protein_id",
+        "log2FC",
+        "pvalue",
+        "padj",
+        "n_a",
+        "n_b",
+        "gene",
+        "spike_in"
+      ],
+      "description": "Protein-level differential abundance, ratio10_DDA vs ratio01_DDA (UPS2 spike-in, highest vs lowest level), three replicates each. 23 spike-in proteins against a constant yeast background; 11 proteins significant at padj<0.05 and |log2FC|>1, of which 10 are true spike-ins.",
+      "derived_from": "evidence.txt",
+      "transformation": "Removed reverse hits and contaminants; summed evidence intensities per (leading razor protein, raw file); log2-transformed and median-normalised each run; Welch t-test across three replicates per group; Benjamini-Hochberg FDR correction."
+    },
+    "pxd044981/psm_peaks.parquet": {
+      "rows": 340,
+      "columns": [
+        "scan_id",
+        "peak_id",
+        "mass",
+        "intensity",
+        "ion"
+      ],
+      "description": "Singly-charged fragment m/z peaks for 6 spectra of peptide ILNNGHAFNVEFDDSQDK (human carbonic anhydrase 2, UPS2 spike-in P00918), with MaxQuant's matched ion labels.",
+      "derived_from": "msms.txt",
+      "transformation": "Split semicolon-separated Masses/Intensities/Matches into one row per peak."
+    },
+    "pxd044981/psm_sequences.parquet": {
+      "rows": 6,
+      "columns": [
+        "sequence_id",
+        "scan_id",
+        "sequence",
+        "precursor_charge",
+        "precursor_mz",
+        "protein_id",
+        "score",
+        "raw_file"
+      ],
+      "description": "Peptide sequence, precursor charge and score per spectrum.",
+      "derived_from": "msms.txt",
+      "transformation": "One row per selected PSM."
+    },
+    "pxd044981/samples.parquet": {
+      "rows": 15,
+      "columns": [
+        "sample_id",
+        "group",
+        "replicate"
+      ],
+      "description": "Sample metadata: 15 DDA runs, 5 UPS2 spike-in levels x 3 replicates.",
+      "derived_from": "evidence.txt (raw file names)",
+      "transformation": "Parsed the spike-in level and replicate number out of each raw file name."
+    },
+    "pxd044981/quant_matrix.parquet": {
+      "rows": 2062,
+      "columns": [
+        "protein_id",
+        "ratio01_1",
+        "ratio01_2",
+        "ratio01_3",
+        "ratio02_1",
+        "ratio02_2",
+        "ratio02_3",
+        "ratio04_1",
+        "ratio04_2",
+        "ratio04_3",
+        "ratio08_1",
+        "ratio08_2",
+        "ratio08_3",
+        "ratio10_1",
+        "ratio10_2",
+        "ratio10_3"
+      ],
+      "description": "Protein quantification matrix: 2062 proteins x 15 runs of log2 median-normalised intensity.",
+      "derived_from": "evidence.txt",
+      "transformation": "Removed reverse hits and contaminants; summed evidence intensities per (leading razor protein, raw file); log2-transformed and median-normalised each run; kept only proteins quantified in every run, since PCA and hierarchical clustering both reject missing values."
+    },
+    "pxd044981/spike_in_matrix.parquet": {
+      "rows": 22,
+      "columns": [
+        "protein_id",
+        "ratio01_1",
+        "ratio01_2",
+        "ratio01_3",
+        "ratio02_1",
+        "ratio02_2",
+        "ratio02_3",
+        "ratio04_1",
+        "ratio04_2",
+        "ratio04_3",
+        "ratio08_1",
+        "ratio08_2",
+        "ratio08_3",
+        "ratio10_1",
+        "ratio10_2",
+        "ratio10_3"
+      ],
+      "description": "The 22 UPS2 spike-in proteins from the quantification matrix -- the subset whose abundance is known to vary by design, against a background that is not.",
+      "derived_from": "quant_matrix.parquet",
+      "transformation": "Selected proteins whose accession carries the UPS2 'ups' suffix."
+    }
+  }
+}

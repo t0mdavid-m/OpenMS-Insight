@@ -645,14 +645,20 @@ export default defineComponent({
           // This fixes issues where virtual rendering doesn't show rows until scroll
           setTimeout(() => {
             if (this.tabulator) {
-              // Get the selected row and scroll to it to force virtual DOM render
+              // Scroll to the selected row, or to the first one, to force the render
               const selectedRows = this.tabulator.getSelectedRows()
-              if (selectedRows.length > 0) {
-                // scrollToRow forces virtual DOM to calculate and render visible rows
-                this.tabulator.scrollToRow(selectedRows[0], 'center', false)
-              } else {
-                // No selection - scroll to top to trigger render
-                this.tabulator.scrollToRow(this.tabulator.getRows()[0], 'top', false)
+              const target =
+                selectedRows.length > 0 ? selectedRows[0] : this.tabulator.getRows()[0]
+              // Under server-side pagination the first page may not have arrived by the
+              // time this timer fires, leaving nothing to scroll to and nothing to
+              // force-render either.
+              if (target) {
+                // Tabulator rejects when the row is not in its rendered set. This scroll
+                // exists only to make the virtual DOM paint, so a miss is a no-op rather
+                // than a failure -- but left uncaught it reaches the console as an error.
+                this.tabulator
+                  .scrollToRow(target, selectedRows.length > 0 ? 'center' : 'top', false)
+                  .catch(() => {})
               }
             }
           }, 50)
