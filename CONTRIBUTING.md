@@ -82,12 +82,15 @@ pytest -k "heatmap"                   # Tests matching pattern
 
 ### Production Build
 
+The build backend builds the Vue frontend automatically (see `hatch_build.py`) and
+bundles it into the wheel/sdist, so a production build is just:
+
 ```bash
-cd js-component && npm run build && cd ..
-mkdir -p openms_insight/js-component
-cp -r js-component/dist openms_insight/js-component/
 python -m build
 ```
+
+Set `OPENMS_INSIGHT_SKIP_NPM_BUILD=1` to skip the frontend build and reuse an existing
+`openms_insight/js-component/dist` (e.g. when iterating via `npm run dev`).
 
 ---
 

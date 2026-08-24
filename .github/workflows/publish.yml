@@ -23,19 +23,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: js-component/package-lock.json
 
-      - name: Install npm dependencies
-        working-directory: js-component
-        run: npm ci
-
-      - name: Build Vue component
-        working-directory: js-component
-        run: npm run build
-
-      - name: Copy Vue dist to package
-        run: |
-          mkdir -p openms_insight/js-component
-          cp -r js-component/dist openms_insight/js-component/
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

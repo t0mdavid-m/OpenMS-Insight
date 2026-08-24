@@ -71,6 +71,15 @@ exclude = [
     "**/__pycache__",
 ]
 
+# Builds the Vue frontend (js-component) and stages its dist into the package
+# during the build. See hatch_build.py (CustomBuildHook). Registered globally so
+# the frontend is also built during the sdist stage, which lets `python -m build`
+# work end-to-end from a clean checkout (the wheel is built from that sdist, where
+# the frontend source is absent and the pre-built dist is reused). No extra build
+# dependencies are needed: the hook uses only the stdlib + hatchling, and npm is an
+# external tool rather than a PyPI build dependency.
+[tool.hatch.build.hooks.custom]
+
 [tool.hatch.build.targets.wheel]
 packages = ["openms_insight"]
 
