@@ -44,9 +44,10 @@ IGNORED_CONSOLE = (
     "Failed to load resource",  # favicon and similar
     "use_container_width",
     "deprecat",
-    # Tabulator logs this when asked to scroll to a row that is not currently in the
-    # rendered viewport, which happens on pages where a table auto-selects a row on
-    # first load. The table still renders and the selection still applies.
+    # Tabulator warns *and* rejects when asked to scroll to a row that is not currently
+    # in the rendered viewport, which happens on pages where a table auto-selects a row
+    # on first load. The table still renders and the selection still applies. It arrives
+    # as an unhandled rejection rather than a console error, hence `record` below.
     "Scroll Error - Row not visible",
 )
 
@@ -150,16 +151,23 @@ def _load_and_check(browser, base_url: str, slug: str, screenshot: bool):
     """Load one page once. Returns (painted, console errors)."""
     page = browser.new_page(viewport={"width": 1440, "height": 1200})
     errors: list[str] = []
+
+    def record(text: str) -> None:
+        """Keep one message unless it is known noise.
+
+        Both channels filter through the same list. An unhandled promise rejection
+        reaches Playwright as a ``pageerror`` rather than a console message, so a
+        filter applied only to the console lets exactly the library's own known
+        rejections through -- which is the opposite of what the list is for.
+        """
+        if not any(ignored in text for ignored in IGNORED_CONSOLE):
+            errors.append(text)
+
     page.on(
         "console",
-        lambda message: (
-            errors.append(message.text)
-            if message.type == "error"
-            and not any(i in message.text for i in IGNORED_CONSOLE)
-            else None
-        ),
+        lambda message: record(message.text) if message.type == "error" else None,
     )
-    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.on("pageerror", lambda exc: record(str(exc)))
 
     try:
         # Never wait for "networkidle": Streamlit holds a websocket open for the
