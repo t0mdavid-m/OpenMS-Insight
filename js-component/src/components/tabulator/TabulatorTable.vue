@@ -4,7 +4,14 @@
       <div style="width: 100%; display: grid; grid-template-columns: 1fr 1fr 1fr">
         <div class="d-flex justify-start" style="grid-column: 1 / span 1">
           <div style="position: relative; display: inline-block">
-            <v-btn variant="text" size="small" icon="mdi-download" @click="downloadTable" />
+            <v-btn
+              variant="text"
+              size="small"
+              icon="mdi-download"
+              :loading="pendingDownloadId !== null"
+              title="Download all rows and columns as CSV"
+              @click="downloadTable"
+            />
             <v-btn variant="text" size="small" icon="mdi-filter" @click="openFilterDialog" />
             <div v-if="activeFilterCount > 0" class="filter-badge">
               {{ activeFilterCount }}
@@ -123,6 +130,8 @@ export default defineComponent({
   data() {
     return {
       tabulator: undefined as Tabulator | undefined,
+      // Request id of a full-table CSV export awaiting its payload from Python
+      pendingDownloadId: null as number | null,
       selectedColumns: [] as string[],
       filterValues: {} as Record<
         string,
@@ -294,6 +303,11 @@ export default defineComponent({
       const val = this.streamlitDataStore.allDataForDrawing?._target_row_index
       return typeof val === 'number' ? val : null
     },
+    // Full-table CSV export prepared by Python in answer to a download request
+    downloadPayload(): { request_id: number; filename: string; csv: string } | null {
+      const val = this.streamlitDataStore.allDataForDrawing?._download
+      return val && typeof val === 'object' ? (val as { request_id: number; filename: string; csv: string }) : null
+    },
     // Check if server-side pagination is enabled
     isServerSidePagination(): boolean {
       return this.args.pagination !== false && !!this.args.paginationIdentifier
@@ -312,6 +326,21 @@ export default defineComponent({
     },
   },
   watch: {
+    // Save the CSV once per request. The payload stays in the data store after
+    // later merges, so only the id this table asked for is honoured.
+    downloadPayload(payload) {
+      if (!payload || payload.request_id !== this.pendingDownloadId) return
+      this.pendingDownloadId = null
+      const blob = new Blob([payload.csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = payload.filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    },
     // Watch data hash instead of tableData directly
     // This prevents unnecessary redraws when only selection changes (data unchanged)
     currentDataHash(newHash, oldHash) {
@@ -1443,6 +1472,22 @@ export default defineComponent({
     },
 
     downloadTable(): void {
+      // A server-side paginated table only holds the current page, and only the
+      // displayed columns, so ask Python for the whole filtered, sorted table.
+      const paginationIdentifier = this.args.paginationIdentifier as string | undefined
+      if (this.isServerSidePagination && paginationIdentifier) {
+        const requestId = Date.now()
+        this.pendingDownloadId = requestId
+        this.selectionStore.updateSelection(paginationIdentifier, {
+          page: this.paginationState?.page || 1,
+          page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+          sort_column: this.requestedSortColumn || undefined,
+          sort_dir: this.requestedSortDir,
+          column_filters: this.currentColumnFilters,
+          download_request: requestId,
+        })
+        return
+      }
       if (this.tabulator) {
         this.tabulator.download('csv', `${this.args.title || 'table'}.csv`)
       }
