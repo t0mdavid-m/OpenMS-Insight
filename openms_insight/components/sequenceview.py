@@ -315,6 +315,140 @@ DEFAULT_ANNOTATION_CONFIG = {
 }
 
 
+# Mass shifts matched alongside each ion when neutral losses or proton
+# loss/addition are enabled. Kept in step with extraFragmentTypeObject in
+# js-component/src/components/sequence/modification.ts.
+NEUTRAL_LOSSES = [("-H2O", -18.0105646863), ("-NH3", -17.0265491015)]
+PROTON_SHIFTS = [("-H", -1.0078250319), ("+H", 1.0078250319)]
+
+_PREFIX_IONS = ("a", "b", "c")
+
+
+def match_fragment_ions(
+    sequence_str: str,
+    observed: "np.ndarray",
+    precursor_charge: int = 1,
+    annotation_config: dict[str, Any] | None = None,
+    deconvolved: bool = False,
+    intensities: Optional["np.ndarray"] = None,
+    peak_ids: Optional["np.ndarray"] = None,
+    include_unmatched: bool = False,
+) -> list[dict[str, Any]]:
+    """Match a peptide's theoretical fragment ions against one spectrum.
+
+    Follows the matching the SequenceView draws: each selected ion type, with
+    neutral losses and proton loss/addition when enabled, at every charge from
+    1 to the precursor charge (neutral masses only when ``deconvolved``), and
+    every observed peak within tolerance is reported.
+
+    Args:
+        sequence_str: Peptide sequence in OpenMS format.
+        observed: Observed m/z values (or neutral masses when deconvolved).
+        precursor_charge: Highest fragment charge to consider.
+        annotation_config: ``ion_types``, ``neutral_losses``,
+            ``proton_loss_addition``, ``tolerance`` and ``tolerance_ppm``;
+            missing keys fall back to ``DEFAULT_ANNOTATION_CONFIG``.
+        deconvolved: Whether ``observed`` holds neutral masses.
+        intensities: Optional intensities, aligned with ``observed``.
+        peak_ids: Optional peak ids, aligned with ``observed``.
+        include_unmatched: Also emit a row, with empty observed columns, for
+            every theoretical ion that no peak matched.
+
+    Returns:
+        One dict per matched (or, optionally, unmatched) fragment ion.
+    """
+    import numpy as np
+
+    config = {**DEFAULT_ANNOTATION_CONFIG, **(annotation_config or {})}
+    tolerance = float(config.get("tolerance") or 0.0)
+    tolerance_ppm = bool(config.get("tolerance_ppm", True))
+
+    shifts = [("", 0.0)]
+    if config.get("neutral_losses"):
+        shifts += NEUTRAL_LOSSES
+    if config.get("proton_loss_addition"):
+        shifts += PROTON_SHIFTS
+
+    try:
+        max_charge = max(1, int(precursor_charge or 1))
+    except (TypeError, ValueError):
+        max_charge = 1
+    charges = [1] if deconvolved else list(range(1, max_charge + 1))
+
+    observed = np.asarray(observed, dtype=float)
+    order = np.argsort(observed, kind="stable")
+    sorted_obs = observed[order]
+
+    fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
+    rows: list[dict[str, Any]] = []
+    for ion_type in config.get("ion_types") or []:
+        per_position = fragment_masses.get(f"fragment_masses_{ion_type}") or []
+        for position, masses in enumerate(per_position):
+            ion_number = position + 1
+            for neutral_mass in masses:
+                for shift_name, shift_mass in shifts:
+                    adjusted = neutral_mass + shift_mass
+                    for charge in charges:
+                        theoretical = (
+                            adjusted
+                            if deconvolved
+                            else (adjusted + charge * PROTON_MASS) / charge
+                        )
+                        window = (
+                            abs(theoretical) * tolerance / 1e6
+                            if tolerance_ppm
+                            else tolerance
+                        )
+                        lo = np.searchsorted(sorted_obs, theoretical - window, "left")
+                        hi = np.searchsorted(sorted_obs, theoretical + window, "right")
+                        base = {
+                            "ion": f"{ion_type}{ion_number}{shift_name}",
+                            "ion_type": f"{ion_type}{shift_name}",
+                            "ion_number": ion_number,
+                            "charge": charge,
+                            "theoretical_mz": theoretical,
+                        }
+                        if hi <= lo:
+                            if include_unmatched:
+                                rows.append(
+                                    {
+                                        **base,
+                                        "observed_mz": None,
+                                        "intensity": None,
+                                        "mass_error_da": None,
+                                        "mass_error_ppm": None,
+                                        "peak_id": None,
+                                    }
+                                )
+                            continue
+                        for idx in order[lo:hi]:
+                            obs = float(observed[idx])
+                            diff = obs - theoretical
+                            rows.append(
+                                {
+                                    **base,
+                                    "observed_mz": obs,
+                                    "intensity": (
+                                        float(intensities[idx])
+                                        if intensities is not None
+                                        else None
+                                    ),
+                                    "mass_error_da": diff,
+                                    "mass_error_ppm": (
+                                        diff / theoretical * 1e6
+                                        if theoretical
+                                        else None
+                                    ),
+                                    "peak_id": (
+                                        int(peak_ids[idx])
+                                        if peak_ids is not None
+                                        else None
+                                    ),
+                                }
+                            )
+    return rows
+
+
 @dataclass
 class SequenceViewResult:
     """Result returned by SequenceView.__call__().
@@ -882,6 +1016,107 @@ class SequenceView:
         args.update(self._config)
         return args
 
+    def export_fragment_ions(self, include_unmatched: bool = False) -> pl.DataFrame:
+        """
+        Export the fragment ions of every sequence against its spectrum.
+
+        Runs the view's fragment matching (its ``annotation_config`` and
+        ``deconvolved`` setting) over every row of the cached sequence data, not
+        only the selected one, so a whole run can be written to one table.
+        Each sequence is matched against the peaks that share its filter
+        columns (e.g. ``file_index`` and ``scan_id``).
+
+        Args:
+            include_unmatched: Also list theoretical ions no peak matched,
+                with empty observed columns.
+
+        Returns:
+            DataFrame with the sequence data's filter columns, ``sequence``,
+            ``precursor_charge`` and one row per fragment ion: ``ion``,
+            ``ion_type``, ``ion_number``, ``charge``, ``theoretical_mz``,
+            ``observed_mz``, ``intensity``, ``mass_error_da``,
+            ``mass_error_ppm`` and ``peak_id``. For deconvolved data the m/z
+            columns hold neutral masses.
+        """
+        import numpy as np
+
+        sequences = self._cached_sequences.collect()
+        seq_filter_cols = [c for c in self._filters.values() if c in sequences.columns]
+        seq_filter_cols = list(dict.fromkeys(seq_filter_cols))
+
+        peaks = (
+            self._cached_peaks.collect()
+            if self._cached_peaks is not None
+            else pl.DataFrame(schema={"peak_id": pl.Int64, "mass": pl.Float64})
+        )
+        join_cols = [c for c in seq_filter_cols if c in peaks.columns]
+        has_intensity = "intensity" in peaks.columns
+
+        def arrays(frame: pl.DataFrame) -> tuple:
+            return (
+                frame["mass"].to_numpy(),
+                frame["intensity"].to_numpy() if has_intensity else None,
+                frame["peak_id"].to_numpy(),
+            )
+
+        empty = (np.array([], dtype=float), None, None)
+        if join_cols:
+            peaks_by_key = {
+                key: arrays(group)
+                for key, group in peaks.partition_by(
+                    join_cols, as_dict=True, maintain_order=True
+                ).items()
+            }
+        else:
+            all_peaks = arrays(peaks) if peaks.height else empty
+
+        rows: list[dict[str, Any]] = []
+        for record in sequences.iter_rows(named=True):
+            sequence = record.get("sequence") or ""
+            if not sequence:
+                continue
+            if join_cols:
+                key = tuple(record[c] for c in join_cols)
+                observed, intensities, peak_ids = peaks_by_key.get(key, empty)
+            else:
+                observed, intensities, peak_ids = all_peaks
+            if len(observed) == 0 and not include_unmatched:
+                continue
+            charge = record.get("precursor_charge") or 1
+            prefix = {c: record[c] for c in seq_filter_cols}
+            prefix["sequence"] = sequence
+            prefix["precursor_charge"] = charge
+            for ion in match_fragment_ions(
+                sequence,
+                observed,
+                precursor_charge=charge,
+                annotation_config=self._annotation_config,
+                deconvolved=self._deconvolved,
+                intensities=intensities,
+                peak_ids=peak_ids,
+                include_unmatched=include_unmatched,
+            ):
+                rows.append({**prefix, **ion})
+
+        schema = {c: sequences.schema[c] for c in seq_filter_cols}
+        schema.update(
+            {
+                "sequence": pl.Utf8,
+                "precursor_charge": pl.Int64,
+                "ion": pl.Utf8,
+                "ion_type": pl.Utf8,
+                "ion_number": pl.Int64,
+                "charge": pl.Int64,
+                "theoretical_mz": pl.Float64,
+                "observed_mz": pl.Float64,
+                "intensity": pl.Float64,
+                "mass_error_da": pl.Float64,
+                "mass_error_ppm": pl.Float64,
+                "peak_id": pl.Int64,
+            }
+        )
+        return pl.DataFrame(rows, schema=schema)
+
     @property
     def peaks_data(self) -> pl.LazyFrame | None:
         """Return the cached peaks LazyFrame for linked components."""
@@ -945,4 +1180,6 @@ class SequenceView:
 
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from ..core.state import StateManager
