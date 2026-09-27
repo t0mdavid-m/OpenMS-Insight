@@ -192,7 +192,7 @@ only the page on screen and the columns in `column_definitions`. Displayed
 columns come first. The same export is available in Python:
 
 ```python
-table.export_data()       # whole table, initial sort
+table.export_data()  # whole table, initial sort
 table.export_data(state)  # as rendered for this selection state
 ```
 
@@ -540,7 +540,7 @@ ion: the sequence's filter columns, `sequence`, `precursor_charge`, `ion`,
 `intensity`, `mass_error_da`, `mass_error_ppm` and `peak_id`.
 
 ```python
-fragments = sequence_view.export_fragment_ions()   # matched ions only
+fragments = sequence_view.export_fragment_ions()  # matched ions only
 fragments = sequence_view.export_fragment_ions(include_unmatched=True)
 fragments.write_csv("fragment_ions.tsv", separator="\t")
 ```
