@@ -379,8 +379,10 @@ def match_fragment_ions(
     order = np.argsort(observed, kind="stable")
     sorted_obs = observed[order]
 
+    # Every theoretical ion as one row of parallel arrays, so the peak search
+    # below is a single vectorised searchsorted per spectrum.
     fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
-    rows: list[dict[str, Any]] = []
+    ions: list[tuple[str, str, int, int, float]] = []
     for ion_type in config.get("ion_types") or []:
         per_position = fragment_masses.get(f"fragment_masses_{ion_type}") or []
         for position, masses in enumerate(per_position):
@@ -394,58 +396,66 @@ def match_fragment_ions(
                             if deconvolved
                             else (adjusted + charge * PROTON_MASS) / charge
                         )
-                        window = (
-                            abs(theoretical) * tolerance / 1e6
-                            if tolerance_ppm
-                            else tolerance
-                        )
-                        lo = np.searchsorted(sorted_obs, theoretical - window, "left")
-                        hi = np.searchsorted(sorted_obs, theoretical + window, "right")
-                        base = {
-                            "ion": f"{ion_type}{ion_number}{shift_name}",
-                            "ion_type": f"{ion_type}{shift_name}",
-                            "ion_number": ion_number,
-                            "charge": charge,
-                            "theoretical_mz": theoretical,
-                        }
-                        if hi <= lo:
-                            if include_unmatched:
-                                rows.append(
-                                    {
-                                        **base,
-                                        "observed_mz": None,
-                                        "intensity": None,
-                                        "mass_error_da": None,
-                                        "mass_error_ppm": None,
-                                        "peak_id": None,
-                                    }
-                                )
-                            continue
-                        for idx in order[lo:hi]:
-                            obs = float(observed[idx])
-                            diff = obs - theoretical
-                            rows.append(
-                                {
-                                    **base,
-                                    "observed_mz": obs,
-                                    "intensity": (
-                                        float(intensities[idx])
-                                        if intensities is not None
-                                        else None
-                                    ),
-                                    "mass_error_da": diff,
-                                    "mass_error_ppm": (
-                                        diff / theoretical * 1e6
-                                        if theoretical
-                                        else None
-                                    ),
-                                    "peak_id": (
-                                        int(peak_ids[idx])
-                                        if peak_ids is not None
-                                        else None
-                                    ),
-                                }
+                        ions.append(
+                            (
+                                f"{ion_type}{ion_number}{shift_name}",
+                                f"{ion_type}{shift_name}",
+                                ion_number,
+                                charge,
+                                theoretical,
                             )
+                        )
+    if not ions:
+        return []
+
+    theoretical_values = np.array([ion[4] for ion in ions])
+    window = (
+        np.abs(theoretical_values) * tolerance / 1e6
+        if tolerance_ppm
+        else np.full(len(ions), tolerance)
+    )
+    lows = np.searchsorted(sorted_obs, theoretical_values - window, "left")
+    highs = np.searchsorted(sorted_obs, theoretical_values + window, "right")
+
+    rows: list[dict[str, Any]] = []
+    for (ion, ion_type, ion_number, charge, theoretical), lo, hi in zip(
+        ions, lows, highs, strict=True
+    ):
+        base = {
+            "ion": ion,
+            "ion_type": ion_type,
+            "ion_number": ion_number,
+            "charge": charge,
+            "theoretical_mz": theoretical,
+        }
+        if hi <= lo:
+            if include_unmatched:
+                rows.append(
+                    {
+                        **base,
+                        "observed_mz": None,
+                        "intensity": None,
+                        "mass_error_da": None,
+                        "mass_error_ppm": None,
+                        "peak_id": None,
+                    }
+                )
+            continue
+        for idx in order[lo:hi]:
+            obs = float(observed[idx])
+            diff = obs - theoretical
+            rows.append(
+                {
+                    **base,
+                    "observed_mz": obs,
+                    "intensity": (
+                        float(intensities[idx]) if intensities is not None else None
+                    ),
+                    "mass_error_da": diff,
+                    "mass_error_ppm": diff / theoretical * 1e6 if theoretical else None,
+                    "peak_id": int(peak_ids[idx]) if peak_ids is not None else None,
+                }
+            )
     return rows
 
 
