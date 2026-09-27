@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -113,6 +114,8 @@ class BaseComponent(ABC):
         self._cache_id = cache_id
         self._cache_dir = get_cache_dir(cache_path, cache_id)
         self._preprocessed_data: dict[str, Any] = {}
+        # Set from the manifest by _load_from_cache(); see "cache_generation".
+        self._cache_generation = ""
 
         # Determine mode: reconstruction (no data) or creation (data provided)
         has_data = data is not None or data_path is not None
@@ -347,6 +350,12 @@ class BaseComponent(ABC):
         with open(manifest_path) as f:
             manifest = json.load(f)
 
+        # Identify this particular build. Manifests written before the field existed
+        # fall back to their creation time, which also changes on every rebuild.
+        self._cache_generation = manifest.get(
+            "cache_generation", manifest.get("created_at", "")
+        )
+
         # Restore filters, filter_defaults, and interactivity from manifest
         self._filters = manifest.get("filters", {})
         self._filter_defaults = manifest.get("filter_defaults", {})
@@ -398,6 +407,10 @@ class BaseComponent(ABC):
             "version": CACHE_VERSION,
             "component_type": self._component_type,
             "created_at": datetime.now().isoformat(),
+            # Changes on every build, so anything holding data derived from this
+            # cache (the bridge's per-session payload cache) can tell a rebuild under
+            # the same cache_id from the cache it already served. See cache_generation.
+            "cache_generation": uuid.uuid4().hex,
             "config_hash": self._compute_config_hash(),
             # Reuse key: the same hash taken from the configuration as passed in,
             # before preprocessing derived anything from it. See __init__.
