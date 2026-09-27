@@ -186,6 +186,16 @@ column_definitions = [
 ]
 ```
 
+**CSV export.** The table's download button exports every row that passes the
+current filters, in the current sort order, with every column of the data, not
+only the page on screen and the columns in `column_definitions`. Displayed
+columns come first. The same export is available in Python:
+
+```python
+table.export_data()       # whole table, initial sort
+table.export_data(state)  # as rendered for this selection state
+```
+
 ### LinePlot
 
 Stick-style line plot using Plotly.js for mass spectra visualization.
@@ -520,6 +530,20 @@ SequenceView(
 - Auto-zoom for short sequences (≤20 amino acids)
 - Fragment coverage statistics
 - Click-to-select peaks with cross-component linking
+- Fragment ion export for every sequence, not just the selected one
+
+**Fragment ion export.** `export_fragment_ions()` runs the view's matching (its
+`annotation_config` and `deconvolved` setting) over every cached sequence,
+against the peaks that share its filter columns, and returns one row per matched
+ion: the sequence's filter columns, `sequence`, `precursor_charge`, `ion`,
+`ion_type`, `ion_number`, `charge`, `theoretical_mz`, `observed_mz`,
+`intensity`, `mass_error_da`, `mass_error_ppm` and `peak_id`.
+
+```python
+fragments = sequence_view.export_fragment_ions()   # matched ions only
+fragments = sequence_view.export_fragment_ions(include_unmatched=True)
+fragments.write_csv("fragment_ions.tsv", separator="\t")
+```
 
 ---
 
