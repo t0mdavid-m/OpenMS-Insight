@@ -572,12 +572,15 @@ class Table(BaseComponent):
         if isinstance(data, pl.DataFrame):
             data = data.lazy()
 
-        # Apply column projection first for efficiency
-        if columns:
-            schema_names = data.collect_schema().names()
-            available_cols = [c for c in columns if c in schema_names]
-            if available_cols:
-                data = data.select(available_cols)
+        # Column projection is applied after filtering and sorting (Polars pushes
+        # it down anyway), so a CSV export can still see every cached column.
+        def project(frame: pl.LazyFrame) -> pl.LazyFrame:
+            if columns:
+                schema_names = frame.collect_schema().names()
+                available_cols = [c for c in columns if c in schema_names]
+                if available_cols:
+                    return frame.select(available_cols)
+            return frame
 
         # Apply cross-component filters (from self._filters)
         for identifier, column in self._filters.items():
@@ -592,7 +595,7 @@ class Table(BaseComponent):
 
             if selected_value is None:
                 # No selection for this filter - return empty DataFrame
-                df_polars = data.head(0).collect()
+                df_polars = project(data).head(0).collect()
                 data_hash = compute_dataframe_hash(df_polars)
                 return {
                     "tableData": df_polars.to_pandas(),
@@ -622,47 +625,23 @@ class Table(BaseComponent):
         sort_dir = pagination_state.get("sort_dir", "asc")
         column_filters = pagination_state.get("column_filters", [])
         go_to_request = pagination_state.get("go_to_request")
+        download_request = pagination_state.get("download_request")
 
-        # Apply column filters from filter dialog
-        for col_filter in column_filters:
-            field = col_filter.get("field")
-            filter_type = col_filter.get("type")
-            value = col_filter.get("value")
+        data = self._apply_column_filters(data, column_filters)
+        data = self._apply_sort(data, sort_column, sort_dir)
 
-            if not field or value is None:
-                continue
+        # Full-table CSV export: every row that passes the current filters, in the
+        # current sort order, with every cached column (not just the current page
+        # and the displayed columns, which is all Tabulator's own download sees).
+        download_payload = None
+        if download_request is not None:
+            download_payload = {
+                "request_id": download_request,
+                "filename": f"{self._title or self._cache_id}.csv",
+                "csv": self._order_export_columns(data.collect()).write_csv(),
+            }
 
-            if filter_type == "in" and isinstance(value, list):
-                # Categorical filter - match any of the values
-                data = data.filter(pl.col(field).is_in(value))
-            elif filter_type == ">=":
-                data = data.filter(pl.col(field) >= value)
-            elif filter_type == "<=":
-                data = data.filter(pl.col(field) <= value)
-            elif filter_type == "regex":
-                # Text search with regex - invalid patterns match nothing
-                try:
-                    re.compile(value)
-                    data = data.filter(pl.col(field).str.contains(value, literal=False))
-                except re.error:
-                    # Invalid regex pattern - filter to empty result
-                    data = data.filter(pl.lit(False))
-
-        # Apply server-side sort
-        if sort_column:
-            # User-applied sort from pagination state takes precedence
-            descending = sort_dir == "desc"
-            data = data.sort(sort_column, descending=descending, maintain_order=True)
-        elif self._initial_sort:
-            # Fall back to initial_sort configuration on initial load
-            # initial_sort is a list of dicts: [{"column": "mass", "dir": "desc"}, ...]
-            sort_columns = [s["column"] for s in self._initial_sort]
-            sort_descending = [
-                s.get("dir", "asc") == "desc" for s in self._initial_sort
-            ]
-            data = data.sort(
-                sort_columns, descending=sort_descending, maintain_order=True
-            )
+        data = project(data)
 
         # Get total row count (after filters, before pagination)
         total_rows = data.select(pl.len()).collect().item()
@@ -926,6 +905,8 @@ class Table(BaseComponent):
             result["_target_row_index"] = target_row_index
         if go_to_not_found:
             result["_go_to_not_found"] = True
+        if download_payload is not None:
+            result["_download"] = download_payload
 
         logger.info(
             f"[Table._prepare_vue_data] Returning: page={page}, total_rows={total_rows}, data_rows={len(df_polars)}"
@@ -934,6 +915,113 @@ class Table(BaseComponent):
             f"[Table._prepare_vue_data] hash={data_hash[:8] if data_hash else 'None'}"
         )
         return result
+
+    @staticmethod
+    def _apply_column_filters(
+        data: pl.LazyFrame, column_filters: list[dict[str, Any]]
+    ) -> pl.LazyFrame:
+        """Apply the filter dialog's column filters to ``data``."""
+        for col_filter in column_filters:
+            field = col_filter.get("field")
+            filter_type = col_filter.get("type")
+            value = col_filter.get("value")
+
+            if not field or value is None:
+                continue
+
+            if filter_type == "in" and isinstance(value, list):
+                # Categorical filter - match any of the values
+                data = data.filter(pl.col(field).is_in(value))
+            elif filter_type == ">=":
+                data = data.filter(pl.col(field) >= value)
+            elif filter_type == "<=":
+                data = data.filter(pl.col(field) <= value)
+            elif filter_type == "regex":
+                # Text search with regex - invalid patterns match nothing
+                try:
+                    re.compile(value)
+                    data = data.filter(pl.col(field).str.contains(value, literal=False))
+                except re.error:
+                    # Invalid regex pattern - filter to empty result
+                    data = data.filter(pl.lit(False))
+        return data
+
+    def _apply_sort(
+        self, data: pl.LazyFrame, sort_column: str | None, sort_dir: str = "asc"
+    ) -> pl.LazyFrame:
+        """Sort by the user's column, falling back to ``initial_sort``."""
+        if sort_column:
+            # User-applied sort from pagination state takes precedence
+            return data.sort(
+                sort_column, descending=sort_dir == "desc", maintain_order=True
+            )
+        if self._initial_sort:
+            # initial_sort is a list of dicts: [{"column": "mass", "dir": "desc"}, ...]
+            sort_columns = [s["column"] for s in self._initial_sort]
+            sort_descending = [
+                s.get("dir", "asc") == "desc" for s in self._initial_sort
+            ]
+            return data.sort(
+                sort_columns, descending=sort_descending, maintain_order=True
+            )
+        return data
+
+    def _order_export_columns(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Put the displayed columns first, in display order, then the rest."""
+        shown = [
+            col_def["field"]
+            for col_def in (self._column_definitions or [])
+            if col_def.get("field") in df.columns
+        ]
+        shown = list(dict.fromkeys(shown))
+        rest = [c for c in df.columns if c not in shown]
+        return df.select(shown + rest)
+
+    def export_data(self, state: dict[str, Any] | None = None) -> pl.DataFrame:
+        """
+        Return the table's full data for export.
+
+        Unlike the rendered table, this is not limited to the current page or
+        to the columns in ``column_definitions``: every cached column and every
+        row is included, displayed columns first.
+
+        Args:
+            state: Selection state to apply, as the table would when rendered.
+                Cross-component ``filters`` whose selection is set, and the
+                table's own pagination state (sort and column filters), are
+                honoured. ``None`` exports the unfiltered table in its initial
+                sort order.
+
+        Returns:
+            Polars DataFrame, ready for ``write_csv()`` / ``write_parquet()``.
+        """
+        state = state or {}
+        data = self._preprocessed_data.get("data")
+        if data is None:
+            data = self._raw_data
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+
+        for identifier, column in self._filters.items():
+            selected_value = state.get(identifier)
+            if selected_value is None and self._filter_defaults:
+                selected_value = self._filter_defaults.get(identifier)
+            if selected_value is None:
+                continue
+            if isinstance(selected_value, float) and selected_value.is_integer():
+                selected_value = int(selected_value)
+            data = data.filter(pl.col(column) == selected_value)
+
+        pagination_state = state.get(self._pagination_identifier) or {}
+        data = self._apply_column_filters(
+            data, pagination_state.get("column_filters", [])
+        )
+        data = self._apply_sort(
+            data,
+            pagination_state.get("sort_column"),
+            pagination_state.get("sort_dir", "asc"),
+        )
+        return self._order_export_columns(data.collect())
 
     def _get_component_args(self) -> dict[str, Any]:
         """
