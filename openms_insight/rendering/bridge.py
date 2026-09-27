@@ -78,6 +78,42 @@ _COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
 _BATCH_RESEND_KEY = "_svc_batch_resend"
 
 
+# Key under which a component's cache build is folded into its payload cache key.
+# Leading underscores keep it clear of state identifiers, which the key also holds.
+_CACHE_GENERATION_KEY = "__cache_generation__"
+
+
+def _payload_cache_key(
+    component: "BaseComponent",
+    state: dict[str, Any],
+    state_keys: set[str],
+) -> tuple[tuple[str, Any], ...]:
+    """
+    Build the key that decides whether a cached payload is still valid.
+
+    The payload cache lives in session state and is keyed by component id, which is
+    derived from cache_id. Filter state alone therefore cannot tell a rebuilt cache
+    from the one already served: rerunning a workflow rewrites the cache on disk
+    under the same cache_id, and the browser would keep being sent the old payload
+    until the session ended. Folding in the cache's build generation makes a
+    rebuild a cache miss.
+
+    Args:
+        component: The component being rendered
+        state: Current selection state
+        state_keys: State identifiers that affect this component's data
+
+    Returns:
+        Hashable, order-independent key of filter state plus cache generation.
+    """
+    return tuple(
+        sorted(
+            [(k, _make_hashable(state.get(k))) for k in state_keys]
+            + [(_CACHE_GENERATION_KEY, getattr(component, "_cache_generation", ""))]
+        )
+    )
+
+
 def _get_component_cache() -> dict[str, Any]:
     """Get per-component data cache from session state."""
     if _COMPONENT_DATA_CACHE_KEY not in st.session_state:
@@ -620,9 +656,7 @@ def render_component(
     # Compute current filter state for cache validity check
     # This tells us what state the component SHOULD have data for
     state_keys = set(component.get_state_dependencies())
-    current_filter_state = tuple(
-        sorted((k, _make_hashable(initial_state.get(k))) for k in state_keys)
-    )
+    current_filter_state = _payload_cache_key(component, initial_state, state_keys)
 
     # Check if cached data is VALID for current state
     # KEY FIX: Only send data when cache matches current state
@@ -759,9 +793,7 @@ def render_component(
         relevant_state = {k: state.get(k) for k in state_keys}
 
         # Build hashable version for cache key
-        filter_state_hashable = tuple(
-            sorted((k, _make_hashable(state.get(k))) for k in state_keys)
-        )
+        filter_state_hashable = _payload_cache_key(component, state, state_keys)
 
         if _DEBUG_HASH_TRACKING:
             _logger.warning(
