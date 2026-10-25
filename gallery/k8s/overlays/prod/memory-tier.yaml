@@ -1,0 +1,21 @@
+# High memory tier. The heatmap example holds a 608k-point map and builds three
+# resolution levels during preprocessing; the scale page rebuilds them whenever the
+# slider changes. Cluster nodes carry the openms.de/memory-tier label.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insight-gallery
+spec:
+  template:
+    spec:
+      nodeSelector:
+        openms.de/memory-tier: high
+      containers:
+        - name: streamlit
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"

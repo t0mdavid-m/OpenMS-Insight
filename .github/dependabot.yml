@@ -1,0 +1,46 @@
+# The gallery image pins its dependencies so the deployed image is the image that was
+# tested. That means the scheduled rebuild cannot discover that a new Streamlit or
+# polars release has broken us -- a pinned build passes forever.
+#
+# Dependabot closes that gap: version bumps arrive as pull requests, and the full
+# example suite runs against the new version before anyone merges. A breaking upstream
+# release therefore shows up as one red, well-scoped pull request.
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: /gallery
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, gallery]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directory: /js-component
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, frontend]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: docker
+    directory: /gallery
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "chore(deps)"

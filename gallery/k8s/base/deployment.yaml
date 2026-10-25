@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insight-gallery
+  labels:
+    app: insight-gallery
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: insight-gallery
+  template:
+    metadata:
+      labels:
+        app: insight-gallery
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: streamlit
+          image: ghcr.io/t0mdavid-m/openms-insight-gallery:main
+          # The overlay pins a mutable tag, so a pod restart picks up whatever CI last
+          # pushed. See docs/adr/0003-scheduled-rebuild-without-restart-hook.md.
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8501
+          env:
+            - name: GALLERY_CACHE_DIR
+              value: /var/cache/gallery
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/gallery
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        # Component caches are derived from committed data and rebuilt on start, so
+        # they need no persistence -- only somewhere writable.
+        - name: cache
+          emptyDir: {}

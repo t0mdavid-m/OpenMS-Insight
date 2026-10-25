@@ -1,0 +1,30 @@
+# Traefik IngressRoute. *.webapps.openms.de and *.webapps.openms.org are wildcard DNS,
+# so claiming a hostname needs no DNS change -- this host match is the whole
+# allocation. TLS is issued per-app by Traefik's ACME resolver, one certificate
+# covering both top-level domains.
+#
+# NOTE: certResolver and entryPoint names must match this cluster's Traefik install;
+# confirm with the cluster operator before applying.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: insight-gallery
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`insight.webapps.openms.de`) || Host(`insight.webapps.openms.org`)
+      services:
+        - name: insight-gallery
+          port: 8501
+          # Streamlit holds a websocket per session, so a client must keep reaching
+          # the same pod.
+          sticky:
+            cookie:
+              name: stroute
+              httpOnly: true
+              sameSite: lax
+              secure: true
+  tls:
+    certResolver: letsencrypt

@@ -3,6 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/openms-insight.svg)](https://badge.fury.io/py/openms-insight)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://github.com/t0mdavid-m/OpenMS-Insight/actions/workflows/tests.yml/badge.svg)](https://github.com/t0mdavid-m/OpenMS-Insight/actions/workflows/tests.yml)
+[![Example gallery](https://img.shields.io/badge/gallery-insight.webapps.openms.de-brightgreen.svg)](https://insight.webapps.openms.de)
 
 Interactive visualization components for mass spectrometry data in Streamlit, backed by Vue.js.
 
@@ -37,6 +38,23 @@ pip install "openms-insight[analysis]"
 
 Everything else - every component, and the rest of `openms_insight.analysis` -
 works with the base install.
+
+## Example Gallery
+
+Every component running live on real published data, each shown next to the exact code that produced it:
+
+**[insight.webapps.openms.de](https://insight.webapps.openms.de)**
+
+The gallery lives in [`gallery/`](gallery/). Nothing in it is synthetic — it is backed by top-down FLASHDeconv results from [FLASHApp](https://github.com/OpenMS/FLASHApp) and by [PXD044981](https://www.ebi.ac.uk/pride/archive/projects/PXD044981), a UPS2 spike-in benchmark whose known ground truth gives the volcano plot something real to show. See [`gallery/data/manifest.json`](gallery/data/manifest.json) for the provenance of every table.
+
+Run it locally:
+
+```bash
+pip install -e ".[dev]" -r gallery/requirements.txt
+streamlit run gallery/app.py
+```
+
+Adding a component means adding an example — `tests/test_gallery_coverage.py` fails when a registered component has none, and `tests/test_gallery_nav.py` fails when a page exists but is not reachable from the navigation.
 
 ## Quick Start
 

@@ -1,0 +1,65 @@
+name: Gallery
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: gallery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    # Proves the gallery's pages actually draw. The coverage, navigation and AppTest
+    # checks run in tests.yml with the rest of the suite; this job adds the layer
+    # AppTest structurally cannot provide -- a real browser.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: js-component/package-lock.json
+
+      - name: Build Vue component
+        working-directory: js-component
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy dist into package
+        run: |
+          mkdir -p openms_insight/js-component
+          cp -r js-component/dist openms_insight/js-component/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r gallery/requirements.txt
+          pip install -e ".[dev]"
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Render every gallery page in a browser
+        run: pytest tests/test_gallery_render.py -v --no-cov
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-screenshots
+          path: screenshots/
+          if-no-files-found: warn
+          retention-days: 14

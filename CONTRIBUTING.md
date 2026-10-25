@@ -593,6 +593,17 @@ case 'MyComponent':
   return MyComponent
 ```
 
+### Step 8: Add a Gallery Example
+
+Every registered component must be demonstrated by at least one example in the gallery. This is enforced, not requested: `tests/test_gallery_coverage.py` parses `gallery/content/*.py`, maps the component classes it finds back through the registry, and fails the build when a registered component appears in none of them.
+
+1. Add `gallery/content/mycomponent.py` following the shape of the existing pages: one `example(sm)` function containing only the code being demonstrated, then a call to `layout.render(...)`.
+2. List the page in `gallery/app.py`, or `tests/test_gallery_nav.py` fails — a page missing from the navigation is a page nobody can reach.
+
+Keep the `example` function minimal. Its body is displayed on the page verbatim via `inspect.getsource`, so anything you add there is something every reader has to skim past. Shared setup belongs in `gallery/src/`.
+
+If your component needs data the example dataset does not have, extend `tools/derive_example_dataset.py` and record the new table's provenance in the manifest. Do not add synthetic data — the gallery's claim is that everything on it is real.
+
 ### Registration Flow
 
 This diagram shows how Python's component name connects to the Vue component:

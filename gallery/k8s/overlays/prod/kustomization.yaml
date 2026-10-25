@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openms-webapps
+
+resources:
+  - ../../base
+
+patches:
+  - path: memory-tier.yaml
+    target:
+      kind: Deployment
+      name: insight-gallery
+
+images:
+  - name: ghcr.io/t0mdavid-m/openms-insight-gallery
+    # Deliberately a mutable tag: a pod restart then picks up the most recent
+    # scheduled build. Pin to a released tag (for example v0.1.14) to freeze or to
+    # roll back.
+    newTag: main
