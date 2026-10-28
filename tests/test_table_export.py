@@ -136,3 +136,46 @@ def test_export_data_from_cache_only(mock_streamlit, temp_cache_dir, psm_data):
 
     assert exported.height == 250
     assert "hidden_meta" in exported.columns
+
+
+def test_download_neutralises_spreadsheet_formulas(mock_streamlit, temp_cache_dir):
+    data = pl.LazyFrame(
+        {
+            "id_idx": [0, 1, 2, 3, 4],
+            "sequence": ["=1+1", "+SUM(A1)", "-2+3", "@cmd", "PEPTIDE"],
+            "score": [-1.5, 2.0, 3.0, 4.0, 5.0],
+        }
+    )
+    table = _table(temp_cache_dir, data)
+    state = {"export_table_page": {"download_request": 1}}
+
+    payload = table._prepare_vue_data(state)["_download"]
+    exported = _read(payload).sort("id_idx")
+
+    assert exported["sequence"].to_list() == [
+        "'=1+1",
+        "'+SUM(A1)",
+        "'-2+3",
+        "'@cmd",
+        "PEPTIDE",
+    ]
+    # Numbers are not text, so a negative score stays a number
+    assert exported["score"][0] == -1.5
+    # The table itself still holds the original text
+    assert table.export_data()["sequence"].sort().to_list()[0] == "+SUM(A1)"
+
+
+def test_csv_safe_handles_tabs_categoricals_and_nulls():
+    from openms_insight.components.table import csv_safe
+
+    df = pl.DataFrame(
+        {
+            "text": ["\tx", "\ry", None, "ok"],
+            "cat": pl.Series(["=A", "B", "C", "-D"], dtype=pl.Categorical),
+            "n": [1, -2, 3, 4],
+        }
+    )
+    safe = csv_safe(df)
+    assert safe["text"].to_list() == ["'\tx", "'\ry", None, "ok"]
+    assert safe["cat"].to_list() == ["'=A", "B", "C", "'-D"]
+    assert safe["n"].to_list() == [1, -2, 3, 4]
