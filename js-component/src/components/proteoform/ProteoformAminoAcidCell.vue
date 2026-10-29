@@ -530,37 +530,44 @@ export default defineComponent({
   z-index: 1000;
 }
 
-.frag-marker-container-a:extend(.frag-marker-container) {
+.frag-marker-container-a {
+  @extend .frag-marker-container;
   top: -28%;
   left: 15%;
 }
 
-.frag-marker-container-b:extend(.frag-marker-container) {
+.frag-marker-container-b {
+  @extend .frag-marker-container;
   top: -8%;
   left: 13%;
 }
 
-.frag-marker-container-c:extend(.frag-marker-container) {
+.frag-marker-container-c {
+  @extend .frag-marker-container;
   top: -28%;
   left: 15%;
 }
 
-.frag-marker-container-x:extend(.frag-marker-container) {
+.frag-marker-container-x {
+  @extend .frag-marker-container;
   bottom: -32%;
   left: -10%;
 }
 
-.frag-marker-container-y:extend(.frag-marker-container) {
+.frag-marker-container-y {
+  @extend .frag-marker-container;
   bottom: -8%;
   left: -10%;
 }
 
-.frag-marker-container-z:extend(.frag-marker-container) {
+.frag-marker-container-z {
+  @extend .frag-marker-container;
   bottom: -32%;
   left: -10%;
 }
 
-.frag-marker-extra-type:extend(.frag-marker-container) {
+.frag-marker-extra-type {
+  @extend .frag-marker-container;
   top: -30%;
 }
 

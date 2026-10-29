@@ -175,7 +175,8 @@ export default defineComponent({
   }
 }
 
-.protein-terminal-modified:extend(.protein-terminal) {
+.protein-terminal-modified {
+  @extend .protein-terminal;
   background-color: #9c1e1e;
   color: var(--amino-acid-cell-color);
 

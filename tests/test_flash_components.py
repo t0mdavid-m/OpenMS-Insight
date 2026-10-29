@@ -502,3 +502,22 @@ def test_table_navigation_uses_render_state_manager():
     finally:
         _render_state_manager.reset(token)
     assert get_render_state_manager() is get_default_state_manager()
+
+
+def test_table_default_row_minus_one_selects_nothing(
+    mock_streamlit, temp_cache_dir: Path, sample_table_data
+):
+    """default_row=-1 means no automatic selection, also when filters change."""
+    from openms_insight import Table
+
+    kwargs = {
+        "data": sample_table_data,
+        "cache_path": str(temp_cache_dir),
+        "filters": {"spectrum": "scan_id"},
+        "interactivity": {"peak": "id"},
+        "index_field": "id",
+    }
+    none = Table(cache_id="none", default_row=-1, **kwargs)
+    assert none._prepare_vue_data({"spectrum": 200})["_auto_selection"] == {}
+    first = Table(cache_id="first", **kwargs)
+    assert first._prepare_vue_data({"spectrum": 200})["_auto_selection"] == {"peak": 3}

@@ -938,7 +938,8 @@ class Table(BaseComponent):
         # This provides the first row's values for interactivity columns
         # so downstream components can receive initial data when filters change
         auto_selection: dict[str, Any] = {}
-        if self._interactivity and total_rows > 0:
+        # default_row=-1: nothing is selected until the user clicks a row
+        if self._interactivity and total_rows > 0 and self._default_row >= 0:
             # Get the first row of sorted/filtered data
             first_row = data.head(1).collect()
             if first_row.height > 0:
