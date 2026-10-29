@@ -601,6 +601,24 @@ def render_component(
     key: str | None = None,
     height: int | None = None,
 ) -> Any:
+    """Render a component in Streamlit (see _render_component)."""
+    from ..core.state import _render_state_manager
+
+    # Components that write state while preparing data (Table navigation) write
+    # it to the manager they are rendered with
+    token = _render_state_manager.set(state_manager)
+    try:
+        return _render_component(component, state_manager, key=key, height=height)
+    finally:
+        _render_state_manager.reset(token)
+
+
+def _render_component(
+    component: "BaseComponent",
+    state_manager: "StateManager",
+    key: str | None = None,
+    height: int | None = None,
+) -> Any:
     """
     Render a component in Streamlit.
 
@@ -625,10 +643,6 @@ def render_component(
     Returns:
         The value returned by the Vue component
     """
-    # Components that write state while preparing data (Table navigation) write
-    # it to the manager they are rendered with
-    component._render_state_manager = state_manager
-
     # === PHASE 0: Generate key and get component info ===
     if key is None:
         interactivity_str = json.dumps(component._interactivity or {}, sort_keys=True)

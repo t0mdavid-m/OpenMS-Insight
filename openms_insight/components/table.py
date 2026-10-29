@@ -1048,12 +1048,9 @@ class Table(BaseComponent):
         manager the table was rendered with, not the default one, so that tables
         rendered with their own StateManager work.
         """
-        state_manager = getattr(self, "_render_state_manager", None)
-        if state_manager is None:
-            from openms_insight.core.state import get_default_state_manager
+        from openms_insight.core.state import get_render_state_manager
 
-            state_manager = get_default_state_manager()
-        return state_manager
+        return get_render_state_manager()
 
     def _apply_range_filters(
         self, data: pl.LazyFrame, state: dict[str, Any]

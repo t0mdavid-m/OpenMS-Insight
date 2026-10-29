@@ -483,3 +483,22 @@ class TestProteoformSequenceView:
         )
         masses = view._prepare_vue_data({"protein": 0})["spectrumData"]["masses"]
         assert math.isclose(masses[0], 12345.678901, abs_tol=1e-9)
+
+
+def test_table_navigation_uses_render_state_manager():
+    """Navigation state goes to the manager the table is rendered with, and
+    only for the duration of that render."""
+    from openms_insight.core.state import (
+        _render_state_manager,
+        get_default_state_manager,
+        get_render_state_manager,
+    )
+
+    own = object()
+    assert get_render_state_manager() is get_default_state_manager()
+    token = _render_state_manager.set(own)
+    try:
+        assert get_render_state_manager() is own
+    finally:
+        _render_state_manager.reset(token)
+    assert get_render_state_manager() is get_default_state_manager()
