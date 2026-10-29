@@ -21,7 +21,11 @@ from .core.base import BaseComponent
 from .core.cache import CacheMissError
 from .core.registry import get_component_class, register_component
 from .core.state import StateManager
-from .rendering.bridge import clear_component_annotations, get_component_annotations
+from .rendering.bridge import (
+    clear_component_annotations,
+    defer_reruns,
+    get_component_annotations,
+)
 
 __version__ = "0.4.0.dev0"
 
@@ -49,4 +53,5 @@ __all__ = [
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",
+    "defer_reruns",
 ]

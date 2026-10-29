@@ -523,3 +523,71 @@ def test_table_default_row_minus_one_selects_nothing(
     assert none._prepare_vue_data({"spectrum": 200})["_auto_selection"] == {}
     first = Table(cache_id="first", **kwargs)
     assert first._prepare_vue_data({"spectrum": 200})["_auto_selection"] == {"peak": 3}
+
+
+def test_table_deselect_on_reclick(
+    mock_streamlit, temp_cache_dir: Path, sample_table_data
+):
+    """deselect_on_reclick reaches Vue and survives cache reconstruction, and
+    tables without it keep their configuration (and cache) unchanged."""
+    from openms_insight import Table
+
+    kwargs = {
+        "data": sample_table_data,
+        "cache_path": str(temp_cache_dir),
+        "interactivity": {"peak": "id"},
+        "index_field": "id",
+    }
+    plain = Table(cache_id="plain", **kwargs)
+    assert "deselectOnReclick" not in plain._get_component_args()
+    assert "deselect_on_reclick" not in plain._get_cache_config()
+
+    table = Table(cache_id="reclick", deselect_on_reclick=True, **kwargs)
+    assert table._get_component_args()["deselectOnReclick"] is True
+    restored = Table(cache_id="reclick", cache_path=str(temp_cache_dir))
+    assert restored._get_component_args()["deselectOnReclick"] is True
+
+
+def test_deselected_row_is_not_selected_again_until_filters_change(
+    mock_streamlit, temp_cache_dir: Path
+):
+    """The default row fills an empty selection, except one the user cleared:
+    that stays empty until the table is filtered to something else."""
+    from unittest.mock import patch
+
+    import polars as pl
+
+    from openms_insight import StateManager, Table
+    from openms_insight.rendering.bridge import _apply_auto_selection
+
+    data = pl.LazyFrame({"id": [0, 1, 2], "scan": [1, 1, 2]})
+    kwargs = {
+        "data": data,
+        "cache_path": str(temp_cache_dir),
+        "index_field": "id",
+        "filters": {"scan": "scan"},
+        "interactivity": {"row": "id"},
+    }
+    plain = Table(cache_id="plain_rows", **kwargs)
+    table = Table(cache_id="rows", deselect_on_reclick=True, **kwargs)
+    assert plain.auto_selection_scope({"scan": 1}) is None
+
+    with patch("openms_insight.rendering.bridge.st.session_state", mock_streamlit):
+        state = StateManager(session_key="reclick_scope")
+        state.set_selection("scan", 1)
+        assert _apply_auto_selection(table, "t", {"row": 0}, state)
+        assert state.get_selection("row") == 0
+
+        state.set_selection("row", None)  # the user re-clicked the row
+        assert not _apply_auto_selection(table, "t", {"row": 0}, state)
+        assert state.get_selection("row") is None
+
+        state.set_selection("scan", 2)
+        assert _apply_auto_selection(table, "t", {"row": 2}, state)
+        assert state.get_selection("row") == 2
+
+        # Without deselect_on_reclick an empty selection is always filled
+        state.set_selection("row", None)
+        assert _apply_auto_selection(plain, "p", {"row": 2}, state)
+        state.set_selection("row", None)
+        assert _apply_auto_selection(plain, "p", {"row": 2}, state)

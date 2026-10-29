@@ -91,6 +91,7 @@ class Table(BaseComponent):
         toggle_filters: list[dict[str, Any]] | None = None,
         range_filters: dict[str, list[str]] | None = None,
         on_select: dict[str, Any] | None = None,
+        deselect_on_reclick: bool = False,
         **kwargs,
     ):
         """
@@ -157,6 +158,8 @@ class Table(BaseComponent):
                 to those in ``interactivity``. A value of None clears the
                 identifier. Example: {'peak': None} clears a dependent selection.
                 Not applied to the automatic default-row selection.
+            deselect_on_reclick: Clicking the selected row again clears the
+                ``interactivity`` selections (and unselects the row).
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -173,6 +176,7 @@ class Table(BaseComponent):
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
         self._range_filters = {k: list(v) for k, v in (range_filters or {}).items()}
         self._on_select = dict(on_select) if on_select else {}
+        self._deselect_on_reclick = bool(deselect_on_reclick)
 
         super().__init__(
             cache_id=cache_id,
@@ -197,6 +201,7 @@ class Table(BaseComponent):
             toggle_filters=toggle_filters,
             range_filters=range_filters,
             on_select=on_select,
+            deselect_on_reclick=deselect_on_reclick,
             **kwargs,
         )
 
@@ -244,6 +249,7 @@ class Table(BaseComponent):
             ),
             **({"range_filters": self._range_filters} if self._range_filters else {}),
             **({"on_select": self._on_select} if self._on_select else {}),
+            **({"deselect_on_reclick": True} if self._deselect_on_reclick else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -263,8 +269,14 @@ class Table(BaseComponent):
         self._toggle_filters = config.get("toggle_filters", [])
         self._range_filters = config.get("range_filters", {})
         self._on_select = config.get("on_select", {})
+        self._deselect_on_reclick = config.get("deselect_on_reclick", False)
         # These are passed on to Vue explicitly; keep them out of the extra options
-        for key in ("toggle_filters", "range_filters", "on_select"):
+        for key in (
+            "toggle_filters",
+            "range_filters",
+            "on_select",
+            "deselect_on_reclick",
+        ):
             self._config.pop(key, None)
 
     def get_state_dependencies(self) -> list[str]:
@@ -286,6 +298,19 @@ class Table(BaseComponent):
         if self._interactivity:
             deps.extend(self._interactivity.keys())
         return deps
+
+    def auto_selection_scope(self, state: dict[str, Any]) -> tuple | None:
+        """
+        What the default row is selected for: the table and its filter values.
+
+        Only with deselect_on_reclick (else None, and the default row is selected
+        whenever nothing is). A row the user deselected is then not selected again
+        until the scope changes, e.g. the table is filtered to another spectrum.
+        """
+        if not self._deselect_on_reclick:
+            return None
+        identifiers = [*self._filters, *self._range_filters]
+        return (self._cache_id, *(repr(state.get(i)) for i in identifiers))
 
     def get_initial_selection(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """
@@ -1247,13 +1272,20 @@ class Table(BaseComponent):
 
         # Add any extra config options
         args.update(self._config)
-        for key in ("toggle_filters", "range_filters", "on_select"):
+        for key in (
+            "toggle_filters",
+            "range_filters",
+            "on_select",
+            "deselect_on_reclick",
+        ):
             args.pop(key, None)
 
         if self._toggle_filters:
             args["toggleFilters"] = self._toggle_filters
         if self._on_select:
             args["onSelect"] = self._on_select
+        if self._deselect_on_reclick:
+            args["deselectOnReclick"] = True
 
         return args
 

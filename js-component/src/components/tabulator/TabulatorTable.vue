@@ -1369,6 +1369,25 @@ export default defineComponent({
       // Get the row data directly from Tabulator's row object
       const rowData = row.getData()
       const rowIndex = row.getIndex()
+      const interactivity = this.args.interactivity || {}
+
+      // Clicking the selected row again clears its selections
+      if (
+        this.args.deselectOnReclick && rowData && Object.keys(interactivity).length > 0 &&
+        Object.entries(interactivity).every(
+          ([identifier, column]) => this.selectionStore.$state[identifier] === rowData[column as string]
+        )
+      ) {
+        this.tabulator?.deselectRow()
+        this.skipNextSync = true
+        for (const identifier of Object.keys(interactivity)) {
+          this.selectionStore.updateSelection(identifier, null)
+        }
+        this.$nextTick(() => {
+          this.skipNextSync = false
+        })
+        return
+      }
 
       // FIRST: Immediately select the row visually (before any async operations)
       // This ensures instant visual feedback regardless of Streamlit round-trip
@@ -1384,7 +1403,6 @@ export default defineComponent({
 
       // THEN: Update selection store (which triggers Streamlit.setComponentValue)
       // The visual selection is already done, so user sees instant feedback
-      const interactivity = this.args.interactivity || {}
 
       if (rowData) {
         // Side effects first, so a selection set by both on_select and

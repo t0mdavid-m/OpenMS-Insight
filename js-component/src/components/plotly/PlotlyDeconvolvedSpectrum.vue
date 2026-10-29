@@ -103,6 +103,7 @@ export default defineComponent({
   },
   data() {
     return {
+      drawPending: false,
       manual: false,
       manualXRange: undefined as number[] | undefined,
       annotationsVisible: true,
@@ -205,6 +206,9 @@ export default defineComponent({
     },
     hasLadder(): boolean {
       return !!this.args.ladder
+    },
+    ladderJson(): string {
+      return JSON.stringify(this.args.ladder ?? null)
     },
     ladderKey(): unknown {
       return this.args.ladder ? this.args.ladder.key ?? JSON.stringify(this.args.ladder.masses) : null
@@ -606,40 +610,48 @@ export default defineComponent({
         // A new spectrum: forget the zoom of the previous one
         this.manual = false
         this.manualXRange = undefined
-        this.safeGraph()
+        this.requestGraph()
       },
       deep: true,
     },
     ladderKey(newKey: unknown, oldKey: unknown) {
       if (newKey !== oldKey) {
         this.resetManualState()
-        this.safeGraph()
+        this.requestGraph()
       }
     },
-    'args.ladder': {
-      handler() {
-        this.safeGraph()
-      },
-      deep: true,
+    // By value: the arguments arrive as a new object on every rerun
+    ladderJson() {
+      this.requestGraph()
     },
     selectedMassIndex() {
       this.manual = false
-      this.safeGraph()
+      this.requestGraph()
     },
     annotationsVisible() {
-      this.safeGraph()
+      this.requestGraph()
     },
     deconvolvedPeaksHighlightMode() {
-      this.safeGraph()
+      this.requestGraph()
     },
     drilledDown() {
-      this.safeGraph()
+      this.requestGraph()
     },
   },
   mounted() {
-    this.$nextTick(() => this.safeGraph())
+    this.requestGraph()
   },
   methods: {
+    /** Draw once per tick: one update often changes several watched values
+     * (the data and the selection), and each drawing costs a full Plotly render. */
+    requestGraph(): void {
+      if (this.drawPending) return
+      this.drawPending = true
+      this.$nextTick(() => {
+        this.drawPending = false
+        this.safeGraph()
+      })
+    },
     highlightFor(posIndex: number): HighlightData {
       const highlight: HighlightData = { mass: this.MassValues[posIndex], mzs: [], charges: [], intensity: [] }
       // Deconvolved-only spectrum: no raw peaks to point at
@@ -810,7 +822,7 @@ export default defineComponent({
     },
     backButton(): void {
       this.resetManualState()
-      this.safeGraph()
+      this.requestGraph()
     },
     onPlotClick(eventData: { points?: Array<{ x: number }> }): void {
       if (!eventData.points || eventData.points.length === 0 || !this.args.massIdentifier) return
@@ -824,7 +836,7 @@ export default defineComponent({
           }
           this.manual = false
           this.setSelectedMass(i)
-          this.safeGraph()
+          this.requestGraph()
           break
         }
       }
@@ -835,13 +847,13 @@ export default defineComponent({
         if (newXRange[0] < 0) newXRange[0] = 0
         this.manual = true
         this.manualXRange = newXRange
-        this.safeGraph()
+        this.requestGraph()
       } else if (eventData['xaxis.autorange'] === true) {
         const xValues = this.xValues
         if (xValues.length === 0) return
         this.manual = true
         this.manualXRange = [Math.min(...xValues), Math.max(...xValues)]
-        this.safeGraph()
+        this.requestGraph()
       }
     },
     async safeGraph(): Promise<void> {

@@ -21,7 +21,7 @@
 
 <script lang="ts">
 import { defineComponent, watch, toRaw, type Component } from 'vue'
-import { useStreamlitDataStore } from './stores/streamlit-data'
+import { stableStringify, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
@@ -88,6 +88,10 @@ export default defineComponent({
         })
         return
       }
+      // A new data hash alone is nothing new for Python, which sent that data
+      const reportsNothingNew =
+        annotationsHash === lastSentAnnotationsHash &&
+        !streamlitDataStore.requestData
       lastSentCounter = currentCounter
       lastSentHash = currentHash ?? undefined
       lastSentAnnotationsHash = annotationsHash
@@ -95,6 +99,17 @@ export default defineComponent({
       // Deep clone to remove Vue reactivity proxies before sending to Streamlit
       // This prevents "Proxy object could not be cloned" errors
       const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
+
+      // The selection state is exactly what Python just sent (its counter moved
+      // because Python's did, or new data arrived): sending it back would only
+      // rerun the script, once per component on the page.
+      if (reportsNothingNew && stableStringify(plainState) === streamlitDataStore.lastPythonState) {
+        console.log('[App] sendStateToStreamlit: SKIPPED (state is Python\'s)', {
+          timestamp: Date.now(),
+          counter: currentCounter,
+        })
+        return
+      }
 
       // Find pagination identifier and value for logging
       const paginationIdentifier = Object.keys(plainState).find(k =>
@@ -127,12 +142,20 @@ export default defineComponent({
       console.log('[App] setComponentValue CALLED')
     }
 
-    // Debounced version for selection changes - batches rapid clicks
+    // Debounced version for selection changes - batches rapid clicks. A change
+    // after a quiet period is sent at once (a single click should not wait for
+    // the window); changes following it within the window are batched.
+    let lastDebouncedSend = 0
     const debouncedSendState = () => {
       if (sendStateTimeout) {
         clearTimeout(sendStateTimeout)
+      } else if (Date.now() - lastDebouncedSend >= DEBOUNCE_MS) {
+        lastDebouncedSend = Date.now()
+        sendStateToStreamlit()
+        return
       }
       sendStateTimeout = setTimeout(() => {
+        lastDebouncedSend = Date.now()
         sendStateToStreamlit()
         sendStateTimeout = null
       }, DEBOUNCE_MS)

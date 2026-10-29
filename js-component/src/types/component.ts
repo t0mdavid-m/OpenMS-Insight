@@ -68,6 +68,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   toggleFilters?: Array<{ label: string; column: string; default: boolean; group_column?: string | null }>
   /** Selections set (null clears) when a row click changes the selection */
   onSelect?: Record<string, unknown>
+  /** Clicking the selected row again clears the interactivity selections */
+  deselectOnReclick?: boolean
 }
 
 /**

@@ -527,6 +527,9 @@ export default defineComponent({
     settings(): FragmentSettings | undefined {
       return this.args.settings ?? undefined
     },
+    selectedTagKey(): string {
+      return JSON.stringify(this.selectedTag ?? null)
+    },
     selectedTag(): SequenceTag | undefined {
       return this.args.tag ?? undefined
     },
@@ -744,7 +747,8 @@ export default defineComponent({
       this.updateSettings()
     },
     // Selected sequence tag; cleared when the app resets it on a new entry.
-    selectedTag() {
+    // By value: the arguments arrive as a new object on every rerun
+    selectedTagKey() {
       this.updateTagPosition()
     },
     // Re-match fragments on a tolerance change (local state, no round-trip).

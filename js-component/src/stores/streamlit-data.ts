@@ -24,6 +24,15 @@ function isArrowVector(value: unknown): value is { length: number; get(index: nu
   )
 }
 
+/** JSON with sorted object keys, so that equal states give equal strings. */
+export function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v
+  )
+}
+
 export const useStreamlitDataStore = defineStore('streamlit-data', {
   state: () => ({
     renderData: null as RenderData | null,
@@ -34,6 +43,9 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
     annotations: null as { peak_id: number[]; highlight_color: string[]; annotation: string[] } | null,
     // Flag to request data from Python when cache is empty after page navigation
     requestData: false,
+    // The selection state Python sent last (stableStringify), to tell whether
+    // Vue's state holds anything Python does not know yet
+    lastPythonState: null as string | null,
   }),
 
   getters: {
@@ -81,6 +93,7 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       // all components see the correct counter value from Python. This prevents race conditions
       // where components with stale counters trigger spurious reruns that lose pagination state.
       if (pythonState) {
+        this.lastPythonState = stableStringify(pythonState)
         // Support both new separate counters and legacy single counter
         const pythonSelectionCounter = (pythonState.selection_counter as number) ?? (pythonState.counter as number) ?? 0
         const pythonPaginationCounter = (pythonState.pagination_counter as number) ?? (pythonState.counter as number) ?? 0

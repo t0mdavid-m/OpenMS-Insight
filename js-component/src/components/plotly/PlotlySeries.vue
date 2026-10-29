@@ -35,7 +35,15 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     return { streamlitDataStore, selectionStore, uniqueId: `series-plot-${++plotIdCounter}` }
   },
+  data() {
+    return {
+      drawPending: false,
+    }
+  },
   computed: {
+    argsKey(): string {
+      return JSON.stringify(this.args)
+    },
     id(): string {
       return this.uniqueId
     },
@@ -114,21 +122,29 @@ export default defineComponent({
   watch: {
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
-        this.renderPlot()
+        this.requestRender()
       },
       deep: true,
     },
-    args: {
-      handler() {
-        this.renderPlot()
-      },
-      deep: true,
+    // By value: the arguments arrive as a new object on every rerun
+    argsKey() {
+      this.requestRender()
     },
   },
   mounted() {
-    this.$nextTick(() => this.renderPlot())
+    this.requestRender()
   },
   methods: {
+    /** Draw once per tick: one update often changes several watched values
+     * (the data and the selection), and each drawing costs a full Plotly render. */
+    requestRender(): void {
+      if (this.drawPending) return
+      this.drawPending = true
+      this.$nextTick(() => {
+        this.drawPending = false
+        this.renderPlot()
+      })
+    },
     async renderPlot(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return

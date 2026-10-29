@@ -43,7 +43,15 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     return { streamlitDataStore, selectionStore, uniqueId: `plot3d-${++plotIdCounter}` }
   },
+  data() {
+    return {
+      drawPending: false,
+    }
+  },
   computed: {
+    argsKey(): string {
+      return JSON.stringify(this.args)
+    },
     id(): string {
       return this.uniqueId
     },
@@ -178,29 +186,40 @@ export default defineComponent({
   watch: {
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
-        this.renderPlot()
+        this.requestRender()
       },
       deep: true,
     },
     title() {
-      this.renderPlot()
+      this.requestRender()
     },
-    args: {
-      handler() {
-        this.renderPlot()
-      },
-      deep: true,
+    // By value: the arguments arrive as a new object on every rerun
+    argsKey() {
+      this.requestRender()
     },
   },
   mounted() {
-    this.$nextTick(() => this.renderPlot())
+    this.requestRender()
   },
   methods: {
+    /** Draw once per update: one update often changes several watched values
+     * (the data and the selection), and each drawing costs a full Plotly render.
+     * Drawn in a task of its own, so the other views of the page, which share
+     * this thread and receive the same update, are not held up by the scene. */
+    requestRender(): void {
+      if (this.drawPending) return
+      this.drawPending = true
+      setTimeout(() => {
+        this.drawPending = false
+        this.renderPlot()
+      }, 0)
+    },
     async renderPlot(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
       const height = this.args.height || 800
-      await Plotly.newPlot(element, this.traces, this.layout, {
+      // react keeps the WebGL scene of the previous render; newPlot builds a new one
+      await Plotly.react(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: [
           {

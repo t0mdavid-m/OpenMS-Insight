@@ -1,9 +1,12 @@
 """Bridge between Python components and Vue frontend."""
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import logging
 import os
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -64,6 +67,13 @@ _vue_component_func = None
 # Vue's echoed hash doesn't match the current data hash
 _VUE_ECHOED_HASH_KEY = "_svc_vue_echoed_hashes"
 
+# Session state key for the data hash last sent to each component. Data the
+# component already has is not sent again (see _render_component).
+_SENT_HASH_KEY = "_svc_sent_hashes"
+# Per component: the scope (see Table.auto_selection_scope) its first row was
+# last selected in, or selected by the user in
+_AUTO_SELECTION_SCOPE_KEY = "_svc_auto_selection_scopes"
+
 # Session state key for per-component data cache
 # Each component stores exactly one entry (current filter state)
 _COMPONENT_DATA_CACHE_KEY = "_svc_component_data_cache"
@@ -77,6 +87,10 @@ _COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
 # ALL hashes on the next render so all components get data in one rerun
 _BATCH_RESEND_KEY = "_svc_batch_resend"
 
+
+# Payload entries that ask Vue to act (not part of the data hash): a payload that
+# carries one is always sent
+_NAVIGATION_KEYS = ("_navigate_to_page", "_target_row_index")
 
 # Key under which a component's cache build is folded into its payload cache key.
 # Leading underscores keep it clear of state identifiers, which the key also holds.
@@ -452,6 +466,99 @@ def _get_validation_filter_groups(
     ]
 
 
+def _apply_auto_selection(
+    component: "BaseComponent",
+    component_id: str,
+    selection: dict[str, Any],
+    state_manager: "StateManager",
+) -> bool:
+    """
+    Set each identifier of a component's default selection that has no value.
+
+    A component that lets the user clear its selection reports the scope its
+    rows were selected in (its filter values); it is not selected again in the
+    scope the user cleared it in, only once the scope changes.
+
+    Returns whether the state changed.
+    """
+    if not selection:
+        return False
+    scope_of = getattr(component, "auto_selection_scope", None)
+    scope = scope_of(state_manager.get_state_for_vue()) if scope_of else None
+    if scope is not None:
+        scopes = st.session_state.setdefault(_AUTO_SELECTION_SCOPE_KEY, {})
+        selected = any(
+            state_manager.get_selection(identifier) is not None
+            for identifier in selection
+        )
+        if selected or scopes.get(component_id) == scope:
+            scopes[component_id] = scope
+            return False
+        scopes[component_id] = scope
+
+    state_changed = False
+    for identifier, value in selection.items():
+        if state_manager.get_selection(identifier) is None:
+            state_manager.set_selection(identifier, value)
+            state_changed = True
+    return state_changed
+
+
+def _prefetch(
+    component: "BaseComponent",
+    component_id: str,
+    state_manager: "StateManager",
+    state: dict[str, Any],
+) -> tuple[dict[str, Any], str, bool] | None:
+    """
+    Data for the current state when no payload is cached for it, inside
+    defer_reruns() only (else None).
+
+    Rendered one after another, a component that sees a selection made earlier in
+    the same run has no payload cached for it. Outside defer_reruns() it reruns
+    the script at once and sends the data then. Inside, the rerun only comes at
+    the end, so the data is computed now and sent in this run.
+
+    Returns (payload, hash, whether the state changed), or None when the data
+    cannot be sent yet: a filter has no value, or preparing the data changed the
+    state it depends on (e.g. table navigation).
+    """
+    if _deferred_rerun.get() is None:
+        return None
+    filters = getattr(component, "_filters", None) or {}
+    filter_defaults = getattr(component, "_filter_defaults", None) or {}
+    if any(
+        state.get(identifier) is None and identifier not in filter_defaults
+        for identifier in filters
+    ):
+        return None
+
+    state_keys = set(component.get_state_dependencies())
+    cache_key = _payload_cache_key(component, state, state_keys)
+    vue_data, data_hash = _prepare_vue_data_cached(
+        component, component_id, cache_key, {k: state.get(k) for k in state_keys}
+    )
+    after = state_manager.get_state_for_vue()
+    if _payload_cache_key(component, after, state_keys) != cache_key:
+        return None
+
+    state_changed = _apply_auto_selection(
+        component, component_id, vue_data.pop("_auto_selection", {}), state_manager
+    )
+
+    payload: dict[str, Any] = {}
+    for data_key, value in vue_data.items():
+        if data_key == "_hash":
+            continue
+        if isinstance(value, pl.LazyFrame):
+            payload[data_key] = value.collect().to_pandas()
+        elif isinstance(value, pl.DataFrame):
+            payload[data_key] = value.to_pandas()
+        else:
+            payload[data_key] = value
+    return payload, data_hash, state_changed
+
+
 def _validate_interactivity_selections(
     component: "BaseComponent",
     state_manager: "StateManager",
@@ -595,6 +702,40 @@ def _validate_interactivity_selections(
     return state_changed
 
 
+# Set inside defer_reruns(): components record there that they need a rerun
+# instead of rerunning the script themselves
+_deferred_rerun: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar(
+    "openms_insight_deferred_rerun", default=None
+)
+
+
+@contextlib.contextmanager
+def defer_reruns() -> Iterator[None]:
+    """
+    Render several components with at most one rerun, after the last of them.
+
+    A component whose selection or data changed reruns the script so that every
+    component gets the new state. Rendered one after another, each component
+    that only now sees a new selection (e.g. the views of a table that was just
+    clicked) reruns the script again, so one click can cost one rerun per
+    component. Inside this block they all render first, with the state updated
+    in place, and the script reruns once at the end if any of them asked for it.
+
+    Example:
+        with defer_reruns():
+            table(key="table", state_manager=state_manager)
+            plot(key="plot", state_manager=state_manager)
+    """
+    pending = [False]
+    token = _deferred_rerun.set(pending)
+    try:
+        yield
+    finally:
+        _deferred_rerun.reset(token)
+    if pending[0]:
+        st.rerun()
+
+
 def render_component(
     component: "BaseComponent",
     state_manager: "StateManager",
@@ -657,11 +798,14 @@ def _render_component(
     # Batch resend: if any component requested data in previous run, clear ALL hashes
     if st.session_state.get(_BATCH_RESEND_KEY):
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
+        st.session_state[_SENT_HASH_KEY] = {}
         st.session_state.pop(_BATCH_RESEND_KEY, None)
 
     # Initialize hash cache in session state if needed
     if _VUE_ECHOED_HASH_KEY not in st.session_state:
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
+    if _SENT_HASH_KEY not in st.session_state:
+        st.session_state[_SENT_HASH_KEY] = {}
 
     # === PHASE 1: Get CACHED data from previous render ===
     cache = _get_component_cache()
@@ -671,12 +815,15 @@ def _render_component(
     initial_state = state_manager.get_state_for_vue()
 
     # Pre-compute initial selections BEFORE Vue renders (for first render only)
+    initial_selection_changed = False
     if hasattr(component, "get_initial_selection"):
         initial_selection = component.get_initial_selection(initial_state)
-        if initial_selection:
-            for identifier, value in initial_selection.items():
-                state_manager.set_selection(identifier, value)
-            initial_state = state_manager.get_state_for_vue()
+        if _apply_auto_selection(
+            component, component_id, initial_selection or {}, state_manager
+        ):
+            new_state = state_manager.get_state_for_vue()
+            initial_selection_changed = new_state != initial_state
+            initial_state = new_state
 
     # Compute current filter state for cache validity check
     # This tells us what state the component SHOULD have data for
@@ -688,6 +835,12 @@ def _render_component(
     # - Before: Always sent cached data, even if stale (page 38 when Vue wants page 1)
     # - Now: Only send if cache matches current state AND annotation state matches
     cache_valid = False
+    # Components rendered before this one have not seen the initial selection.
+    # Without defer_reruns() the cache miss below reruns anyway; with it, a
+    # prefetched payload would not, so the selection asks for the rerun itself.
+    prefetch_changed_state = (
+        initial_selection_changed and _deferred_rerun.get() is not None
+    )
     current_ann_hash = _compute_annotation_hash(component)
 
     if cached_entry is not None:
@@ -711,7 +864,28 @@ def _render_component(
             )
 
     # Build payload - only send data if cache is valid for current state
-    if cache_valid:
+    if (
+        cache_valid
+        and st.session_state[_SENT_HASH_KEY].get(key) == cached_hash
+        and not any(k in cached_data for k in _NAVIGATION_KEYS)
+    ):
+        # Vue already has this data (it was sent in an earlier run): send the
+        # state and the component arguments only. Resending the data on every
+        # rerun made each view parse and redraw it again, once per rerun. A
+        # component that lost its data (e.g. remounted) asks for it with
+        # _requestData, which clears the sent hashes.
+        data_payload = {
+            "selection_store": initial_state,
+            "hash": cached_hash,
+            "dataChanged": False,
+            "awaitingFilter": False,
+            **(
+                {"_plotConfig": cached_data["_plotConfig"]}
+                if "_plotConfig" in cached_data
+                else {}
+            ),
+        }
+    elif cache_valid:
         # Cache HIT - send cached data (it's correct for current state)
         data_payload = {
             **cached_data,
@@ -729,6 +903,22 @@ def _render_component(
                     f"sending data with hash={cached_hash[:8]}, "
                     f"pagination={initial_state.get(pagination_key)}"
                 )
+    elif (
+        prefetched := _prefetch(component, component_id, state_manager, initial_state)
+    ) is not None:
+        # Inside defer_reruns(): the data for the current state, computed now
+        # and sent in this run rather than after the rerun
+        prefetched_data, prefetched_hash, auto_selected = prefetched
+        prefetch_changed_state = prefetch_changed_state or auto_selected
+        initial_state = state_manager.get_state_for_vue()
+        data_payload = {
+            **prefetched_data,
+            "selection_store": initial_state,
+            "hash": prefetched_hash,
+            "dataChanged": True,
+            "awaitingFilter": False,
+        }
+        cache_valid = True
     else:
         # Cache MISS (no cache, or state mismatch) - don't send stale data
         # Vue will show loading or use its local cache
@@ -743,6 +933,9 @@ def _render_component(
                 f"[Bridge:{component._cache_id}] Phase1: Cache MISS, "
                 f"not sending data (cached_entry={cached_entry is not None})"
             )
+
+    if data_payload["dataChanged"]:
+        st.session_state[_SENT_HASH_KEY][key] = data_payload["hash"]
 
     # Component layout: [[{componentArgs: {...}}]]
     components = [[{"componentArgs": component_args}]]
@@ -766,7 +959,7 @@ def _render_component(
     result = vue_func(**kwargs)
 
     # === PHASE 3: Apply Vue's request FIRST ===
-    state_changed = False
+    state_changed = prefetch_changed_state
     if result is not None:
         # Debug logging: what we received from Vue
         if _DEBUG_STATE_SYNC:
@@ -786,8 +979,11 @@ def _render_component(
         state_changed = state_manager.update_from_vue(result)
 
         # Check if Vue is requesting data resend
+        # Its data is only sent with the next render, which this run has passed:
+        # rerun, or a view that missed its data keeps waiting for it
         if result.get("_requestData", False):
             st.session_state[_BATCH_RESEND_KEY] = True
+            state_changed = True
 
     # === PHASE 4: Get UPDATED state and prepare data ===
     # Now state reflects Vue's request (e.g., new page number after click)
@@ -838,11 +1034,10 @@ def _render_component(
 
         # Apply auto-selection from first row (for tables with interactivity)
         # This ensures downstream components receive data when a filter changes
-        auto_selection = vue_data.pop("_auto_selection", {})
-        for identifier, value in auto_selection.items():
-            if state_manager.get_selection(identifier) is None:
-                state_manager.set_selection(identifier, value)
-                state_changed = True
+        if _apply_auto_selection(
+            component, component_id, vue_data.pop("_auto_selection", {}), state_manager
+        ):
+            state_changed = True
 
         # Check if Python overrode state during _prepare_vue_data
         # (e.g., table.py sets page to last page after sort)
@@ -945,7 +1140,11 @@ def _render_component(
                 f"[Bridge:{component._cache_id}] Phase6: RERUN triggered, "
                 f"next render will have cache HIT"
             )
-        st.rerun()
+        pending = _deferred_rerun.get()
+        if pending is not None:
+            pending[0] = True
+        else:
+            st.rerun()
     elif _DEBUG_STATE_SYNC:
         _logger.warning(
             f"[Bridge:{component._cache_id}] Phase6: No rerun needed, state_changed=False"

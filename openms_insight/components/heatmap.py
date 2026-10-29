@@ -100,6 +100,7 @@ class Heatmap(BaseComponent):
         log_scale: bool = True,
         low_values_on_top: bool = False,
         intensity_label: str | None = None,
+        levels: list[pl.LazyFrame] | None = None,
         **kwargs,
     ):
         """
@@ -161,8 +162,18 @@ class Heatmap(BaseComponent):
                 preserved during downsampling and appear on top of high values.
             intensity_label: Custom label for the colorbar. Default is "Intensity".
                 Useful when displaying non-intensity values like scores or counts.
+            levels: Downsampled versions of ``data`` the caller has computed already,
+                smallest first. They are stored as the resolution levels as given,
+                with ``data`` as the full-resolution level, instead of being built
+                from ``data``. Each needs the columns of ``data``. Requires ``data``
+                and cannot be combined with ``categorical_filters``.
             **kwargs: Additional configuration options
         """
+        if levels is not None and data is None:
+            raise ValueError("levels= requires data= to be provided")
+        if levels is not None and categorical_filters:
+            raise ValueError("levels= cannot be combined with categorical_filters")
+        self._precomputed_levels = levels
         self._x_column = x_column
         self._y_column = y_column
         self._intensity_column = intensity_column
@@ -243,6 +254,12 @@ class Heatmap(BaseComponent):
             "low_values_on_top": self._low_values_on_top,
             "intensity_label": self._intensity_label,
             # Note: category_colors is render-time styling, doesn't affect cache
+            # Only when set, so caches built without levels keep their hash
+            **(
+                {"precomputed_levels": len(self._precomputed_levels)}
+                if self._precomputed_levels is not None
+                else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -298,6 +315,8 @@ class Heatmap(BaseComponent):
         """
         if self._categorical_filters:
             self._preprocess_with_categorical_filters()
+        elif self._precomputed_levels is not None:
+            self._preprocess_precomputed()
         elif self._use_streaming:
             self._preprocess_streaming()
         else:
@@ -643,6 +662,61 @@ class Heatmap(BaseComponent):
                 self._preprocessed_data[key] = value
 
         # Mark that files are already saved (base class should skip saving)
+        self._preprocessed_data["_files_already_saved"] = True
+
+    def _preprocess_precomputed(self) -> None:
+        """
+        Store the levels the caller downsampled, with the full data as the last.
+
+        Bins are still computed, because a zoomed view with more points than
+        min_points is downsampled at render time.
+        """
+        import sys
+
+        x_range, y_range = get_data_range(
+            self._raw_data,
+            self._x_column,
+            self._y_column,
+        )
+        self._preprocessed_data["x_range"] = x_range
+        self._preprocessed_data["y_range"] = y_range
+
+        if self._x_bins is None or self._y_bins is None:
+            self._x_bins, self._y_bins = compute_optimal_bins(
+                2 * self._min_points,
+                (0, self._display_aspect_ratio),
+                (0, 1.0),
+            )
+
+        self._preprocessed_data["total"] = (
+            self._raw_data.select(pl.len()).collect().item()
+        )
+
+        columns = self._raw_data.collect_schema().names()
+        levels = [
+            (level.lazy() if isinstance(level, pl.DataFrame) else level).select(columns)
+            for level in self._precomputed_levels
+        ]
+        self._preprocessed_data["level_sizes"] = [
+            level.select(pl.len()).collect().item() for level in levels
+        ]
+
+        cache_dir = self._cache_dir / "preprocessed"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for i, level in enumerate([*levels, self._raw_data]):
+            level_path = cache_dir / f"level_{i}.parquet"
+            with atomic_write(level_path) as tmp:
+                level.sort([self._x_column, self._y_column]).sink_parquet(
+                    tmp, compression="zstd"
+                )
+            self._preprocessed_data[f"level_{i}"] = pl.scan_parquet(level_path)
+        self._preprocessed_data["num_levels"] = len(levels) + 1
+        print(
+            f"[HEATMAP] Stored {len(levels)} precomputed levels "
+            f"{self._preprocessed_data['level_sizes']}",
+            file=sys.stderr,
+        )
+
         self._preprocessed_data["_files_already_saved"] = True
 
     def _preprocess_eager(self) -> None:
