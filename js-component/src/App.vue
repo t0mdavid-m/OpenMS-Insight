@@ -65,6 +65,8 @@ export default defineComponent({
     let lastSentCounter: number | undefined = undefined
     let lastSentHash: string | undefined = undefined
     let lastSentAnnotationsHash: string | undefined = undefined
+    let lastSentRequestedData = false
+    let dataRequests = 0
 
     // Debounce utility for selection state updates
     // This prevents rapid clicks from overwhelming Streamlit with reruns
@@ -88,10 +90,13 @@ export default defineComponent({
         })
         return
       }
-      // A new data hash alone is nothing new for Python, which sent that data
+      // A new data hash alone is nothing new for Python, which sent that data.
+      // After a data request it is: Streamlit keeps returning the last value
+      // sent, so a value still carrying the request would ask on every run.
       const reportsNothingNew =
         annotationsHash === lastSentAnnotationsHash &&
-        !streamlitDataStore.requestData
+        !streamlitDataStore.requestData &&
+        !lastSentRequestedData
       lastSentCounter = currentCounter
       lastSentHash = currentHash ?? undefined
       lastSentAnnotationsHash = annotationsHash
@@ -134,8 +139,10 @@ export default defineComponent({
         plainState._annotations = JSON.parse(JSON.stringify(currentAnnotations))
       }
       // Signal Python if we need data (cache miss after page navigation)
+      lastSentRequestedData = streamlitDataStore.requestData
       if (streamlitDataStore.requestData) {
-        plainState._requestData = true
+        // A new value per request, so Python can tell it from the kept one
+        plainState._requestData = ++dataRequests
         streamlitDataStore.clearRequestData()
       }
       Streamlit.setComponentValue(plainState)

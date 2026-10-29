@@ -70,6 +70,8 @@ _VUE_ECHOED_HASH_KEY = "_svc_vue_echoed_hashes"
 # Session state key for the data hash last sent to each component. Data the
 # component already has is not sent again (see _render_component).
 _SENT_HASH_KEY = "_svc_sent_hashes"
+# Per component: the last data request from Vue that was acted on
+_HANDLED_REQUESTS_KEY = "_svc_handled_data_requests"
 # Per component: the scope (see Table.auto_selection_scope) its first row was
 # last selected in, or selected by the user in
 _AUTO_SELECTION_SCOPE_KEY = "_svc_auto_selection_scopes"
@@ -979,9 +981,16 @@ def _render_component(
         state_changed = state_manager.update_from_vue(result)
 
         # Check if Vue is requesting data resend
-        # Its data is only sent with the next render, which this run has passed:
-        # rerun, or a view that missed its data keeps waiting for it
-        if result.get("_requestData", False):
+        # The data is only sent with the next render, which this run has passed:
+        # rerun, or a view that missed its data keeps waiting for it. Streamlit
+        # returns the last value Vue sent on every run, so each request (Vue
+        # numbers them) is acted on once; else every run would rerun again.
+        request = result.get("_requestData", False)
+        handled = st.session_state.setdefault(_HANDLED_REQUESTS_KEY, {})
+        if request is True:
+            st.session_state[_BATCH_RESEND_KEY] = True
+        elif request and handled.get(key) != request:
+            handled[key] = request
             st.session_state[_BATCH_RESEND_KEY] = True
             state_changed = True
 

@@ -200,7 +200,10 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       } else if (!dataChanged) {
         // Data unchanged - Python only sent hash and state, keep cached data
         // But first check if we actually have cached data (may be empty after page navigation)
-        const hasCache = Object.keys(this.dataForDrawing).length > 0
+        // A hash other than the one of the data held means data sent for it was
+        // lost (e.g. its message was dropped when a rerun started): ask again
+        const hasCache =
+          Object.keys(this.dataForDrawing).length > 0 && (!newHash || newHash === this.hash)
 
         console.log('[StreamlitDataStore] Using cached data branch:', {
           timestamp: Date.now(),
@@ -226,7 +229,8 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
             this.dataForDrawing._plotConfig = (newData.args as any)._plotConfig
           }
         } else {
-          // Cache is empty (e.g., after page navigation) - request data from Python
+          // Cache is empty (e.g., after page navigation) or holds older data -
+          // request data from Python
           console.warn('[StreamlitDataStore] Cache miss - requesting data from Python')
           this.requestData = true
           // Don't update renderData - wait for Python to resend with actual data

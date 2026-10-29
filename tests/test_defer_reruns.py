@@ -100,9 +100,16 @@ def test_data_request_resends_in_a_rerun(rerun, vue, temp_cache_dir):
     render_component(first, state, key="scans")
     assert vue.call_args.kwargs["dataChanged"] is False
 
-    vue.return_value = {"_requestData": True}
+    # Streamlit keeps returning the value Vue sent last, request included
+    vue.return_value = {"_requestData": 1}
     with pytest.raises(Rerun):
         render_component(first, state, key="scans")
-    vue.return_value = None
     render_component(first, state, key="scans")
     assert vue.call_args.kwargs["dataChanged"] is True
+    # ...and the kept request does not rerun or resend again
+    render_component(first, state, key="scans")
+    assert vue.call_args.kwargs["dataChanged"] is False
+
+    vue.return_value = {"_requestData": 2}
+    with pytest.raises(Rerun):
+        render_component(first, state, key="scans")
