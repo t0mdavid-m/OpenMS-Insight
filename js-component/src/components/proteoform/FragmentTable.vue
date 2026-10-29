@@ -373,7 +373,7 @@ export default defineComponent({
     onSelectedRowListener(row: number): void {
       console.log('🔍 [DEBUG] TabulatorTable onSelectedRowListener called with row:', row)
       console.log('🔍 [DEBUG] TabulatorTable tabulator instance available:', !!this.tabulator)
-      this.tabulator?.scrollToRow(row, 'top', false)
+      this.tabulator?.scrollToRow(row, 'top', false).catch(() => {})
       this.tabulator?.deselectRow()
       this.tabulator?.selectRow([row])
       console.log('🔍 [DEBUG] TabulatorTable calling onTableClick after selection')

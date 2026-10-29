@@ -12,6 +12,18 @@ import { Vector } from 'apache-arrow'
 import { useSelectionStore } from '@/stores/selection'
 import type { ComponentLayout, StreamlitData } from '@/types/component'
 
+/** An Arrow Vector, from this bundle's apache-arrow or another copy of it. */
+function isArrowVector(value: unknown): value is { length: number; get(index: number): unknown } {
+  if (value instanceof Vector) return true
+  if (value === null || typeof value !== 'object') return false
+  const candidate = value as { get?: unknown; length?: unknown; toArray?: unknown }
+  return (
+    typeof candidate.get === 'function' &&
+    typeof candidate.length === 'number' &&
+    typeof candidate.toArray === 'function'
+  )
+}
+
 export const useStreamlitDataStore = defineStore('streamlit-data', {
   state: () => ({
     renderData: null as RenderData | null,
@@ -292,8 +304,9 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       if (typeof value === 'bigint') {
         return Number(value)
       }
-      // Arrays are stored as vectors
-      if (value instanceof Vector) {
+      // Arrays are stored as vectors. streamlit-component-lib bundles its own
+      // apache-arrow, whose Vector class is not this one: recognise both.
+      if (isArrowVector(value)) {
         const result: unknown[] = []
         for (let i = 0; i < value.length; i++) {
           result.push(this.parseArrowValue(value.get(i)))

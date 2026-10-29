@@ -455,7 +455,7 @@ export default defineComponent({
         this.isNavigatingPages = true
         console.log(`[TabulatorTable ${this.args.title}] Set pendingTargetRowIndex:`, this.pendingTargetRowIndex)
         // Navigate to the page - selection will happen in paginationState watcher
-        ;(this.tabulator as any).setPage(newPage)
+        ;(this.tabulator as any).setPage(newPage).catch(() => {})
       }
     },
     // Watch pagination state to update table when server sends new data
@@ -508,7 +508,7 @@ export default defineComponent({
           tab.redraw(true)
           // Trigger setPage to refresh pagination counter (Showing X of Y rows)
           // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
-          tab.setPage(newState.page || 1)
+          tab.setPage(newState.page || 1).catch(() => {})
         }
 
         // Sync client's requested state with server's confirmed state
@@ -724,10 +724,11 @@ export default defineComponent({
               const selectedRows = this.tabulator.getSelectedRows()
               if (selectedRows.length > 0) {
                 // scrollToRow forces virtual DOM to calculate and render visible rows
-                this.tabulator.scrollToRow(selectedRows[0], 'center', false)
-              } else {
+                // (rejects when the row is not rendered, e.g. on a collapsed table)
+                this.tabulator.scrollToRow(selectedRows[0], 'center', false).catch(() => {})
+              } else if (this.tabulator.getRows().length > 0) {
                 // No selection - scroll to top to trigger render
-                this.tabulator.scrollToRow(this.tabulator.getRows()[0], 'top', false)
+                this.tabulator.scrollToRow(this.tabulator.getRows()[0], 'top', false).catch(() => {})
               }
             }
           }, 50)
@@ -1095,7 +1096,7 @@ export default defineComponent({
       if (rows && rows[targetIndex]) {
         this.tabulator.deselectRow()
         rows[targetIndex].select()
-        rows[targetIndex].scrollTo('center', false)
+        rows[targetIndex].scrollTo('center', false).catch(() => {})
         console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: SUCCESS - selected row ${targetIndex}`)
       }
     },
@@ -1139,7 +1140,7 @@ export default defineComponent({
               if (row) {
                 this.tabulator.deselectRow()
                 row.select()
-                row.scrollTo('center', false)
+                row.scrollTo('center', false).catch(() => {})
               }
             } else {
               // Store as pending - row may be on different page awaiting navigation
@@ -1181,10 +1182,10 @@ export default defineComponent({
               // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
               if (this.tabulator.options.pagination) {
                 this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                  row.scrollTo('center', false)
-                })
+                  row.scrollTo('center', false).catch(() => {})
+                }).catch(() => {})
               } else {
-                row.scrollTo('center', false)
+                row.scrollTo('center', false).catch(() => {})
               }
               // Successfully selected, clear any pending selection
               this.pendingSelection = null
@@ -1244,10 +1245,10 @@ export default defineComponent({
                 // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
                 if (this.tabulator?.options.pagination) {
                   this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                    row.scrollTo('center', false)
-                  })
+                    row.scrollTo('center', false).catch(() => {})
+                  }).catch(() => {})
                 } else {
-                  row.scrollTo('center', false)
+                  row.scrollTo('center', false).catch(() => {})
                 }
                 selectedFromState = true
                 // Clear pending selection since we successfully applied it
@@ -1280,10 +1281,10 @@ export default defineComponent({
                 // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
                 if (this.tabulator?.options.pagination) {
                   this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                    row.scrollTo('center', false)
-                  })
+                    row.scrollTo('center', false).catch(() => {})
+                  }).catch(() => {})
                 } else {
-                  row.scrollTo('center', false)
+                  row.scrollTo('center', false).catch(() => {})
                 }
                 // KEY: Don't call updateSelection - Python already set it
                 selectedFromState = true
@@ -1500,7 +1501,7 @@ export default defineComponent({
               tab.redraw(true)
               // Trigger setPage to refresh pagination counter (Showing X of Y rows)
               // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
-              tab.setPage(targetPage || tab.getPage() || 1)
+              tab.setPage(targetPage || tab.getPage() || 1).catch(() => {})
             } catch (error) {
               console.error('[TabulatorTable] Error setting pagination limits:', error)
             }
@@ -1512,7 +1513,7 @@ export default defineComponent({
         // Even for page 1, this is necessary because replaceData() + the initial AJAX resolution
         // leaves Tabulator in an inconsistent state without this explicit setPage() call.
         if (this.isServerSidePagination && targetPage && this.isNavigatingPages) {
-          ;(this.tabulator as any).setPage(targetPage)
+          ;(this.tabulator as any).setPage(targetPage).catch(() => {})
         }
 
         // Only sync selection if not navigating pages
@@ -2311,7 +2312,7 @@ export default defineComponent({
         const rowId = this.preparedTableData[rowIndex][indexField]
         const row = this.tabulator?.getRow(rowId)
         if (row) {
-          row.scrollTo('top', false)
+          row.scrollTo('top', false).catch(() => {})
           this.tabulator?.deselectRow()
           row.select()
           // Update selection store

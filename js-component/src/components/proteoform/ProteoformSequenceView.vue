@@ -545,6 +545,16 @@ export default defineComponent({
     sequence(): string[] {
       return this.entry?.sequence ?? []
     },
+    /** Identifies the proteoform shown. Data arriving again after a rerun builds
+     * new objects for the same proteoform, which must not reset the view. */
+    entryKey(): string {
+      const entry = this.entry
+      if (!entry) return ''
+      return JSON.stringify([
+        entry.sequence, entry.proteoform_start, entry.proteoform_end, entry.theoretical_mass,
+        entry.computed_mass, entry.fixed_modifications, entry.modifications,
+      ])
+    },
     sequence_start_reported(): number {
       return this.entry?.proteoform_start ?? 0
     },
@@ -729,7 +739,7 @@ export default defineComponent({
     // KEPT — sole trigger for FLASHDeconv custom-sequence entry; also uniquely clears
     // the stale AA selection and re-pulls settings. Primary FLASHTnT protein-switch
     // trigger (sequence_data is re-keyed by proteinIndex).
-    sequence() {
+    entryKey() {
       this.setSelectedAA(undefined)
       this.recomputeFragments()
       this.updateSettings()
