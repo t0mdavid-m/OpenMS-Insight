@@ -33,6 +33,15 @@ export function stableStringify(value: unknown): string {
   )
 }
 
+const COUNTER_KEYS = new Set(['counter', 'selection_counter', 'pagination_counter'])
+
+/** The selection values of a state, without its counters (stableStringify). */
+export function stateValues(state: Record<string, unknown>): string {
+  return stableStringify(
+    Object.fromEntries(Object.entries(state).filter(([key]) => !COUNTER_KEYS.has(key)))
+  )
+}
+
 export const useStreamlitDataStore = defineStore('streamlit-data', {
   state: () => ({
     renderData: null as RenderData | null,
@@ -93,7 +102,7 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       // all components see the correct counter value from Python. This prevents race conditions
       // where components with stale counters trigger spurious reruns that lose pagination state.
       if (pythonState) {
-        this.lastPythonState = stableStringify(pythonState)
+        this.lastPythonState = stateValues(pythonState)
         // Support both new separate counters and legacy single counter
         const pythonSelectionCounter = (pythonState.selection_counter as number) ?? (pythonState.counter as number) ?? 0
         const pythonPaginationCounter = (pythonState.pagination_counter as number) ?? (pythonState.counter as number) ?? 0
@@ -141,6 +150,23 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
             }
           }
         })
+      }
+
+      // Data of the hash already held: sent again because Python could not
+      // know whether the earlier message arrived (a rerun drops undelivered ones)
+      const alreadyHeld =
+        dataChanged && !!newHash && newHash === this.hash &&
+        Object.keys(this.dataForDrawing).length > 0
+      if (alreadyHeld) {
+        if (!this.renderData) {
+          this.renderData = newData
+        } else if (newData.args.components) {
+          this.renderData.args.components = newData.args.components
+        }
+        for (const [key, value] of Object.entries(newData.args as StreamlitData)) {
+          if (!(value instanceof ArrowTable)) this.dataForDrawing[key] = value
+        }
+        return
       }
 
       // Only process data if Python says it changed (optimization to avoid re-parsing same data)

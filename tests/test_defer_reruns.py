@@ -113,3 +113,25 @@ def test_data_request_resends_in_a_rerun(rerun, vue, temp_cache_dir):
     vue.return_value = {"_requestData": 2}
     with pytest.raises(Rerun):
         render_component(first, state, key="scans")
+
+
+def test_data_sent_in_a_run_that_reruns_is_sent_again(rerun, vue, temp_cache_dir):
+    """Starting a run drops the messages of the previous run that have not been
+    delivered, so the data sent in a run that reruns is not counted as sent."""
+    state = StateManager(session_key="dropped")
+    first, second = _tables(temp_cache_dir)
+    with pytest.raises(Rerun):
+        with defer_reruns():
+            render_component(first, state, key="scans")
+            render_component(second, state, key="rows")
+    assert vue.call_args.kwargs["dataChanged"] is True
+
+    with defer_reruns():
+        render_component(first, state, key="scans")
+        render_component(second, state, key="rows")
+    assert vue.call_args.kwargs["dataChanged"] is True  # sent again
+
+    with defer_reruns():
+        render_component(first, state, key="scans")
+        render_component(second, state, key="rows")
+    assert vue.call_args.kwargs["dataChanged"] is False

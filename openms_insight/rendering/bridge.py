@@ -70,6 +70,9 @@ _VUE_ECHOED_HASH_KEY = "_svc_vue_echoed_hashes"
 # Session state key for the data hash last sent to each component. Data the
 # component already has is not sent again (see _render_component).
 _SENT_HASH_KEY = "_svc_sent_hashes"
+# The hashes recorded in _SENT_HASH_KEY during the current script run: (run, {key:
+# hash before the run})
+_RUN_SENT_KEY = "_svc_run_sent_hashes"
 # Per component: the last data request from Vue that was acted on
 _HANDLED_REQUESTS_KEY = "_svc_handled_data_requests"
 # Per component: the scope (see Table.auto_selection_scope) its first row was
@@ -711,6 +714,44 @@ _deferred_rerun: contextvars.ContextVar[list[bool] | None] = contextvars.Context
 )
 
 
+def _sent_this_run() -> dict[str, Any]:
+    """The sent hashes recorded during this script run, with their earlier values."""
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+    ctx = get_script_run_ctx()
+    # A new set per run (ScriptRunContext.reset), so it identifies the run
+    run = getattr(ctx, "widget_ids_this_run", None)
+    entry = st.session_state.get(_RUN_SENT_KEY)
+    if entry is None or entry[0] is not run:
+        entry = (run, {})
+        st.session_state[_RUN_SENT_KEY] = entry
+    return entry[1]
+
+
+def _record_sent(key: str, data_hash: str) -> None:
+    sent = st.session_state[_SENT_HASH_KEY]
+    _sent_this_run().setdefault(key, sent.get(key))
+    sent[key] = data_hash
+
+
+def _rerun() -> None:
+    """
+    Rerun the script, forgetting the data sent in this run.
+
+    Starting a run drops the messages of the previous one that have not reached
+    the browser yet, so the data sent in this run may never arrive. The next
+    run sends it again; a view that got it already does not parse it twice.
+    """
+    sent = st.session_state.get(_SENT_HASH_KEY, {})
+    for key, before in _sent_this_run().items():
+        if before is None:
+            sent.pop(key, None)
+        else:
+            sent[key] = before
+    _sent_this_run().clear()
+    st.rerun()
+
+
 @contextlib.contextmanager
 def defer_reruns() -> Iterator[None]:
     """
@@ -735,7 +776,7 @@ def defer_reruns() -> Iterator[None]:
     finally:
         _deferred_rerun.reset(token)
     if pending[0]:
-        st.rerun()
+        _rerun()
 
 
 def render_component(
@@ -801,6 +842,7 @@ def _render_component(
     if st.session_state.get(_BATCH_RESEND_KEY):
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
         st.session_state[_SENT_HASH_KEY] = {}
+        _sent_this_run().clear()
         st.session_state.pop(_BATCH_RESEND_KEY, None)
 
     # Initialize hash cache in session state if needed
@@ -937,7 +979,7 @@ def _render_component(
             )
 
     if data_payload["dataChanged"]:
-        st.session_state[_SENT_HASH_KEY][key] = data_payload["hash"]
+        _record_sent(key, data_payload["hash"])
 
     # Component layout: [[{componentArgs: {...}}]]
     components = [[{"componentArgs": component_args}]]
@@ -1153,7 +1195,7 @@ def _render_component(
         if pending is not None:
             pending[0] = True
         else:
-            st.rerun()
+            _rerun()
     elif _DEBUG_STATE_SYNC:
         _logger.warning(
             f"[Bridge:{component._cache_id}] Phase6: No rerun needed, state_changed=False"

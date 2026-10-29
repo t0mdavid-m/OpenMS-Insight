@@ -21,7 +21,7 @@
 
 <script lang="ts">
 import { defineComponent, watch, toRaw, type Component } from 'vue'
-import { stableStringify, useStreamlitDataStore } from './stores/streamlit-data'
+import { stateValues, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
@@ -105,10 +105,11 @@ export default defineComponent({
       // This prevents "Proxy object could not be cloned" errors
       const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
 
-      // The selection state is exactly what Python just sent (its counter moved
-      // because Python's did, or new data arrived): sending it back would only
-      // rerun the script, once per component on the page.
-      if (reportsNothingNew && stableStringify(plainState) === streamlitDataStore.lastPythonState) {
+      // The selection values are exactly what Python just sent (its counter
+      // moved because Python's did, a view wrote back a value it already had, or
+      // new data arrived): sending them back would only rerun the script, once
+      // per component on the page.
+      if (reportsNothingNew && stateValues(plainState) === streamlitDataStore.lastPythonState) {
         console.log('[App] sendStateToStreamlit: SKIPPED (state is Python\'s)', {
           timestamp: Date.now(),
           counter: currentCounter,
