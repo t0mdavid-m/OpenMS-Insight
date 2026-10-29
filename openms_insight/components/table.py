@@ -880,11 +880,7 @@ class Table(BaseComponent):
                             target_page = (row_num // page_size) + 1
                             if target_page != page:
                                 # Update pagination state directly (same as Vue would)
-                                from openms_insight.core.state import (
-                                    get_default_state_manager,
-                                )
-
-                                state_manager = get_default_state_manager()
+                                state_manager = self._active_state_manager()
                                 updated_pagination = {
                                     **pagination_state,
                                     "page": target_page,
@@ -918,11 +914,7 @@ class Table(BaseComponent):
                                     if hasattr(first_value, "item"):
                                         first_value = first_value.item()
 
-                                    from openms_insight.core.state import (
-                                        get_default_state_manager,
-                                    )
-
-                                    state_manager = get_default_state_manager()
+                                    state_manager = self._active_state_manager()
 
                                     # Update selection to first row
                                     state_manager.set_selection(
@@ -1047,6 +1039,21 @@ class Table(BaseComponent):
             if replacement.height > 0:
                 return replacement
         return None
+
+    def _active_state_manager(self):
+        """The StateManager this table is being rendered with.
+
+        Navigation (moving to the selected row's page, replacing a selection that
+        was filtered out) writes state while preparing data. It must go to the
+        manager the table was rendered with, not the default one, so that tables
+        rendered with their own StateManager work.
+        """
+        state_manager = getattr(self, "_render_state_manager", None)
+        if state_manager is None:
+            from openms_insight.core.state import get_default_state_manager
+
+            state_manager = get_default_state_manager()
+        return state_manager
 
     def _apply_range_filters(
         self, data: pl.LazyFrame, state: dict[str, Any]

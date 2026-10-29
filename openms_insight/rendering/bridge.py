@@ -625,6 +625,10 @@ def render_component(
     Returns:
         The value returned by the Vue component
     """
+    # Components that write state while preparing data (Table navigation) write
+    # it to the manager they are rendered with
+    component._render_state_manager = state_manager
+
     # === PHASE 0: Generate key and get component info ===
     if key is None:
         interactivity_str = json.dumps(component._interactivity or {}, sort_keys=True)
