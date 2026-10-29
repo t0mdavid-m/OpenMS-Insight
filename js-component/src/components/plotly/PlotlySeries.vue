@@ -165,7 +165,7 @@ export default defineComponent({
       if (row === undefined) return
       for (const [identifier, column] of Object.entries(interactivity)) {
         const values = this.columns[column] as unknown[] | undefined
-        // Skip no-op writes (see ProteoformSequenceView)
+        // Skip no-op writes (see ProteinSequenceView)
         if (values && this.selectionStore.$state[identifier] !== values[row]) {
           this.selectionStore.updateSelection(identifier, values[row])
         }

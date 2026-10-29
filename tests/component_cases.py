@@ -19,7 +19,7 @@ from openms_insight import (
     LinePlot,
     PCAPlot,
     Plot3D,
-    ProteoformSequenceView,
+    ProteinSequenceView,
     SeriesPlot,
     Table,
     VolcanoPlot,
@@ -64,7 +64,7 @@ COMPONENT_CASES = [
     (
         SeriesPlot,
         "sample_series_data",
-        {"x_column": "QScore", "y_column": "Density", "series_column": "kind"},
+        {"x_column": "Score", "y_column": "Density", "series_column": "kind"},
         {},
     ),
     (
@@ -87,9 +87,9 @@ COMPONENT_CASES = [
         {},
     ),
     (
-        ProteoformSequenceView,
-        "sample_proteoform_data",
-        {"filters": {"protein": "proteoform_index"}},
+        ProteinSequenceView,
+        "sample_protein_sequence_data",
+        {"filters": {"protein": "hit_index"}},
         {},
     ),
 ]

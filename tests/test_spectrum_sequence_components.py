@@ -1,6 +1,6 @@
-"""Tests for the top-down proteomics components and the Table options they need.
+"""Tests for the spectrum and sequence components and the Table options they need.
 
-Covers SeriesPlot, Plot3D, DeconvolvedSpectrum, ProteoformSequenceView, the
+Covers SeriesPlot, Plot3D, DeconvolvedSpectrum, ProteinSequenceView, the
 Table options toggle_filters / range_filters / on_select and float_precision.
 """
 
@@ -14,7 +14,7 @@ import pytest
 from openms_insight import (
     DeconvolvedSpectrum,
     Plot3D,
-    ProteoformSequenceView,
+    ProteinSequenceView,
     SeriesPlot,
     Table,
 )
@@ -22,7 +22,7 @@ from openms_insight import (
 
 @pytest.fixture
 def protein_table_data() -> pl.LazyFrame:
-    """Proteoforms, two per scan, the best one flagged."""
+    """Identifications, two per scan, the best one flagged."""
     return pl.LazyFrame(
         {
             "index": [0, 1, 2, 3],
@@ -210,10 +210,10 @@ class TestSeriesPlot:
         plot = SeriesPlot(
             cache_id="fdr",
             data=sample_series_data,
-            x_column="QScore",
+            x_column="Score",
             y_column="Density",
             series_column="kind",
-            series_names={"target": "Target QScores", "decoy": "Decoy QScores"},
+            series_names={"target": "Target scores", "decoy": "Decoy scores"},
             series_colors={"target": "green", "decoy": "red"},
             title="FDR Plot",
             cache_path=str(temp_cache_dir),
@@ -222,8 +222,8 @@ class TestSeriesPlot:
         assert args["componentType"] == "PlotlySeries"
         # Pairs keep the legend order through JSON
         assert args["seriesNames"] == [
-            ["target", "Target QScores"],
-            ["decoy", "Decoy QScores"],
+            ["target", "Target scores"],
+            ["decoy", "Decoy scores"],
         ]
         data = plot._prepare_vue_data({})
         assert len(data["plotData"]) == 6
@@ -306,7 +306,7 @@ class TestDeconvolvedSpectrum:
         assert spectrum.get_state_dependencies() == ["scan"]
         df = spectrum._prepare_vue_data({"scan": 0, "mass": 1})["plotData"]
         assert len(df) == 1
-        assert list(df["MonoMass"][0]) == [1000.0, 2000.123456]
+        assert list(df["masses"][0]) == [1000.0, 2000.123456]
         assert len(spectrum._prepare_vue_data({})["plotData"]) == 0
 
         args = spectrum._get_component_args()
@@ -316,10 +316,10 @@ class TestDeconvolvedSpectrum:
 
     def test_ladder(self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra):
         spectrum = DeconvolvedSpectrum(
-            cache_id="augmented",
+            cache_id="ladder",
             data=sample_deconvolved_spectra,
             filters={"scan": "scan_idx"},
-            view="augmented",
+            view="ladder",
             cache_path=str(temp_cache_dir),
         )
         spectrum.set_ladder([1000, 1057.02], "G", selected_index=0, key=7)
@@ -334,7 +334,7 @@ class TestDeconvolvedSpectrum:
 
     def test_deconvolved_view_needs_no_peaks(self, mock_streamlit, temp_cache_dir):
         data = pl.LazyFrame(
-            {"scan_idx": [0], "MonoMass": [[1.0]], "SumIntensity": [[2.0]]}
+            {"scan_idx": [0], "masses": [[1.0]], "intensities": [[2.0]]}
         )
         DeconvolvedSpectrum(
             cache_id="deconv",
@@ -355,20 +355,20 @@ class TestDeconvolvedSpectrum:
         with pytest.raises(ValueError, match="view"):
             DeconvolvedSpectrum(
                 cache_id="bad",
-                data=pl.LazyFrame({"MonoMass": [[1.0]], "SumIntensity": [[1.0]]}),
+                data=pl.LazyFrame({"masses": [[1.0]], "intensities": [[1.0]]}),
                 view="raw",
                 cache_path=str(temp_cache_dir),
             )
 
 
-class TestProteoformSequenceView:
-    def test_selected_proteoform(
-        self, mock_streamlit, temp_cache_dir, sample_proteoform_data
+class TestProteinSequenceView:
+    def test_selected_entry(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
     ):
-        view = ProteoformSequenceView(
+        view = ProteinSequenceView(
             cache_id="seq",
-            data=sample_proteoform_data,
-            filters={"protein": "proteoform_index"},
+            data=sample_protein_sequence_data,
+            filters={"protein": "hit_index"},
             mass_identifier="mass",
             aa_identifier="aa",
             cache_path=str(temp_cache_dir),
@@ -377,15 +377,15 @@ class TestProteoformSequenceView:
 
         data = view._prepare_vue_data({"protein": 1})
         assert data["sequenceData"]["sequence"] == list("ACDK")
-        assert data["sequenceData"]["proteoform_end"] == -1
+        assert data["sequenceData"]["end_position"] == -1
         assert data["spectrumData"] == {"masses": [72.04], "precursorMass": 435.2}
-        # Spectrum columns are not part of the proteoform
-        assert "MonoMass" not in data["sequenceData"]
+        # Spectrum columns are not part of the sequence entry
+        assert "masses" not in data["sequenceData"]
         # The payload is valid JSON (NaN replaced)
         json.dumps(data, allow_nan=False)
 
         nan_row = view._prepare_vue_data({"protein": 0})["sequenceData"]
-        assert nan_row["computed_mass"] is None
+        assert nan_row["observed_mass"] is None
 
         empty = view._prepare_vue_data({})
         assert empty["sequenceData"] is None and empty["spectrumData"] is None
@@ -395,8 +395,8 @@ class TestProteoformSequenceView:
         spectra = pl.LazyFrame(
             {
                 "scan_idx": [0, 1],
-                "MonoMass": [[1.0, 2.0], [3.0]],
-                "PrecursorMass": [500.0, 0.0],
+                "masses": [[1.0, 2.0], [3.0]],
+                "precursor_mass": [500.0, 0.0],
             }
         )
         sequence = {
@@ -404,7 +404,7 @@ class TestProteoformSequenceView:
             "theoretical_mass": 311.15,
             "fragment_masses_b": [[98.06], [227.1], [float("nan")]],
         }
-        view = ProteoformSequenceView(
+        view = ProteinSequenceView(
             cache_id="seq_fixed",
             data=spectra,
             filters={"scan": "scan_idx"},
@@ -418,7 +418,7 @@ class TestProteoformSequenceView:
         assert data["spectrumData"]["masses"] == [3.0]
 
         # The sequence is part of the configuration: a new one rebuilds the cache
-        other = ProteoformSequenceView(
+        other = ProteinSequenceView(
             cache_id="seq_fixed",
             data=spectra,
             filters={"scan": "scan_idx"},
@@ -430,7 +430,7 @@ class TestProteoformSequenceView:
             "A",
             "A",
         ]
-        restored = ProteoformSequenceView(
+        restored = ProteinSequenceView(
             cache_id="seq_fixed", cache_path=str(temp_cache_dir)
         )
         assert restored._prepare_vue_data({"scan": 0})["sequenceData"]["sequence"] == [
@@ -439,17 +439,19 @@ class TestProteoformSequenceView:
             "A",
         ]
 
-    def test_args_and_tag(self, mock_streamlit, temp_cache_dir, sample_proteoform_data):
-        view = ProteoformSequenceView(
+    def test_args_and_tag(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        view = ProteinSequenceView(
             cache_id="seq_args",
-            data=sample_proteoform_data,
-            filters={"protein": "proteoform_index"},
+            data=sample_protein_sequence_data,
+            filters={"protein": "hit_index"},
             aa_identifier="aa",
             settings={"tolerance": 10, "ion_types": ["b", "y"]},
             cache_path=str(temp_cache_dir),
         )
         args = view._get_component_args()
-        assert args["componentType"] == "ProteoformSequenceView"
+        assert args["componentType"] == "ProteinSequenceView"
         assert args["sequenceIdentifier"] is None
         assert args["settings"] == {"tolerance": 10, "ion_types": ["b", "y"]}
         assert args["tag"] is None
@@ -460,25 +462,25 @@ class TestProteoformSequenceView:
 
     def test_requires_sequence(self, mock_streamlit, temp_cache_dir):
         with pytest.raises(ValueError, match="sequence"):
-            ProteoformSequenceView(
+            ProteinSequenceView(
                 cache_id="noseq",
-                data=pl.LazyFrame({"MonoMass": [[1.0]], "PrecursorMass": [1.0]}),
+                data=pl.LazyFrame({"masses": [[1.0]], "precursor_mass": [1.0]}),
                 cache_path=str(temp_cache_dir),
             )
 
     def test_masses_keep_full_precision(self, mock_streamlit, temp_cache_dir):
         data = pl.LazyFrame(
             {
-                "proteoform_index": [0],
+                "hit_index": [0],
                 "sequence": [["A"]],
-                "MonoMass": [[12345.678901]],
-                "PrecursorMass": [12345.678901],
+                "masses": [[12345.678901]],
+                "precursor_mass": [12345.678901],
             }
         )
-        view = ProteoformSequenceView(
+        view = ProteinSequenceView(
             cache_id="seq_precision",
             data=data,
-            filters={"protein": "proteoform_index"},
+            filters={"protein": "hit_index"},
             cache_path=str(temp_cache_dir),
         )
         masses = view._prepare_vue_data({"protein": 0})["spectrumData"]["masses"]

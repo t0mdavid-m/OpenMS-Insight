@@ -297,7 +297,7 @@ def sample_series_data() -> pl.LazyFrame:
     """Create sample data for SeriesPlot (two density curves)."""
     return pl.LazyFrame(
         {
-            "QScore": [0.1, 0.5, 0.9, 0.1, 0.5, 0.9],
+            "Score": [0.1, 0.5, 0.9, 0.1, 0.5, 0.9],
             "Density": [0.2, 1.0, 0.4, 0.8, 0.3, 0.05],
             "kind": ["target"] * 3 + ["decoy"] * 3,
         }
@@ -325,11 +325,11 @@ def sample_deconvolved_spectra() -> pl.LazyFrame:
     return pl.LazyFrame(
         {
             "scan_idx": [0, 1],
-            "MonoMass": [[1000.0, 2000.123456], [1500.0]],
-            "SumIntensity": [[10.0, 20.0], [5.0]],
-            "MonoMass_Anno": [[201.0, 251.0, 401.0], [301.0]],
-            "SumIntensity_Anno": [[1.0, 2.0, 3.0], [4.0]],
-            "SignalPeaks": [
+            "masses": [[1000.0, 2000.123456], [1500.0]],
+            "intensities": [[10.0, 20.0], [5.0]],
+            "peak_mz": [[201.0, 251.0, 401.0], [301.0]],
+            "peak_intensity": [[1.0, 2.0, 3.0], [4.0]],
+            "signal_peaks": [
                 [[[0.0, 201.0, 1.0, 5.0]], [[2.0, 401.0, 3.0, 5.0]]],
                 [[[0.0, 301.0, 4.0, 5.0]]],
             ],
@@ -338,21 +338,21 @@ def sample_deconvolved_spectra() -> pl.LazyFrame:
 
 
 @pytest.fixture
-def sample_proteoform_data() -> pl.LazyFrame:
-    """Create sample data for ProteoformSequenceView: one row per proteoform."""
+def sample_protein_sequence_data() -> pl.LazyFrame:
+    """Create sample data for ProteinSequenceView: one row per identification."""
     return pl.LazyFrame(
         {
-            "proteoform_index": [0, 1],
+            "hit_index": [0, 1],
             "sequence": [list("PEPTIDE"), list("ACDK")],
             "theoretical_mass": [799.36, 435.2],
             "coverage": [[0.0] * 7, [1.0, 1.0, 0.5, 0.0]],
             "maxCoverage": [0.0, 2.0],
             "fragment_masses_b": [[[98.06]] * 7, [[72.04]] * 4],
             "fragment_masses_y": [[[148.06]] * 7, [[147.11]] * 4],
-            "proteoform_start": [0, 1],
-            "proteoform_end": [6, -1],
-            "computed_mass": [float("nan"), 435.21],
-            "MonoMass": [[98.06, 148.06], [72.04]],
-            "PrecursorMass": [799.4, 435.2],
+            "start_position": [0, 1],
+            "end_position": [6, -1],
+            "observed_mass": [float("nan"), 435.21],
+            "masses": [[98.06, 148.06], [72.04]],
+            "precursor_mass": [799.4, 435.2],
         }
     )

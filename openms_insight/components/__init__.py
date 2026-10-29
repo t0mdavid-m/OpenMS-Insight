@@ -7,7 +7,7 @@ from .lineplot import LinePlot
 from .mirrorplot import MirrorPlot
 from .pca import PCAPlot
 from .plot3d import Plot3D
-from .proteoform_sequence_view import ProteoformSequenceView
+from .protein_sequence_view import ProteinSequenceView
 from .series_plot import SeriesPlot
 from .table import Table
 from .volcanoplot import VolcanoPlot
@@ -23,5 +23,5 @@ __all__ = [
     "SeriesPlot",
     "Plot3D",
     "DeconvolvedSpectrum",
-    "ProteoformSequenceView",
+    "ProteinSequenceView",
 ]

@@ -29,7 +29,7 @@ export default defineComponent({
     filename: {
       type: String,
       required: false,
-      default: 'FLASHViewer-sequence'
+      default: 'sequence'
     }
   },
   setup() {
@@ -60,7 +60,7 @@ export default defineComponent({
           bgcolor: this.streamlitDataStore.theme?.backgroundColor ?? '#fff'
         }).then((dataUrl: string) => {
           const element = this.$refs.downloadLink as HTMLAnchorElement
-          element.download = `${this.filename || 'FLASHViewer-sequence'}.svg`
+          element.download = `${this.filename || 'sequence'}.svg`
           element.href = dataUrl
           element.click()
         }).finally(() => {

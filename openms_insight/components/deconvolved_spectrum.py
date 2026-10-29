@@ -8,12 +8,12 @@ from ..core.base import BaseComponent
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
-# What each view draws and what it is called (FLASHViewer's plot titles)
+# What each view draws and what it is called
 VIEWS: dict[str, dict[str, str]] = {
     "deconvolved": {"title": "Deconvolved Spectrum", "x_label": "Monoisotopic Mass"},
     "annotated": {"title": "Annotated Spectrum", "x_label": "m/z"},
-    "augmented": {
-        "title": "Augmented Deconvolved Spectrum",
+    "ladder": {
+        "title": "Deconvolved Spectrum with Sequence Tag",
         "x_label": "Monoisotopic Mass",
     },
 }
@@ -22,7 +22,7 @@ VIEWS: dict[str, dict[str, str]] = {
 @register_component("deconvolved_spectrum")
 class DeconvolvedSpectrum(BaseComponent):
     """
-    Spectrum plot for charge-state deconvolution results (e.g. FLASHDeconv).
+    Spectrum plot for charge-state deconvolution results.
 
     One row of data per spectrum, with list columns: the deconvolved masses and
     their intensities, the raw peaks, and for each mass the raw peaks assigned to
@@ -37,13 +37,13 @@ class DeconvolvedSpectrum(BaseComponent):
       highlighted and each charge state is labelled ``z=N`` at the intensity
       weighted mean m/z of its peaks. A toolbar toggle highlights the signal peaks
       of every mass.
-    - ``'augmented'``: the masses, with a sequence tag drawn as a ladder: the tag's
+    - ``'ladder'``: the masses, with a sequence tag drawn as a ladder: the tag's
       masses are highlighted and labelled, and arrows between consecutive masses
       carry the residue explaining the gap (hover: the mass difference). Clicking
       a ladder mass switches to its raw peaks as in ``'annotated'``; a back button
       returns. Set the tag at render time with :meth:`set_ladder`.
 
-    All views share the annotation toggle, the zoom rules of FLASHViewer (the
+    All views share the annotation toggle, the same zoom rules (the
     view fits the highlighted masses and narrows until their labels no longer
     overlap) and SVG export.
 
@@ -75,15 +75,15 @@ class DeconvolvedSpectrum(BaseComponent):
         regenerate_cache: bool = False,
         view: str = "deconvolved",
         mass_identifier: str | None = None,
-        mass_column: str = "MonoMass",
-        mass_intensity_column: str = "SumIntensity",
-        peak_mz_column: str | None = "MonoMass_Anno",
-        peak_intensity_column: str | None = "SumIntensity_Anno",
-        signal_column: str | None = "SignalPeaks",
+        mass_column: str = "masses",
+        mass_intensity_column: str = "intensities",
+        peak_mz_column: str | None = "peak_mz",
+        peak_intensity_column: str | None = "peak_intensity",
+        signal_column: str | None = "signal_peaks",
         title: str | None = None,
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
-        svg_filename: str = "FLASHViewer-lineplot",
+        svg_filename: str = "spectrum",
         **kwargs,
     ):
         """
@@ -99,19 +99,19 @@ class DeconvolvedSpectrum(BaseComponent):
             interactivity: Not used; clicks set ``mass_identifier``.
             cache_path: Base path for cache storage.
             regenerate_cache: Rebuild the cache even if a matching one exists.
-            view: 'deconvolved', 'annotated' or 'augmented' (see class docstring).
+            view: 'deconvolved', 'annotated' or 'ladder' (see class docstring).
             mass_identifier: Selection identifier holding the index of the
                 selected mass within the spectrum's mass list. None disables
                 mass selection.
             mass_column: List column with the deconvolved masses.
             mass_intensity_column: List column with the mass intensities.
             peak_mz_column: List column with the raw peak m/z values. Needed for
-                'annotated' and for drilling down in 'augmented'.
+                'annotated' and for drilling down in 'ladder'.
             peak_intensity_column: List column with the raw peak intensities.
             signal_column: List column with, per mass, the list of its signal
                 peaks as [peak index, m/z, intensity, charge]. The m/z values
                 must equal the raw peak m/z values they refer to.
-            title: Plot title (default: the view's FLASHViewer title).
+            title: Plot title (default: the view's title).
             styling: Colour overrides: highlightColor, selectedColor,
                 unhighlightedColor, highlightHiddenColor and annotationColors
                 (massButton, selectedMassButton, sequenceArrow,
@@ -134,7 +134,7 @@ class DeconvolvedSpectrum(BaseComponent):
         self._styling = styling or {}
         self._plot_config = config or {}
         self._svg_filename = svg_filename
-        # Sequence tag drawn in the 'augmented' view (set per render, not cached)
+        # Sequence tag drawn in the 'ladder' view (set per render, not cached)
         self._ladder: dict[str, Any] | None = None
 
         super().__init__(
@@ -178,17 +178,15 @@ class DeconvolvedSpectrum(BaseComponent):
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
         self._view = config.get("view", "deconvolved")
         self._mass_identifier = config.get("mass_identifier")
-        self._mass_column = config.get("mass_column", "MonoMass")
-        self._mass_intensity_column = config.get(
-            "mass_intensity_column", "SumIntensity"
-        )
+        self._mass_column = config.get("mass_column", "masses")
+        self._mass_intensity_column = config.get("mass_intensity_column", "intensities")
         self._peak_mz_column = config.get("peak_mz_column")
         self._peak_intensity_column = config.get("peak_intensity_column")
         self._signal_column = config.get("signal_column")
         self._title = config.get("title")
         self._styling = config.get("styling") or {}
         self._plot_config = config.get("plot_config") or {}
-        self._svg_filename = config.get("svg_filename", "FLASHViewer-lineplot")
+        self._svg_filename = config.get("svg_filename", "spectrum")
         self._ladder = None
 
     def _data_columns(self) -> list[str]:
@@ -265,7 +263,7 @@ class DeconvolvedSpectrum(BaseComponent):
         key: Any = None,
     ) -> "DeconvolvedSpectrum":
         """
-        Set the sequence tag drawn in the 'augmented' view for the next render.
+        Set the sequence tag drawn in the 'ladder' view for the next render.
 
         Args:
             masses: The tag's masses, as they appear in the spectrum's mass list

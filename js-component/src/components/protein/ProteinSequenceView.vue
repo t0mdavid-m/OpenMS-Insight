@@ -17,7 +17,7 @@
         </template>
       </div>
       <div v-if="annotationSummaryItems.length > 0" class="d-flex flex-wrap justify-space-evenly text-body-2 mt-1">
-        <span class="font-weight-bold">FLASHAnnotator</span>
+        <span class="font-weight-bold">{{ args.annotationTitle ?? 'Fragment annotation' }}</span>
         <template v-for="(item, s_index) in annotationSummaryItems" :key="`s${s_index}`">
           <v-divider :vertical="true"></v-divider>
           <span>{{ item }}</span>
@@ -325,27 +325,27 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { useModificationStore } from '@/stores/variable-modification'
-import type { ProteoformSequenceViewComponentArgs } from '@/types/component'
+import type { ProteinSequenceViewComponentArgs } from '@/types/component'
 import type {
   AnnotatedFragment,
   AnnotationSummary,
-  FLASHTnTSettings,
+  FragmentSettings,
   ModificationData,
-  ProteoformSpectrum,
-  ProteoformTag,
+  MatchedSpectrum,
+  SequenceTag,
   SequenceData,
-} from '@/types/proteoform-sequence-data'
-import type { SequenceObject } from '@/types/proteoform-sequence-object'
+} from '@/types/protein-sequence-data'
+import type { SequenceObject } from '@/types/protein-sequence-object'
 import type { ColumnDefinition } from 'tabulator-tables'
 import FragmentTable from './FragmentTable.vue'
-import AminoAcidCell from './ProteoformAminoAcidCell.vue'
+import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import SvgScreenshot from './SvgScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
 
-// Fixed decimals for long numbers, as FLASHViewer's fragment tables show them
+// Fixed decimals for long numbers in the fragment tables
 const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => unknown }) => {
   const value = cell.getValue()
   if (value === null || value === undefined) return ''
@@ -355,7 +355,7 @@ const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => un
 let viewIdCounter = 0
 
 export default defineComponent({
-  name: 'ProteoformSequenceView',
+  name: 'ProteinSequenceView',
   components: {
     SequenceViewInformation,
     FragmentTable,
@@ -366,7 +366,7 @@ export default defineComponent({
   },
   props: {
     args: {
-      type: Object as PropType<ProteoformSequenceViewComponentArgs>,
+      type: Object as PropType<ProteinSequenceViewComponentArgs>,
       required: true,
     },
     index: {
@@ -389,9 +389,9 @@ export default defineComponent({
     }
   },
   provide() {
-    // Residue cells read the proteoform and the residue selection through this
+    // Residue cells read the entry and the residue selection through this
     return {
-      proteoformView: {
+      sequenceView: {
         entry: () => this.entry,
         selectedAA: () => this.selectedAA,
         setSelectedAA: (position?: number) => this.setSelectedAA(position),
@@ -452,11 +452,11 @@ export default defineComponent({
           headerTooltip: 'The difference between the observed and theoretical masses of the fragment ion, in parts per million (ppm).'
         },
       ] as ColumnDefinition[],
-      // Fragment table of FLASHAnnotator's envelopes (one row per envelope)
+      // Fragment table of externally annotated envelopes (one row per envelope)
       annotatorTableColumnDefinitions: [
         {
           title: 'Name', field: 'Name',
-          headerTooltip: 'Terminal fragments in Biemann notation; internal fragments as type[first-last residue of the proteoform].'
+          headerTooltip: 'Terminal fragments in Biemann notation; internal fragments as type[first-last residue of the identified sequence].'
         },
         {
           title: 'Ion type', field: 'IonType',
@@ -492,7 +492,7 @@ export default defineComponent({
         },
       ] as ColumnDefinition[],
       fragmentTableData: [] as Record<string, unknown>[],
-      // FLASHAnnotator fragment behind each fragmentTableData row
+      // Annotated fragment behind each fragmentTableData row
       fragmentTableSource: [] as AnnotatedFragment[],
       selectedFragment: undefined as AnnotatedFragment | undefined,
       selectedResidue: undefined as number | undefined,
@@ -521,13 +521,13 @@ export default defineComponent({
     entry(): SequenceData | undefined {
       return (this.streamlitDataStore.allDataForDrawing.sequenceData as SequenceData | null) ?? undefined
     },
-    spectrum(): ProteoformSpectrum | undefined {
-      return (this.streamlitDataStore.allDataForDrawing.spectrumData as ProteoformSpectrum | null) ?? undefined
+    spectrum(): MatchedSpectrum | undefined {
+      return (this.streamlitDataStore.allDataForDrawing.spectrumData as MatchedSpectrum | null) ?? undefined
     },
-    settings(): FLASHTnTSettings | undefined {
+    settings(): FragmentSettings | undefined {
       return this.args.settings ?? undefined
     },
-    selectedTag(): ProteoformTag | undefined {
+    selectedTag(): SequenceTag | undefined {
       return this.args.tag ?? undefined
     },
     selectedAA(): number | undefined {
@@ -545,18 +545,18 @@ export default defineComponent({
     sequence(): string[] {
       return this.entry?.sequence ?? []
     },
-    /** Identifies the proteoform shown. Data arriving again after a rerun builds
-     * new objects for the same proteoform, which must not reset the view. */
+    /** Identifies the entry shown. Data arriving again after a rerun builds
+     * new objects for the same entry, which must not reset the view. */
     entryKey(): string {
       const entry = this.entry
       if (!entry) return ''
       return JSON.stringify([
-        entry.sequence, entry.proteoform_start, entry.proteoform_end, entry.theoretical_mass,
-        entry.computed_mass, entry.fixed_modifications, entry.modifications,
+        entry.sequence, entry.start_position, entry.end_position, entry.theoretical_mass,
+        entry.observed_mass, entry.fixed_modifications, entry.modifications,
       ])
     },
     sequence_start_reported(): number {
-      return this.entry?.proteoform_start ?? 0
+      return this.entry?.start_position ?? 0
     },
     sequence_start(): number {
       if (this.sequence_start_reported < 0)
@@ -572,7 +572,7 @@ export default defineComponent({
       return this.sequence_start_reported >= 0
     },
     sequence_end_reported(): number {
-      return this.entry?.proteoform_end ?? this.sequence.length-1
+      return this.entry?.end_position ?? this.sequence.length-1
     },
     sequence_end(): number {
       if (this.sequence_end_reported < 0) {
@@ -589,7 +589,7 @@ export default defineComponent({
     modifications(): ModificationData[] {
       return this.entry?.modifications ?? []
     },
-    // null/undefined: results without FLASHAnnotator -> fragments are matched here
+    // null/undefined: no annotated fragments -> fragments are matched here
     annotatedFragments(): AnnotatedFragment[] | undefined {
       return this.entry?.annotated_fragments ?? undefined
     },
@@ -603,7 +603,7 @@ export default defineComponent({
       const s = this.annotationSummary
       if (s === undefined || !this.showFragments) return []
       const items: string[] = []
-      if (s.fa_score !== null) items.push(`FAScore : ${s.fa_score.toFixed(2)}`)
+      if (s.score !== null) items.push(`Score : ${s.score.toFixed(2)}`)
       if (s.coverage !== null) items.push(`Bond coverage : ${s.coverage.toFixed(1)}%`)
       if (s.coverage_with_internal !== null) items.push(`With internal : ${s.coverage_with_internal.toFixed(1)}%`)
       if (s.internal_matched !== null && s.internal_hypotheses !== null) {
@@ -633,8 +633,8 @@ export default defineComponent({
     theoreticalMass(): number {
       return this.entry?.theoretical_mass ?? 0
     },
-    computedMass(): number | undefined {
-      return this.entry?.computed_mass
+    entryObservedMass(): number | undefined {
+      return this.entry?.observed_mass
     },
     fixedModificationSites(): string[] {
       return this.entry?.fixed_modifications ?? []
@@ -685,19 +685,19 @@ export default defineComponent({
       return (explained_cleavage / (this.sequence_end - this.sequence_start)) * 100
     },
     disableVariableModifications(): boolean {
-      if (this.displayTnT) {
+      if (this.showIdentification) {
         return true
       }
       return false
     },
-    displayTnT(): boolean {
-      if (this.computedMass !== undefined) {
+    showIdentification(): boolean {
+      if (this.entryObservedMass !== undefined) {
         return true
       }
       return false
     },
     showTags(): boolean {
-      if (!this.displayTnT) {
+      if (!this.showIdentification) {
         return false
       }
       if (this.visibilityOptions.find(option => option.text === 'Tags')?.selected) {
@@ -706,7 +706,7 @@ export default defineComponent({
       return false
     },
     showTruncations(): boolean {
-      if (!this.displayTnT) {
+      if (!this.showIdentification) {
         return false
       }
       if (this.visibilityOptions.find(option => option.text === 'Truncations')?.selected) {
@@ -728,32 +728,30 @@ export default defineComponent({
     },
     // Sequence change button computed properties
     shouldShowSequenceChangeButton(): boolean {
-      return !this.displayTnT && !!this.args.sequenceIdentifier
+      return !this.showIdentification && !!this.args.sequenceIdentifier
     },
   },
   watch: {
-    // A new spectrum (or proteoform) arrives: rematch the fragments
+    // A new spectrum (or entry) arrives: rematch the fragments
     spectrum() {
       this.recomputeFragments()
     },
-    // KEPT — sole trigger for FLASHDeconv custom-sequence entry; also uniquely clears
-    // the stale AA selection and re-pulls settings. Primary FLASHTnT protein-switch
-    // trigger (sequence_data is re-keyed by proteinIndex).
+    // A new entry (another identification, or a user-given sequence): clears the
+    // stale residue selection and re-reads the settings.
     entryKey() {
       this.setSelectedAA(undefined)
       this.recomputeFragments()
       this.updateSettings()
     },
-    // KEPT — FLASHTnT tag overlay; also clears tag marks when a protein switch resets
-    // tagData to undefined.
+    // Selected sequence tag; cleared when the app resets it on a new entry.
     selectedTag() {
       this.updateTagPosition()
     },
-    // KEPT — re-match fragments on a tolerance change (local state, no round-trip).
+    // Re-match fragments on a tolerance change (local state, no round-trip).
     fragmentMassTolerance() {
       this.recomputeFragments()
     },
-    // KEPT — ion-type a/b/c/x/y/z toggles (both tools). deep required (nested .selected).
+    // Ion-type a/b/c/x/y/z toggles. deep required (nested .selected).
     ionTypes: {
       handler() {
         this.initializeSequenceObjects()
@@ -762,7 +760,7 @@ export default defineComponent({
       },
       deep: true,
     },
-    // KEPT — extra fragment-type toggles (both tools). deep required (nested key).
+    // Extra fragment-type toggles. deep required (nested key).
     ionTypesExtra: {
       handler() {
         this.initializeSequenceObjects()
@@ -776,7 +774,7 @@ export default defineComponent({
     showInternal() {
       this.recomputeFragments()
     },
-    // KEPT — FLASHDeconv variable modifications (local store; inert in FLASHTnT).
+    // Variable modifications set on residues (only without an identification).
     variableModifications() {
       this.recomputeFragments()
     },
@@ -839,20 +837,20 @@ export default defineComponent({
         return
       }
 
-      if (this.computedMass !== undefined) {
+      if (this.entryObservedMass !== undefined) {
 
-        this.massTitle = 'Proteoform'
-        let proteoform_mass = '-'
+        this.massTitle = 'Identification'
+        let observed_mass = '-'
         let delta_mass = '-'
-        if (this.computedMass > 0) {
-          proteoform_mass = this.computedMass.toFixed(2)
-          delta_mass = Math.abs(this.theoreticalMass - this.computedMass).toFixed(2)
+        if (this.entryObservedMass > 0) {
+          observed_mass = this.entryObservedMass.toFixed(2)
+          delta_mass = Math.abs(this.theoreticalMass - this.entryObservedMass).toFixed(2)
         }
 
 
         this.massData = [
           `Theoretical protein mass : ${this.theoreticalMass.toFixed(2)}`,
-          `Observed proteoform mass : ${proteoform_mass}`,
+          `Observed mass : ${observed_mass}`,
           `Δ Mass (Da) : ${delta_mass}`,
         ]
 
@@ -925,7 +923,7 @@ export default defineComponent({
         .filter((iontype) => iontype.selected)
         .forEach((iontype) => {
           
-          // Dont match fragments in FLASHTnT if end could not be determined
+          // Dont match fragments of an identification whose end is undetermined
           if ((iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c') && (this.sequence_start_reported < 0))
             return
           if ((iontype.text === 'x' || iontype.text === 'y' || iontype.text === 'z') && (this.sequence_end_reported < 0))
@@ -1011,7 +1009,7 @@ export default defineComponent({
       this.fragmentTableData = matching_fragments
       this.fragmentTableTitle = `Matching fragments (# ${matching_fragments.length})`
     },
-    // Fragment ions from FLASHAnnotator: the envelopes it accepted on the raw
+    // Externally annotated fragment ions: the envelopes accepted on the raw
     // spectrum, no matching against the deconvolved masses here.
     prepareAnnotatedFragmentTable(): void {
       if (this.sequence.length <= 0) {

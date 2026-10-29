@@ -365,7 +365,7 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
  */
 export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyDeconvolvedSpectrum'
-  view: 'deconvolved' | 'annotated' | 'augmented'
+  view: 'deconvolved' | 'annotated' | 'ladder'
   title: string
   /** Selection identifier holding the index of the selected mass */
   massIdentifier?: string | null
@@ -383,17 +383,19 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
   }
   config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
   svgFilename?: string
-  /** Sequence tag drawn in the augmented view */
+  /** Sequence tag drawn in the ladder view */
   ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
   height?: number
 }
 
 /**
- * ProteoformSequenceView component arguments.
+ * ProteinSequenceView component arguments.
  */
-export interface ProteoformSequenceViewComponentArgs extends BaseComponentArgs {
-  componentType: 'ProteoformSequenceView'
+export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
+  componentType: 'ProteinSequenceView'
   title?: string
+  /** Label of the annotation summary line */
+  annotationTitle?: string
   /** Identifier holding the selected mass (index into the spectrum's masses) */
   massIdentifier?: string | null
   /** Identifier holding the selected residue (0-based position in the sequence) */
@@ -423,7 +425,7 @@ export type ComponentArgs =
   | SeriesPlotComponentArgs
   | Plot3DComponentArgs
   | DeconvolvedSpectrumComponentArgs
-  | ProteoformSequenceViewComponentArgs
+  | ProteinSequenceViewComponentArgs
 
 /**
  * Component layout entry.

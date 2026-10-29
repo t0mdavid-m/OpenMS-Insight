@@ -71,9 +71,9 @@
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
 import type { Theme } from 'streamlit-component-lib'
-import type { AnnotatedFragment } from '@/types/proteoform-sequence-data'
+import type { AnnotatedFragment } from '@/types/protein-sequence-data'
 
-// Internal ion types are "<N-end type>/<C-end type>" (FLASHAnnotator)
+// Internal ion types are "<N-end type>/<C-end type>" (e.g. "b/y")
 const INTERNAL_COLORS: Record<string, string> = {
   'b/y': '#8E44AD',
   'a/y': '#2E86C1',

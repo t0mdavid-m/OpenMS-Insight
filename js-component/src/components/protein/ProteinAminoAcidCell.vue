@@ -138,8 +138,8 @@
 <script lang="ts">
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useModificationStore } from '@/stores/variable-modification'
-import type { SequenceObject } from '@/types/proteoform-sequence-object'
-import type { SequenceData } from '@/types/proteoform-sequence-data'
+import type { SequenceObject } from '@/types/protein-sequence-object'
+import type { SequenceData } from '@/types/protein-sequence-data'
 import type { Theme } from 'streamlit-component-lib'
 import type { PropType } from 'vue'
 import { defineComponent } from 'vue'
@@ -149,19 +149,19 @@ import {
   modificationMassMap,
 } from '@/components/sequence/modification'
 
-// Provided by ProteoformSequenceView. The defaults let the legend's example
+// Provided by ProteinSequenceView. The defaults let the legend's example
 // cells render outside a view.
-interface ProteoformViewContext {
+interface SequenceViewContext {
   entry: () => SequenceData | undefined
   selectedAA: () => number | undefined
   setSelectedAA: (position?: number) => void
 }
 
 export default defineComponent({
-  name: 'ProteoformAminoAcidCell',
+  name: 'ProteinAminoAcidCell',
   inject: {
-    proteoformView: {
-      default: (): ProteoformViewContext => ({
+    sequenceView: {
+      default: (): SequenceViewContext => ({
         entry: () => undefined,
         selectedAA: () => undefined,
         setSelectedAA: () => undefined,
@@ -245,7 +245,7 @@ export default defineComponent({
       return this.sequenceObject.aminoAcid
     },
     start(): number | undefined {
-      const start = this.view.entry()?.proteoform_start
+      const start = this.view.entry()?.start_position
       if (start === undefined) {
         return start
       }
@@ -255,7 +255,7 @@ export default defineComponent({
       return start
     },
     end(): number | undefined {
-      const end = this.view.entry()?.proteoform_end
+      const end = this.view.entry()?.end_position
       if (end === undefined) {
         return end
       }
@@ -301,7 +301,7 @@ export default defineComponent({
       return undefined
     },
     truncated_suffix(): number | undefined {
-      const end = this.view.entry()?.proteoform_end
+      const end = this.view.entry()?.end_position
       const length = this.view.entry()?.sequence.length
       if ((end == undefined) || (this.index <= end)) {
         return undefined
@@ -378,8 +378,8 @@ export default defineComponent({
     DoesThisAAHaveExtraFragTypes(): boolean {
       return this.sequenceObject.extraTypes.length > 0
     },
-    view(): ProteoformViewContext {
-      return this.proteoformView as ProteoformViewContext
+    view(): SequenceViewContext {
+      return this.sequenceView as SequenceViewContext
     },
     coverage(): number {
       if (this.sequenceObject.coverage !== undefined) 

@@ -1,4 +1,4 @@
-"""Proteoform sequence view: fragment coverage, tags and modifications of a proteoform."""
+"""Protein sequence view: fragment coverage, tags and modifications of a sequence."""
 
 import hashlib
 import json
@@ -11,7 +11,7 @@ from ..core.base import BaseComponent
 from ..core.registry import register_component
 from ..preprocessing.filtering import _make_cache_key
 
-# Columns describing one proteoform (FLASHViewer's sequence data schema). Only
+# Columns describing one sequence entry. Only
 # 'sequence' is required; the others are drawn when present.
 SEQUENCE_COLUMNS: tuple[str, ...] = (
     "sequence",
@@ -25,9 +25,9 @@ SEQUENCE_COLUMNS: tuple[str, ...] = (
     "fragment_masses_x",
     "fragment_masses_y",
     "fragment_masses_z",
-    "proteoform_start",
-    "proteoform_end",
-    "computed_mass",
+    "start_position",
+    "end_position",
+    "observed_mass",
     "modifications",
     "annotated_fragments",
     "annotation_summary",
@@ -45,45 +45,46 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-@register_component("proteoform_sequence_view")
-class ProteoformSequenceView(BaseComponent):
+@register_component("protein_sequence_view")
+class ProteinSequenceView(BaseComponent):
     """
-    Sequence view of a proteoform for top-down proteomics (FLASHViewer's sequence view).
+    Sequence view of a protein (or peptide) with its fragment and tag evidence.
 
     Draws the protein sequence as a grid of residues and marks on it the matched
     fragment ions (a/b/c/x/y/z), sequence tag coverage, the selected tag,
-    truncations, localized and ambiguous modifications and, with FLASHAnnotator
-    results, internal fragments. Below the grid a table lists the matched
+    truncations, localized and ambiguous modifications and, with externally
+    annotated fragments, internal fragments. Below the grid a table lists the matched
     fragments. Residues, fragment rows and the masses of the spectrum are linked:
     clicking one selects the others.
 
-    Each row of data is one proteoform with its spectrum:
+    Each row of data is one sequence entry (e.g. an identification) with its spectrum:
 
     - Sequence columns (see ``SEQUENCE_COLUMNS``): ``sequence`` (list of
       residues), ``fragment_masses_<ion>`` (per position, the theoretical
       masses), ``coverage``/``maxCoverage`` (tag coverage per residue),
-      ``proteoform_start``/``proteoform_end`` (0-based, -1 when undetermined),
-      ``theoretical_mass``, ``computed_mass`` (observed proteoform mass; its
+      ``start_position``/``end_position`` (0-based, -1 when undetermined),
+      ``theoretical_mass``, ``observed_mass`` (observed mass of the entry; its
       presence switches to the identification view with tags and truncations),
       ``modifications`` (list of {start, end, mass_diff, labels}),
       ``fixed_modifications`` (residues carrying a fixed modification),
-      ``annotated_fragments`` and ``annotation_summary`` (FLASHAnnotator).
+      ``annotated_fragments`` and ``annotation_summary`` (fragments annotated
+      by an external tool, see ``AnnotatedFragment`` in the Vue types).
     - Spectrum columns: ``mass_column`` (list of deconvolved masses) and
       ``precursor_mass_column``.
 
-    Alternatively pass one fixed proteoform as ``sequence`` (a dict with the
+    Alternatively pass one fixed entry as ``sequence`` (a dict with the
     sequence columns); then each row of data is just a spectrum, e.g. to match
     a user-given sequence against the selected scan.
 
-    Without FLASHAnnotator results, fragments are matched here against the
+    Without annotated fragments, fragments are matched here against the
     spectrum's masses within the tolerance (ppm), honouring variable
     modifications the user sets on residues (right click).
 
     Example:
-        view = ProteoformSequenceView(
+        view = ProteinSequenceView(
             cache_id="sequence_view",
-            data=proteoforms,  # one row per proteoform
-            filters={"protein": "proteoform_index"},
+            data=identifications,  # one row per identification
+            filters={"protein": "hit_index"},
             mass_identifier="mass",
             aa_identifier="aa",
         )
@@ -91,8 +92,8 @@ class ProteoformSequenceView(BaseComponent):
         view(key="sequence_view", state_manager=state_manager)
     """
 
-    _component_type: str = "proteoform_sequence_view"
-    # One row holds a whole proteoform with its spectrum
+    _component_type: str = "protein_sequence_view"
+    # One row holds a whole sequence entry with its spectrum
     _parquet_row_group_size = 64
 
     def __init__(
@@ -106,37 +107,38 @@ class ProteoformSequenceView(BaseComponent):
         cache_path: str = ".",
         regenerate_cache: bool = False,
         sequence: dict[str, Any] | None = None,
-        mass_column: str | None = "MonoMass",
-        precursor_mass_column: str | None = "PrecursorMass",
+        mass_column: str | None = "masses",
+        precursor_mass_column: str | None = "precursor_mass",
         mass_identifier: str | None = None,
         aa_identifier: str | None = None,
         sequence_identifier: str | None = None,
         settings: dict[str, Any] | None = None,
         title: str | None = "Sequence View",
-        svg_filename: str = "FLASHViewer-sequence",
+        annotation_title: str = "Fragment annotation",
+        svg_filename: str = "sequence",
         float_precision: str = "float64",
         **kwargs,
     ):
         """
-        Initialize the ProteoformSequenceView component.
+        Initialize the ProteinSequenceView component.
 
         Args:
             cache_id: Unique identifier for this component's cache (MANDATORY).
-            data: Polars LazyFrame, one row per proteoform (or per spectrum when
+            data: Polars LazyFrame, one row per entry (or per spectrum when
                 ``sequence`` is given). See the class docstring for columns.
             data_path: Path to a parquet file with the data.
             filters: Mapping of identifier names to column names selecting the
-                row to show, e.g. {'protein': 'proteoform_index'}.
+                row to show, e.g. {'protein': 'hit_index'}.
             filter_defaults: Default values for filters when state is None.
             interactivity: Not used; clicks set the identifiers below.
             cache_path: Base path for cache storage.
             regenerate_cache: Rebuild the cache even if a matching one exists.
-            sequence: One fixed proteoform (dict of sequence columns) shown for
+            sequence: One fixed entry (dict of sequence columns) shown for
                 every row of data.
             mass_column: List column with the spectrum's deconvolved masses.
-                None: no spectrum (fragments only from FLASHAnnotator).
+                None: no spectrum (fragments only from annotated_fragments).
             precursor_mass_column: Column with the precursor mass, shown against
-                the theoretical mass when no proteoform mass is given.
+                the theoretical mass when no observed mass is given.
             mass_identifier: Identifier holding the selected mass, as an index
                 into the masses of the spectrum (e.g. a mass table's selection).
                 Selecting a fragment selects its mass and vice versa.
@@ -148,6 +150,7 @@ class ProteoformSequenceView(BaseComponent):
             settings: Initial fragment settings: {'tolerance': ppm,
                 'ion_types': ['b', 'y', ...]}.
             title: Title above the view (None: no title).
+            annotation_title: Label of the ``annotation_summary`` line.
             svg_filename: File name for the SVG download.
             float_precision: Masses are compared at ppm level, so they are kept
                 as Float64 by default.
@@ -161,6 +164,7 @@ class ProteoformSequenceView(BaseComponent):
         self._sequence_identifier = sequence_identifier
         self._settings = settings
         self._title = title
+        self._annotation_title = annotation_title
         self._svg_filename = svg_filename
         # Sequence tag marked on the sequence (set per render, not cached)
         self._tag: dict[str, int] | None = None
@@ -183,6 +187,7 @@ class ProteoformSequenceView(BaseComponent):
             sequence_identifier=sequence_identifier,
             settings=settings,
             title=title,
+            annotation_title=annotation_title,
             svg_filename=svg_filename,
             **kwargs,
         )
@@ -197,6 +202,7 @@ class ProteoformSequenceView(BaseComponent):
             "sequence_identifier": self._sequence_identifier,
             "settings": self._settings,
             "title": self._title,
+            "annotation_title": self._annotation_title,
             "svg_filename": self._svg_filename,
         }
 
@@ -209,7 +215,8 @@ class ProteoformSequenceView(BaseComponent):
         self._sequence_identifier = config.get("sequence_identifier")
         self._settings = config.get("settings")
         self._title = config.get("title")
-        self._svg_filename = config.get("svg_filename", "FLASHViewer-sequence")
+        self._annotation_title = config.get("annotation_title", "Fragment annotation")
+        self._svg_filename = config.get("svg_filename", "sequence")
         self._tag = None
 
     def _spectrum_columns(self) -> list[str]:
@@ -222,7 +229,7 @@ class ProteoformSequenceView(BaseComponent):
         columns = self._raw_data.collect_schema().names()
         if self._sequence is None and "sequence" not in columns:
             raise ValueError(
-                "Data needs a 'sequence' column, or pass one proteoform as sequence=. "
+                "Data needs a 'sequence' column, or pass one entry as sequence=. "
                 f"Available columns: {columns}"
             )
         if self._sequence is not None and "sequence" not in self._sequence:
@@ -248,7 +255,7 @@ class ProteoformSequenceView(BaseComponent):
         self._preprocessed_data["data"] = data
 
     def _get_vue_component_name(self) -> str:
-        return "ProteoformSequenceView"
+        return "ProteinSequenceView"
 
     def _get_data_key(self) -> str:
         return "sequenceData"
@@ -305,7 +312,7 @@ class ProteoformSequenceView(BaseComponent):
 
     def set_tag(
         self, start: int | None, end: int | None = None
-    ) -> "ProteoformSequenceView":
+    ) -> "ProteinSequenceView":
         """
         Mark a sequence tag on the sequence for the next render.
 
@@ -326,6 +333,7 @@ class ProteoformSequenceView(BaseComponent):
         return {
             "componentType": self._get_vue_component_name(),
             "title": self._title,
+            "annotationTitle": self._annotation_title,
             "massIdentifier": self._mass_identifier,
             "aaIdentifier": self._aa_identifier,
             "sequenceIdentifier": self._sequence_identifier,

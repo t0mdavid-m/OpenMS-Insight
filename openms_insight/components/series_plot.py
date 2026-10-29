@@ -28,10 +28,10 @@ class SeriesPlot(BaseComponent):
             x_column="x",
             y_column="y",
             series_column="kind",
-            series_names={"target": "Target QScores", "decoy": "Decoy QScores"},
+            series_names={"target": "Target scores", "decoy": "Decoy scores"},
             series_colors={"target": "green", "decoy": "red"},
             title="FDR Plot",
-            x_label="QScore",
+            x_label="Score",
             y_label="Density",
         )
         fdr_plot(key="fdr", state_manager=state_manager)

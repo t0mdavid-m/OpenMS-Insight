@@ -68,8 +68,8 @@
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import type { Theme } from 'streamlit-component-lib'
 import { defineComponent } from 'vue'
-import AminoAcidCell from './ProteoformAminoAcidCell.vue'
-import type { SequenceObject } from '@/types/proteoform-sequence-object'
+import AminoAcidCell from './ProteinAminoAcidCell.vue'
+import type { SequenceObject } from '@/types/protein-sequence-object'
 
 export default defineComponent({
   name: 'SequenceViewInformation',

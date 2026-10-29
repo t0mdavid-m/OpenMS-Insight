@@ -36,7 +36,7 @@ import PlotlySeries from './components/plotly/PlotlySeries.vue'
 import Plotly3D from './components/plotly/Plotly3D.vue'
 import PlotlyDeconvolvedSpectrum from './components/plotly/PlotlyDeconvolvedSpectrum.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
-import ProteoformSequenceView from './components/proteoform/ProteoformSequenceView.vue'
+import ProteinSequenceView from './components/protein/ProteinSequenceView.vue'
 
 export default defineComponent({
   name: 'App',
@@ -52,7 +52,7 @@ export default defineComponent({
     Plotly3D,
     PlotlyDeconvolvedSpectrum,
     SequenceView,
-    ProteoformSequenceView,
+    ProteinSequenceView,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -228,8 +228,8 @@ export default defineComponent({
           return PlotlyDeconvolvedSpectrum
         case 'SequenceView':
           return SequenceView
-        case 'ProteoformSequenceView':
-          return ProteoformSequenceView
+        case 'ProteinSequenceView':
+          return ProteinSequenceView
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null

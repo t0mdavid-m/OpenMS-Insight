@@ -9,13 +9,13 @@
 
 <script lang="ts">
 /**
- * Deconvolved spectrum plot (port of FLASHViewer's unified line plot).
+ * Deconvolved spectrum plot (masses, raw peaks and sequence tag ladders).
  *
  * Modes:
  *  - deconvolved: masses as sticks, selected mass highlighted and labelled
  *  - annotated: raw peaks, signal peaks of the selected mass highlighted, z=N labels
- *  - augmented: masses with a sequence tag ladder; clicking a ladder mass drills
- *    down to its raw peaks ('augmented-annotated'), the back button returns
+ *  - ladder: masses with a sequence tag ladder; clicking a ladder mass drills
+ *    down to its raw peaks ('ladder-annotated'), the back button returns
  */
 import { defineComponent, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
@@ -24,7 +24,7 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { DeconvolvedSpectrumComponentArgs } from '@/types/component'
 
-type Mode = 'deconvolved' | 'annotated' | 'augmented' | 'augmented-annotated'
+type Mode = 'deconvolved' | 'annotated' | 'ladder' | 'ladder-annotated'
 
 interface HighlightData {
   mass: number
@@ -107,7 +107,7 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       annotationsVisible: true,
       deconvolvedPeaksHighlightMode: false,
-      // Drilled down from the augmented view into the raw peaks of a mass
+      // Drilled down from the ladder view into the raw peaks of a mass
       drilledDown: false,
     }
   },
@@ -132,17 +132,17 @@ export default defineComponent({
       }
     },
     mode(): Mode {
-      if (this.args.view === 'augmented') {
-        return this.drilledDown ? 'augmented-annotated' : 'augmented'
+      if (this.args.view === 'ladder') {
+        return this.drilledDown ? 'ladder-annotated' : 'ladder'
       }
       return this.args.view
     },
     /** Raw peaks (m/z) are drawn, rather than masses */
     isMzMode(): boolean {
-      return this.mode === 'annotated' || this.mode === 'augmented-annotated'
+      return this.mode === 'annotated' || this.mode === 'ladder-annotated'
     },
     currentTitle(): string {
-      return this.mode === 'augmented-annotated' ? 'Augmented Annotated Spectrum' : this.args.title
+      return this.mode === 'ladder-annotated' ? 'Annotated Spectrum' : this.args.title
     },
     xAxisLabel(): string {
       return this.isMzMode ? 'm/z' : 'Monoisotopic Mass'
@@ -203,7 +203,7 @@ export default defineComponent({
       const value = this.selectionStore.$state[this.args.massIdentifier]
       return typeof value === 'number' ? value : undefined
     },
-    isTnTMode(): boolean {
+    hasLadder(): boolean {
       return !!this.args.ladder
     },
     ladderKey(): unknown {
@@ -220,7 +220,7 @@ export default defineComponent({
       return ladder.sequence.length - 1 - ladder.selectedIndex
     },
     showBackButton(): boolean {
-      return this.isTnTMode && this.mode === 'augmented-annotated'
+      return this.hasLadder && this.mode === 'ladder-annotated'
     },
 
     /** Positions (into MassValues) highlighted by the tag or the mass selection. */
@@ -240,7 +240,7 @@ export default defineComponent({
         selected !== undefined &&
         selected >= 0 &&
         selected < this.MassValues.length &&
-        this.mode !== 'augmented'
+        this.mode !== 'ladder'
       ) {
         positions = [selected]
       }
@@ -806,7 +806,7 @@ export default defineComponent({
       this.manual = false
       this.manualXRange = undefined
       if (this.drilledDown) this.drilledDown = false
-      if (this.args.view === 'augmented') this.setSelectedMass(undefined)
+      if (this.args.view === 'ladder') this.setSelectedMass(undefined)
     },
     backButton(): void {
       this.resetManualState()
@@ -817,7 +817,7 @@ export default defineComponent({
       const x = eventData.points[0].x
       for (let i = 0; i < this.MassValues.length; i++) {
         if (x === this.MassValues[i]) {
-          if (this.mode === 'augmented') {
+          if (this.mode === 'ladder') {
             // Only the tag's masses lead on to their raw peaks
             if (!this.highlightedMassPos[i]) break
             this.drilledDown = true
@@ -887,7 +887,7 @@ export default defineComponent({
           const plotElement = document.getElementById(this.id)
           if (plotElement) {
             Plotly.downloadImage(plotElement, {
-              filename: this.args.svgFilename || 'FLASHViewer-lineplot',
+              filename: this.args.svgFilename || 'spectrum',
               height: 400,
               width: 1200,
               format: 'svg',
