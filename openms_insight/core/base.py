@@ -465,7 +465,9 @@ class BaseComponent(ABC):
                     if self._float_precision == "float32":
                         value = optimize_for_transfer_lazy(value)
                     with atomic_write(filepath) as tmp:
-                        value.sink_parquet(tmp, compression="zstd", **self._row_group_kwargs())
+                        value.sink_parquet(
+                            tmp, compression="zstd", **self._row_group_kwargs()
+                        )
                     manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
@@ -480,7 +482,9 @@ class BaseComponent(ABC):
                         value, downcast_floats=self._float_precision == "float32"
                     )
                     with atomic_write(filepath) as tmp:
-                        value.write_parquet(tmp, compression="zstd", **self._row_group_kwargs())
+                        value.write_parquet(
+                            tmp, compression="zstd", **self._row_group_kwargs()
+                        )
                     manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
