@@ -6,11 +6,15 @@ visualizations with cross-component selection state management.
 """
 
 from .components.clustered_heatmap import ClusteredHeatmap
+from .components.deconvolved_spectrum import DeconvolvedSpectrum
 from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
 from .components.pca import PCAPlot
+from .components.plot3d import Plot3D
+from .components.proteoform_sequence_view import ProteoformSequenceView
 from .components.sequenceview import SequenceView, SequenceViewResult
+from .components.series_plot import SeriesPlot
 from .components.table import Table
 from .components.volcanoplot import VolcanoPlot
 from .core.base import BaseComponent
@@ -38,6 +42,10 @@ __all__ = [
     "SequenceViewResult",
     "MirrorPlot",
     "PCAPlot",
+    "SeriesPlot",
+    "Plot3D",
+    "DeconvolvedSpectrum",
+    "ProteoformSequenceView",
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",

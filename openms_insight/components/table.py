@@ -88,6 +88,9 @@ class Table(BaseComponent):
         pagination: bool = True,
         page_size: int = 100,
         pagination_identifier: str | None = None,
+        toggle_filters: list[dict[str, Any]] | None = None,
+        range_filters: dict[str, list[str]] | None = None,
+        on_select: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -135,6 +138,25 @@ class Table(BaseComponent):
             pagination_identifier: State key for storing pagination state (page, sort,
                 filters). Default: "{cache_id}_page". Used by StateManager to track
                 pagination state across reruns.
+            toggle_filters: Checkboxes shown in the title row, each restricting the
+                table to rows where a boolean column is true. Each entry is a dict:
+                - label: Checkbox label
+                - column: Boolean column the checkbox filters on
+                - default: Initial state (default: True)
+                - group_column: Optional column. When ticking the box hides the
+                  selected row, the selection moves to the first remaining row
+                  sharing its value in this column (e.g. the best hit of the
+                  same spectrum) instead of to the first row of the table.
+                Example: [{'label': 'Best per spectrum', 'column': 'is_best',
+                'group_column': 'scan'}]
+            range_filters: Mapping of identifier names to [start_column, end_column]
+                pairs. While the identifier has a selection, only rows with
+                start_column <= value <= end_column are shown; without one the
+                table is not restricted. Example: {'residue': ['start', 'end']}
+            on_select: Selections to set whenever the user clicks a row, in addition
+                to those in ``interactivity``. A value of None clears the
+                identifier. Example: {'peak': None} clears a dependent selection.
+                Not applied to the automatic default-row selection.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -148,6 +170,9 @@ class Table(BaseComponent):
         self._page_size = page_size
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
+        self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
+        self._range_filters = {k: list(v) for k, v in (range_filters or {}).items()}
+        self._on_select = dict(on_select) if on_select else {}
 
         super().__init__(
             cache_id=cache_id,
@@ -169,8 +194,30 @@ class Table(BaseComponent):
             pagination=pagination,
             page_size=page_size,
             pagination_identifier=self._pagination_identifier,
+            toggle_filters=toggle_filters,
+            range_filters=range_filters,
+            on_select=on_select,
             **kwargs,
         )
+
+    @staticmethod
+    def _normalize_toggle_filters(
+        toggle_filters: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Validate toggle filter entries and fill in their defaults."""
+        normalized = []
+        for entry in toggle_filters or []:
+            if "column" not in entry:
+                raise ValueError(f"toggle_filters entry needs a 'column': {entry}")
+            normalized.append(
+                {
+                    "label": entry.get("label", entry["column"]),
+                    "column": entry["column"],
+                    "default": bool(entry.get("default", True)),
+                    "group_column": entry.get("group_column"),
+                }
+            )
+        return normalized
 
     def _get_cache_config(self) -> dict[str, Any]:
         """
@@ -190,6 +237,13 @@ class Table(BaseComponent):
             "pagination": self._pagination,
             "page_size": self._page_size,
             "pagination_identifier": self._pagination_identifier,
+            # Only present when used, so tables that do not use them keep the
+            # configuration hash (and with it the cache) they had before.
+            **(
+                {"toggle_filters": self._toggle_filters} if self._toggle_filters else {}
+            ),
+            **({"range_filters": self._range_filters} if self._range_filters else {}),
+            **({"on_select": self._on_select} if self._on_select else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -206,6 +260,12 @@ class Table(BaseComponent):
         self._pagination_identifier = config.get(
             "pagination_identifier", f"{self._cache_id}_page"
         )
+        self._toggle_filters = config.get("toggle_filters", [])
+        self._range_filters = config.get("range_filters", {})
+        self._on_select = config.get("on_select", {})
+        # These are passed on to Vue explicitly; keep them out of the extra options
+        for key in ("toggle_filters", "range_filters", "on_select"):
+            self._config.pop(key, None)
 
     def get_state_dependencies(self) -> list[str]:
         """
@@ -220,6 +280,7 @@ class Table(BaseComponent):
             List of state identifier keys
         """
         deps = list(self._filters.keys()) if self._filters else []
+        deps.extend(k for k in self._range_filters if k not in deps)
         deps.append(self._pagination_identifier)
         # Include interactivity identifiers for page navigation
         if self._interactivity:
@@ -614,10 +675,16 @@ class Table(BaseComponent):
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
 
+        data = self._apply_range_filters(data, state)
+
         # Get pagination state
         pagination_state = state.get(self._pagination_identifier)
         if pagination_state is None:
             pagination_state = {}
+
+        # Rows before the toggle filters, for moving a selection a toggle hid
+        # to another row of the same group
+        untoggled_data = data
 
         page = pagination_state.get("page", 1)
         page_size = pagination_state.get("page_size", self._page_size)
@@ -627,6 +694,7 @@ class Table(BaseComponent):
         go_to_request = pagination_state.get("go_to_request")
         download_request = pagination_state.get("download_request")
 
+        data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(data, column_filters)
         data = self._apply_sort(data, sort_column, sort_dir)
 
@@ -724,6 +792,8 @@ class Table(BaseComponent):
                 "sort_dir": sort_dir,
                 "column_filters_json": json.dumps(column_filters, sort_keys=True),
             }
+            if self._toggle_filters:
+                current_sort_filter["toggles"] = self._toggle_states(pagination_state)
 
             # DETECT what changed by comparing current vs previous
             selection_changed = current_selections != last_selections
@@ -829,9 +899,20 @@ class Table(BaseComponent):
                             # ROW NOT FOUND - it was filtered out
                             # Update selection to first row's value AND set page to 1
                             if sort_filter_changed and not selection_changed:
-                                first_row_result = (
-                                    data.select(pl.col(nav_column)).head(1).collect()
+                                first_row_result = self._group_replacement_row(
+                                    untoggled_data,
+                                    data,
+                                    nav_column,
+                                    selected_value,
+                                    last_sort_filter.get("toggles"),
+                                    current_sort_filter.get("toggles"),
                                 )
+                                if first_row_result is None:
+                                    first_row_result = (
+                                        data.select(pl.col(nav_column))
+                                        .head(1)
+                                        .collect()
+                                    )
                                 if len(first_row_result) > 0:
                                     first_value = first_row_result[nav_column][0]
                                     if hasattr(first_value, "item"):
@@ -895,6 +976,11 @@ class Table(BaseComponent):
                 "total_pages": total_pages,
                 "sort_column": sort_column,
                 "sort_dir": sort_dir,
+                **(
+                    {"toggles": self._toggle_states(pagination_state)}
+                    if self._toggle_filters
+                    else {}
+                ),
             },
             "_auto_selection": auto_selection,
         }
@@ -915,6 +1001,95 @@ class Table(BaseComponent):
             f"[Table._prepare_vue_data] hash={data_hash[:8] if data_hash else 'None'}"
         )
         return result
+
+    def _group_replacement_row(
+        self,
+        untoggled_data: pl.LazyFrame,
+        data: pl.LazyFrame,
+        nav_column: str,
+        selected_value: Any,
+        last_toggles: dict[str, bool] | None,
+        current_toggles: dict[str, bool] | None,
+    ) -> pl.DataFrame | None:
+        """
+        Find the row that takes over a selection hidden by ticking a toggle filter.
+
+        Only toggles with a ``group_column`` do this: the selection moves to the first
+        visible row sharing the hidden row's value in that column. Returns a
+        one-row frame of ``nav_column``, or None to fall back to the first row.
+        """
+        if not current_toggles:
+            return None
+        for toggle in self._toggle_filters:
+            column = toggle["column"]
+            group_column = toggle.get("group_column")
+            switched_on = current_toggles.get(column) and not (
+                (last_toggles or {}).get(column, toggle["default"])
+                if last_toggles is not None
+                else False
+            )
+            if not group_column or not switched_on:
+                continue
+            group = (
+                untoggled_data.filter(pl.col(nav_column) == selected_value)
+                .select(pl.col(group_column))
+                .head(1)
+                .collect()
+            )
+            if group.height == 0:
+                continue
+            replacement = (
+                data.filter(pl.col(group_column) == group[group_column][0])
+                .select(pl.col(nav_column))
+                .head(1)
+                .collect()
+            )
+            if replacement.height > 0:
+                return replacement
+        return None
+
+    def _apply_range_filters(
+        self, data: pl.LazyFrame, state: dict[str, Any]
+    ) -> pl.LazyFrame:
+        """Keep rows whose [start, end] range contains each set range selection."""
+        for identifier, (start_column, end_column) in self._range_filters.items():
+            value = state.get(identifier)
+            if value is None:
+                continue
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            data = data.filter(
+                (pl.col(start_column) <= value) & (pl.col(end_column) >= value)
+            )
+        return data
+
+    def _apply_validation_filters(
+        self, data: pl.LazyFrame, state: dict[str, Any]
+    ) -> pl.LazyFrame:
+        """Restrictions beyond ``filters`` that the bridge validates selections against.
+
+        Range filters hide rows the way a filter does, so a selection outside the
+        range is dropped (and the table's default row takes over). Toggle filters
+        are not included: the table itself moves a selection they hide.
+        """
+        return self._apply_range_filters(data, state)
+
+    def _toggle_states(self, pagination_state: dict[str, Any]) -> dict[str, bool]:
+        """Current on/off state of each toggle filter, keyed by column."""
+        requested = pagination_state.get("toggles") or {}
+        return {
+            toggle["column"]: bool(requested.get(toggle["column"], toggle["default"]))
+            for toggle in self._toggle_filters
+        }
+
+    def _apply_toggle_filters(
+        self, data: pl.LazyFrame, pagination_state: dict[str, Any]
+    ) -> pl.LazyFrame:
+        """Keep rows whose column is true for every ticked toggle filter."""
+        for column, enabled in self._toggle_states(pagination_state).items():
+            if enabled:
+                data = data.filter(pl.col(column))
+        return data
 
     @staticmethod
     def _apply_column_filters(
@@ -1011,8 +1186,10 @@ class Table(BaseComponent):
             if isinstance(selected_value, float) and selected_value.is_integer():
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
+        data = self._apply_range_filters(data, state)
 
         pagination_state = state.get(self._pagination_identifier) or {}
+        data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(
             data, pagination_state.get("column_filters", [])
         )
@@ -1065,6 +1242,13 @@ class Table(BaseComponent):
 
         # Add any extra config options
         args.update(self._config)
+        for key in ("toggle_filters", "range_filters", "on_select"):
+            args.pop(key, None)
+
+        if self._toggle_filters:
+            args["toggleFilters"] = self._toggle_filters
+        if self._on_select:
+            args["onSelect"] = self._on_select
 
         return args
 

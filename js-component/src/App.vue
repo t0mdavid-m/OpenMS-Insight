@@ -32,7 +32,11 @@ import PlotlyClusteredHeatmap from './components/plotly/PlotlyClusteredHeatmap.v
 import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
 import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
 import PlotlyPca from './components/plotly/PlotlyPca.vue'
+import PlotlySeries from './components/plotly/PlotlySeries.vue'
+import Plotly3D from './components/plotly/Plotly3D.vue'
+import PlotlyDeconvolvedSpectrum from './components/plotly/PlotlyDeconvolvedSpectrum.vue'
 import SequenceView from './components/sequence/SequenceView.vue'
+import ProteoformSequenceView from './components/proteoform/ProteoformSequenceView.vue'
 
 export default defineComponent({
   name: 'App',
@@ -44,7 +48,11 @@ export default defineComponent({
     PlotlyMirrorPlot,
     PlotlyVolcano,
     PlotlyPca,
+    PlotlySeries,
+    Plotly3D,
+    PlotlyDeconvolvedSpectrum,
     SequenceView,
+    ProteoformSequenceView,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -212,8 +220,16 @@ export default defineComponent({
           return PlotlyVolcano
         case 'PlotlyPca':
           return PlotlyPca
+        case 'PlotlySeries':
+          return PlotlySeries
+        case 'Plotly3D':
+          return Plotly3D
+        case 'PlotlyDeconvolvedSpectrum':
+          return PlotlyDeconvolvedSpectrum
         case 'SequenceView':
           return SequenceView
+        case 'ProteoformSequenceView':
+          return ProteoformSequenceView
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null

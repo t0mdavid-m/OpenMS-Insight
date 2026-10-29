@@ -8,7 +8,9 @@ import pandas as pd
 import polars as pl
 
 
-def optimize_for_transfer(df: pl.DataFrame) -> pl.DataFrame:
+def optimize_for_transfer(
+    df: pl.DataFrame, downcast_floats: bool = True
+) -> pl.DataFrame:
     """
     Optimize DataFrame types for efficient Arrow transfer to frontend.
 
@@ -19,6 +21,8 @@ def optimize_for_transfer(df: pl.DataFrame) -> pl.DataFrame:
 
     Args:
         df: Polars DataFrame to optimize
+        downcast_floats: Cast Float64 to Float32 (default True). False keeps
+            full precision and only narrows integers.
 
     Returns:
         DataFrame with optimized types
@@ -50,7 +54,7 @@ def optimize_for_transfer(df: pl.DataFrame) -> pl.DataFrame:
 
         # Downcast Float64 to Float32 (sufficient for display)
         # Float32 has ~7 significant digits - enough for visualization
-        elif dtype == pl.Float64:
+        elif dtype == pl.Float64 and downcast_floats:
             casts.append(pl.col(col).cast(pl.Float32))
 
     if casts:

@@ -27,6 +27,7 @@ export interface PaginationState {
   total_pages: number
   sort_column?: string
   sort_dir?: 'asc' | 'desc'
+  toggles?: Record<string, boolean>
 }
 
 /**
@@ -63,6 +64,10 @@ export interface TableComponentArgs extends BaseComponentArgs {
   paginationIdentifier?: string
   /** Column metadata for filter dialogs (precomputed unique values, min/max) */
   columnMetadata?: Record<string, ColumnMetadata>
+  /** Title-row checkboxes that restrict rows to a boolean column */
+  toggleFilters?: Array<{ label: string; column: string; default: boolean; group_column?: string | null }>
+  /** Selections set (null clears) when a row click changes the selection */
+  onSelect?: Record<string, unknown>
 }
 
 /**
@@ -305,6 +310,105 @@ export interface MirrorPlotStyling {
 }
 
 /**
+ * Series plot component arguments.
+ */
+export interface SeriesPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlySeries'
+  xColumn: string
+  yColumn: string
+  seriesColumn?: string | null
+  /** [series value, legend name] pairs, in drawing order */
+  seriesNames?: Array<[string, string]>
+  seriesColors?: Record<string, string>
+  mode?: 'lines' | 'markers' | 'lines+markers'
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  showLegend?: boolean
+  fixedYRange?: boolean
+  svgFilename?: string
+  interactivity?: InteractivityMapping
+  height?: number
+}
+
+/**
+ * 3D plot component arguments.
+ */
+export interface Plot3DComponentArgs extends BaseComponentArgs {
+  componentType: 'Plotly3D'
+  xColumn: string
+  yColumn: string
+  zColumn: string
+  mode: 'stems' | 'lines'
+  seriesColumn?: string | null
+  /** [series value, legend name] pairs, in drawing order */
+  seriesNames?: Array<[string, string]>
+  seriesNameTemplate?: string | null
+  seriesColors?: Record<string, string>
+  color: string
+  traceColumn?: string | null
+  title: string
+  /** [identifier, title] pairs: first identifier with a selection sets the title */
+  selectionTitles?: Array<[string, string]>
+  xLabel: string
+  yLabel: string
+  zLabel: string
+  yDtick?: number | null
+  cameraEye?: { x: number; y: number; z: number } | null
+  showLegend?: boolean
+  svgFilename?: string
+  height?: number
+}
+
+/**
+ * Deconvolved spectrum component arguments.
+ */
+export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyDeconvolvedSpectrum'
+  view: 'deconvolved' | 'annotated' | 'augmented'
+  title: string
+  /** Selection identifier holding the index of the selected mass */
+  massIdentifier?: string | null
+  massColumn: string
+  massIntensityColumn: string
+  peakMzColumn?: string | null
+  peakIntensityColumn?: string | null
+  signalColumn?: string | null
+  styling?: {
+    highlightColor?: string
+    selectedColor?: string
+    unhighlightedColor?: string
+    highlightHiddenColor?: string
+    annotationColors?: Record<string, string>
+  }
+  config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
+  svgFilename?: string
+  /** Sequence tag drawn in the augmented view */
+  ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  height?: number
+}
+
+/**
+ * ProteoformSequenceView component arguments.
+ */
+export interface ProteoformSequenceViewComponentArgs extends BaseComponentArgs {
+  componentType: 'ProteoformSequenceView'
+  title?: string
+  /** Identifier holding the selected mass (index into the spectrum's masses) */
+  massIdentifier?: string | null
+  /** Identifier holding the selected residue (0-based position in the sequence) */
+  aaIdentifier?: string | null
+  /** Identifier the change-sequence dialog writes the new sequence to */
+  sequenceIdentifier?: string | null
+  /** Fragment ion types and tolerance (ppm) to start from */
+  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Sequence tag to mark (0-based residues) */
+  tag?: { startPos: number; endPos: number } | null
+  svgFilename?: string
+  height?: number
+}
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -316,6 +420,10 @@ export type ComponentArgs =
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
+  | SeriesPlotComponentArgs
+  | Plot3DComponentArgs
+  | DeconvolvedSpectrumComponentArgs
+  | ProteoformSequenceViewComponentArgs
 
 /**
  * Component layout entry.

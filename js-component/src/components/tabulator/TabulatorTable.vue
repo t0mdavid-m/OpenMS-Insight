@@ -29,7 +29,19 @@
         <div class="d-flex justify-center" style="grid-column: 2 / span 1">
           <h4>{{ args.title ?? '' }}</h4>
         </div>
-        <div class="d-flex justify-end" style="grid-column: 3 / span 1"></div>
+        <div class="d-flex justify-end align-center" style="grid-column: 3 / span 1">
+          <v-checkbox
+            v-for="toggle in toggleFilters"
+            :key="toggle.column"
+            :model-value="currentToggles[toggle.column]"
+            :label="toggle.label"
+            hide-details
+            density="compact"
+            color="primary"
+            class="flex-grow-0"
+            @update:model-value="onToggleFilter(toggle.column, $event)"
+          />
+        </div>
       </div>
     </div>
 
@@ -171,6 +183,8 @@ export default defineComponent({
       isLoadingServerData: false as boolean,
       // Track current server-side filter state sent to Python
       currentColumnFilters: [] as Array<{ field: string; type: string; value: unknown }>,
+      // On/off state of the title-row toggle filters, keyed by column
+      currentToggles: {} as Record<string, boolean>,
       // Track if table has fired tableBuilt event (DOM ready)
       isTableBuilt: false as boolean,
       // Track if we're in the middle of a user-initiated page navigation
@@ -203,6 +217,13 @@ export default defineComponent({
         'table-bordered': true,
         'table-sm': true,
       }
+    },
+    toggleFilters(): Array<{ label: string; column: string; default: boolean }> {
+      return this.args.toggleFilters || []
+    },
+    /** Toggle state to merge into pagination requests (nothing when the table has none). */
+    togglesPatch(): Record<string, unknown> {
+      return this.toggleFilters.length > 0 ? { toggles: { ...this.currentToggles } } : {}
     },
     tableData(): Record<string, unknown>[] {
       const data = this.streamlitDataStore.allDataForDrawing?.tableData
@@ -538,6 +559,13 @@ export default defineComponent({
       deep: true,
     },
   },
+  created() {
+    // Toggle filters start from the state Python last saw, else their defaults
+    const saved = this.paginationState?.toggles || {}
+    for (const toggle of this.toggleFilters) {
+      this.currentToggles[toggle.column] = saved[toggle.column] ?? toggle.default
+    }
+  },
   mounted() {
     // Initialize lastDataHash from store and draw table
     this.lastDataHash = this.currentDataHash
@@ -549,6 +577,24 @@ export default defineComponent({
     this.cleanupTeleport()
   },
   methods: {
+    /**
+     * Tick or untick a title-row toggle filter. The filtering happens in Python,
+     * so this requests page 1 of the re-filtered data.
+     */
+    onToggleFilter(column: string, value: boolean | null): void {
+      this.currentToggles[column] = !!value
+      const paginationIdentifier = this.args.paginationIdentifier
+      if (!paginationIdentifier) return
+      this.isLoadingServerData = true
+      this.selectionStore.updateSelection(paginationIdentifier, {
+        page: 1,
+        page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+        sort_column: this.paginationState?.sort_column,
+        sort_dir: this.paginationState?.sort_dir || 'asc',
+        column_filters: this.currentColumnFilters,
+        ...this.togglesPatch,
+      })
+    },
     drawTable(): void {
       // Reset table built flag - new table being created
       this.isTableBuilt = false
@@ -744,6 +790,7 @@ export default defineComponent({
               sort_column: sortColumn,
               sort_dir: sortDir,
               column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
             })
           }
         })
@@ -825,6 +872,7 @@ export default defineComponent({
             sort_column: sortColumn,
             sort_dir: sortDir,
             column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
           })
         }
 
@@ -855,6 +903,7 @@ export default defineComponent({
           sort_column: sortColumn,
           sort_dir: sortDir,
           column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
         })
       }
 
@@ -1337,6 +1386,19 @@ export default defineComponent({
       const interactivity = this.args.interactivity || {}
 
       if (rowData) {
+        // Side effects first, so a selection set by both on_select and
+        // interactivity ends up with the clicked row's value
+        const onSelect = this.args.onSelect || {}
+        const selectionChanges = Object.entries(interactivity).some(
+          ([identifier, column]) => this.selectionStore.$state[identifier] !== rowData[column as string]
+        )
+        if (selectionChanges) {
+          for (const [identifier, value] of Object.entries(onSelect)) {
+            if (!(identifier in interactivity) && this.selectionStore.$state[identifier] !== value) {
+              this.selectionStore.updateSelection(identifier, value)
+            }
+          }
+        }
         for (const [identifier, column] of Object.entries(interactivity)) {
           const value = rowData[column as string]
           this.selectionStore.updateSelection(identifier, value)
@@ -1484,6 +1546,7 @@ export default defineComponent({
           sort_column: this.requestedSortColumn || undefined,
           sort_dir: this.requestedSortDir,
           column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
           download_request: requestId,
         })
         return
@@ -1690,6 +1753,7 @@ export default defineComponent({
             sort_column: this.requestedSortColumn || undefined,
             sort_dir: this.requestedSortDir,
             column_filters: serverFilters,
+              ...this.togglesPatch,
           })
         }
         return
@@ -2228,6 +2292,7 @@ export default defineComponent({
             sort_column: this.requestedSortColumn || undefined,
             sort_dir: this.requestedSortDir,
             column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
             go_to_request: {
               field: this.selectedGoToField,
               value: this.goToInputValue.trim(),

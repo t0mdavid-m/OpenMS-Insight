@@ -536,6 +536,13 @@ def _validate_interactivity_selections(
             combined = combined | predicate
         data = data.filter(combined)
 
+    # Restrictions that are not plain equality filters (e.g. a Table's range
+    # filters) hide rows just the same, so a selection outside them is invalid too.
+    # Looked up on the class, so test doubles' auto-created attributes are ignored.
+    extra_filters = getattr(type(component), "_apply_validation_filters", None)
+    if callable(extra_filters):
+        data = extra_filters(component, data, state)
+
     # Collect all checks to validate
     state_changed = False
     schema = data.collect_schema()
