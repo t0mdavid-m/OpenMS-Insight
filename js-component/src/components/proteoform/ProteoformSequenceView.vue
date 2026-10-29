@@ -1222,7 +1222,12 @@ export default defineComponent({
         }
       }
       
-      if (massIndex >= 0 && this.args.massIdentifier) {
+      // Skip no-op writes: they advance this frame's selection counter without
+      // a round trip, and its stale state would then win over the next click
+      if (
+        massIndex >= 0 && this.args.massIdentifier &&
+        this.selectionStore.$state[this.args.massIdentifier] !== massIndex
+      ) {
         this.selectionStore.updateSelection(this.args.massIdentifier, massIndex)
       }
       

@@ -165,7 +165,10 @@ export default defineComponent({
       if (row === undefined) return
       for (const [identifier, column] of Object.entries(interactivity)) {
         const values = this.columns[column] as unknown[] | undefined
-        if (values) this.selectionStore.updateSelection(identifier, values[row])
+        // Skip no-op writes (see ProteoformSequenceView)
+        if (values && this.selectionStore.$state[identifier] !== values[row]) {
+          this.selectionStore.updateSelection(identifier, values[row])
+        }
       }
     },
   },
