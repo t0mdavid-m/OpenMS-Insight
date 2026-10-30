@@ -74,6 +74,10 @@ export interface TableComponentArgs extends BaseComponentArgs {
   // Where a selected row is scrolled to (default 'center'); when set, a
   // clicked row that is cut off is scrolled there too
   scrollPosition?: 'top' | 'center' | 'bottom' | 'nearest'
+  /** Fields hidden until the viewer turns them on in the column menu */
+  hiddenColumns?: string[]
+  /** False hides the column menu */
+  columnMenu?: boolean
 }
 
 /**

@@ -32,6 +32,13 @@ declare module 'tabulator-tables' {
     getRow(): RowComponent
   }
 
+  export interface ColumnComponent {
+    getField(): string
+    show(): void
+    hide(): void
+    isVisible(): boolean
+  }
+
   export class TabulatorFull {
     constructor(element: string | HTMLElement, options: Record<string, unknown>)
     options: Record<string, unknown>
@@ -41,6 +48,7 @@ declare module 'tabulator-tables' {
     getData(): unknown[]
     getRows(filter?: string): RowComponent[]
     getRow(index: any): RowComponent | false
+    getColumn(field: string): ColumnComponent | false
     selectRow(row?: RowComponent | number | string | RowComponent[] | any): void
     deselectRow(row?: RowComponent | number | string | any): void
     getSelectedRows(): RowComponent[]

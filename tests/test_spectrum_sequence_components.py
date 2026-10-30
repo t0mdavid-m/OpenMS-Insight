@@ -719,3 +719,23 @@ def test_pandas_hash_of_rows_holding_arrays():
         compute_pandas_dataframe_hash(pd.DataFrame({"id": [0], "peaks": [same]}))
         == first
     )
+
+
+def test_column_menu_can_be_hidden(mock_streamlit, temp_cache_dir):
+    from openms_insight import Table
+
+    data = pl.LazyFrame({"id": [0, 1]})
+    table = Table(
+        cache_id="no_menu",
+        data=data,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
+        column_menu=False,
+    )
+    assert table._get_component_args()["columnMenu"] is False
+    cached = Table(cache_id="no_menu", cache_path=str(temp_cache_dir))
+    assert cached._get_component_args()["columnMenu"] is False
+    shown = Table(
+        cache_id="menu", data=data, cache_path=str(temp_cache_dir), index_field="id"
+    )
+    assert "columnMenu" not in shown._get_component_args()

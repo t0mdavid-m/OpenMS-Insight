@@ -10,6 +10,37 @@ from ..core.base import BaseComponent
 from ..core.registry import register_component
 from ..preprocessing.filtering import compute_dataframe_hash
 
+# A spreadsheet reads a cell starting with one of these as a formula, so a value
+# like ``=HYPERLINK(...)`` in exported text would run when the CSV is opened.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Neutralise spreadsheet formulas in the text columns of ``df`` (CSV injection).
+
+    Text that starts with ``= + - @``, a tab or a carriage return gets a leading
+    single quote, which spreadsheets show as text and do not evaluate (the OWASP
+    recommendation). Numeric columns are left alone, so negative numbers stay
+    numbers.
+    """
+    pattern = "^[" + re.escape("".join(FORMULA_PREFIXES)) + "]"
+    text_columns = [
+        name
+        for name, dtype in df.schema.items()
+        if dtype in (pl.Utf8, pl.Categorical) or isinstance(dtype, pl.Enum)
+    ]
+    if not text_columns:
+        return df
+    return df.with_columns(
+        pl.when(pl.col(name).cast(pl.Utf8).str.contains(pattern))
+        .then(pl.lit("'") + pl.col(name).cast(pl.Utf8))
+        .otherwise(pl.col(name).cast(pl.Utf8))
+        .alias(name)
+        for name in text_columns
+    )
+
+
 logger = logging.getLogger(__name__)
 
 # Numeric data types for dtype checking
@@ -94,6 +125,8 @@ class Table(BaseComponent):
         reclick: str = "keep",
         default_row_selects: bool = True,
         scroll_position: str = "center",
+        hidden_columns: list[str] | None = None,
+        column_menu: bool = True,
         **kwargs,
     ):
         """
@@ -173,6 +206,13 @@ class Table(BaseComponent):
             scroll_position: Where a row selected from elsewhere is scrolled to:
                 "center" (the default), "top", "bottom" or "nearest". Other than
                 "center", a clicked row that is cut off is scrolled there too.
+            hidden_columns: Fields of ``column_definitions`` to hide until the
+                viewer turns them on in the column menu. Use it for optional
+                columns that most viewers do not need. A column definition with
+                ``"visible": False`` is treated the same way. The viewer's
+                choice is kept in their browser, per table.
+            column_menu: Show the toolbar button that lists the columns to show
+                or hide.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -184,6 +224,9 @@ class Table(BaseComponent):
         self._initial_sort = initial_sort
         self._pagination = pagination
         self._page_size = page_size
+        # Display-only, so not part of the cache config
+        self._hidden_columns = list(hidden_columns or [])
+        self._column_menu = bool(column_menu)
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -228,6 +271,7 @@ class Table(BaseComponent):
             reclick=reclick,
             default_row_selects=default_row_selects,
             scroll_position=scroll_position,
+            column_menu=column_menu,
             **kwargs,
         )
 
@@ -283,6 +327,7 @@ class Table(BaseComponent):
                 if self._scroll_position != "center"
                 else {}
             ),
+            **({"column_menu": False} if not self._column_menu else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -305,6 +350,7 @@ class Table(BaseComponent):
         self._reclick = config.get("reclick", "keep")
         self._default_row_selects = config.get("default_row_selects", True)
         self._scroll_position = config.get("scroll_position", "center")
+        self._column_menu = config.get("column_menu", True)
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in (
             "toggle_filters",
@@ -313,6 +359,7 @@ class Table(BaseComponent):
             "reclick",
             "default_row_selects",
             "scroll_position",
+            "column_menu",
         ):
             self._config.pop(key, None)
 
@@ -783,7 +830,7 @@ class Table(BaseComponent):
             download_payload = {
                 "request_id": download_request,
                 "filename": f"{self._title or self._cache_id}.csv",
-                "csv": self._order_export_columns(data.collect()).write_csv(),
+                "csv": csv_safe(self._order_export_columns(data.collect())).write_csv(),
             }
 
         data = project(data)
@@ -1272,6 +1319,8 @@ class Table(BaseComponent):
 
         Returns:
             Polars DataFrame, ready for ``write_csv()`` / ``write_parquet()``.
+            For a CSV that people open in a spreadsheet, pass it through
+            ``csv_safe()`` first, as the in-table download does.
         """
         state = state or {}
         data = self._preprocessed_data.get("data")
@@ -1343,6 +1392,11 @@ class Table(BaseComponent):
         if self._initial_sort:
             args["initialSort"] = self._initial_sort
 
+        if self._hidden_columns:
+            args["hiddenColumns"] = self._hidden_columns
+        if not self._column_menu:
+            args["columnMenu"] = False
+
         # Add any extra config options
         args.update(self._config)
         for key in (
@@ -1352,6 +1406,7 @@ class Table(BaseComponent):
             "reclick",
             "default_row_selects",
             "scroll_position",
+            "column_menu",
         ):
             args.pop(key, None)
 

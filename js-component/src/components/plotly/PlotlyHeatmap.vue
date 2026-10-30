@@ -332,8 +332,9 @@ export default defineComponent({
               y: 1,
               xanchor: 'left',
               yanchor: 'top',
-              bgcolor: 'rgba(255, 255, 255, 0.8)',
-              bordercolor: '#ccc',
+              bgcolor:
+                this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
+              bordercolor: this.theme?.base === 'dark' ? '#555' : '#ccc',
               borderwidth: 1,
             }
           : undefined,

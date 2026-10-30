@@ -547,3 +547,51 @@ class TestPaginationCounterConflict:
         assert state_manager._state["selections"][selection_id] == 99
         # Pagination should NOT update (15 < 20)
         assert state_manager._state["selections"][pagination_id]["page"] == 10
+
+
+class TestHiddenColumns:
+    """Columns hidden until the viewer turns them on in the column menu."""
+
+    def test_hidden_columns_in_args(
+        self, mock_streamlit, temp_cache_dir, large_table_data
+    ):
+        table = Table(
+            cache_id="test_hidden_columns",
+            data=large_table_data,
+            cache_path=str(temp_cache_dir),
+            hidden_columns=["category"],
+        )
+
+        args = table._get_component_args()
+
+        assert args["hiddenColumns"] == ["category"]
+        # Hidden columns are still sent, so the viewer can show them
+        assert "category" in [c["field"] for c in args["columnDefinitions"]]
+
+    def test_no_hidden_columns_by_default(
+        self, mock_streamlit, temp_cache_dir, large_table_data
+    ):
+        table = Table(
+            cache_id="test_hidden_columns_default",
+            data=large_table_data,
+            cache_path=str(temp_cache_dir),
+        )
+
+        assert "hiddenColumns" not in table._get_component_args()
+
+    def test_hidden_columns_do_not_invalidate_cache(
+        self, mock_streamlit, temp_cache_dir, large_table_data
+    ):
+        Table(
+            cache_id="test_hidden_columns_cache",
+            data=large_table_data,
+            cache_path=str(temp_cache_dir),
+        )
+        # Loaded from cache without data: a display option must not require a rebuild
+        table = Table(
+            cache_id="test_hidden_columns_cache",
+            cache_path=str(temp_cache_dir),
+            hidden_columns=["mass"],
+        )
+
+        assert table._get_component_args()["hiddenColumns"] == ["mass"]
