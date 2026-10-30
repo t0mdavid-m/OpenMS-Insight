@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from typing import Any
 
 import polars as pl
@@ -23,13 +24,16 @@ class ProteinStructureView(ProteinSequenceView):
     view's colours (a/x green, b/y blue, c/z red), and both cleavage sites of
     each annotated internal fragment. Modified residues carry the sequence
     view's dotted pattern and a label, residues outside
-    ``start_position``..``end_position`` are greyed out (or hidden). The
+    ``start_position``..``end_position`` are not shown. The
     sequence is aligned to the structure's chains, so structures with their
     own residue numbering work too. Clicking a residue sets ``aa_identifier``,
     so residue selection is shared with a sequence view.
 
     The structure itself is given per render with ``set_structure()``, since
     where it comes from (a database download, an upload) is up to the app.
+    With a handler set by ``on_structure_action()``, the view has buttons to
+    upload a structure file for the entry and to remove an uploaded one; the
+    app stores them.
 
     Example:
         view = ProteinStructureView(
@@ -99,6 +103,8 @@ class ProteinStructureView(ProteinSequenceView):
         self._viewer_height = viewer_height
         # Structure shown with the next render (set per render, not cached)
         self._structure: dict[str, Any] | None = None
+        # Handler of uploads and removals (set per render, not cached)
+        self._structure_handler: Callable[[dict[str, Any]], Any] | None = None
         super().__init__(
             cache_id=cache_id,
             data=data,
@@ -133,6 +139,7 @@ class ProteinStructureView(ProteinSequenceView):
         )
         self._viewer_height = config.get("viewer_height", 480)
         self._structure = None
+        self._structure_handler = None
 
     def _get_vue_component_name(self) -> str:
         return "ProteinStructureView"
@@ -146,8 +153,9 @@ class ProteinStructureView(ProteinSequenceView):
                 'ok' with ``format`` ('pdb' or 'cif') and ``data`` (the file's
                 text), or 'missing' / 'unavailable' with a ``message`` shown in
                 its place. Optional: ``accession`` (names the PNG download),
-                ``label`` (source line below the viewer) and ``url`` (links the
-                label).
+                ``label`` (source line below the viewer), ``url`` (links the
+                label), ``source`` ('upload' shows the remove button) and
+                ``upload_error`` (why the last upload was rejected).
 
         Returns:
             Self for method chaining.
@@ -164,6 +172,35 @@ class ProteinStructureView(ProteinSequenceView):
                 )
         self._structure = structure
         return self
+
+    def on_structure_action(
+        self, handler: Callable[[dict[str, Any]], Any] | None
+    ) -> "ProteinStructureView":
+        """
+        Let the user upload a structure file for the entry, or remove an
+        uploaded one, from the view.
+
+        Args:
+            handler: Called once per action with {'op': 'upload', 'accession',
+                'name', 'data'} (the file's text) or {'op': 'remove',
+                'accession'}; ``accession`` is the shown structure's. Returns
+                True if the page should rerun to show the result (e.g. the
+                stored file, or an ``upload_error`` for ``set_structure``).
+                None: no upload or remove buttons.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._structure_handler = handler
+        return self
+
+    def _handle_event(self, event: dict[str, Any]) -> bool:
+        if self._structure_handler is None or event.get("type") != "structure":
+            return False
+        action = {
+            k: event[k] for k in ("op", "accession", "name", "data") if k in event
+        }
+        return bool(self._structure_handler(action))
 
     def _get_render_key(self) -> str | None:
         # The structure's text can be large: hash its identity, not the text
@@ -193,6 +230,7 @@ class ProteinStructureView(ProteinSequenceView):
             {
                 "emptyMessage": self._empty_message,
                 "viewerHeight": self._viewer_height,
+                "structureUploads": self._structure_handler is not None,
             }
         )
         return args

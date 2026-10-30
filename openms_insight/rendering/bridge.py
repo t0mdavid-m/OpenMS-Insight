@@ -104,6 +104,9 @@ _NAVIGATION_KEYS = ("_navigate_to_page", "_target_row_index")
 # Leading underscores keep it clear of state identifiers, which the key also holds.
 _CACHE_GENERATION_KEY = "__cache_generation__"
 
+# Session key: per component key, the nonce of the last view action applied
+_HANDLED_EVENTS_KEY = "_svc_handled_events"
+
 # Key under which data a component is given per render is folded in (see
 # BaseComponent._get_render_key).
 _RENDER_KEY = "__render_key__"
@@ -1062,6 +1065,16 @@ def _render_component(
                 state_manager._session_key,
                 result,
             )
+
+        # An action the view sent (e.g. a file the user chose). Streamlit returns
+        # the last value on every run, so each one (by its nonce) is applied once.
+        event = result.get("_event")
+        if isinstance(event, dict) and event.get("nonce") is not None:
+            handled_events = st.session_state.setdefault(_HANDLED_EVENTS_KEY, {})
+            if handled_events.get(key) != event["nonce"]:
+                handled_events[key] = event["nonce"]
+                if component._handle_event(event):
+                    state_changed = True
 
         # Check if Vue is requesting data resend
         # The data is only sent with the next render, which this run has passed:

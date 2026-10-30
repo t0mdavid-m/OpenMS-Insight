@@ -858,6 +858,30 @@ class TestProteinStructureView:
         view.set_structure(None)
         assert render() is None
 
+    def test_structure_actions(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        view = self._view(sample_protein_sequence_data, temp_cache_dir)
+        assert view._get_component_args()["structureUploads"] is False
+        event = {
+            "type": "structure",
+            "op": "upload",
+            "accession": "P60844",
+            "name": "x.pdb",
+            "data": "ATOM",
+            "nonce": "1",
+        }
+        assert view._handle_event(event) is False
+
+        received = []
+        view.on_structure_action(lambda action: received.append(action) or True)
+        assert view._get_component_args()["structureUploads"] is True
+        assert view._handle_event({"type": "other", "nonce": "2"}) is False
+        assert view._handle_event(event) is True
+        assert received == [
+            {"op": "upload", "accession": "P60844", "name": "x.pdb", "data": "ATOM"}
+        ]
+
     def test_structure_is_validated(
         self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
     ):

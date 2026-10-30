@@ -87,7 +87,8 @@ export default defineComponent({
         : undefined
 
       // Avoid duplicate sends for same counter+hash+annotations combination
-      if (currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) {
+      const event = streamlitDataStore.event
+      if (event === null && currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) {
         console.log('[App] sendStateToStreamlit: SKIPPED (duplicate)', {
           timestamp: Date.now(),
           counter: currentCounter,
@@ -113,7 +114,7 @@ export default defineComponent({
       // moved because Python's did, a view wrote back a value it already had, or
       // new data arrived): sending them back would only rerun the script, once
       // per component on the page.
-      if (reportsNothingNew && stateValues(plainState) === streamlitDataStore.lastPythonState) {
+      if (event === null && reportsNothingNew && stateValues(plainState) === streamlitDataStore.lastPythonState) {
         console.log('[App] sendStateToStreamlit: SKIPPED (state is Python\'s)', {
           timestamp: Date.now(),
           counter: currentCounter,
@@ -149,6 +150,10 @@ export default defineComponent({
         // A new value per request, so Python can tell it from the kept one
         plainState._requestData = ++dataRequests
         streamlitDataStore.clearRequestData()
+      }
+      if (event !== null) {
+        plainState._event = JSON.parse(JSON.stringify(event))
+        streamlitDataStore.event = null
       }
       Streamlit.setComponentValue(plainState)
       console.log('[App] setComponentValue CALLED')
@@ -198,6 +203,14 @@ export default defineComponent({
     // RequestData needs immediate response - flush any pending debounced state first
     watch(() => streamlitDataStore.requestData, (newVal) => {
       if (newVal) {
+        flushPendingState()
+        sendStateToStreamlit()
+      }
+    })
+
+    // A view's action goes out at once, with any pending selection
+    watch(() => streamlitDataStore.event, (newVal) => {
+      if (newVal !== null) {
         flushPendingState()
         sendStateToStreamlit()
       }

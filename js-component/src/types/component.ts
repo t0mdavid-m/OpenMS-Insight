@@ -426,6 +426,8 @@ export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
   emptyMessage?: string
   /** Height of the 3D viewer in pixels */
   viewerHeight?: number
+  /** Upload and remove buttons (the app stores the files) */
+  structureUploads?: boolean
 }
 
 /**

@@ -11,6 +11,10 @@ export type StructureData = {
   name?: string
   label?: string
   url?: string
+  // 'upload': the user's file (it can be removed in the view)
+  source?: string
+  // Why the last upload for this entry was rejected
+  upload_error?: string
 }
 
 // One residue of the structure, read from its CA atom

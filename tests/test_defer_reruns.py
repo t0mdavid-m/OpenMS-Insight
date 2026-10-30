@@ -174,3 +174,25 @@ def test_click_is_seen_by_components_rendered_before_it(
     state.set_selection("scan", 1)
     render()
     assert state.get_selection("scan") == 1
+
+
+def test_view_event_is_applied_once(rerun, vue, temp_cache_dir):
+    # Streamlit returns the view's last value on every run: an action it
+    # carries is applied for the first of them only
+    state = StateManager(session_key="events")
+    table, _ = _tables(temp_cache_dir)
+    with pytest.raises(Rerun):
+        render_component(table, state, key="scans")
+    applied = []
+    table._handle_event = lambda event: applied.append(event["nonce"]) or True
+    vue.return_value = {"counter": 0, "_event": {"type": "x", "nonce": "a"}}
+    with pytest.raises(Rerun):
+        render_component(table, state, key="scans")
+    calls = rerun.call_count
+    render_component(table, state, key="scans")
+    assert applied == ["a"]
+    assert rerun.call_count == calls
+    vue.return_value = {"counter": 0, "_event": {"type": "x", "nonce": "b"}}
+    with pytest.raises(Rerun):
+        render_component(table, state, key="scans")
+    assert applied == ["a", "b"]

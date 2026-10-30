@@ -55,6 +55,10 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
     // The selection state Python sent last (stableStringify), to tell whether
     // Vue's state holds anything Python does not know yet
     lastPythonState: null as string | null,
+    // An action a view sends to Python once (e.g. a file the user chose), with
+    // a nonce Python tells repeats by: Streamlit returns the last value sent on
+    // every run
+    event: null as Record<string, unknown> | null,
   }),
 
   getters: {
@@ -372,6 +376,13 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
      */
     clearRequestData() {
       this.requestData = false
+    },
+
+    /**
+     * Send an action to Python with the selection state (applied once).
+     */
+    sendEvent(event: Record<string, unknown>) {
+      this.event = { ...event, nonce: `${Date.now()}-${Math.random()}` }
     },
   },
 })

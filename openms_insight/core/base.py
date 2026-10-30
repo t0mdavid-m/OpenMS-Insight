@@ -584,6 +584,18 @@ class BaseComponent(ABC):
         """
         return None
 
+    def _handle_event(self, event: dict[str, Any]) -> bool:
+        """
+        Apply an action the view sent (once per action).
+
+        Args:
+            event: The action, as the view sent it (with its ``nonce``).
+
+        Returns:
+            True if the page should rerun to show its effect.
+        """
+        return False
+
     def get_filters_mapping(self) -> dict[str, str]:
         """Return the filters identifier-to-column mapping."""
         return self._filters.copy()
