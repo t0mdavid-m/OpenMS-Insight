@@ -17,6 +17,29 @@
               {{ activeFilterCount }}
             </div>
           </div>
+          <v-btn variant="text" size="small" icon="mdi-view-column" :title="columnMenuTitle">
+            <v-icon>mdi-view-column</v-icon>
+            <v-menu activator="parent" :close-on-content-click="false" location="bottom start">
+              <v-card min-width="220">
+                <div class="d-flex align-center justify-space-between px-3 pt-2">
+                  <span class="text-subtitle-2">Columns</span>
+                  <v-btn size="small" variant="text" @click="resetColumnVisibility">Reset</v-btn>
+                </div>
+                <div style="max-height: 260px; overflow-y: auto" class="px-2 pb-2">
+                  <v-checkbox
+                    v-for="col in columnNames"
+                    :key="col.field"
+                    :model-value="isColumnVisible(col.field)"
+                    :label="col.title"
+                    :disabled="isColumnVisible(col.field) && visibleColumnCount <= 1"
+                    hide-details
+                    density="compact"
+                    @update:model-value="setColumnVisible(col.field, !!$event)"
+                  />
+                </div>
+              </v-card>
+            </v-menu>
+          </v-btn>
           <v-btn
             v-if="args.goToFields && args.goToFields.length > 0"
             variant="text"
@@ -132,6 +155,8 @@ export default defineComponent({
       tabulator: undefined as Tabulator | undefined,
       // Request id of a full-table CSV export awaiting its payload from Python
       pendingDownloadId: null as number | null,
+      // Columns the viewer showed or hid in the column menu (field -> visible)
+      columnVisibility: {} as Record<string, boolean>,
       selectedColumns: [] as string[],
       filterValues: {} as Record<
         string,
@@ -215,6 +240,25 @@ export default defineComponent({
           title: (col.title as string) || col.field || '',
         }))
         .filter((col) => col.field !== '')
+    },
+    // Columns hidden until the viewer turns them on
+    defaultHiddenColumns(): Set<string> {
+      const hidden = new Set<string>(this.args.hiddenColumns || [])
+      for (const col of this.args.columnDefinitions || []) {
+        if (col.visible === false && col.field) hidden.add(col.field)
+      }
+      return hidden
+    },
+    visibleColumnCount(): number {
+      return this.columnNames.filter((col) => this.isColumnVisible(col.field)).length
+    },
+    columnMenuTitle(): string {
+      const hidden = this.columnNames.length - this.visibleColumnCount
+      return hidden > 0 ? `Choose columns (${hidden} hidden)` : 'Choose columns'
+    },
+    // localStorage key for the viewer's column choice, one per table
+    columnVisibilityKey(): string {
+      return `openms-insight:columns:${this.args.paginationIdentifier || this.args.title || ''}`
     },
     activeFilterCount(): number {
       let count = 0
@@ -541,6 +585,7 @@ export default defineComponent({
   mounted() {
     // Initialize lastDataHash from store and draw table
     this.lastDataHash = this.currentDataHash
+    this.loadColumnVisibility()
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()
@@ -590,6 +635,7 @@ export default defineComponent({
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
+          colDef.visible = this.isColumnVisible(col.field || '')
           if (colDef.headerTooltip === undefined) {
             colDef.headerTooltip = true
           }
@@ -1471,6 +1517,56 @@ export default defineComponent({
       })
     },
 
+    isColumnVisible(field: string): boolean {
+      if (field in this.columnVisibility) return this.columnVisibility[field]
+      return !this.defaultHiddenColumns.has(field)
+    },
+    setColumnVisible(field: string, visible: boolean): void {
+      this.columnVisibility = { ...this.columnVisibility, [field]: visible }
+      this.applyColumnVisibility()
+      this.saveColumnVisibility()
+    },
+    resetColumnVisibility(): void {
+      this.columnVisibility = {}
+      this.applyColumnVisibility()
+      this.saveColumnVisibility()
+    },
+    applyColumnVisibility(): void {
+      if (!this.tabulator) return
+      for (const col of this.columnNames) {
+        const column = this.tabulator.getColumn(col.field)
+        if (!column) continue
+        if (this.isColumnVisible(col.field)) {
+          column.show()
+        } else {
+          column.hide()
+        }
+      }
+    },
+    loadColumnVisibility(): void {
+      try {
+        const stored = window.localStorage.getItem(this.columnVisibilityKey)
+        const parsed = stored ? JSON.parse(stored) : {}
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          this.columnVisibility = Object.fromEntries(
+            Object.entries(parsed).filter(([, v]) => typeof v === 'boolean')
+          ) as Record<string, boolean>
+        }
+      } catch {
+        // Storage can be unavailable (private window, blocked site data)
+      }
+    },
+    saveColumnVisibility(): void {
+      try {
+        if (Object.keys(this.columnVisibility).length === 0) {
+          window.localStorage.removeItem(this.columnVisibilityKey)
+        } else {
+          window.localStorage.setItem(this.columnVisibilityKey, JSON.stringify(this.columnVisibility))
+        }
+      } catch {
+        // Storage can be unavailable (private window, blocked site data)
+      }
+    },
     downloadTable(): void {
       // A server-side paginated table only holds the current page, and only the
       // displayed columns, so ask Python for the whole filtered, sorted table.
