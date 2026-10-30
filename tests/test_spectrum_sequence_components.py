@@ -761,3 +761,68 @@ def test_column_menu_can_be_hidden(mock_streamlit, temp_cache_dir):
     )
     assert "columnMenu" not in shown._get_component_args()
     assert "resetSort" not in shown._get_component_args()
+
+
+class TestProteinStructureView:
+    def _view(self, data, cache_dir, **kwargs):
+        from openms_insight import ProteinStructureView
+
+        return ProteinStructureView(
+            cache_id="structure_view",
+            data=data,
+            filters={"protein": "hit_index"},
+            aa_identifier="aa",
+            cache_path=str(cache_dir),
+            **kwargs,
+        )
+
+    def test_entry_and_structure(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        view = self._view(sample_protein_sequence_data, temp_cache_dir)
+        args = view._get_component_args()
+        assert args["componentType"] == "ProteinStructureView"
+        assert args["aaIdentifier"] == "aa"
+        assert args["viewerHeight"] == 480
+        assert args["emptyMessage"] == "Select an entry to show its structure."
+
+        data = view._prepare_vue_data({"protein": 1})
+        assert data["sequenceData"]["sequence"] == list("ACDK")
+        assert data["spectrumData"]["masses"] == [72.04]
+        assert data["structure"] is None
+
+        empty = view._prepare_vue_data({"protein": 1})["_hash"]
+        view.set_structure({"status": "ok", "format": "pdb", "data": "ATOM  1"})
+        data = view._prepare_vue_data({"protein": 1})
+        assert data["structure"]["data"] == "ATOM  1"
+        assert data["_hash"] != empty
+        view.set_structure({"status": "ok", "format": "pdb", "data": "ATOM  2"})
+        assert view._prepare_vue_data({"protein": 1})["_hash"] != data["_hash"]
+
+    def test_structure_is_validated(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        view = self._view(sample_protein_sequence_data, temp_cache_dir)
+        with pytest.raises(ValueError, match="status"):
+            view.set_structure({"status": "found"})
+        with pytest.raises(ValueError, match="format"):
+            view.set_structure({"status": "ok", "format": "mol2", "data": ""})
+        view.set_structure({"status": "missing", "message": "No structure"})
+
+    def test_options_survive_the_cache(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        from openms_insight import ProteinStructureView
+
+        self._view(
+            sample_protein_sequence_data,
+            temp_cache_dir,
+            empty_message="Pick a protein.",
+            viewer_height=300,
+        )
+        restored = ProteinStructureView(
+            cache_id="structure_view", cache_path=str(temp_cache_dir)
+        )
+        args = restored._get_component_args()
+        assert args["emptyMessage"] == "Pick a protein."
+        assert args["viewerHeight"] == 300

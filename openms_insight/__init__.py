@@ -13,6 +13,7 @@ from .components.mirrorplot import MirrorPlot
 from .components.pca import PCAPlot
 from .components.plot3d import Plot3D
 from .components.protein_sequence_view import ProteinSequenceView
+from .components.protein_structure_view import ProteinStructureView
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.series_plot import SeriesPlot
 from .components.table import Table
@@ -50,6 +51,7 @@ __all__ = [
     "Plot3D",
     "DeconvolvedSpectrum",
     "ProteinSequenceView",
+    "ProteinStructureView",
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",

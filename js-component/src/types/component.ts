@@ -411,6 +411,22 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
 }
 
 /**
+ * ProteinStructureView component arguments.
+ */
+export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
+  componentType: 'ProteinStructureView'
+  title?: string
+  /** Identifier holding the selected residue (0-based position in the sequence) */
+  aaIdentifier?: string | null
+  /** Fragment ion types and tolerance (ppm) to match with */
+  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Shown while no entry is selected */
+  emptyMessage?: string
+  /** Height of the 3D viewer in pixels */
+  viewerHeight?: number
+}
+
+/**
  * ProteinSequenceView component arguments.
  */
 export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
@@ -450,6 +466,7 @@ export type ComponentArgs =
   | Plot3DComponentArgs
   | DeconvolvedSpectrumComponentArgs
   | ProteinSequenceViewComponentArgs
+  | ProteinStructureViewComponentArgs
 
 /**
  * Component layout entry.
