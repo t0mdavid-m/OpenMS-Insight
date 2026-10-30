@@ -476,6 +476,9 @@ export default defineComponent({
           // react() preserves WebGL context and event handlers
           console.debug('[PlotlyHeatmap] renderPlot: using Plotly.react() (update)')
           await Plotly.react(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
+          // The points under a hover label may be gone (e.g. after a zoom
+          // reset); clear it as a new plot would
+          ;(Plotly as unknown as { Fx: { unhover: (id: string) => void } }).Fx.unhover(this.id)
           // Note: No need to re-setup event handlers - they persist with react()
         }
 

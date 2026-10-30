@@ -692,3 +692,30 @@ def test_scroll_position_reaches_vue_and_cache(mock_streamlit, temp_cache_dir):
             cache_path=str(temp_cache_dir),
             scroll_position="up",
         )
+
+
+def test_pandas_hash_of_rows_holding_arrays():
+    """Rows holding nested arrays hash by content, and quickly."""
+    import time
+
+    import numpy as np
+    import pandas as pd
+
+    from openms_insight.preprocessing.filtering import compute_pandas_dataframe_hash
+
+    peaks = np.array([np.arange(4.0) + i for i in range(50000)], dtype=object)
+    df = pd.DataFrame({"id": [0], "peaks": [peaks]})
+    start = time.perf_counter()
+    first = compute_pandas_dataframe_hash(df)
+    assert time.perf_counter() - start < 1
+    changed = peaks.copy()
+    changed[100] = changed[100] + 1
+    assert (
+        compute_pandas_dataframe_hash(pd.DataFrame({"id": [0], "peaks": [changed]}))
+        != first
+    )
+    same = np.array([np.arange(4.0) + i for i in range(50000)], dtype=object)
+    assert (
+        compute_pandas_dataframe_hash(pd.DataFrame({"id": [0], "peaks": [same]}))
+        == first
+    )

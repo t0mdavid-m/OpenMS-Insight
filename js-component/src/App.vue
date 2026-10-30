@@ -20,23 +20,25 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, watch, toRaw, type Component } from 'vue'
+import { defineAsyncComponent, defineComponent, watch, toRaw, type Component } from 'vue'
 import { stateValues, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
-import TabulatorTable from './components/tabulator/TabulatorTable.vue'
-import PlotlyLineplot from './components/plotly/PlotlyLineplot.vue'
-import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
-import PlotlyClusteredHeatmap from './components/plotly/PlotlyClusteredHeatmap.vue'
-import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
-import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
-import PlotlyPca from './components/plotly/PlotlyPca.vue'
-import PlotlySeries from './components/plotly/PlotlySeries.vue'
-import Plotly3D from './components/plotly/Plotly3D.vue'
-import PlotlyDeconvolvedSpectrum from './components/plotly/PlotlyDeconvolvedSpectrum.vue'
-import SequenceView from './components/sequence/SequenceView.vue'
-import ProteinSequenceView from './components/protein/ProteinSequenceView.vue'
+// Each view is its own chunk, so a page with several views does not load and
+// run Plotly in every table's frame
+const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
+const PlotlyLineplot = defineAsyncComponent(() => import('./components/plotly/PlotlyLineplot.vue'))
+const PlotlyHeatmap = defineAsyncComponent(() => import('./components/plotly/PlotlyHeatmap.vue'))
+const PlotlyClusteredHeatmap = defineAsyncComponent(() => import('./components/plotly/PlotlyClusteredHeatmap.vue'))
+const PlotlyMirrorPlot = defineAsyncComponent(() => import('./components/plotly/PlotlyMirrorPlot.vue'))
+const PlotlyVolcano = defineAsyncComponent(() => import('./components/plotly/PlotlyVolcano.vue'))
+const PlotlyPca = defineAsyncComponent(() => import('./components/plotly/PlotlyPca.vue'))
+const PlotlySeries = defineAsyncComponent(() => import('./components/plotly/PlotlySeries.vue'))
+const Plotly3D = defineAsyncComponent(() => import('./components/plotly/Plotly3D.vue'))
+const PlotlyDeconvolvedSpectrum = defineAsyncComponent(() => import('./components/plotly/PlotlyDeconvolvedSpectrum.vue'))
+const SequenceView = defineAsyncComponent(() => import('./components/sequence/SequenceView.vue'))
+const ProteinSequenceView = defineAsyncComponent(() => import('./components/protein/ProteinSequenceView.vue'))
 
 export default defineComponent({
   name: 'App',

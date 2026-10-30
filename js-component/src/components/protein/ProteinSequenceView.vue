@@ -320,7 +320,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, type PropType } from 'vue'
+import { defineComponent, toRaw, type PropType } from 'vue'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -917,7 +917,18 @@ export default defineComponent({
       }
 
       // get the observed mass table info
-      const observed_masses = this.spectrum.masses ?? []
+      // Plain values: the loops below run peaks x fragments times, and a read
+      // through Vue's reactive proxies there cost about a second per spectrum
+      const observed_masses: number[] = toRaw(this.spectrum.masses ?? [])
+      const tolerance = this.fragmentMassTolerance
+      const extraFragments = Object.entries(extraFragmentTypeObject)
+        .filter(
+          ([extraFragmentType]) =>
+            this.ionTypesExtra[extraFragmentType as ExtraFragmentType] ||
+            extraFragmentType === 'default'
+        )
+        .map(([_, extraFragment]) => extraFragment)
+        .flat()
 
       // calculate matching masses
       let matching_fragments: Record<string, unknown>[] = []
@@ -960,14 +971,6 @@ export default defineComponent({
                   }
                 })
             }
-            const extraFragments = Object.entries(extraFragmentTypeObject)
-              .filter(
-                ([extraFragmentType]) =>
-                  this.ionTypesExtra[extraFragmentType as ExtraFragmentType] ||
-                  extraFragmentType === 'default'
-              )
-              .map(([_, extraFragment]) => extraFragment)
-              .flat()
             for (
               let obsIndex = 0, obsSize = observed_masses.length;
               obsIndex < obsSize;
@@ -978,7 +981,7 @@ export default defineComponent({
                 const thisTypeMass = theoretical_mass + typeMass
                 const massDiffDa = observed_masses[obsIndex] - thisTypeMass
                 const massDiffPpm = (massDiffDa / thisTypeMass) * 1e6
-                if (Math.abs(massDiffPpm) > this.fragmentMassTolerance) {
+                if (Math.abs(massDiffPpm) > tolerance) {
                   // if mass difference is larger than tolerance, ignore
                   return
                 }

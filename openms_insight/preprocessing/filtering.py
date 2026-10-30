@@ -4,6 +4,7 @@ import hashlib
 import threading
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import polars as pl
 
@@ -194,6 +195,34 @@ def compute_dataframe_hash(df: pl.DataFrame) -> str:
     return hashlib.sha256(hash_input).hexdigest()
 
 
+def _row_digest(row: dict) -> str:
+    """Digest of one row whose cells may hold (nested) arrays.
+
+    ``str()`` of an object array of arrays formats every element and took
+    seconds for a row holding the peaks of a spectrum; the bytes are hashed
+    instead.
+    """
+    digest = hashlib.sha256()
+
+    def add(value: Any) -> None:
+        if isinstance(value, np.ndarray) and value.dtype != object:
+            digest.update(f"{value.dtype}{value.shape}".encode())
+            digest.update(np.ascontiguousarray(value).tobytes())
+        elif isinstance(value, (np.ndarray, list, tuple)):
+            digest.update(f"[{len(value)}".encode())
+            for item in value:
+                add(item)
+            digest.update(b"]")
+        else:
+            digest.update(repr(value).encode())
+            digest.update(b",")
+
+    for key, value in row.items():
+        digest.update(f"{key}=".encode())
+        add(value)
+    return digest.hexdigest()
+
+
 def compute_pandas_dataframe_hash(df: pd.DataFrame) -> str:
     """
     Compute an efficient hash for a pandas DataFrame, without converting it.
@@ -222,8 +251,8 @@ def compute_pandas_dataframe_hash(df: pd.DataFrame) -> str:
     ]
 
     if len(df) > 0:
-        hash_parts.append(str(df.head(1).to_dict("records")[0]))
-        hash_parts.append(str(df.tail(1).to_dict("records")[0]))
+        hash_parts.append(_row_digest(df.head(1).to_dict("records")[0]))
+        hash_parts.append(_row_digest(df.tail(1).to_dict("records")[0]))
 
         for col in df.columns:
             series = df[col]
