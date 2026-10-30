@@ -606,25 +606,31 @@ def test_deselected_row_is_not_selected_again_until_filters_change(
         assert _apply_auto_selection(plain, "p", {"row": 2}, state)
 
 
-def test_unpaginated_table_sends_every_row_unsorted(mock_streamlit, temp_cache_dir):
-    """Without pagination every row is sent in data order (Tabulator sorts them
-    itself, keeping that order on ties), while the default row is still the
-    first one of the sorted rows."""
+def test_unpaginated_table_sends_every_row(mock_streamlit, temp_cache_dir):
+    """Without pagination every row is sent unsorted, in their order in the
+    data (Tabulator's own sorts start from it), while the default row is the
+    first of the sorted rows."""
     from openms_insight import Table
 
-    data = pl.LazyFrame({"id": list(range(250)), "score": [i % 3 for i in range(250)]})
+    n = 250
+    data = pl.LazyFrame(
+        {"id": list(range(n)), "group": [i % 2 for i in range(n)], "score": [1] * n}
+    )
     table = Table(
         cache_id="all_rows",
         data=data,
         cache_path=str(temp_cache_dir),
         index_field="id",
+        filters={"group": "group"},
         interactivity={"row": "id"},
-        initial_sort=[{"column": "score", "dir": "desc"}],
+        initial_sort=[{"column": "id", "dir": "desc"}],
         pagination=False,
     )
-    result = table._prepare_vue_data({})
-    assert list(result["tableData"]["id"]) == list(range(250))
-    assert result["_auto_selection"] == {"row": 2}
+    result = table._prepare_vue_data({"group": 1})
+    assert list(result["tableData"]["id"]) == list(range(1, n, 2))
+    assert result["_auto_selection"] == {"row": n - 1}
+    # The initial selection is the first sorted row, not the first sent one
+    assert table.get_initial_selection({"group": 1}) == {"row": n - 1}
 
 
 def test_toggle_filter_colour_reaches_vue(mock_streamlit, temp_cache_dir):
@@ -656,3 +662,33 @@ def test_series_plot_font(mock_streamlit, temp_cache_dir: Path, sample_series_da
         cache_id="arial", font={"family": "Arial", "color": "black"}, **kwargs
     )
     assert plot._get_component_args()["font"] == {"family": "Arial", "color": "black"}
+
+
+def test_scroll_position_reaches_vue_and_cache(mock_streamlit, temp_cache_dir):
+    from openms_insight import Table
+
+    data = pl.LazyFrame({"id": [0, 1]})
+    table = Table(
+        cache_id="scroll_top",
+        data=data,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
+        scroll_position="top",
+    )
+    assert table._get_component_args()["scrollPosition"] == "top"
+    cached = Table(cache_id="scroll_top", cache_path=str(temp_cache_dir))
+    assert cached._get_component_args()["scrollPosition"] == "top"
+    default = Table(
+        cache_id="scroll_default",
+        data=data,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
+    )
+    assert "scrollPosition" not in default._get_component_args()
+    with pytest.raises(ValueError):
+        Table(
+            cache_id="bad",
+            data=data,
+            cache_path=str(temp_cache_dir),
+            scroll_position="up",
+        )

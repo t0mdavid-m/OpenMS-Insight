@@ -71,6 +71,9 @@ export interface TableComponentArgs extends BaseComponentArgs {
   /** Clicking the selected row again clears the interactivity selections */
   reclick?: 'unhighlight' | 'deselect'
   highlightDefaultRow?: boolean
+  // Where a selected row is scrolled to (default 'center'); when set, a
+  // clicked row that is cut off is scrolled there too
+  scrollPosition?: 'top' | 'center' | 'bottom' | 'nearest'
 }
 
 /**

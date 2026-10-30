@@ -215,6 +215,9 @@ export default defineComponent({
     }
   },
   computed: {
+    selectionScrollPosition(): 'top' | 'center' | 'bottom' | 'nearest' {
+      return this.args.scrollPosition || 'center'
+    },
     id(): string {
       return this.uniqueId
     },
@@ -749,7 +752,7 @@ export default defineComponent({
               if (selectedRows.length > 0) {
                 // scrollToRow forces virtual DOM to calculate and render visible rows
                 // (rejects when the row is not rendered, e.g. on a collapsed table)
-                this.tabulator.scrollToRow(selectedRows[0], 'center', false).catch(() => {})
+                this.tabulator.scrollToRow(selectedRows[0], this.selectionScrollPosition, false).catch(() => {})
               } else if (this.tabulator.getRows().length > 0) {
                 // No selection - scroll to top to trigger render
                 this.tabulator.scrollToRow(this.tabulator.getRows()[0], 'top', false).catch(() => {})
@@ -1120,7 +1123,7 @@ export default defineComponent({
       if (rows && rows[targetIndex]) {
         this.tabulator.deselectRow()
         rows[targetIndex].select()
-        rows[targetIndex].scrollTo('center', false).catch(() => {})
+        rows[targetIndex].scrollTo(this.selectionScrollPosition, false).catch(() => {})
         console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: SUCCESS - selected row ${targetIndex}`)
       }
     },
@@ -1175,7 +1178,7 @@ export default defineComponent({
               if (row) {
                 this.tabulator.deselectRow()
                 row.select()
-                row.scrollTo('center', false).catch(() => {})
+                row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
               }
             } else {
               // Store as pending - row may be on different page awaiting navigation
@@ -1220,10 +1223,10 @@ export default defineComponent({
               // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
               if (this.tabulator.options.pagination) {
                 this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                  row.scrollTo('center', false).catch(() => {})
+                  row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
                 }).catch(() => {})
               } else {
-                row.scrollTo('center', false).catch(() => {})
+                row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
               }
               // Successfully selected, clear any pending selection
               this.pendingSelection = null
@@ -1248,7 +1251,8 @@ export default defineComponent({
     highlightDefaultRow(): void {
       if (!this.args.highlightDefaultRow || !this.tabulator) return
       const defaultRow = this.args.defaultRow ?? 0
-      const rows = this.tabulator.getRows('active')
+      // In display order: after Tabulator's own sort
+      const rows = this.tabulator.getRows('display')
       if (defaultRow < 0 || defaultRow >= rows.length) return
       if (this.tabulator.getSelectedRows()[0] === rows[defaultRow]) return
       this.tabulator.deselectRow()
@@ -1296,10 +1300,10 @@ export default defineComponent({
                 // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
                 if (this.tabulator?.options.pagination) {
                   this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                    row.scrollTo('center', false).catch(() => {})
+                    row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
                   }).catch(() => {})
                 } else {
-                  row.scrollTo('center', false).catch(() => {})
+                  row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
                 }
                 selectedFromState = true
                 // Clear pending selection since we successfully applied it
@@ -1332,10 +1336,10 @@ export default defineComponent({
                 // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
                 if (this.tabulator?.options.pagination) {
                   this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                    row.scrollTo('center', false).catch(() => {})
+                    row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
                   }).catch(() => {})
                 } else {
-                  row.scrollTo('center', false).catch(() => {})
+                  row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
                 }
                 // KEY: Don't call updateSelection - Python already set it
                 selectedFromState = true
@@ -1350,30 +1354,10 @@ export default defineComponent({
         }
       }
 
-      // If no selection exists in state AND default_row is enabled,
-      // this is a fallback for edge cases (e.g., client-side pagination)
-      // For server-side pagination, Python pre-computes initial selection
+      // Python selects the default row (and sends the selection with the
+      // data); without a selection only the highlight is left to do here
       if (!selectedFromState && !this.isServerSidePagination) {
-        const defaultRow = this.args.defaultRow ?? 0
-        if (defaultRow >= 0) {
-          // Use setTimeout to ensure Tabulator has fully rendered rows
-          setTimeout(() => {
-            const visibleRows = this.tabulator?.getRows('active')
-            if (visibleRows && visibleRows.length > 0 && defaultRow < visibleRows.length) {
-              const row = visibleRows[defaultRow]
-              row.select()
-              // For client-side only: update selection store
-              const rowData = row.getData()
-              if (rowData) {
-                const interactivity = this.args.interactivity || {}
-                for (const [identifier, column] of Object.entries(interactivity)) {
-                  const value = rowData[column as string]
-                  this.selectionStore.updateSelection(identifier, value)
-                }
-              }
-            }
-          }, 0)
-        }
+        this.highlightDefaultRow()
       }
     },
 
@@ -1457,6 +1441,11 @@ export default defineComponent({
       // This ensures instant visual feedback regardless of Streamlit round-trip
       this.tabulator?.deselectRow()
       row.select()
+      // A clicked row that is cut off is brought into view when the table
+      // asks for a scroll position of its own
+      if (this.args.scrollPosition) {
+        row.scrollTo(this.args.scrollPosition, false).catch(() => {})
+      }
 
       this.$emit('rowSelected', rowIndex)
 

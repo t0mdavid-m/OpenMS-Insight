@@ -93,6 +93,7 @@ class Table(BaseComponent):
         on_select: dict[str, Any] | None = None,
         reclick: str = "keep",
         default_row_selects: bool = True,
+        scroll_position: str = "center",
         **kwargs,
     ):
         """
@@ -169,6 +170,9 @@ class Table(BaseComponent):
                 table's filter values change.
             default_row_selects: If False, the default row is only highlighted
                 while nothing is selected, and no selection is set for it.
+            scroll_position: Where a row selected from elsewhere is scrolled to:
+                "center" (the default), "top", "bottom" or "nearest". Other than
+                "center", a clicked row that is cut off is scrolled there too.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -191,6 +195,12 @@ class Table(BaseComponent):
             )
         self._reclick = reclick
         self._default_row_selects = bool(default_row_selects)
+        if scroll_position not in ("center", "top", "bottom", "nearest"):
+            raise ValueError(
+                "scroll_position must be 'center', 'top', 'bottom' or 'nearest', "
+                f"not {scroll_position!r}"
+            )
+        self._scroll_position = scroll_position
 
         super().__init__(
             cache_id=cache_id,
@@ -217,6 +227,7 @@ class Table(BaseComponent):
             on_select=on_select,
             reclick=reclick,
             default_row_selects=default_row_selects,
+            scroll_position=scroll_position,
             **kwargs,
         )
 
@@ -267,6 +278,11 @@ class Table(BaseComponent):
             **({"on_select": self._on_select} if self._on_select else {}),
             **({"reclick": self._reclick} if self._reclick != "keep" else {}),
             **({"default_row_selects": False} if not self._default_row_selects else {}),
+            **(
+                {"scroll_position": self._scroll_position}
+                if self._scroll_position != "center"
+                else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -288,6 +304,7 @@ class Table(BaseComponent):
         self._on_select = config.get("on_select", {})
         self._reclick = config.get("reclick", "keep")
         self._default_row_selects = config.get("default_row_selects", True)
+        self._scroll_position = config.get("scroll_position", "center")
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in (
             "toggle_filters",
@@ -295,6 +312,7 @@ class Table(BaseComponent):
             "on_select",
             "reclick",
             "default_row_selects",
+            "scroll_position",
         ):
             self._config.pop(key, None)
 
@@ -383,6 +401,9 @@ class Table(BaseComponent):
         # Get first page data and extract default row values
         try:
             vue_data = self._prepare_vue_data(state)
+            if not self._pagination:
+                # tableData holds the rows unsorted; the browser sorts them
+                return vue_data.get("_auto_selection") or None
             table_data = vue_data.get("tableData")
             if table_data is None or len(table_data) == 0:
                 return None
@@ -421,10 +442,11 @@ class Table(BaseComponent):
         # Sort by filter columns for efficient predicate pushdown.
         # This clusters identical filter values together, enabling Polars
         # to skip row groups that don't contain the target value when
-        # filtering by selection state.
+        # filtering by selection state. Stable, so the rows of one filter value
+        # keep their order (sorting them again keeps that order on ties).
         if self._filters:
             sort_columns = list(self._filters.values())
-            data = data.sort(sort_columns)
+            data = data.sort(sort_columns, maintain_order=True)
 
         # Collect schema for auto-generating column definitions if needed
         schema = data.collect_schema()
@@ -747,8 +769,9 @@ class Table(BaseComponent):
 
         data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(data, column_filters)
-        # Without pagination Tabulator sorts the rows itself, in a stable sort
-        # from the order they arrive in, so they are sent unsorted
+        # Without pagination Tabulator sorts the rows itself, starting each sort
+        # from the order they arrive in (it keeps that order on ties), so they
+        # are sent unsorted
         unsorted_data = data
         data = self._apply_sort(data, sort_column, sort_dir)
 
@@ -1002,8 +1025,14 @@ class Table(BaseComponent):
             and self._default_row >= 0
             and self._default_row_selects
         ):
-            # Get the first row of sorted/filtered data
-            first_row = data.head(1).collect()
+            # Get the first row of sorted/filtered data. Without pagination the
+            # browser shows every row, sorted, and highlights default_row.
+            if self._pagination:
+                first_row = data.head(1).collect()
+            else:
+                first_row = data.slice(
+                    min(self._default_row, total_rows - 1), 1
+                ).collect()
             if first_row.height > 0:
                 for identifier, column in self._interactivity.items():
                     if column in first_row.columns:
@@ -1322,6 +1351,7 @@ class Table(BaseComponent):
             "on_select",
             "reclick",
             "default_row_selects",
+            "scroll_position",
         ):
             args.pop(key, None)
 
@@ -1333,6 +1363,8 @@ class Table(BaseComponent):
             args["reclick"] = self._reclick
         if not self._default_row_selects:
             args["highlightDefaultRow"] = True
+        if self._scroll_position != "center":
+            args["scrollPosition"] = self._scroll_position
 
         return args
 
