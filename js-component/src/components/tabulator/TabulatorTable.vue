@@ -2476,6 +2476,16 @@ export default defineComponent({
   color: #aaa;
 }
 
+/* Dark mode selected row: the bootstrap4 theme keeps its light-mode blue,
+   which leaves the white row text unreadable */
+.tabulator.table-dark .tabulator-row.tabulator-selected {
+  background-color: #2b4c7e;
+}
+
+.tabulator.table-dark .tabulator-row.tabulator-selected:hover {
+  background-color: #355d99;
+}
+
 /* Light mode - ensure consistent styling */
 .table-light .tabulator-footer {
   background-color: #f8f9fa;

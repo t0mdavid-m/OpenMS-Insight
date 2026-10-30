@@ -335,7 +335,7 @@ export default defineComponent({
           size: 10,
           color: this.theme?.textColor || 'black',
         },
-        bgcolor: 'rgba(255, 255, 255, 0.8)',
+        bgcolor: this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
         borderpad: 2,
       }))
     },
