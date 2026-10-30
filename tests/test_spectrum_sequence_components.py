@@ -731,11 +731,17 @@ def test_column_menu_can_be_hidden(mock_streamlit, temp_cache_dir):
         cache_path=str(temp_cache_dir),
         index_field="id",
         column_menu=False,
+        reset_sort=True,
+        reset_sort_on=["protein"],
     )
     assert table._get_component_args()["columnMenu"] is False
+    assert table._get_component_args()["resetSort"] is True
     cached = Table(cache_id="no_menu", cache_path=str(temp_cache_dir))
     assert cached._get_component_args()["columnMenu"] is False
+    assert cached._get_component_args()["resetSort"] is True
+    assert cached._get_component_args()["resetSortOn"] == ["protein"]
     shown = Table(
         cache_id="menu", data=data, cache_path=str(temp_cache_dir), index_field="id"
     )
     assert "columnMenu" not in shown._get_component_args()
+    assert "resetSort" not in shown._get_component_args()

@@ -649,6 +649,9 @@ export default defineComponent({
             margin: {
               r: this.effectiveColorbarVisible ? 120 : 20,
             },
+            // Keep the height: the frame is as tall as the plot, so an autosize
+            // here would measure the plot's own collapsing container
+            height: plotElement._fullLayout?.height ?? this.args.height ?? 400,
           })
         } catch (error) {
           // Silently handle errors

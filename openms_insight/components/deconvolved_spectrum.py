@@ -84,6 +84,7 @@ class DeconvolvedSpectrum(BaseComponent):
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
         svg_filename: str = "spectrum",
+        drilldown_title: str | None = None,
         **kwargs,
     ):
         """
@@ -112,6 +113,8 @@ class DeconvolvedSpectrum(BaseComponent):
                 peaks as [peak index, m/z, intensity, charge]. The m/z values
                 must equal the raw peak m/z values they refer to.
             title: Plot title (default: the view's title).
+            drilldown_title: Title while a ladder view shows the raw peaks of a
+                mass (default: "Annotated Spectrum").
             styling: Colour overrides: highlightColor, selectedColor,
                 unhighlightedColor, highlightHiddenColor and annotationColors
                 (massButton, selectedMassButton, sequenceArrow,
@@ -134,6 +137,7 @@ class DeconvolvedSpectrum(BaseComponent):
         self._styling = styling or {}
         self._plot_config = config or {}
         self._svg_filename = svg_filename
+        self._drilldown_title = drilldown_title
         # Sequence tag drawn in the 'ladder' view (set per render, not cached)
         self._ladder: dict[str, Any] | None = None
 
@@ -157,6 +161,7 @@ class DeconvolvedSpectrum(BaseComponent):
             styling=styling,
             config=config,
             svg_filename=svg_filename,
+            drilldown_title=drilldown_title,
             **kwargs,
         )
 
@@ -173,6 +178,12 @@ class DeconvolvedSpectrum(BaseComponent):
             "styling": self._styling,
             "plot_config": self._plot_config,
             "svg_filename": self._svg_filename,
+            # Only when set, so caches built without it keep their hash
+            **(
+                {"drilldown_title": self._drilldown_title}
+                if self._drilldown_title
+                else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -187,6 +198,7 @@ class DeconvolvedSpectrum(BaseComponent):
         self._styling = config.get("styling") or {}
         self._plot_config = config.get("plot_config") or {}
         self._svg_filename = config.get("svg_filename", "spectrum")
+        self._drilldown_title = config.get("drilldown_title")
         self._ladder = None
 
     def _data_columns(self) -> list[str]:
@@ -306,4 +318,6 @@ class DeconvolvedSpectrum(BaseComponent):
             "svgFilename": self._svg_filename,
             "ladder": self._ladder,
         }
+        if self._drilldown_title:
+            args["drilldownTitle"] = self._drilldown_title
         return args

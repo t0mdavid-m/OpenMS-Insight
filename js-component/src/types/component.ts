@@ -76,6 +76,10 @@ export interface TableComponentArgs extends BaseComponentArgs {
   scrollPosition?: 'top' | 'center' | 'bottom' | 'nearest'
   /** Fields hidden until the viewer turns them on in the column menu */
   hiddenColumns?: string[]
+  /** New rows are sorted by initialSort again (client-side tables) */
+  resetSort?: boolean
+  /** Identifiers whose selection change sorts by initialSort again */
+  resetSortOn?: string[]
   /** False hides the column menu */
   columnMenu?: boolean
 }
@@ -383,6 +387,8 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyDeconvolvedSpectrum'
   view: 'deconvolved' | 'annotated' | 'ladder'
   title: string
+  /** Title while a ladder view shows the raw peaks of a mass */
+  drilldownTitle?: string
   /** Selection identifier holding the index of the selected mass */
   massIdentifier?: string | null
   massColumn: string

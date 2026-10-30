@@ -127,6 +127,8 @@ class Table(BaseComponent):
         scroll_position: str = "center",
         hidden_columns: list[str] | None = None,
         column_menu: bool = True,
+        reset_sort: bool = False,
+        reset_sort_on: list[str] | None = None,
         **kwargs,
     ):
         """
@@ -213,6 +215,12 @@ class Table(BaseComponent):
                 choice is kept in their browser, per table.
             column_menu: Show the toolbar button that lists the columns to show
                 or hide.
+            reset_sort: Without pagination, sort new rows (e.g. after a filter
+                value changed) by ``initial_sort`` again instead of keeping the
+                viewer's sort.
+            reset_sort_on: Identifiers whose selection, when it changes, sorts
+                the rows by ``initial_sort`` again, whether or not the rows
+                change (e.g. a table of the tags of the selected protein).
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -227,6 +235,8 @@ class Table(BaseComponent):
         # Display-only, so not part of the cache config
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
+        self._reset_sort = bool(reset_sort)
+        self._reset_sort_on = list(reset_sort_on or [])
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -272,6 +282,8 @@ class Table(BaseComponent):
             default_row_selects=default_row_selects,
             scroll_position=scroll_position,
             column_menu=column_menu,
+            reset_sort=reset_sort,
+            reset_sort_on=reset_sort_on,
             **kwargs,
         )
 
@@ -328,6 +340,8 @@ class Table(BaseComponent):
                 else {}
             ),
             **({"column_menu": False} if not self._column_menu else {}),
+            **({"reset_sort": True} if self._reset_sort else {}),
+            **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -351,6 +365,8 @@ class Table(BaseComponent):
         self._default_row_selects = config.get("default_row_selects", True)
         self._scroll_position = config.get("scroll_position", "center")
         self._column_menu = config.get("column_menu", True)
+        self._reset_sort = config.get("reset_sort", False)
+        self._reset_sort_on = config.get("reset_sort_on") or []
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in (
             "toggle_filters",
@@ -360,6 +376,8 @@ class Table(BaseComponent):
             "default_row_selects",
             "scroll_position",
             "column_menu",
+            "reset_sort",
+            "reset_sort_on",
         ):
             self._config.pop(key, None)
 
@@ -1396,6 +1414,10 @@ class Table(BaseComponent):
             args["hiddenColumns"] = self._hidden_columns
         if not self._column_menu:
             args["columnMenu"] = False
+        if self._reset_sort:
+            args["resetSort"] = True
+        if self._reset_sort_on:
+            args["resetSortOn"] = self._reset_sort_on
 
         # Add any extra config options
         args.update(self._config)
@@ -1407,6 +1429,8 @@ class Table(BaseComponent):
             "default_row_selects",
             "scroll_position",
             "column_menu",
+            "reset_sort",
+            "reset_sort_on",
         ):
             args.pop(key, None)
 

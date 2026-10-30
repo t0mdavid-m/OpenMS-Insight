@@ -143,7 +143,9 @@ export default defineComponent({
       return this.mode === 'annotated' || this.mode === 'ladder-annotated'
     },
     currentTitle(): string {
-      return this.mode === 'ladder-annotated' ? 'Annotated Spectrum' : this.args.title
+      return this.mode === 'ladder-annotated'
+        ? this.args.drilldownTitle ?? 'Annotated Spectrum'
+        : this.args.title
     },
     xAxisLabel(): string {
       return this.isMzMode ? 'm/z' : 'Monoisotopic Mass'

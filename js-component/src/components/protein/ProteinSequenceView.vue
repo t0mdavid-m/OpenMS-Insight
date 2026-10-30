@@ -1,4 +1,8 @@
 <template>
+  <!-- At least as wide as the residue grid: a narrow frame scrolls sideways
+       instead of squeezing the header and the fragment table -->
+  <div class="sequence-view-row">
+  <div class="sequence-view-column">
   <div v-if="args.title" class="d-flex justify-center">
     <h4>{{ args.title }}</h4>
   </div>
@@ -258,6 +262,8 @@
       </template>
     </div>
   </v-sheet>
+  </div>
+  </div>
   
   <v-snackbar
     v-model="copySnackbar"
@@ -1427,6 +1433,14 @@ export default defineComponent({
 </script>
 
 <style scoped lang="scss">
+.sequence-view-row {
+  display: flex;
+}
+
+.sequence-view-column {
+  flex: 0 1 100%;
+}
+
 .sequence-grid {
   display: grid;
   grid-template-rows: auto;

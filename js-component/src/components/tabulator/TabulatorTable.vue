@@ -628,6 +628,17 @@ export default defineComponent({
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()
+    // A new selection of these identifiers starts the rows in the initial order
+    for (const identifier of this.args.resetSortOn || []) {
+      this.$watch(
+        () => this.selectionStore.$state[identifier],
+        () => {
+          if (this.tabulator && !this.isServerSidePagination) {
+            ;(this.tabulator as any).setSort(this.args.initialSort || [])
+          }
+        }
+      )
+    }
     // A table fitted to its rows resizes with them: the frame follows it
     if (!this.isServerSidePagination) {
       this.rootResizeObserver = new ResizeObserver(() => {
@@ -703,6 +714,11 @@ export default defineComponent({
           colDef.visible = this.isColumnVisible(col.field || '')
           if (colDef.headerTooltip === undefined) {
             colDef.headerTooltip = true
+          }
+          // A missing number arrives as NaN; the CSV leaves it empty
+          if (colDef.accessorDownload === undefined) {
+            colDef.accessorDownload = (value: unknown) =>
+              typeof value === 'number' && Number.isNaN(value) ? '' : value
           }
           // Resolve custom formatter names to their implementations
           // Python sends formatter as a string (e.g., "scientific", "signed", "badge")
@@ -1633,6 +1649,11 @@ export default defineComponent({
         // leaves Tabulator in an inconsistent state without this explicit setPage() call.
         if (this.isServerSidePagination && targetPage && this.isNavigatingPages) {
           ;(this.tabulator as any).setPage(targetPage).catch(() => {})
+        }
+
+        // New rows start in the initial order again when the table asks so
+        if (this.args.resetSort && !this.isServerSidePagination) {
+          ;(this.tabulator as any)?.setSort(this.args.initialSort || [])
         }
 
         // Only sync selection if not navigating pages
@@ -2609,6 +2630,11 @@ export default defineComponent({
 .tabulator-col-title,
 .tabulator-cell {
   font-size: 14px;
+}
+
+.v-checkbox.v-input.toggle-filter,
+.toggle-filter .v-selection-control {
+  flex: 1 1 auto;
 }
 
 .toggle-filter .v-label {
