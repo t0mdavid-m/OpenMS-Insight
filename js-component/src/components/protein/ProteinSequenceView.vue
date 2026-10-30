@@ -69,7 +69,7 @@
           </v-btn>
           <v-btn :id="settingsButtonId" variant="text" icon="mdi-cog" size="large"></v-btn>
           <v-menu :close-on-content-click="false" :activator="`#${settingsButtonId}`" location="bottom">
-            <v-card min-width="300">
+            <v-card min-width="300" class="sequence-controls">
               <v-list>
                 <v-list-item>
                   <v-list-item-title># amino acids per row</v-list-item-title>
@@ -160,6 +160,7 @@
             <v-col cols="12" md="8">
               <v-text-field
                 v-model="regexPattern"
+                class="sequence-regex-field"
                 label="Regex pattern for highlighting"
                 placeholder="e.g., A+, [KR], M.*L"
                 :error-messages="regexError"
@@ -1437,6 +1438,18 @@ export default defineComponent({
   },
 })
 </script>
+
+<style lang="scss">
+/* Option labels at medium emphasis and the regex field's height, as in the
+   view's first release (dialogs and menus render outside the component) */
+.sequence-controls .v-selection-control .v-label {
+  opacity: var(--v-medium-emphasis-opacity);
+}
+.sequence-regex-field .v-field__input {
+  padding-top: 19px;
+  padding-bottom: 4px;
+}
+</style>
 
 <style scoped lang="scss">
 .sequence-view-row {

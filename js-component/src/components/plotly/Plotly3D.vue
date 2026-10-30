@@ -246,6 +246,8 @@ export default defineComponent({
       await Plotly.react(element, this.traces, this.layout, {
         ...exportButtons,
         responsive: true,
+        // No "double-click to isolate" notice on a legend click
+        showTips: false,
       } as Partial<Plotly.Config>)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },

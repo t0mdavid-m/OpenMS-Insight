@@ -1,7 +1,7 @@
 <template>
   <v-btn id="info-button" variant="text" size="large" icon="mdi-information"> </v-btn>
   <v-dialog v-model="dialog" activator="#info-button" width="auto" :theme="theme?.base ?? 'light'">
-    <v-card>
+    <v-card class="sequence-controls">
       <v-card-title>Sequence View legend</v-card-title>
       <v-divider></v-divider>
       <v-card-text>
