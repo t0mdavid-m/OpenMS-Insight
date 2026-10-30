@@ -737,9 +737,13 @@ def test_scroll_position_reaches_vue_and_cache(mock_streamlit, temp_cache_dir):
 
 
 def test_pandas_hash_of_rows_holding_arrays():
-    """Rows holding nested arrays hash by content, and quickly."""
-    import time
+    """Rows holding nested arrays hash by content, not by their text form.
 
+    The text form was slow (seconds for a spectrum's peaks) and summarises the
+    middle of a long array as '...', so a change there went unnoticed: the
+    changed row below sits in that middle. No wall-clock assertion, which
+    fails on a busy CI runner.
+    """
     import numpy as np
     import pandas as pd
 
@@ -747,9 +751,7 @@ def test_pandas_hash_of_rows_holding_arrays():
 
     peaks = np.array([np.arange(4.0) + i for i in range(50000)], dtype=object)
     df = pd.DataFrame({"id": [0], "peaks": [peaks]})
-    start = time.perf_counter()
     first = compute_pandas_dataframe_hash(df)
-    assert time.perf_counter() - start < 1
     changed = peaks.copy()
     changed[100] = changed[100] + 1
     assert (
