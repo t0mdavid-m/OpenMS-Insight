@@ -613,11 +613,14 @@ class Table(BaseComponent):
         if not self._column_definitions:
             return None
 
-        columns_to_select = [
-            col_def["field"]
-            for col_def in self._column_definitions
-            if "field" in col_def
-        ]
+        # Once per field: a field may be shown in more than one column
+        columns_to_select = list(
+            dict.fromkeys(
+                col_def["field"]
+                for col_def in self._column_definitions
+                if "field" in col_def
+            )
+        )
         # Always include index field for row identification
         if self._index_field and self._index_field not in columns_to_select:
             columns_to_select.append(self._index_field)

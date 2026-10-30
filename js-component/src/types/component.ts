@@ -342,6 +342,9 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs {
  */
 export interface Plot3DComponentArgs extends BaseComponentArgs {
   componentType: 'Plotly3D'
+  titleBold?: boolean
+  border?: boolean
+  exportFormat?: 'svg' | 'png'
   xColumn: string
   yColumn: string
   zColumn: string

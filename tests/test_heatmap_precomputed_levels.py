@@ -101,15 +101,17 @@ def test_levels_exclude_categorical_filters(temp_cache_dir, full):
 
 
 def test_export_name_and_wheel_reach_vue(tmp_path, full):
-    """Render-time options: they reach Vue but not the cache configuration."""
+    """They reach Vue, also from a component loaded from its cache, and leave
+    the cache of a heatmap without them as it was."""
     plain = _heatmap(tmp_path, data=full, cache_id="plain")
     args = plain._get_component_args()
     assert "svgFilename" not in args and "scrollZoom" not in args
+    assert "svg_filename" not in plain._get_cache_config()
 
-    styled = _heatmap(
+    _heatmap(
         tmp_path, data=full, cache_id="styled", svg_filename="heat", scroll_zoom=False
     )
-    args = styled._get_component_args()
+    loaded = Heatmap(cache_id="styled", cache_path=str(tmp_path))
+    args = loaded._get_component_args()
     assert args["svgFilename"] == "heat"
     assert args["scrollZoom"] is False
-    assert styled._get_cache_config() == plain._get_cache_config()

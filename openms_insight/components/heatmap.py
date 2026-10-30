@@ -200,7 +200,6 @@ class Heatmap(BaseComponent):
         self._use_simple_downsample = use_simple_downsample
         self._category_column = category_column
         self._category_colors = category_colors or {}
-        # Render-time options, not part of the cache
         self._svg_filename = svg_filename
         self._scroll_zoom = scroll_zoom
         self._log_scale = log_scale
@@ -236,6 +235,9 @@ class Heatmap(BaseComponent):
             categorical_filters=categorical_filters,
             category_column=category_column,
             category_colors=category_colors,
+            downsample_zoomed=downsample_zoomed,
+            svg_filename=svg_filename,
+            scroll_zoom=scroll_zoom,
             **kwargs,
         )
 
@@ -274,6 +276,10 @@ class Heatmap(BaseComponent):
                 else {}
             ),
             **({"downsample_zoomed": False} if not self._downsample_zoomed else {}),
+            # Only when set, so caches built without them keep their hash; stored
+            # so a component loaded from its cache keeps them
+            **({"svg_filename": self._svg_filename} if self._svg_filename else {}),
+            **({"scroll_zoom": False} if not self._scroll_zoom else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -300,6 +306,8 @@ class Heatmap(BaseComponent):
         self._low_values_on_top = config.get("low_values_on_top", False)
         self._intensity_label = config.get("intensity_label")
         self._downsample_zoomed = config.get("downsample_zoomed", True)
+        self._svg_filename = config.get("svg_filename")
+        self._scroll_zoom = config.get("scroll_zoom", True)
         # category_colors is not stored in cache (render-time styling)
 
     def get_state_dependencies(self) -> list:

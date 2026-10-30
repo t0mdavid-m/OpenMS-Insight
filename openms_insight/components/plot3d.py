@@ -78,6 +78,9 @@ class Plot3D(BaseComponent):
         camera_eye: dict[str, float] | None = None,
         show_legend: bool = True,
         svg_filename: str | None = None,
+        title_bold: bool = True,
+        border: bool = True,
+        export_format: str = "svg",
         **kwargs,
     ):
         """
@@ -114,6 +117,10 @@ class Plot3D(BaseComponent):
             camera_eye: Initial camera position, e.g. {'x': 2.5, 'y': 0, 'z': 0.2}.
             show_legend: Show the legend.
             svg_filename: File name for the SVG download (default: title).
+            title_bold: Draw the title in bold.
+            border: Draw a border around the plot.
+            export_format: 'svg' (a "Download as SVG" button) or 'png'
+                (Plotly's own PNG download).
             **kwargs: Additional configuration options.
         """
         if mode not in ("stems", "lines"):
@@ -137,6 +144,13 @@ class Plot3D(BaseComponent):
         self._camera_eye = camera_eye
         self._show_legend = show_legend
         self._svg_filename = svg_filename
+        if export_format not in ("svg", "png"):
+            raise ValueError(
+                f"export_format must be 'svg' or 'png', got {export_format!r}"
+            )
+        self._title_bold = title_bold
+        self._border = border
+        self._export_format = export_format
 
         super().__init__(
             cache_id=cache_id,
@@ -166,6 +180,9 @@ class Plot3D(BaseComponent):
             camera_eye=camera_eye,
             show_legend=show_legend,
             svg_filename=svg_filename,
+            title_bold=title_bold,
+            border=border,
+            export_format=export_format,
             **kwargs,
         )
 
@@ -190,6 +207,14 @@ class Plot3D(BaseComponent):
             "camera_eye": self._camera_eye,
             "show_legend": self._show_legend,
             "svg_filename": self._svg_filename,
+            # Only when set, so caches built without them keep their hash
+            **({"title_bold": False} if not self._title_bold else {}),
+            **({"border": False} if not self._border else {}),
+            **(
+                {"export_format": self._export_format}
+                if self._export_format != "svg"
+                else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -212,6 +237,9 @@ class Plot3D(BaseComponent):
         self._camera_eye = config.get("camera_eye")
         self._show_legend = config.get("show_legend", True)
         self._svg_filename = config.get("svg_filename")
+        self._title_bold = config.get("title_bold", True)
+        self._border = config.get("border", True)
+        self._export_format = config.get("export_format", "svg")
 
     def _validate_mappings(self) -> None:
         super()._validate_mappings()
@@ -318,4 +346,10 @@ class Plot3D(BaseComponent):
         }
         if self._svg_filename:
             args["svgFilename"] = self._svg_filename
+        if not self._title_bold:
+            args["titleBold"] = False
+        if not self._border:
+            args["border"] = False
+        if self._export_format != "svg":
+            args["exportFormat"] = self._export_format
         return args

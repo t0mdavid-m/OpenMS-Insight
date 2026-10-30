@@ -112,7 +112,6 @@ class SeriesPlot(BaseComponent):
         self._show_legend = show_legend
         self._fixed_y_range = fixed_y_range
         self._svg_filename = svg_filename
-        # Render-time styling, not part of the cache
         self._font = dict(font) if font else None
 
         super().__init__(
@@ -136,6 +135,7 @@ class SeriesPlot(BaseComponent):
             show_legend=show_legend,
             fixed_y_range=fixed_y_range,
             svg_filename=svg_filename,
+            font=font,
             **kwargs,
         )
 
@@ -153,6 +153,8 @@ class SeriesPlot(BaseComponent):
             "show_legend": self._show_legend,
             "fixed_y_range": self._fixed_y_range,
             "svg_filename": self._svg_filename,
+            # Only when set, so caches built without it keep their hash
+            **({"font": self._font} if self._font else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -168,6 +170,7 @@ class SeriesPlot(BaseComponent):
         self._show_legend = config.get("show_legend", True)
         self._fixed_y_range = config.get("fixed_y_range", False)
         self._svg_filename = config.get("svg_filename")
+        self._font = config.get("font")
 
     def _validate_mappings(self) -> None:
         super()._validate_mappings()

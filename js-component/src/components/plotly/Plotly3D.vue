@@ -1,5 +1,5 @@
 <template>
-  <div :id="id" class="plot-container"></div>
+  <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
 </template>
 
 <script lang="ts">
@@ -172,7 +172,7 @@ export default defineComponent({
         scene.camera = { eye: this.args.cameraEye }
       }
       return {
-        title: { text: `<b>${this.title}</b>` },
+        title: { text: this.args.titleBold === false ? this.title : `<b>${this.title}</b>` },
         paper_bgcolor: this.theme?.backgroundColor,
         plot_bgcolor: this.theme?.secondaryBackgroundColor,
         height: this.args.height || 800,
@@ -221,25 +221,32 @@ export default defineComponent({
       if (!element) return
       const height = this.args.height || 800
       // react keeps the WebGL scene of the previous render; newPlot builds a new one
+      // exportFormat 'png': Plotly's own download button
+      const exportButtons =
+        this.args.exportFormat === 'png'
+          ? {}
+          : {
+              modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+              modeBarButtonsToAdd: [
+                {
+                  title: 'Download as SVG',
+                  name: 'toImageSvg',
+                  icon: Plotly.Icons.camera,
+                  click: (plotElement: HTMLElement) => {
+                    Plotly.downloadImage(plotElement, {
+                      filename: this.args.svgFilename || this.title || 'plot3d',
+                      height,
+                      width: height,
+                      format: 'svg',
+                    })
+                  },
+                },
+              ],
+            }
       await Plotly.react(element, this.traces, this.layout, {
-        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: Plotly.Icons.camera,
-            click: (plotElement: HTMLElement) => {
-              Plotly.downloadImage(plotElement, {
-                filename: this.args.svgFilename || this.title || 'plot3d',
-                height,
-                width: height,
-                format: 'svg',
-              })
-            },
-          },
-        ],
+        ...exportButtons,
         responsive: true,
-      })
+      } as Partial<Plotly.Config>)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },
   },
@@ -249,7 +256,9 @@ export default defineComponent({
 <style scoped>
 .plot-container {
   width: 100%;
-  border: 1px solid #cccccc;
   box-sizing: border-box;
+}
+.plot-container.bordered {
+  border: 1px solid #cccccc;
 }
 </style>
