@@ -78,6 +78,9 @@ _HANDLED_REQUESTS_KEY = "_svc_handled_data_requests"
 # Per component: the scope (see Table.auto_selection_scope) its first row was
 # last selected in, or selected by the user in
 _AUTO_SELECTION_SCOPE_KEY = "_svc_auto_selection_scopes"
+# Per component rendered inside defer_reruns(): its StateManager's session key
+# and the last value from Vue that was applied (see defer_reruns)
+_DEFERRED_COMPONENTS_KEY = "_svc_deferred_components"
 
 # Session state key for per-component data cache
 # Each component stores exactly one entry (current filter state)
@@ -752,6 +755,27 @@ def _rerun() -> None:
     st.rerun()
 
 
+def _apply_new_vue_values() -> None:
+    """
+    Apply the values Vue sent since the last run, for the components rendered
+    inside defer_reruns(), before any of them renders.
+
+    Streamlit returns a component's last value on every run, so only a value
+    that differs from the one applied last is new. Applying it again in Phase 3
+    of the component's render then changes nothing.
+    """
+    from ..core.state import StateManager
+
+    deferred = st.session_state.get(_DEFERRED_COMPONENTS_KEY, {})
+    for key, (session_key, applied) in list(deferred.items()):
+        value = st.session_state.get(key) if key in st.session_state else None
+        if not isinstance(value, dict) or value == applied:
+            continue
+        deferred[key] = (session_key, value)
+        if session_key in st.session_state:
+            StateManager(session_key).update_from_vue(dict(value))
+
+
 @contextlib.contextmanager
 def defer_reruns() -> Iterator[None]:
     """
@@ -764,11 +788,16 @@ def defer_reruns() -> Iterator[None]:
     component. Inside this block they all render first, with the state updated
     in place, and the script reruns once at the end if any of them asked for it.
 
+    A click in one of them is applied before any of them renders, so the
+    components rendered before the clicked one see it too, and the click costs
+    no rerun at all unless preparing the data changes the state again.
+
     Example:
         with defer_reruns():
             table(key="table", state_manager=state_manager)
             plot(key="plot", state_manager=state_manager)
     """
+    _apply_new_vue_values()
     pending = [False]
     token = _deferred_rerun.set(pending)
     try:
@@ -1020,7 +1049,14 @@ def _render_component(
             st.session_state[_VUE_ECHOED_HASH_KEY][key] = vue_hash
 
         # Apply Vue's state update FIRST - this is the key fix!
-        state_changed = state_manager.update_from_vue(result)
+        # (or: a selection made in Phase 1 still needs its rerun)
+        if state_manager.update_from_vue(dict(result)):
+            state_changed = True
+        if _deferred_rerun.get() is not None:
+            st.session_state.setdefault(_DEFERRED_COMPONENTS_KEY, {})[key] = (
+                state_manager._session_key,
+                result,
+            )
 
         # Check if Vue is requesting data resend
         # The data is only sent with the next render, which this run has passed:

@@ -525,11 +525,12 @@ def test_table_default_row_minus_one_selects_nothing(
     assert first._prepare_vue_data({"spectrum": 200})["_auto_selection"] == {"peak": 3}
 
 
-def test_table_deselect_on_reclick(
+def test_table_reclick_and_default_row_options(
     mock_streamlit, temp_cache_dir: Path, sample_table_data
 ):
-    """deselect_on_reclick reaches Vue and survives cache reconstruction, and
-    tables without it keep their configuration (and cache) unchanged."""
+    """reclick and default_row_selects reach Vue and survive cache
+    reconstruction, and tables without them keep their configuration (and
+    cache) unchanged."""
     from openms_insight import Table
 
     kwargs = {
@@ -539,13 +540,25 @@ def test_table_deselect_on_reclick(
         "index_field": "id",
     }
     plain = Table(cache_id="plain", **kwargs)
-    assert "deselectOnReclick" not in plain._get_component_args()
-    assert "deselect_on_reclick" not in plain._get_cache_config()
+    assert "reclick" not in plain._get_component_args()
+    assert "highlightDefaultRow" not in plain._get_component_args()
+    assert "reclick" not in plain._get_cache_config()
+    assert "default_row_selects" not in plain._get_cache_config()
 
-    table = Table(cache_id="reclick", deselect_on_reclick=True, **kwargs)
-    assert table._get_component_args()["deselectOnReclick"] is True
+    table = Table(
+        cache_id="reclick", reclick="unhighlight", default_row_selects=False, **kwargs
+    )
+    assert table._get_component_args()["reclick"] == "unhighlight"
     restored = Table(cache_id="reclick", cache_path=str(temp_cache_dir))
-    assert restored._get_component_args()["deselectOnReclick"] is True
+    args = restored._get_component_args()
+    assert args["reclick"] == "unhighlight"
+    assert args["highlightDefaultRow"] is True
+    # Only highlighted: nothing is selected for the default row
+    assert restored.get_initial_selection({}) is None
+    assert restored._prepare_vue_data({})["_auto_selection"] == {}
+
+    with pytest.raises(ValueError, match="reclick"):
+        Table(cache_id="bad", reclick="toggle", **kwargs)
 
 
 def test_deselected_row_is_not_selected_again_until_filters_change(
@@ -569,7 +582,7 @@ def test_deselected_row_is_not_selected_again_until_filters_change(
         "interactivity": {"row": "id"},
     }
     plain = Table(cache_id="plain_rows", **kwargs)
-    table = Table(cache_id="rows", deselect_on_reclick=True, **kwargs)
+    table = Table(cache_id="rows", reclick="deselect", **kwargs)
     assert plain.auto_selection_scope({"scan": 1}) is None
 
     with patch("openms_insight.rendering.bridge.st.session_state", mock_streamlit):
@@ -586,8 +599,60 @@ def test_deselected_row_is_not_selected_again_until_filters_change(
         assert _apply_auto_selection(table, "t", {"row": 2}, state)
         assert state.get_selection("row") == 2
 
-        # Without deselect_on_reclick an empty selection is always filled
+        # Without reclick="deselect" an empty selection is always filled
         state.set_selection("row", None)
         assert _apply_auto_selection(plain, "p", {"row": 2}, state)
         state.set_selection("row", None)
         assert _apply_auto_selection(plain, "p", {"row": 2}, state)
+
+
+def test_unpaginated_table_sends_every_row_unsorted(mock_streamlit, temp_cache_dir):
+    """Without pagination every row is sent in data order (Tabulator sorts them
+    itself, keeping that order on ties), while the default row is still the
+    first one of the sorted rows."""
+    from openms_insight import Table
+
+    data = pl.LazyFrame({"id": list(range(250)), "score": [i % 3 for i in range(250)]})
+    table = Table(
+        cache_id="all_rows",
+        data=data,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
+        interactivity={"row": "id"},
+        initial_sort=[{"column": "score", "dir": "desc"}],
+        pagination=False,
+    )
+    result = table._prepare_vue_data({})
+    assert list(result["tableData"]["id"]) == list(range(250))
+    assert result["_auto_selection"] == {"row": 2}
+
+
+def test_toggle_filter_colour_reaches_vue(mock_streamlit, temp_cache_dir):
+    from openms_insight import Table
+
+    data = pl.LazyFrame({"id": [0, 1], "best": [True, False]})
+    table = Table(
+        cache_id="toggle_colour",
+        data=data,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
+        toggle_filters=[{"label": "Best", "column": "best", "color": "#6200EE"}],
+    )
+    assert table._get_component_args()["toggleFilters"][0]["color"] == "#6200EE"
+
+
+def test_series_plot_font(mock_streamlit, temp_cache_dir: Path, sample_series_data):
+    """A font of the plot's own reaches Vue (the theme's font otherwise)."""
+    from openms_insight import SeriesPlot
+
+    kwargs = {
+        "data": sample_series_data,
+        "x_column": "Score",
+        "y_column": "Density",
+        "cache_path": str(temp_cache_dir),
+    }
+    assert "font" not in SeriesPlot(cache_id="themed", **kwargs)._get_component_args()
+    plot = SeriesPlot(
+        cache_id="arial", font={"family": "Arial", "color": "black"}, **kwargs
+    )
+    assert plot._get_component_args()["font"] == {"family": "Arial", "color": "black"}

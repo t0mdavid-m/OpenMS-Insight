@@ -84,8 +84,10 @@ export default defineComponent({
       const colors = this.args.seriesColors || {}
       const stems = this.args.mode !== 'lines'
 
+      // Named series are listed (even without points of their own) whenever
+      // there is anything to draw
       const groups = new Map<string, SeriesPoints>()
-      for (const [k] of this.args.seriesNames || []) {
+      for (const [k] of xs.length > 0 ? this.args.seriesNames || [] : []) {
         const key = String(k)
         groups.set(key, { key, name: this.seriesName(key), color: colors[key] || this.args.color, x: [], y: [], z: [] })
       }

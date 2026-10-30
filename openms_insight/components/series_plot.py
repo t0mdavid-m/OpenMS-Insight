@@ -61,6 +61,7 @@ class SeriesPlot(BaseComponent):
         show_legend: bool = True,
         fixed_y_range: bool = False,
         svg_filename: str | None = None,
+        font: dict[str, str] | None = None,
         **kwargs,
     ):
         """
@@ -91,6 +92,8 @@ class SeriesPlot(BaseComponent):
             show_legend: Show the legend.
             fixed_y_range: Disable zooming along the y axis.
             svg_filename: File name for the SVG download (default: title).
+            font: Plotly font of the plot, e.g. {'family': 'Arial', 'color':
+                'black'} (default: the Streamlit theme's font and text colour).
             **kwargs: Additional configuration options.
         """
         if mode not in ("lines", "markers", "lines+markers"):
@@ -109,6 +112,8 @@ class SeriesPlot(BaseComponent):
         self._show_legend = show_legend
         self._fixed_y_range = fixed_y_range
         self._svg_filename = svg_filename
+        # Render-time styling, not part of the cache
+        self._font = dict(font) if font else None
 
         super().__init__(
             cache_id=cache_id,
@@ -231,4 +236,6 @@ class SeriesPlot(BaseComponent):
             args["title"] = self._title
         if self._svg_filename:
             args["svgFilename"] = self._svg_filename
+        if self._font:
+            args["font"] = self._font
         return args

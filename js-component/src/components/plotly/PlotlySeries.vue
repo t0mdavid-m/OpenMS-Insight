@@ -115,6 +115,7 @@ export default defineComponent({
         font: {
           color: this.theme?.textColor || 'black',
           family: this.theme?.font || 'Arial',
+          ...(this.args.font || {}),
         },
       }
     },

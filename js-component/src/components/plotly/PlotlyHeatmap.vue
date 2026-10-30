@@ -33,6 +33,8 @@ export default defineComponent({
         return (data as HeatmapData[]) || []
       },
       title: computed(() => props.args.title),
+      svgFilename: computed(() => props.args.svgFilename as string | undefined),
+      scrollZoom: computed(() => props.args.scrollZoom as boolean | undefined),
     })
 
     return {

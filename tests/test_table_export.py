@@ -136,3 +136,12 @@ def test_export_data_from_cache_only(mock_streamlit, temp_cache_dir, psm_data):
 
     assert exported.height == 250
     assert "hidden_meta" in exported.columns
+
+
+def test_download_changes_the_hash(mock_streamlit, temp_cache_dir, psm_data):
+    """The bridge sends no data with an unchanged hash to a view that holds it,
+    so the export has to change the hash to reach the browser."""
+    table = Table(cache_id="hash_table", data=psm_data, cache_path=str(temp_cache_dir))
+    plain = table._prepare_vue_data({})["_hash"]
+    state = {"hash_table_page": {"page": 1, "download_request": 7}}
+    assert table._prepare_vue_data(state)["_hash"] != plain

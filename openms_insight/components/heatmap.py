@@ -101,6 +101,9 @@ class Heatmap(BaseComponent):
         low_values_on_top: bool = False,
         intensity_label: str | None = None,
         levels: list[pl.LazyFrame] | None = None,
+        downsample_zoomed: bool = True,
+        svg_filename: str | None = None,
+        scroll_zoom: bool = True,
         **kwargs,
     ):
         """
@@ -167,6 +170,12 @@ class Heatmap(BaseComponent):
                 with ``data`` as the full-resolution level, instead of being built
                 from ``data``. Each needs the columns of ``data``. Requires ``data``
                 and cannot be combined with ``categorical_filters``.
+            downsample_zoomed: If False, a zoomed view shows every point of the
+                first level with at least min_points points in the zoomed range,
+                instead of downsampling them to min_points.
+            svg_filename: File name for the SVG download (default: title).
+            scroll_zoom: If False, the mouse wheel scrolls the page instead of
+                zooming the plot.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -174,6 +183,7 @@ class Heatmap(BaseComponent):
         if levels is not None and categorical_filters:
             raise ValueError("levels= cannot be combined with categorical_filters")
         self._precomputed_levels = levels
+        self._downsample_zoomed = downsample_zoomed
         self._x_column = x_column
         self._y_column = y_column
         self._intensity_column = intensity_column
@@ -190,6 +200,9 @@ class Heatmap(BaseComponent):
         self._use_simple_downsample = use_simple_downsample
         self._category_column = category_column
         self._category_colors = category_colors or {}
+        # Render-time options, not part of the cache
+        self._svg_filename = svg_filename
+        self._scroll_zoom = scroll_zoom
         self._log_scale = log_scale
         self._low_values_on_top = low_values_on_top
         self._intensity_label = intensity_label
@@ -260,6 +273,7 @@ class Heatmap(BaseComponent):
                 if self._precomputed_levels is not None
                 else {}
             ),
+            **({"downsample_zoomed": False} if not self._downsample_zoomed else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -285,6 +299,7 @@ class Heatmap(BaseComponent):
         self._log_scale = config.get("log_scale", True)
         self._low_values_on_top = config.get("low_values_on_top", False)
         self._intensity_label = config.get("intensity_label")
+        self._downsample_zoomed = config.get("downsample_zoomed", True)
         # category_colors is not stored in cache (render-time styling)
 
     def get_state_dependencies(self) -> list:
@@ -996,7 +1011,7 @@ class Heatmap(BaseComponent):
 
             if count >= self._min_points:
                 # This level has enough detail
-                if count > self._min_points:
+                if count > self._min_points and self._downsample_zoomed:
                     # Over limit - downsample to exactly min_points
                     # Compute optimal bins from ACTUAL zoom region aspect ratio
                     zoom_x_range = (x0, x1)
@@ -1198,6 +1213,10 @@ class Heatmap(BaseComponent):
 
         if self._title:
             args["title"] = self._title
+        if self._svg_filename:
+            args["svgFilename"] = self._svg_filename
+        if not self._scroll_zoom:
+            args["scrollZoom"] = False
 
         # Add category column configuration for categorical coloring mode
         if self._category_column:

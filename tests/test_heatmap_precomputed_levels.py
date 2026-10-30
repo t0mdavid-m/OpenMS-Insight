@@ -98,3 +98,18 @@ def test_levels_exclude_categorical_filters(temp_cache_dir, full):
             filters={"scan": "scan_id"},
             categorical_filters=["scan"],
         )
+
+
+def test_export_name_and_wheel_reach_vue(tmp_path, full):
+    """Render-time options: they reach Vue but not the cache configuration."""
+    plain = _heatmap(tmp_path, data=full, cache_id="plain")
+    args = plain._get_component_args()
+    assert "svgFilename" not in args and "scrollZoom" not in args
+
+    styled = _heatmap(
+        tmp_path, data=full, cache_id="styled", svg_filename="heat", scroll_zoom=False
+    )
+    args = styled._get_component_args()
+    assert args["svgFilename"] == "heat"
+    assert args["scrollZoom"] is False
+    assert styled._get_cache_config() == plain._get_cache_config()

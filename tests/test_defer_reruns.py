@@ -135,3 +135,42 @@ def test_data_sent_in_a_run_that_reruns_is_sent_again(rerun, vue, temp_cache_dir
         render_component(first, state, key="scans")
         render_component(second, state, key="rows")
     assert vue.call_args.kwargs["dataChanged"] is False
+
+
+def test_click_is_seen_by_components_rendered_before_it(
+    rerun, vue, mock_streamlit, temp_cache_dir
+):
+    """A click is applied before the block renders: the components rendered
+    before the clicked one get the new selection in the same run, and the
+    click costs no rerun."""
+    state = StateManager(session_key="click")
+    scans, rows = _tables(temp_cache_dir)
+
+    def render():
+        with defer_reruns():
+            render_component(rows, state, key="rows")
+            render_component(scans, state, key="scans")
+
+    # Streamlit returns each component's last value on every run
+    vue.side_effect = lambda **kwargs: mock_streamlit.get(kwargs["key"])
+    mock_streamlit["scans"] = {"id": state.session_id, "counter": 0}
+    with pytest.raises(Rerun):
+        render()
+    render()
+    assert state.get_selection("scan") == 1
+    reruns = rerun.call_count
+
+    # The user clicks scan 2 in the table rendered last
+    mock_streamlit["scans"] = {"id": state.session_id, "counter": 5, "scan": 2}
+    render()
+    assert state.get_selection("scan") == 2
+    assert rerun.call_count == reruns
+    rows_call = vue.call_args_list[-2].kwargs
+    assert rows_call["key"] == "rows"
+    assert list(rows_call["tableData"]["scan"]) == [2]
+
+    # The value Streamlit keeps returning is not applied again: a selection made
+    # since (here by Python) stands
+    state.set_selection("scan", 1)
+    render()
+    assert state.get_selection("scan") == 1

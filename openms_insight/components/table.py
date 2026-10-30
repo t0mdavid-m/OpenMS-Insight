@@ -91,7 +91,8 @@ class Table(BaseComponent):
         toggle_filters: list[dict[str, Any]] | None = None,
         range_filters: dict[str, list[str]] | None = None,
         on_select: dict[str, Any] | None = None,
-        deselect_on_reclick: bool = False,
+        reclick: str = "keep",
+        default_row_selects: bool = True,
         **kwargs,
     ):
         """
@@ -134,7 +135,8 @@ class Table(BaseComponent):
             pagination: Enable pagination for large tables (default: True).
                 When enabled, uses server-side pagination where only the current
                 page of data is sent to the frontend, dramatically reducing browser
-                memory usage for large datasets.
+                memory usage for large datasets. Without it every row is sent,
+                and the browser sorts, filters and exports them itself.
             page_size: Number of rows per page when pagination is enabled (default: 100)
             pagination_identifier: State key for storing pagination state (page, sort,
                 filters). Default: "{cache_id}_page". Used by StateManager to track
@@ -148,6 +150,7 @@ class Table(BaseComponent):
                   selected row, the selection moves to the first remaining row
                   sharing its value in this column (e.g. the best hit of the
                   same spectrum) instead of to the first row of the table.
+                - color: Optional checkbox colour (default: the theme's primary)
                 Example: [{'label': 'Best per spectrum', 'column': 'is_best',
                 'group_column': 'scan'}]
             range_filters: Mapping of identifier names to [start_column, end_column]
@@ -158,8 +161,14 @@ class Table(BaseComponent):
                 to those in ``interactivity``. A value of None clears the
                 identifier. Example: {'peak': None} clears a dependent selection.
                 Not applied to the automatic default-row selection.
-            deselect_on_reclick: Clicking the selected row again clears the
-                ``interactivity`` selections (and unselects the row).
+            reclick: What clicking the highlighted row again does: "keep" (the
+                default) keeps it selected and highlighted, "unhighlight" only
+                removes the highlight (the selection stays until another row is
+                clicked), "deselect" clears the ``interactivity`` selections. With
+                "deselect" the default row is not selected again until the
+                table's filter values change.
+            default_row_selects: If False, the default row is only highlighted
+                while nothing is selected, and no selection is set for it.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -176,7 +185,12 @@ class Table(BaseComponent):
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
         self._range_filters = {k: list(v) for k, v in (range_filters or {}).items()}
         self._on_select = dict(on_select) if on_select else {}
-        self._deselect_on_reclick = bool(deselect_on_reclick)
+        if reclick not in ("keep", "unhighlight", "deselect"):
+            raise ValueError(
+                f"reclick must be 'keep', 'unhighlight' or 'deselect', not {reclick!r}"
+            )
+        self._reclick = reclick
+        self._default_row_selects = bool(default_row_selects)
 
         super().__init__(
             cache_id=cache_id,
@@ -201,7 +215,8 @@ class Table(BaseComponent):
             toggle_filters=toggle_filters,
             range_filters=range_filters,
             on_select=on_select,
-            deselect_on_reclick=deselect_on_reclick,
+            reclick=reclick,
+            default_row_selects=default_row_selects,
             **kwargs,
         )
 
@@ -220,6 +235,7 @@ class Table(BaseComponent):
                     "column": entry["column"],
                     "default": bool(entry.get("default", True)),
                     "group_column": entry.get("group_column"),
+                    **({"color": entry["color"]} if entry.get("color") else {}),
                 }
             )
         return normalized
@@ -249,7 +265,8 @@ class Table(BaseComponent):
             ),
             **({"range_filters": self._range_filters} if self._range_filters else {}),
             **({"on_select": self._on_select} if self._on_select else {}),
-            **({"deselect_on_reclick": True} if self._deselect_on_reclick else {}),
+            **({"reclick": self._reclick} if self._reclick != "keep" else {}),
+            **({"default_row_selects": False} if not self._default_row_selects else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -269,13 +286,15 @@ class Table(BaseComponent):
         self._toggle_filters = config.get("toggle_filters", [])
         self._range_filters = config.get("range_filters", {})
         self._on_select = config.get("on_select", {})
-        self._deselect_on_reclick = config.get("deselect_on_reclick", False)
+        self._reclick = config.get("reclick", "keep")
+        self._default_row_selects = config.get("default_row_selects", True)
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in (
             "toggle_filters",
             "range_filters",
             "on_select",
-            "deselect_on_reclick",
+            "reclick",
+            "default_row_selects",
         ):
             self._config.pop(key, None)
 
@@ -303,11 +322,11 @@ class Table(BaseComponent):
         """
         What the default row is selected for: the table and its filter values.
 
-        Only with deselect_on_reclick (else None, and the default row is selected
+        Only with reclick="deselect" (else None, and the default row is selected
         whenever nothing is). A row the user deselected is then not selected again
         until the scope changes, e.g. the table is filtered to another spectrum.
         """
-        if not self._deselect_on_reclick:
+        if self._reclick != "deselect":
             return None
         identifiers = [*self._filters, *self._range_filters]
         return (self._cache_id, *(repr(state.get(i)) for i in identifiers))
@@ -336,7 +355,11 @@ class Table(BaseComponent):
             or None if no initial selection should be set.
         """
         # Skip if no interactivity or default_row disabled
-        if not self._interactivity or self._default_row < 0:
+        if (
+            not self._interactivity
+            or self._default_row < 0
+            or not self._default_row_selects
+        ):
             return None
 
         # Skip if selection already exists for ANY interactivity identifier
@@ -721,6 +744,9 @@ class Table(BaseComponent):
 
         data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(data, column_filters)
+        # Without pagination Tabulator sorts the rows itself, in a stable sort
+        # from the order they arrive in, so they are sent unsorted
+        unsorted_data = data
         data = self._apply_sort(data, sort_column, sort_dir)
 
         # Full-table CSV export: every row that passes the current filters, in the
@@ -738,6 +764,9 @@ class Table(BaseComponent):
 
         # Get total row count (after filters, before pagination)
         total_rows = data.select(pl.len()).collect().item()
+        if not self._pagination:
+            # Every row in one page; Tabulator sorts and filters them itself
+            page, page_size = 1, max(total_rows, 1)
         total_pages = max(1, (total_rows + page_size - 1) // page_size)
 
         # Handle go-to request (server-side search for row by field value)
@@ -964,7 +993,12 @@ class Table(BaseComponent):
         # so downstream components can receive initial data when filters change
         auto_selection: dict[str, Any] = {}
         # default_row=-1: nothing is selected until the user clicks a row
-        if self._interactivity and total_rows > 0 and self._default_row >= 0:
+        if (
+            self._interactivity
+            and total_rows > 0
+            and self._default_row >= 0
+            and self._default_row_selects
+        ):
             # Get the first row of sorted/filtered data
             first_row = data.head(1).collect()
             if first_row.height > 0:
@@ -978,10 +1012,17 @@ class Table(BaseComponent):
 
         # Slice to current page
         offset = (page - 1) * page_size
-        df_polars = data.slice(offset, page_size).collect()
+        if self._pagination:
+            df_polars = data.slice(offset, page_size).collect()
+        else:
+            df_polars = project(unsorted_data).collect()
 
         # Compute hash for change detection
         data_hash = compute_dataframe_hash(df_polars)
+        if download_payload is not None:
+            # A view that holds this page already is only sent data with a new
+            # hash, and the export has to reach it
+            data_hash = f"{data_hash}-download-{download_request}"
 
         # Build result
         result: dict[str, Any] = {
@@ -1276,7 +1317,8 @@ class Table(BaseComponent):
             "toggle_filters",
             "range_filters",
             "on_select",
-            "deselect_on_reclick",
+            "reclick",
+            "default_row_selects",
         ):
             args.pop(key, None)
 
@@ -1284,8 +1326,10 @@ class Table(BaseComponent):
             args["toggleFilters"] = self._toggle_filters
         if self._on_select:
             args["onSelect"] = self._on_select
-        if self._deselect_on_reclick:
-            args["deselectOnReclick"] = True
+        if self._reclick != "keep":
+            args["reclick"] = self._reclick
+        if not self._default_row_selects:
+            args["highlightDefaultRow"] = True
 
         return args
 

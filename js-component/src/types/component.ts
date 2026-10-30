@@ -69,7 +69,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   /** Selections set (null clears) when a row click changes the selection */
   onSelect?: Record<string, unknown>
   /** Clicking the selected row again clears the interactivity selections */
-  deselectOnReclick?: boolean
+  reclick?: 'unhighlight' | 'deselect'
+  highlightDefaultRow?: boolean
 }
 
 /**
@@ -119,6 +120,8 @@ export interface LinePlotConfig {
 export interface HeatmapComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyHeatmap'
   title?: string
+  svgFilename?: string
+  scrollZoom?: boolean
   xColumn: string
   yColumn: string
   intensityColumn: string
@@ -316,6 +319,7 @@ export interface MirrorPlotStyling {
  */
 export interface SeriesPlotComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlySeries'
+  font?: { family?: string; color?: string; size?: number }
   xColumn: string
   yColumn: string
   seriesColumn?: string | null

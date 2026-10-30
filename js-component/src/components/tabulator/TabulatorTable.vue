@@ -1,5 +1,9 @@
 <template>
-  <div style="padding: 8px; width: 98%">
+  <!-- A table fitted to a few rows stays at least 200 px tall -->
+  <div
+    style="padding: 8px; width: 98%; box-sizing: border-box"
+    :style="isServerSidePagination ? {} : { minHeight: '200px' }"
+  >
     <div class="d-flex">
       <div style="width: 100%; display: grid; grid-template-columns: 1fr 1fr 1fr">
         <div class="d-flex justify-start" style="grid-column: 1 / span 1">
@@ -9,7 +13,7 @@
               size="small"
               icon="mdi-download"
               :loading="pendingDownloadId !== null"
-              title="Download all rows and columns as CSV"
+              :title="isServerSidePagination ? 'Download all rows and columns as CSV' : undefined"
               @click="downloadTable"
             />
             <v-btn variant="text" size="small" icon="mdi-filter" @click="openFilterDialog" />
@@ -29,7 +33,7 @@
         <div class="d-flex justify-center" style="grid-column: 2 / span 1">
           <h4>{{ args.title ?? '' }}</h4>
         </div>
-        <div class="d-flex justify-end align-center" style="grid-column: 3 / span 1">
+        <div class="d-flex justify-end" style="grid-column: 3 / span 1">
           <v-checkbox
             v-for="toggle in toggleFilters"
             :key="toggle.column"
@@ -37,8 +41,8 @@
             :label="toggle.label"
             hide-details
             density="compact"
-            color="primary"
-            class="flex-grow-0"
+            :color="toggle.color || 'primary'"
+            class="toggle-filter"
             @update:model-value="onToggleFilter(toggle.column, $event)"
           />
         </div>
@@ -177,6 +181,10 @@ export default defineComponent({
       lastDataHash: '' as string,
       // Flag to skip redundant syncSelectionFromStore calls after manual selection
       skipNextSync: false as boolean,
+      // reclick 'unhighlight': the selection whose row the user unhighlighted.
+      // The row stays unhighlighted until the selection changes.
+      unhighlightedSelection: null as Record<string, unknown> | null,
+      rootResizeObserver: null as ResizeObserver | null,
       // Pending data request for server-side pagination (deferred promise)
       pendingDataRequest: null as { resolve: (data: any) => void; reject: (err: any) => void } | null,
       // Track if we're waiting for server response
@@ -218,7 +226,7 @@ export default defineComponent({
         'table-sm': true,
       }
     },
-    toggleFilters(): Array<{ label: string; column: string; default: boolean }> {
+    toggleFilters(): Array<{ label: string; column: string; default: boolean; color?: string }> {
       return this.args.toggleFilters || []
     },
     /** Toggle state to merge into pagination requests (nothing when the table has none). */
@@ -572,9 +580,17 @@ export default defineComponent({
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()
+    // A table fitted to its rows resizes with them: the frame follows it
+    if (!this.isServerSidePagination) {
+      this.rootResizeObserver = new ResizeObserver(() => {
+        Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
+      })
+      this.rootResizeObserver.observe(this.$el as HTMLElement)
+    }
   },
   beforeUnmount() {
     this.cleanupTeleport()
+    this.rootResizeObserver?.disconnect()
   },
   methods: {
     /**
@@ -678,6 +694,10 @@ export default defineComponent({
       } else {
         // For non-paginated tables, set data directly
         tabulatorOptions.data = this.preparedTableData
+        // The table is as tall as its rows, up to the height it was given
+        delete tabulatorOptions.height
+        tabulatorOptions.minHeight = 50
+        tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
         // Only use virtual DOM if pagination is disabled and dataset is large
         const useVirtualDom = this.preparedTableData.length > 100
         tabulatorOptions.renderVertical = useVirtualDom ? 'virtual' : 'basic'
@@ -711,8 +731,12 @@ export default defineComponent({
         // Update Streamlit iframe height after table is rendered
         // Use specified height if provided, otherwise auto-calculate
         this.$nextTick(() => {
-          if (this.args.height) {
+          if (this.args.height && this.isServerSidePagination) {
             Streamlit.setFrameHeight(this.args.height)
+          } else if (!this.isServerSidePagination) {
+            // The table's own height: while Tabulator lays out new rows, the
+            // document is briefly taller than the table
+            Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
           } else {
             Streamlit.setFrameHeight()
           }
@@ -1113,6 +1137,17 @@ export default defineComponent({
 
       const interactivity = this.args.interactivity || {}
 
+      if (this.unhighlightedSelection) {
+        const unchanged = Object.entries(this.unhighlightedSelection).every(
+          ([identifier, value]) => this.selectionStore.$state[identifier] === value
+        )
+        if (unchanged) {
+          this.tabulator.deselectRow()
+          return
+        }
+        this.unhighlightedSelection = null
+      }
+
       // For server-side pagination, Python handles navigation to the correct page
       // via the navigate_to_page hint. We only need to select the row if it's
       // on the current page.
@@ -1146,16 +1181,19 @@ export default defineComponent({
               // Store as pending - row may be on different page awaiting navigation
               this.pendingSelection = { [identifier]: selectedValue }
             }
-            break
+            return
           }
         }
+        this.highlightDefaultRow()
         return
       }
 
       // Client-side sync (for non-streaming tables)
+      let anySelected = false
       for (const [identifier, column] of Object.entries(interactivity)) {
         const selectedValue = this.selectionStore.$state[identifier]
         if (selectedValue !== undefined && selectedValue !== null) {
+          anySelected = true
           // Check if the currently selected row already matches
           const currentlySelected = this.tabulator.getSelectedRows()[0]
           if (currentlySelected) {
@@ -1202,6 +1240,19 @@ export default defineComponent({
           break
         }
       }
+      if (!anySelected) this.highlightDefaultRow()
+    },
+
+    /** Nothing is selected: with highlightDefaultRow, mark the default row
+     * without selecting it (the selection store is left as it is). */
+    highlightDefaultRow(): void {
+      if (!this.args.highlightDefaultRow || !this.tabulator) return
+      const defaultRow = this.args.defaultRow ?? 0
+      const rows = this.tabulator.getRows('active')
+      if (defaultRow < 0 || defaultRow >= rows.length) return
+      if (this.tabulator.getSelectedRows()[0] === rows[defaultRow]) return
+      this.tabulator.deselectRow()
+      rows[defaultRow].select()
     },
 
     selectDefaultRow(): void {
@@ -1371,9 +1422,22 @@ export default defineComponent({
       const rowIndex = row.getIndex()
       const interactivity = this.args.interactivity || {}
 
+      // Clicking the highlighted row again only removes the highlight
+      if (this.args.reclick === 'unhighlight' && row.isSelected()) {
+        row.deselect()
+        this.unhighlightedSelection = Object.fromEntries(
+          Object.keys(interactivity).map((identifier) => [
+            identifier,
+            this.selectionStore.$state[identifier],
+          ])
+        )
+        return
+      }
+      this.unhighlightedSelection = null
+
       // Clicking the selected row again clears its selections
       if (
-        this.args.deselectOnReclick && rowData && Object.keys(interactivity).length > 0 &&
+        this.args.reclick === 'deselect' && rowData && Object.keys(interactivity).length > 0 &&
         Object.entries(interactivity).every(
           ([identifier, column]) => this.selectionStore.$state[identifier] === rowData[column as string]
         )
@@ -1436,6 +1500,8 @@ export default defineComponent({
      * This is much faster than destroying and recreating the table.
      */
     updateTableData(): void {
+      // New rows: the row the user unhighlighted is highlighted again
+      this.unhighlightedSelection = null
       console.log('[TabulatorTable] updateTableData called', {
         hasTabulator: !!this.tabulator,
         isServerSidePagination: this.isServerSidePagination,
@@ -1543,8 +1609,12 @@ export default defineComponent({
 
         // Update Streamlit frame height - use specified height if provided
         this.$nextTick(() => {
-          if (this.args.height) {
+          if (this.args.height && this.isServerSidePagination) {
             Streamlit.setFrameHeight(this.args.height)
+          } else if (!this.isServerSidePagination) {
+            // The table's own height: while Tabulator lays out new rows, the
+            // document is briefly taller than the table
+            Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
           } else {
             Streamlit.setFrameHeight()
           }
@@ -1926,6 +1996,12 @@ export default defineComponent({
         border-radius: 4px;
       `
       closeBtn.addEventListener('click', () => this.closeTeleportDialog())
+      closeBtn.addEventListener('mouseenter', () => {
+        closeBtn.style.backgroundColor = '#f5f5f5'
+      })
+      closeBtn.addEventListener('mouseleave', () => {
+        closeBtn.style.backgroundColor = 'transparent'
+      })
 
       header.appendChild(title)
       header.appendChild(closeBtn)
@@ -1964,6 +2040,12 @@ export default defineComponent({
         font-size: 14px;
       `
       closeFooterBtn.addEventListener('click', () => this.closeTeleportDialog())
+      closeFooterBtn.addEventListener('mouseenter', () => {
+        closeFooterBtn.style.backgroundColor = '#1565c0'
+      })
+      closeFooterBtn.addEventListener('mouseleave', () => {
+        closeFooterBtn.style.backgroundColor = '#1976d2'
+      })
 
       footer.appendChild(closeFooterBtn)
 
@@ -2016,13 +2098,86 @@ export default defineComponent({
           this.toggleColumnSelection(column.field)
           this.refreshTeleportDialog()
         })
+        chip.addEventListener('mouseenter', () => {
+          if (!isSelected) chip.style.backgroundColor = '#f5f5f5'
+        })
+        chip.addEventListener('mouseleave', () => {
+          if (!isSelected) chip.style.backgroundColor = 'white'
+        })
 
         chipsContainer.appendChild(chip)
       })
 
+      const actionsContainer = this.parentDocument.createElement('div')
+      actionsContainer.style.cssText = `
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid #e0e0e0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      `
+
+      const selectionInfo = this.parentDocument.createElement('span')
+      selectionInfo.textContent = `${this.selectedColumns.length} of ${this.columnNames.length} columns selected`
+      selectionInfo.style.cssText = 'color: #666; font-size: 14px;'
+
+      const buttonsDiv = this.parentDocument.createElement('div')
+      buttonsDiv.appendChild(
+        this.createActionButton('Select All', () => {
+          this.selectAllColumns()
+          this.refreshTeleportDialog()
+        })
+      )
+      buttonsDiv.appendChild(
+        this.createActionButton('Clear All', () => {
+          this.clearColumnSelection()
+          this.refreshTeleportDialog()
+        })
+      )
+
+      actionsContainer.appendChild(selectionInfo)
+      actionsContainer.appendChild(buttonsDiv)
+
       columnSection.appendChild(columnTitle)
       columnSection.appendChild(chipsContainer)
+      columnSection.appendChild(actionsContainer)
       content.appendChild(columnSection)
+    },
+
+    createActionButton(text: string, onClick: () => void): HTMLElement {
+      const btn = this.parentDocument!.createElement('button')
+      btn.textContent = text
+      btn.style.cssText = `
+        background: white;
+        color: #1976d2;
+        border: 1px solid #1976d2;
+        padding: 6px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        margin-left: 8px;
+      `
+      btn.addEventListener('click', onClick)
+      btn.addEventListener('mouseenter', () => {
+        btn.style.backgroundColor = '#f5f5f5'
+      })
+      btn.addEventListener('mouseleave', () => {
+        btn.style.backgroundColor = 'white'
+      })
+      return btn
+    },
+
+    selectAllColumns(): void {
+      this.selectedColumns = this.columnNames.map((column) => column.field)
+    },
+
+    clearColumnSelection(): void {
+      this.selectedColumns = []
+      this.filterValues = {}
+      this.filterTypes = {}
+      this.columnAnalysis = {}
+      this.applyFilters()
     },
 
     renderFilterControls(content: HTMLElement): void {
@@ -2369,6 +2524,10 @@ export default defineComponent({
 .tabulator-col-title,
 .tabulator-cell {
   font-size: 14px;
+}
+
+.toggle-filter .v-label {
+  opacity: 0.6;
 }
 
 .filter-badge {
