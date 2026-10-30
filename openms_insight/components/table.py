@@ -119,6 +119,7 @@ class Table(BaseComponent):
         pagination: bool = True,
         page_size: int = 100,
         pagination_identifier: str | None = None,
+        hidden_columns: list[str] | None = None,
         **kwargs,
     ):
         """
@@ -166,6 +167,11 @@ class Table(BaseComponent):
             pagination_identifier: State key for storing pagination state (page, sort,
                 filters). Default: "{cache_id}_page". Used by StateManager to track
                 pagination state across reruns.
+            hidden_columns: Fields of ``column_definitions`` to hide until the
+                viewer turns them on in the column menu. Use it for optional
+                columns that most viewers do not need. A column definition with
+                ``"visible": False`` is treated the same way. The viewer's
+                choice is kept in their browser, per table.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -177,6 +183,8 @@ class Table(BaseComponent):
         self._initial_sort = initial_sort
         self._pagination = pagination
         self._page_size = page_size
+        # Display-only, so not part of the cache config
+        self._hidden_columns = list(hidden_columns or [])
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
 
@@ -1095,6 +1103,9 @@ class Table(BaseComponent):
 
         if self._initial_sort:
             args["initialSort"] = self._initial_sort
+
+        if self._hidden_columns:
+            args["hiddenColumns"] = self._hidden_columns
 
         # Add any extra config options
         args.update(self._config)

@@ -154,6 +154,7 @@ Table(
 - `initial_sort`: Default sort configuration
 - `pagination`: Enable server-side pagination (default: True). Only the current page of data is sent to the browser, dramatically reducing memory usage for large datasets.
 - `page_size`: Rows per page (default: 100)
+- `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
 
 **Custom formatters:**
 In addition to Tabulator's built-in formatters, these custom formatters are available:

@@ -63,6 +63,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   paginationIdentifier?: string
   /** Column metadata for filter dialogs (precomputed unique values, min/max) */
   columnMetadata?: Record<string, ColumnMetadata>
+  /** Fields hidden until the viewer turns them on in the column menu */
+  hiddenColumns?: string[]
 }
 
 /**
