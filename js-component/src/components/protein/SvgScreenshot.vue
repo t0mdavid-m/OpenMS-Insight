@@ -5,7 +5,7 @@
   </v-btn>
   <a ref="downloadLink" style="visibility: hidden;"></a>
   <v-dialog v-model="svgDownloadTriggered" persistent width="auto">
-    <v-card color="primary">
+    <v-card :color="color">
       <v-card-text>
         Please stand by
         <v-progress-linear indeterminate color="white" class="mb-0"></v-progress-linear>
@@ -30,6 +30,10 @@ export default defineComponent({
       type: String,
       required: false,
       default: 'sequence'
+    },
+    color: {
+      type: String,
+      default: 'primary'
     }
   },
   setup() {

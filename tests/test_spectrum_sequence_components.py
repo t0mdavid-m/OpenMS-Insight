@@ -455,10 +455,26 @@ class TestProteinSequenceView:
         assert args["sequenceIdentifier"] is None
         assert args["settings"] == {"tolerance": 10, "ion_types": ["b", "y"]}
         assert args["tag"] is None
+        assert args["accentColor"] is None
         view.set_tag(2, 5)
         assert view._get_component_args()["tag"] == {"startPos": 2, "endPos": 5}
         view.set_tag(None)
         assert view._get_component_args()["tag"] is None
+
+    def test_accent_color(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        ProteinSequenceView(
+            cache_id="seq_accent",
+            data=sample_protein_sequence_data,
+            filters={"protein": "hit_index"},
+            accent_color="#336699",
+            cache_path=str(temp_cache_dir),
+        )
+        restored = ProteinSequenceView(
+            cache_id="seq_accent", cache_path=str(temp_cache_dir)
+        )
+        assert restored._get_component_args()["accentColor"] == "#336699"
 
     def test_requires_sequence(self, mock_streamlit, temp_cache_dir):
         with pytest.raises(ValueError, match="sequence"):

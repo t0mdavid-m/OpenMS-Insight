@@ -9,7 +9,7 @@
 
   <v-sheet class="pa-4 rounded-lg" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
     <div class="sequence-and-scale">
-    <div :id="sequencePartId">
+    <div :id="sequencePartId" class="sequence-part">
       <div class="d-flex justify-space-evenly">
         <template v-if="massData.length != 0">
           <h3>{{massTitle}}</h3>
@@ -29,8 +29,8 @@
       </div>
       <div class="d-flex justify-end px-4 mb-4">
         <div>
-          <SvgScreenshot :element-id="sequencePartId" :filename="args.svgFilename" />
-          <SequenceViewInformation />
+          <SvgScreenshot :element-id="sequencePartId" :filename="args.svgFilename" :color="accentColor" />
+          <SequenceViewInformation :color="accentColor" />
           <v-btn
             variant="text"
             icon="mdi-content-copy"
@@ -288,11 +288,13 @@
       <v-card-title class="text-h6">
         Enter Custom Sequence
       </v-card-title>
-      <v-card-text>
+      <v-card-text style="padding-bottom: 12px">
+        <!-- The example shows only while typing, under the raised label -->
         <v-textarea
           v-model="customSequenceInput"
           label="Protein Sequence"
-          placeholder="Enter amino acid sequence (e.g., MKFLVNVALVF...)"
+          :placeholder="sequenceInputFocused ? 'Enter amino acid sequence (e.g., MKFLVNVALVF...)' : undefined"
+          @update:focused="sequenceInputFocused = $event"
           :error-messages="sequenceInputError"
           rows="6"
           auto-grow
@@ -314,7 +316,7 @@
           Cancel
         </v-btn>
         <v-btn
-          color="primary"
+          :color="accentColor"
           variant="elevated"
           @click="submitCustomSequence"
         >
@@ -518,9 +520,13 @@ export default defineComponent({
       sequenceDialog: false as boolean,
       customSequenceInput: '' as string,
       sequenceInputError: '' as string,
+      sequenceInputFocused: false,
     }
   },
   computed: {
+    accentColor(): string {
+      return this.args.accentColor ?? 'primary'
+    },
     theme(): Theme | undefined {
       return this.streamlitDataStore.theme
     },
@@ -1489,7 +1495,7 @@ export default defineComponent({
     align-items: center;
   }
 
-  #sequence-part {
+  .sequence-part {
     flex-grow: 1;
     min-width: 0;
   }

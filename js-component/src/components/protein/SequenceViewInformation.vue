@@ -58,7 +58,7 @@
         </v-list>
       </v-card-text>
       <v-card-actions>
-        <v-btn color="primary" block @click="dialog = false">Close</v-btn>
+        <v-btn :color="color" block @click="dialog = false">Close</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -74,6 +74,12 @@ import type { SequenceObject } from '@/types/protein-sequence-object'
 export default defineComponent({
   name: 'SequenceViewInformation',
   components: { AminoAcidCell },
+  props: {
+    color: {
+      type: String,
+      default: 'primary'
+    }
+  },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     return { streamlitDataStore }

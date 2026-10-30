@@ -429,6 +429,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   /** Sequence tag to mark (0-based residues) */
   tag?: { startPos: number; endPos: number } | null
   svgFilename?: string
+  /** Colour of the dialog buttons (default: the theme's primary colour) */
+  accentColor?: string | null
   height?: number
 }
 

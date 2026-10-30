@@ -116,6 +116,7 @@ class ProteinSequenceView(BaseComponent):
         title: str | None = "Sequence View",
         annotation_title: str = "Fragment annotation",
         svg_filename: str = "sequence",
+        accent_color: str | None = None,
         float_precision: str = "float64",
         **kwargs,
     ):
@@ -152,6 +153,8 @@ class ProteinSequenceView(BaseComponent):
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.
             svg_filename: File name for the SVG download.
+            accent_color: Colour of the dialog buttons (default: the theme's
+                primary colour).
             float_precision: Masses are compared at ppm level, so they are kept
                 as Float64 by default.
             **kwargs: Additional configuration options.
@@ -166,6 +169,7 @@ class ProteinSequenceView(BaseComponent):
         self._title = title
         self._annotation_title = annotation_title
         self._svg_filename = svg_filename
+        self._accent_color = accent_color
         # Sequence tag marked on the sequence (set per render, not cached)
         self._tag: dict[str, int] | None = None
 
@@ -189,11 +193,12 @@ class ProteinSequenceView(BaseComponent):
             title=title,
             annotation_title=annotation_title,
             svg_filename=svg_filename,
+            accent_color=accent_color,
             **kwargs,
         )
 
     def _get_cache_config(self) -> dict[str, Any]:
-        return {
+        config = {
             "sequence": self._sequence,
             "mass_column": self._mass_column,
             "precursor_mass_column": self._precursor_mass_column,
@@ -205,6 +210,9 @@ class ProteinSequenceView(BaseComponent):
             "annotation_title": self._annotation_title,
             "svg_filename": self._svg_filename,
         }
+        if self._accent_color is not None:
+            config["accent_color"] = self._accent_color
+        return config
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
         self._sequence = config.get("sequence")
@@ -217,6 +225,7 @@ class ProteinSequenceView(BaseComponent):
         self._title = config.get("title")
         self._annotation_title = config.get("annotation_title", "Fragment annotation")
         self._svg_filename = config.get("svg_filename", "sequence")
+        self._accent_color = config.get("accent_color")
         self._tag = None
 
     def _spectrum_columns(self) -> list[str]:
@@ -340,4 +349,5 @@ class ProteinSequenceView(BaseComponent):
             "settings": self._settings,
             "tag": self._tag,
             "svgFilename": self._svg_filename,
+            "accentColor": self._accent_color,
         }

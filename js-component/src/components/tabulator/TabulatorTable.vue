@@ -635,6 +635,7 @@ export default defineComponent({
         () => {
           if (this.tabulator && !this.isServerSidePagination) {
             ;(this.tabulator as any).setSort(this.args.initialSort || [])
+            ;(this.tabulator as any).rowManager.element.scrollTop = 0
           }
         }
       )
@@ -1582,8 +1583,13 @@ export default defineComponent({
         size: tab.modules?.page?.size,
       })
 
-      // replaceData silently replaces all data without updating scroll position, sort or filtering
-      this.tabulator.replaceData(this.preparedTableData).then(() => {
+      // replaceData silently replaces all data without updating scroll position, sort or filtering.
+      // A table that resets its sort on new rows also starts them at the top (setData)
+      const resetRows = this.args.resetSort && !this.isServerSidePagination
+      const loaded = resetRows
+        ? this.tabulator.setData(this.preparedTableData)
+        : this.tabulator.replaceData(this.preparedTableData)
+      loaded.then(() => {
         console.log('[TabulatorTable] After replaceData - Tabulator internal state:', {
           hasPageModule: !!tab.modules?.page,
           maxPage: tab.modules?.page?.max,
