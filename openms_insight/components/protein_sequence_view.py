@@ -117,6 +117,9 @@ class ProteinSequenceView(BaseComponent):
         annotation_title: str = "Fragment annotation",
         svg_filename: str = "sequence",
         accent_color: str | None = None,
+        fragment_identifier: str | None = None,
+        entry_title: str = "Identification",
+        observed_mass_label: str = "Observed mass",
         float_precision: str = "float64",
         **kwargs,
     ):
@@ -155,6 +158,14 @@ class ProteinSequenceView(BaseComponent):
             svg_filename: File name for the SVG download.
             accent_color: Colour of the dialog buttons (default: the theme's
                 primary colour).
+            fragment_identifier: Identifier the selected fragment's bounds are
+                written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
+                'end'} (positions in the sequence), e.g. for a
+                ``ProteinStructureView``.
+            entry_title: Heading of the mass summary of an entry with an
+                observed mass.
+            observed_mass_label: Label of the entry's observed mass in that
+                summary.
             float_precision: Masses are compared at ppm level, so they are kept
                 as Float64 by default.
             **kwargs: Additional configuration options.
@@ -170,6 +181,9 @@ class ProteinSequenceView(BaseComponent):
         self._annotation_title = annotation_title
         self._svg_filename = svg_filename
         self._accent_color = accent_color
+        self._fragment_identifier = fragment_identifier
+        self._entry_title = entry_title
+        self._observed_mass_label = observed_mass_label
         # Sequence tag marked on the sequence (set per render, not cached)
         self._tag: dict[str, int] | None = None
 
@@ -194,6 +208,9 @@ class ProteinSequenceView(BaseComponent):
             annotation_title=annotation_title,
             svg_filename=svg_filename,
             accent_color=accent_color,
+            fragment_identifier=fragment_identifier,
+            entry_title=entry_title,
+            observed_mass_label=observed_mass_label,
             **kwargs,
         )
 
@@ -212,6 +229,12 @@ class ProteinSequenceView(BaseComponent):
         }
         if self._accent_color is not None:
             config["accent_color"] = self._accent_color
+        if self._fragment_identifier is not None:
+            config["fragment_identifier"] = self._fragment_identifier
+        if self._entry_title != "Identification":
+            config["entry_title"] = self._entry_title
+        if self._observed_mass_label != "Observed mass":
+            config["observed_mass_label"] = self._observed_mass_label
         return config
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -226,6 +249,9 @@ class ProteinSequenceView(BaseComponent):
         self._annotation_title = config.get("annotation_title", "Fragment annotation")
         self._svg_filename = config.get("svg_filename", "sequence")
         self._accent_color = config.get("accent_color")
+        self._fragment_identifier = config.get("fragment_identifier")
+        self._entry_title = config.get("entry_title", "Identification")
+        self._observed_mass_label = config.get("observed_mass_label", "Observed mass")
         self._tag = None
 
     def _spectrum_columns(self) -> list[str]:
@@ -350,4 +376,7 @@ class ProteinSequenceView(BaseComponent):
             "tag": self._tag,
             "svgFilename": self._svg_filename,
             "accentColor": self._accent_color,
+            "fragmentIdentifier": self._fragment_identifier,
+            "entryTitle": self._entry_title,
+            "observedMassLabel": self._observed_mass_label,
         }

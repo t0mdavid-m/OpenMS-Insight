@@ -57,6 +57,7 @@ class ProteinStructureView(ProteinSequenceView):
         regenerate_cache: bool = False,
         mass_column: str | None = "masses",
         aa_identifier: str | None = None,
+        fragment_identifier: str | None = None,
         settings: dict[str, Any] | None = None,
         title: str | None = "Structure View",
         empty_message: str = "Select an entry to show its structure.",
@@ -82,6 +83,10 @@ class ProteinStructureView(ProteinSequenceView):
                 matched against the theoretical fragment masses when the entry
                 has no ``annotated_fragments``.
             aa_identifier: Identifier holding the selected residue (0-based).
+            fragment_identifier: Identifier holding a fragment selected in a
+                ``ProteinSequenceView`` (its ``fragment_identifier``): its
+                cleavage sites are marked, the rest of the protein faded and
+                the view centred on it.
             settings: Fragment settings: {'tolerance': ppm, 'ion_types': [...]}.
             title: Title above the view (None: no title).
             empty_message: Shown while no entry is selected.
@@ -106,6 +111,7 @@ class ProteinStructureView(ProteinSequenceView):
             mass_column=mass_column,
             precursor_mass_column=None,
             aa_identifier=aa_identifier,
+            fragment_identifier=fragment_identifier,
             settings=settings,
             title=title,
             float_precision=float_precision,
@@ -159,20 +165,25 @@ class ProteinStructureView(ProteinSequenceView):
         self._structure = structure
         return self
 
+    def _get_render_key(self) -> str | None:
+        # The structure's text can be large: hash its identity, not the text
+        structure = self._structure
+        if structure is None:
+            return None
+        text = structure.get("data") or ""
+        key = {
+            **{k: v for k, v in structure.items() if k != "data"},
+            "data": hashlib.md5(text.encode()).hexdigest(),
+        }
+        return hashlib.md5(
+            json.dumps(key, sort_keys=True, default=str).encode()
+        ).hexdigest()
+
     def _prepare_vue_data(self, state: dict[str, Any]) -> dict[str, Any]:
         data = super()._prepare_vue_data(state)
-        structure = self._structure
-        data["structure"] = structure
-        # The structure's text can be large: hash its identity, not the text
-        key = None
-        if structure is not None:
-            text = structure.get("data") or ""
-            key = {
-                **{k: v for k, v in structure.items() if k != "data"},
-                "data": hashlib.md5(text.encode()).hexdigest(),
-            }
+        data["structure"] = self._structure
         data["_hash"] = hashlib.md5(
-            json.dumps([data["_hash"], key], sort_keys=True, default=str).encode()
+            json.dumps([data["_hash"], self._get_render_key()]).encode()
         ).hexdigest()
         return data
 

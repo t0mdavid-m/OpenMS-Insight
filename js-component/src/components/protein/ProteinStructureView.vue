@@ -73,7 +73,7 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { ProteinStructureViewComponentArgs } from '@/types/component'
-import type { MatchedSpectrum, SequenceData } from '@/types/protein-sequence-data'
+import type { FragmentSelection, MatchedSpectrum, SequenceData } from '@/types/protein-sequence-data'
 import {
   bestChainMapping,
   fragmentSites,
@@ -95,6 +95,13 @@ const MODIFICATION_DOT = '#444cf7'
 const MODIFICATION_BACKGROUND = '#e5e5f7'
 const INTERNAL_BRACKET = '#8E44AD'
 const SELECTED = '#F3A712'
+
+// A hex colour mixed 70 % with white
+function fade(hex: string): string {
+  const n = parseInt(hex.slice(1), 16)
+  const mix = (c: number) => Math.round(c + (255 - c) * 0.7)
+  return `rgb(${mix((n >> 16) & 255)}, ${mix((n >> 8) & 255)}, ${mix(n & 255)})`
+}
 
 // The 3Dmol viewer and model live outside Vue's reactivity
 type Viewer = any
@@ -221,8 +228,34 @@ export default defineComponent({
       if (this.showModifications && (this.entry?.modifications?.length ?? 0) > 0) {
         items.push({ label: 'Modification', chipClass: 'legend-modification' })
       }
+      if (this.fragment !== undefined) {
+        items.push({ label: `Selected fragment ${this.fragment.name} (rest faded)`, color: this.fragmentColor })
+      }
       items.push({ label: 'Selected residue', color: SELECTED })
       return items
+    },
+    // Fragment selected in a linked sequence view, if it lies on this sequence
+    fragment(): FragmentSelection | undefined {
+      const id = this.args.fragmentIdentifier
+      if (!id) return undefined
+      const f = this.selectionStore.$state[id] as FragmentSelection | null | undefined
+      if (f === undefined || f === null) return undefined
+      if (f.start < 0 || f.end >= this.dbSequence.length || f.start > f.end) return undefined
+      return f
+    },
+    // Where the selected fragment was cleaved off: one residue for a terminal
+    // ion, both ends for an internal one
+    cleavageSites(): number[] {
+      const f = this.fragment
+      if (f === undefined) return []
+      if (f.kind === 'N') return [f.end]
+      if (f.kind === 'C') return [f.start]
+      return f.start === f.end ? [f.start] : [f.start, f.end]
+    },
+    fragmentColor(): string {
+      const f = this.fragment
+      if (f === undefined || f.kind === 'I') return INTERNAL_BRACKET
+      return ionColor(new Set([f.name.charAt(0)])) ?? INTERNAL_BRACKET
     },
     hasTruncation(): boolean {
       const [start, end] = this.sequenceRange
@@ -251,6 +284,14 @@ export default defineComponent({
     selectedAA(pos: number | undefined) {
       this.applyStyle()
       this.centerOn(pos)
+    },
+    fragment(fragment: FragmentSelection | undefined) {
+      this.applyStyle()
+      const mapping = this.mapping
+      if (fragment === undefined || mapping === undefined || this.viewer === undefined) return
+      // Centre on the piece the fragment covers
+      const span = this.residuesOf((pos) => pos >= fragment.start && pos <= fragment.end)
+      if (span.length > 0) this.viewer.center({ chain: mapping.chain, resi: span }, 400)
     },
     theme() {
       this.applyStyle()
@@ -346,6 +387,13 @@ export default defineComponent({
       return mapping.dbOfResidue.get(atom.resi ?? NaN) ?? -1
     },
     residueColor(pos: number): string {
+      const color = this.baseColor(pos)
+      // A selected fragment stands out: the rest of the protein is faded
+      const f = this.fragment
+      if (f !== undefined && (pos < f.start || pos > f.end)) return fade(color)
+      return color
+    },
+    baseColor(pos: number): string {
       const [start, end] = this.sequenceRange
       if (pos < start || pos > end) return UNOBSERVED
       const ion = ionColor(this.sites.ionTypes.get(pos))
@@ -410,6 +458,22 @@ export default defineComponent({
             backgroundOpacity: 0.9,
           }, { ...selection, atom: 'CA' })
         }
+      }
+      const f = this.fragment
+      if (f !== undefined) {
+        this.cleavageSites.forEach((pos) => {
+          const r = mapping.dbToResidue[pos]
+          if (r === undefined || r < 0) return
+          const selection = { chain: mapping.chain, resi: mapping.residues[r].resi }
+          viewer.addStyle(selection, { stick: { color: this.fragmentColor, radius: 0.25 } })
+          const side = f.kind === 'I' ? (pos === f.start ? ' (start)' : ' (end)') : ''
+          viewer.addLabel(`${f.name} · ${this.dbSequence[pos]}${pos + 1}${side}`, {
+            fontSize: 12,
+            fontColor: '#ffffff',
+            backgroundColor: this.fragmentColor,
+            backgroundOpacity: 0.9,
+          }, { ...selection, atom: 'CA' })
+        })
       }
       viewer.render()
     },

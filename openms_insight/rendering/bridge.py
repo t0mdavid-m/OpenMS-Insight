@@ -104,6 +104,10 @@ _NAVIGATION_KEYS = ("_navigate_to_page", "_target_row_index")
 # Leading underscores keep it clear of state identifiers, which the key also holds.
 _CACHE_GENERATION_KEY = "__cache_generation__"
 
+# Key under which data a component is given per render is folded in (see
+# BaseComponent._get_render_key).
+_RENDER_KEY = "__render_key__"
+
 
 def _payload_cache_key(
     component: "BaseComponent",
@@ -132,6 +136,7 @@ def _payload_cache_key(
         sorted(
             [(k, _make_hashable(state.get(k))) for k in state_keys]
             + [(_CACHE_GENERATION_KEY, getattr(component, "_cache_generation", ""))]
+            + [(_RENDER_KEY, component._get_render_key())]
         )
     )
 

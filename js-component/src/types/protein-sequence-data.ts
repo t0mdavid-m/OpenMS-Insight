@@ -66,6 +66,16 @@ export type ModificationData = {
   labels : string
 }
 
+// Bounds (positions in `sequence`) of a fragment ion selected in the sequence
+// view: N-terminal ions end at `end`, C-terminal ions start at `start`,
+// internal ions are cleaved at both
+export type FragmentSelection = {
+  name: string
+  kind: 'N' | 'C' | 'I'
+  start: number
+  end: number
+}
+
 export type FragmentSettings = {
   tolerance : number
   ion_types : string[]

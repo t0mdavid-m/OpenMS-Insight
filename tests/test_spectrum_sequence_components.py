@@ -456,6 +456,7 @@ class TestProteinSequenceView:
         assert args["settings"] == {"tolerance": 10, "ion_types": ["b", "y"]}
         assert args["tag"] is None
         assert args["accentColor"] is None
+        assert args["fragmentIdentifier"] is None
         view.set_tag(2, 5)
         assert view._get_component_args()["tag"] == {"startPos": 2, "endPos": 5}
         view.set_tag(None)
@@ -475,6 +476,31 @@ class TestProteinSequenceView:
             cache_id="seq_accent", cache_path=str(temp_cache_dir)
         )
         assert restored._get_component_args()["accentColor"] == "#336699"
+
+    def test_entry_mass_labels(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        default = ProteinSequenceView(
+            cache_id="seq_labels_default",
+            data=sample_protein_sequence_data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )._get_component_args()
+        assert default["entryTitle"] == "Identification"
+        assert default["observedMassLabel"] == "Observed mass"
+        ProteinSequenceView(
+            cache_id="seq_labels",
+            data=sample_protein_sequence_data,
+            filters={"protein": "hit_index"},
+            entry_title="Peptide",
+            observed_mass_label="Observed peptide mass",
+            cache_path=str(temp_cache_dir),
+        )
+        restored = ProteinSequenceView(
+            cache_id="seq_labels", cache_path=str(temp_cache_dir)
+        )._get_component_args()
+        assert restored["entryTitle"] == "Peptide"
+        assert restored["observedMassLabel"] == "Observed peptide mass"
 
     def test_requires_sequence(self, mock_streamlit, temp_cache_dir):
         with pytest.raises(ValueError, match="sequence"):
@@ -799,6 +825,37 @@ class TestProteinStructureView:
         view.set_structure({"status": "ok", "format": "pdb", "data": "ATOM  2"})
         assert view._prepare_vue_data({"protein": 1})["_hash"] != data["_hash"]
 
+    def test_new_structure_is_not_served_stale(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        # An upload changes the structure while the selection stays the same
+        from unittest.mock import patch
+
+        from openms_insight.rendering.bridge import (
+            _payload_cache_key,
+            _prepare_vue_data_cached,
+        )
+
+        view = self._view(sample_protein_sequence_data, temp_cache_dir)
+        state_keys = set(view.get_state_dependencies())
+
+        def render():
+            key = _payload_cache_key(view, {"protein": 1}, state_keys)
+            with patch(
+                "openms_insight.rendering.bridge.st.session_state", mock_streamlit
+            ):
+                data, _ = _prepare_vue_data_cached(
+                    view, "structure_view", key, {"protein": 1}
+                )
+            return data["structure"]
+
+        view.set_structure({"status": "ok", "format": "pdb", "data": "ATOM  1"})
+        assert render()["data"] == "ATOM  1"
+        view.set_structure({"status": "ok", "format": "pdb", "data": "ATOM  2"})
+        assert render()["data"] == "ATOM  2"
+        view.set_structure(None)
+        assert render() is None
+
     def test_structure_is_validated(
         self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
     ):
@@ -819,6 +876,7 @@ class TestProteinStructureView:
             temp_cache_dir,
             empty_message="Pick a protein.",
             viewer_height=300,
+            fragment_identifier="fragment",
         )
         restored = ProteinStructureView(
             cache_id="structure_view", cache_path=str(temp_cache_dir)
@@ -826,3 +884,4 @@ class TestProteinStructureView:
         args = restored._get_component_args()
         assert args["emptyMessage"] == "Pick a protein."
         assert args["viewerHeight"] == 300
+        assert args["fragmentIdentifier"] == "fragment"

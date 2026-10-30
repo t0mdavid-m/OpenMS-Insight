@@ -420,6 +420,8 @@ export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
   aaIdentifier?: string | null
   /** Fragment ion types and tolerance (ppm) to match with */
   settings?: { tolerance: number; ion_types: string[] } | null
+  /** Identifier holding the fragment selected in a sequence view */
+  fragmentIdentifier?: string | null
   /** Shown while no entry is selected */
   emptyMessage?: string
   /** Height of the 3D viewer in pixels */
@@ -440,6 +442,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   aaIdentifier?: string | null
   /** Identifier the change-sequence dialog writes the new sequence to */
   sequenceIdentifier?: string | null
+  /** Identifier the selected fragment's bounds are written to */
+  fragmentIdentifier?: string | null
   /** Fragment ion types and tolerance (ppm) to start from */
   settings?: { tolerance: number; ion_types: string[] } | null
   /** Sequence tag to mark (0-based residues) */
@@ -447,6 +451,10 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   svgFilename?: string
   /** Colour of the dialog buttons (default: the theme's primary colour) */
   accentColor?: string | null
+  /** Heading of an entry's mass summary (default 'Identification') */
+  entryTitle?: string
+  /** Label of the entry's observed mass (default 'Observed mass') */
+  observedMassLabel?: string
   height?: number
 }
 

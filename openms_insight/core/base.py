@@ -572,6 +572,18 @@ class BaseComponent(ABC):
         """
         pass
 
+    def _get_render_key(self) -> str | None:
+        """
+        Identity of data the component is given per render rather than read
+        from its cache (None: there is none).
+
+        The payload sent to Vue is cached per selection state, so a component
+        whose ``_prepare_vue_data`` also depends on something set per render
+        returns a key here that changes with it; a changed key makes the
+        cached payload stale.
+        """
+        return None
+
     def get_filters_mapping(self) -> dict[str, str]:
         """Return the filters identifier-to-column mapping."""
         return self._filters.copy()

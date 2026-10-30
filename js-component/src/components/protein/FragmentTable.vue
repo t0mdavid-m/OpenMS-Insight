@@ -318,7 +318,8 @@ export default defineComponent({
         maxHeight: Math.max(tableMaxHeight, 50), // Ensure minimum height
         responsiveLayout : 'collapse',
         layout: this.tableLayoutParam,
-        selectable: 1,
+        // One clickable row (Tabulator 6 name of the old selectable option)
+        selectableRows: 1,
         columnDefaults: {
           title: '',
           hozAlign: 'right',

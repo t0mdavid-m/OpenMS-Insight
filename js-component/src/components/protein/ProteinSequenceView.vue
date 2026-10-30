@@ -340,6 +340,7 @@ import type {
   AnnotationSummary,
   FragmentSettings,
   ModificationData,
+  FragmentSelection,
   MatchedSpectrum,
   SequenceTag,
   SequenceData,
@@ -768,6 +769,10 @@ export default defineComponent({
     fragmentMassTolerance() {
       this.recomputeFragments()
     },
+    // Rows selected from the sequence (residue click, internal track, mass table)
+    selectedFragTableRowIndex(rowIndex?: number) {
+      this.publishSelectedFragment(rowIndex)
+    },
     // Ion-type a/b/c/x/y/z toggles. deep required (nested .selected).
     ionTypes: {
       handler() {
@@ -856,7 +861,7 @@ export default defineComponent({
 
       if (this.entryObservedMass !== undefined) {
 
-        this.massTitle = 'Identification'
+        this.massTitle = this.args.entryTitle ?? 'Identification'
         let observed_mass = '-'
         let delta_mass = '-'
         if (this.entryObservedMass > 0) {
@@ -867,7 +872,7 @@ export default defineComponent({
 
         this.massData = [
           `Theoretical protein mass : ${this.theoreticalMass.toFixed(2)}`,
-          `Observed mass : ${observed_mass}`,
+          `${this.args.observedMassLabel ?? 'Observed mass'} : ${observed_mass}`,
           `Δ Mass (Da) : ${delta_mass}`,
         ]
 
@@ -913,6 +918,7 @@ export default defineComponent({
     prepareFragmentTable(): void {
       this.selectedFragment = undefined
       this.selectedResidue = undefined
+      this.publishSelectedFragment(undefined)
       if (this.usesAnnotator) {
         this.prepareAnnotatedFragmentTable()
         return
@@ -1135,8 +1141,9 @@ export default defineComponent({
           xIon: false,
           yIon: false,
           zIon: false,
-          tagStart: false,
-          tagEnd : false,
+          // The tag can arrive before a rebuild (e.g. with a new entry)
+          tagStart: this.selectedTag?.startPos == index,
+          tagEnd : this.selectedTag?.endPos == index,
           modStart : false,
           modEnd : false,
           modCenter : false,
@@ -1199,7 +1206,32 @@ export default defineComponent({
         )
       }
     },
+    // Bounds of a fragment table row (database positions), for linked views
+    fragmentSelectionOf(rowIndex?: number): FragmentSelection | null {
+      if (rowIndex === undefined || rowIndex < 0) return null
+      if (this.usesAnnotator) {
+        const f = this.fragmentTableSource[rowIndex]
+        return f === undefined ? null : { name: f.name, kind: f.kind, start: f.start, end: f.end }
+      }
+      const row = this.fragmentTableData[rowIndex]
+      if (row === undefined) return null
+      const ion = String(row.IonType).charAt(0)
+      const n = row.IonNumber as number
+      if (['a', 'b', 'c'].includes(ion)) {
+        return { name: row.Name as string, kind: 'N', start: this.sequence_start, end: this.sequence_start + n - 1 }
+      }
+      return { name: row.Name as string, kind: 'C', start: this.sequence_end - n + 1, end: this.sequence_end }
+    },
+    publishSelectedFragment(rowIndex?: number) {
+      const id = this.args.fragmentIdentifier
+      if (!id) return
+      const next = this.fragmentSelectionOf(rowIndex)
+      // Skip no-op writes: each write is a round trip to Python
+      if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
+      this.selectionStore.updateSelection(id, next)
+    },
     onFragmentTableRowSelected(rowIndex?: number) {
+      this.publishSelectedFragment(rowIndex)
       if (rowIndex !== undefined && this.fragmentTableSource[rowIndex]) {
         this.selectedFragment = this.fragmentTableSource[rowIndex]
       }
