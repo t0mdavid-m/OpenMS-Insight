@@ -49,12 +49,12 @@ def test_line_mode_reaches_vue_and_survives_reconstruction(
 def test_line_mode_is_part_of_the_cache_config(
     mock_streamlit, temp_cache_dir, tic_data
 ):
-    kwargs = dict(
-        data=tic_data,
-        cache_path=str(temp_cache_dir),
-        x_column="rt",
-        y_column="tic",
-    )
+    kwargs = {
+        "data": tic_data,
+        "cache_path": str(temp_cache_dir),
+        "x_column": "rt",
+        "y_column": "tic",
+    }
     sticks = LinePlot(cache_id="tic_sticks", **kwargs)
     line = LinePlot(cache_id="tic_line2", plot_mode="line", **kwargs)
     assert sticks._get_cache_config()["plot_mode"] == "sticks"

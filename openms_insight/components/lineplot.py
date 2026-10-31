@@ -120,9 +120,7 @@ class LinePlot(BaseComponent):
         self._styling = styling or {}
         self._plot_config = config or {}
         if plot_mode not in ("sticks", "line"):
-            raise ValueError(
-                f"plot_mode must be 'sticks' or 'line', got {plot_mode!r}"
-            )
+            raise ValueError(f"plot_mode must be 'sticks' or 'line', got {plot_mode!r}")
         self._plot_mode = plot_mode
 
         # Dynamic annotations set at render time (not cached)
