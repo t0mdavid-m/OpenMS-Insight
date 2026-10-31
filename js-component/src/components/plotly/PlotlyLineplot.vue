@@ -206,6 +206,13 @@ export default defineComponent({
     },
 
     /**
+     * True when the plot draws a continuous line (chromatograms) instead of sticks.
+     */
+    isLineMode(): boolean {
+      return this.args.plotMode === 'line'
+    },
+
+    /**
      * Generate stick format x values from raw data.
      * Each data point (x) becomes triplet: [x, x, x]
      */
@@ -273,6 +280,9 @@ export default defineComponent({
       }
 
       if (maxY === 0) return [0, 1]
+
+      // Line mode has no annotations, so only a little headroom
+      if (this.isLineMode) return [0, maxY * 1.05]
 
       // Add headroom for annotations (1.8x like FLASHApp)
       return [0, maxY * 1.8]
@@ -524,6 +534,10 @@ export default defineComponent({
         return this.getFallbackData()
       }
 
+      if (this.isLineMode) {
+        return this.lineTraces
+      }
+
       const traces: Plotly.Data[] = []
       const { highlight_mask } = this.plotData
       const selectedIndex = this.selectedPeakIndex
@@ -617,12 +631,53 @@ export default defineComponent({
     },
 
     /**
+     * Traces for line mode: one continuous line filled to zero, sorted by x,
+     * plus a dashed vertical line at the selected point.
+     */
+    lineTraces(): Plotly.Data[] {
+      if (!this.isDataReady || !this.plotData) return []
+      const { x_values, y_values } = this.plotData
+      const order = Array.from(x_values.keys()).sort(
+        (a: number, b: number) => x_values[a] - x_values[b]
+      )
+      const x = order.map((i: number) => x_values[i])
+      const y = order.map((i: number) => y_values[i])
+      const color = this.styling.lineColor || this.styling.highlightHiddenColor
+      const traces: Plotly.Data[] = [
+        {
+          x,
+          y,
+          mode: 'lines',
+          type: 'scatter',
+          fill: 'tozeroy',
+          line: { color, width: 1.5 },
+          hovertemplate: '%{x:.2f}<br>%{y:.3s}<extra></extra>',
+        },
+      ]
+      const selectedIndex = this.selectedPeakIndex
+      if (selectedIndex !== undefined) {
+        const sx = x_values[selectedIndex]
+        traces.push({
+          x: [sx, sx],
+          y: [0, this.yRange[1]],
+          mode: 'lines',
+          type: 'scatter',
+          line: { color: this.styling.selectedColor, width: 2, dash: 'dash' },
+          hoverinfo: 'skip',
+        })
+      }
+      return traces
+    },
+
+    /**
      * Build Plotly layout.
      */
     layout(): Partial<Plotly.Layout> {
       return {
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: false,
+        // Line mode: hovering (and clicking) anywhere picks the point at that x
+        hovermode: this.isLineMode ? 'x' : 'closest',
         height: this.args.height || 400,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
