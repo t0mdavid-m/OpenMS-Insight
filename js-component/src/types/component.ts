@@ -82,10 +82,12 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   yColumn?: string // Column name for y-axis values
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
+  plotMode?: 'sticks' | 'line' // Sticks (spectra) or a filled line (chromatograms)
   height?: number // Component height in pixels
 }
 
 export interface LinePlotStyling {
+  lineColor?: string // Line color in line mode (default: highlightHiddenColor)
   highlightColor?: string
   selectedColor?: string
   unhighlightedColor?: string

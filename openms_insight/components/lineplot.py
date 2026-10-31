@@ -63,6 +63,7 @@ class LinePlot(BaseComponent):
         annotation_column: str | None = None,
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
+        plot_mode: str = "sticks",
         **kwargs,
     ):
         """
@@ -102,6 +103,11 @@ class LinePlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options
+            plot_mode: ``"sticks"`` (default) draws one vertical stick per
+                point, as for mass spectra. ``"line"`` draws a continuous
+                line filled to zero, sorted by x, as for chromatograms
+                (TIC, BPC, XIC). In line mode the selected point is marked
+                by a dashed vertical line and clicks select the nearest point.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -113,6 +119,11 @@ class LinePlot(BaseComponent):
         self._annotation_column = annotation_column
         self._styling = styling or {}
         self._plot_config = config or {}
+        if plot_mode not in ("sticks", "line"):
+            raise ValueError(
+                f"plot_mode must be 'sticks' or 'line', got {plot_mode!r}"
+            )
+        self._plot_mode = plot_mode
 
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: dict[str, Any] | None = None
@@ -137,6 +148,7 @@ class LinePlot(BaseComponent):
             annotation_column=annotation_column,
             styling=styling,
             config=config,
+            plot_mode=plot_mode,
             **kwargs,
         )
 
@@ -157,6 +169,7 @@ class LinePlot(BaseComponent):
             "y_label": self._y_label,
             "styling": self._styling,
             "plot_config": self._plot_config,
+            "plot_mode": self._plot_mode,
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -170,6 +183,7 @@ class LinePlot(BaseComponent):
         self._y_label = config.get("y_label", self._y_column)
         self._styling = config.get("styling", {})
         self._plot_config = config.get("plot_config", {})
+        self._plot_mode = config.get("plot_mode", "sticks")
         # Initialize dynamic annotations (not cached)
         self._dynamic_annotations = None
         self._dynamic_title = None
@@ -414,6 +428,7 @@ class LinePlot(BaseComponent):
             "yColumn": self._y_column,
             "highlightColumn": self._highlight_column,
             "annotationColumn": self._annotation_column,
+            "plotMode": self._plot_mode,
         }
 
         # Add any extra config options
