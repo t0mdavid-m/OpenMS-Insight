@@ -343,6 +343,10 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs {
   yLabel?: string
   showLegend?: boolean
   fixedYRange?: boolean
+  /** Plotly rangemode of the y axis (default 'nonnegative') */
+  yRangeMode?: 'nonnegative' | 'tozero' | 'normal'
+  /** Column whose text is shown on hover */
+  hoverColumn?: string | null
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
