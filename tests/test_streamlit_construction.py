@@ -631,6 +631,22 @@ class TestTableAutoSelection:
         assert "_auto_selection" in result
         assert result["_auto_selection"] == {}
 
+    def test_auto_selection_empty_when_default_row_disabled(
+        self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
+    ):
+        """default_row=-1 means nothing is selected until the viewer clicks."""
+        table = Table(
+            cache_id="test_autoselect_disabled",
+            data=sample_table_data,
+            cache_path=str(temp_cache_dir),
+            interactivity={"selected_id": "id"},
+            default_row=-1,
+        )
+
+        result = table._prepare_vue_data({})
+
+        assert result["_auto_selection"] == {}
+
     def test_auto_selection_empty_when_no_interactivity(
         self, mock_streamlit, temp_cache_dir: Path, sample_table_data: pl.LazyFrame
     ):
