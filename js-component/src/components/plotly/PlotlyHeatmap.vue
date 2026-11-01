@@ -388,7 +388,7 @@ export default defineComponent({
               // Continuous mode only lists the boxes: above the plot, clear of the colorbar
               ...(this.isCategoricalMode
                 ? { x: 1.02, y: 1, xanchor: 'left', yanchor: 'top' }
-                : { orientation: 'h', x: 1, y: 1.02, xanchor: 'right', yanchor: 'bottom' }),
+                : { orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom' }),
               bgcolor:
                 this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
               bordercolor: this.theme?.base === 'dark' ? '#555' : '#ccc',
