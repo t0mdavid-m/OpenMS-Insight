@@ -227,6 +227,48 @@ class TestSeriesPlot:
         ]
         data = plot._prepare_vue_data({})
         assert len(data["plotData"]) == 6
+        # Defaults: y axis from zero, no hover text
+        assert args["yRangeMode"] == "nonnegative"
+        assert args["hoverColumn"] is None
+
+    def test_signed_y_axis_and_hover_column(self, mock_streamlit, temp_cache_dir):
+        errors = pl.LazyFrame(
+            {
+                "mass": [500.0, 900.0, 1200.0],
+                "ppm": [-3.5, 1.0, 4.2],
+                "ion": ["b", "y", "y"],
+                "fragment": ["b5", "y8", "y11"],
+            }
+        )
+        plot = SeriesPlot(
+            cache_id="errors",
+            data=errors,
+            x_column="mass",
+            y_column="ppm",
+            series_column="ion",
+            mode="markers",
+            y_range_mode="normal",
+            hover_column="fragment",
+            cache_path=str(temp_cache_dir),
+        )
+        args = plot._get_component_args()
+        assert args["yRangeMode"] == "normal"
+        assert args["hoverColumn"] == "fragment"
+        data = plot._prepare_vue_data({})["plotData"]
+        assert list(data["fragment"]) == ["b5", "y8", "y11"]
+        # Restored from its cache with the same configuration
+        cached = SeriesPlot(cache_id="errors", cache_path=str(temp_cache_dir))
+        assert cached._get_component_args()["yRangeMode"] == "normal"
+        assert cached._get_component_args()["hoverColumn"] == "fragment"
+
+    def test_rejects_unknown_y_range_mode(self, mock_streamlit, temp_cache_dir):
+        with pytest.raises(ValueError, match="y_range_mode"):
+            SeriesPlot(
+                cache_id="bad",
+                data=pl.LazyFrame({"x": [1.0], "y": [1.0]}),
+                y_range_mode="symmetric",
+                cache_path=str(temp_cache_dir),
+            )
 
 
 class TestPlot3D:
