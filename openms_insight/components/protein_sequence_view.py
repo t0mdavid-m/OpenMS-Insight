@@ -34,6 +34,63 @@ SEQUENCE_COLUMNS: tuple[str, ...] = (
 )
 
 
+# Ion series the views match: the base series (whose masses the data carries)
+# and their radical / hydrogen-shifted variants, with accepted spellings
+ION_TYPES: tuple[str, ...] = ("a", "b", "c", "x", "y", "z")
+ION_VARIANTS: dict[str, str] = {
+    "a•": "a•",
+    "a+1": "a•",
+    "a.": "a•",
+    "x•": "x•",
+    "x+1": "x•",
+    "x.": "x•",
+    "y-1": "y-1",
+    "y−1": "y-1",
+    "z•": "z•",
+    "z+1": "z•",
+    "z.": "z•",
+    "z-dot": "z•",
+    "zp1": "z•",
+}
+# Fragmentation methods and the ion series they select (as in ProSight Lite)
+FRAGMENTATION_METHODS: dict[str, tuple[str, ...]] = {
+    "CID/HCD": ("b", "y"),
+    "ETD/ECD": ("c", "z•"),
+    "EThcD": ("b", "c", "y", "z•"),
+    "UVPD": ("a", "a•", "b", "c", "x", "x•", "y", "y-1", "z"),
+}
+_METHOD_ALIASES = {"cid/hcd", "cid", "hcd", "etd/ecd", "etd", "ecd", "ethcd", "uvpd"}
+
+
+def check_fragment_settings(settings: dict[str, Any] | None) -> None:
+    """Raise ValueError for a fragment setting the views cannot apply.
+
+    Checks the keys ``tolerance_unit`` ('ppm' or 'Da') and ``fragmentation``
+    (a key of ``FRAGMENTATION_METHODS``, or 'CID', 'HCD', 'ETD', 'ECD'; case
+    and spaces ignored). ``tolerance`` and ``ion_types`` are passed on as
+    before: the view ignores ion series it does not know (see ``ION_TYPES``
+    and ``ION_VARIANTS`` for the ones it draws).
+    """
+    if not isinstance(settings, dict):
+        return
+    unit = settings.get("tolerance_unit")
+    if unit is not None and (
+        not isinstance(unit, str) or unit.lower() not in ("ppm", "da")
+    ):
+        raise ValueError(
+            f"settings['tolerance_unit'] must be 'ppm' or 'Da', not {unit!r}"
+        )
+    method = settings.get("fragmentation")
+    if method is not None and (
+        not isinstance(method, str)
+        or method.replace(" ", "").lower() not in _METHOD_ALIASES
+    ):
+        raise ValueError(
+            f"Unknown fragmentation method {method!r}; "
+            f"use one of {list(FRAGMENTATION_METHODS)}"
+        )
+
+
 def _json_safe(value: Any) -> Any:
     """Replace NaN and infinities, which JSON cannot carry, with None."""
     if isinstance(value, float):
@@ -151,8 +208,14 @@ class ProteinSequenceView(BaseComponent):
             sequence_identifier: Identifier the "change sequence" dialog writes a
                 new sequence to. None hides the button. The app reads it and
                 rebuilds the view for the new sequence.
-            settings: Initial fragment settings: {'tolerance': ppm,
-                'ion_types': ['b', 'y', ...]}.
+            settings: Initial fragment settings, all keys optional:
+                ``tolerance`` (default 10), ``tolerance_unit`` ('ppm' default,
+                or 'Da'), ``ion_types`` (a b c x y z and the variants a• x•
+                y-1 z•, also written a+1 x+1 z+1; default b and y) and
+                ``fragmentation`` ('CID/HCD', 'ETD/ECD', 'EThcD' or 'UVPD',
+                selecting that method's ion series when ``ion_types`` is not
+                given). The user can change all of them in the view. See
+                ``check_fragment_settings``.
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.
             svg_filename: File name for the SVG download.
@@ -176,6 +239,7 @@ class ProteinSequenceView(BaseComponent):
         self._mass_identifier = mass_identifier
         self._aa_identifier = aa_identifier
         self._sequence_identifier = sequence_identifier
+        check_fragment_settings(settings)
         self._settings = settings
         self._title = title
         self._annotation_title = annotation_title
