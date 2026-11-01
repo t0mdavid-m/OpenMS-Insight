@@ -3,6 +3,7 @@
  */
 
 import type { ColumnDefinition, Options as TabulatorOptions } from 'tabulator-tables'
+import type { FragmentSettings } from './protein-sequence-data'
 
 /**
  * Base component arguments shared by all components.
@@ -422,8 +423,8 @@ export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
   title?: string
   /** Identifier holding the selected residue (0-based position in the sequence) */
   aaIdentifier?: string | null
-  /** Fragment ion types and tolerance (ppm) to match with */
-  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Fragment ion types (or fragmentation method) and tolerance to match with */
+  settings?: FragmentSettings | null
   /** Identifier holding the fragment selected in a sequence view */
   fragmentIdentifier?: string | null
   /** Shown while no entry is selected */
@@ -450,8 +451,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   sequenceIdentifier?: string | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
-  /** Fragment ion types and tolerance (ppm) to start from */
-  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Fragment ion types (or fragmentation method) and tolerance to start from */
+  settings?: FragmentSettings | null
   /** Sequence tag to mark (0-based residues) */
   tag?: { startPos: number; endPos: number } | null
   svgFilename?: string
