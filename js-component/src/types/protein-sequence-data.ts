@@ -94,6 +94,8 @@ export type SequenceDataDictionary = Record<number, SequenceData>
 export type MatchedSpectrum = {
   masses: number[]
   precursorMass?: number | null
+  // Fragmentation method the spectrum was acquired with (see FragmentSettings)
+  fragmentation?: string | null
 }
 
 // Sequence tag marked on the sequence (0-based residues, inclusive)

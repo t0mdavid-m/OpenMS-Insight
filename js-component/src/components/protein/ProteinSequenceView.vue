@@ -621,6 +621,9 @@ export default defineComponent({
     spectrum(): MatchedSpectrum | undefined {
       return (this.streamlitDataStore.allDataForDrawing.spectrumData as MatchedSpectrum | null) ?? undefined
     },
+    spectrumFragmentation(): string | undefined {
+      return this.spectrum?.fragmentation ?? undefined
+    },
     settings(): FragmentSettings | undefined {
       return this.args.settings ?? undefined
     },
@@ -836,6 +839,11 @@ export default defineComponent({
     spectrum() {
       this.recomputeFragments()
     },
+    // The selected spectrum's fragmentation method (fragmentation_column):
+    // a spectrum acquired with another method selects that method's series
+    spectrumFragmentation() {
+      this.applySpectrumFragmentation()
+    },
     // A new entry (another identification, or a user-given sequence): clears the
     // stale residue selection and re-reads the settings.
     entryKey() {
@@ -966,6 +974,14 @@ export default defineComponent({
       if (settings?.tolerance_unit !== undefined && settings.tolerance_unit !== null) {
         this.toleranceUnit = toleranceUnit(settings.tolerance_unit)
       }
+      this.applySpectrumFragmentation()
+    },
+    // Select the ion series of the spectrum's own fragmentation method. Not with
+    // annotated fragments: those were annotated for the search's ion types.
+    applySpectrumFragmentation() {
+      if (this.usesAnnotator) return
+      const ions = methodIons(this.spectrumFragmentation)
+      if (ions !== undefined) this.selectIons(ions)
     },
     toggleIonTypeSelected(index: number) {
       this.ionTypes[index].selected = !this.ionTypes[index].selected
@@ -992,6 +1008,9 @@ export default defineComponent({
           `${this.args.observedMassLabel ?? 'Observed mass'} : ${observed_mass}`,
           `Δ Mass (Da) : ${delta_mass}`,
         ]
+        if (this.spectrumFragmentation) {
+          this.massData.push(`Fragmentation : ${this.spectrumFragmentation}`)
+        }
 
         // Ensures this is only executed once
         if (!this.visibilityOptions.some(option => option.text === 'Tags')) {
@@ -1031,6 +1050,9 @@ export default defineComponent({
         `Observed mass : ${observedMass.toFixed(2)}`,
         `Δ Mass (Da) : ${deltaMassDa.toFixed(2)}`,
       ]
+      if (this.spectrumFragmentation) {
+        this.massData.push(`Fragmentation : ${this.spectrumFragmentation}`)
+      }
     },
     prepareFragmentTable(): void {
       this.selectedFragment = undefined

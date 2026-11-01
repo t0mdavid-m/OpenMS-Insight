@@ -1004,3 +1004,59 @@ class TestFragmentSettings:
             assert f"{{ name: '{label}', ions: [{listed}] }}" in source, method
         for variant in set(ION_VARIANTS.values()):
             assert f"name: '{variant}'" in source, variant
+
+
+class TestSpectrumFragmentation:
+    """Per-spectrum fragmentation method (fragmentation_column)."""
+
+    def _view(self, cache_dir, data, **kwargs):
+        return ProteinSequenceView(
+            cache_id="seq_frag",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(cache_dir),
+            **kwargs,
+        )
+
+    def test_payload_carries_method(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        data = sample_protein_sequence_data.with_columns(
+            pl.Series("activation", ["ETD", None])
+        )
+        view = self._view(temp_cache_dir, data, fragmentation_column="activation")
+        etd = view._prepare_vue_data({"protein": 0})["spectrumData"]
+        assert etd["fragmentation"] == "ETD"
+        unknown = view._prepare_vue_data({"protein": 1})["spectrumData"]
+        assert unknown["fragmentation"] is None
+
+    def test_without_column_payload_unchanged(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        view = self._view(temp_cache_dir, sample_protein_sequence_data)
+        spectrum = view._prepare_vue_data({"protein": 0})["spectrumData"]
+        assert set(spectrum) == {"masses", "precursorMass"}
+        assert "fragmentation_column" not in view._get_cache_config()
+
+    def test_column_survives_cache_reload(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        data = sample_protein_sequence_data.with_columns(
+            pl.Series("activation", ["HCD", "ETD"])
+        )
+        self._view(temp_cache_dir, data, fragmentation_column="activation")
+        reloaded = ProteinSequenceView(
+            cache_id="seq_frag", cache_path=str(temp_cache_dir)
+        )
+        spectrum = reloaded._prepare_vue_data({"protein": 1})["spectrumData"]
+        assert spectrum["fragmentation"] == "ETD"
+
+    def test_missing_column_raises(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        with pytest.raises(ValueError):
+            self._view(
+                temp_cache_dir,
+                sample_protein_sequence_data,
+                fragmentation_column="activation",
+            )

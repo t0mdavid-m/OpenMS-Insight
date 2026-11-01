@@ -166,6 +166,7 @@ class ProteinSequenceView(BaseComponent):
         sequence: dict[str, Any] | None = None,
         mass_column: str | None = "masses",
         precursor_mass_column: str | None = "precursor_mass",
+        fragmentation_column: str | None = None,
         mass_identifier: str | None = None,
         aa_identifier: str | None = None,
         sequence_identifier: str | None = None,
@@ -200,6 +201,13 @@ class ProteinSequenceView(BaseComponent):
                 None: no spectrum (fragments only from annotated_fragments).
             precursor_mass_column: Column with the precursor mass, shown against
                 the theoretical mass when no observed mass is given.
+            fragmentation_column: Column with the fragmentation method of the
+                spectrum (a ``fragmentation`` value of ``settings``, e.g.
+                'ETD' or 'HCD'; None or unknown keeps the current ion series).
+                When the selected spectrum's method changes, the view selects
+                that method's ion series and shows the method in the mass
+                summary; not with annotated fragments, which were annotated
+                for the search's ion types.
             mass_identifier: Identifier holding the selected mass, as an index
                 into the masses of the spectrum (e.g. a mass table's selection).
                 Selecting a fragment selects its mass and vice versa.
@@ -236,6 +244,7 @@ class ProteinSequenceView(BaseComponent):
         self._sequence = _json_safe(sequence) if sequence is not None else None
         self._mass_column = mass_column
         self._precursor_mass_column = precursor_mass_column
+        self._fragmentation_column = fragmentation_column
         self._mass_identifier = mass_identifier
         self._aa_identifier = aa_identifier
         self._sequence_identifier = sequence_identifier
@@ -264,6 +273,7 @@ class ProteinSequenceView(BaseComponent):
             sequence=self._sequence,
             mass_column=mass_column,
             precursor_mass_column=precursor_mass_column,
+            fragmentation_column=fragmentation_column,
             mass_identifier=mass_identifier,
             aa_identifier=aa_identifier,
             sequence_identifier=sequence_identifier,
@@ -291,6 +301,8 @@ class ProteinSequenceView(BaseComponent):
             "annotation_title": self._annotation_title,
             "svg_filename": self._svg_filename,
         }
+        if self._fragmentation_column is not None:
+            config["fragmentation_column"] = self._fragmentation_column
         if self._accent_color is not None:
             config["accent_color"] = self._accent_color
         if self._fragment_identifier is not None:
@@ -305,6 +317,7 @@ class ProteinSequenceView(BaseComponent):
         self._sequence = config.get("sequence")
         self._mass_column = config.get("mass_column")
         self._precursor_mass_column = config.get("precursor_mass_column")
+        self._fragmentation_column = config.get("fragmentation_column")
         self._mass_identifier = config.get("mass_identifier")
         self._aa_identifier = config.get("aa_identifier")
         self._sequence_identifier = config.get("sequence_identifier")
@@ -320,7 +333,13 @@ class ProteinSequenceView(BaseComponent):
 
     def _spectrum_columns(self) -> list[str]:
         return [
-            c for c in (self._mass_column, self._precursor_mass_column) if c is not None
+            c
+            for c in (
+                self._mass_column,
+                self._precursor_mass_column,
+                self._fragmentation_column,
+            )
+            if c is not None
         ]
 
     def _validate_mappings(self) -> None:
@@ -403,6 +422,8 @@ class ProteinSequenceView(BaseComponent):
                         else None,
                     }
                 )
+                if self._fragmentation_column is not None:
+                    spectrum_data["fragmentation"] = row.get(self._fragmentation_column)
         payload = {"sequenceData": sequence_data, "spectrumData": spectrum_data}
         data_hash = hashlib.md5(
             json.dumps(payload, sort_keys=True, default=str).encode()
