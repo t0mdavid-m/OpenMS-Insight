@@ -888,21 +888,23 @@ OpenMS/streamlit-template (`docs/quantification-spec.md`).
 
 ```python
 from openms_insight.analysis.differential import (
-    count_significant, describe_settings, run_differential,
+    count_significant,
+    describe_settings,
+    run_differential,
 )
 
 settings = {"postproc-stat-test": "welch"}  # missing keys take the defaults
 out = run_differential(
-    abundances,                      # id column + one column per sample
+    abundances,  # id column + one column per sample
     {"a1": "control", "a2": "control", "b1": "treated", "b2": "treated"},
     id_col="ProteinName",
     settings=settings,
     replicates={"a1": 1, "a2": 2, "b1": 1, "b2": 2},  # pairs samples for "paired"
-    entity="protein",                # noun used in messages
+    entity="protein",  # noun used in messages
 )
-out["statistics_df"]                 # log2FC, p-value, p-adj, stat
-out["stat_test"]                     # the test applied (falls back to limma_like
-                                     # when the chosen one does not fit the design)
+out["statistics_df"]  # log2FC, p-value, p-adj, stat
+# the test applied; falls back to limma_like when the chosen one does not fit the design
+out["stat_test"]
 up, down = count_significant(out["statistics_df"], fc=1.0, padj=0.05)
 describe_settings(settings, entity="protein")  # one plain-language line per step
 ```
