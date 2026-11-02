@@ -34,7 +34,8 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 pip install openms-insight
 ```
 
-GO enrichment ([`openms_insight.analysis.enrichment`](#go-enrichment)) needs two
+GO enrichment ([`openms_insight.analysis.enrichment`](#go-enrichment)) and the
+diagnostic figures ([`openms_insight.analysis.plots`](#diagnostic-figures)) need two
 additional packages:
 
 ```bash
@@ -875,6 +876,48 @@ VolcanoPlot(
     label_column="ProteinName",
 )(state_manager=state_manager, fc_threshold=1.0, p_threshold=0.05)
 ```
+
+### The whole chain in one call
+
+`run_differential` runs filter → impute → transform/normalize/scale → test → FDR with
+one settings dict, so every app compares conditions the same way. It takes a pandas
+table (an ID column plus one column per sample, raw abundances) and a sample → condition
+map, and returns every intermediate table. The settings keys, their choices (`OPTIONS`)
+and defaults (`DEFAULT_SETTINGS`) are those of the quantification spec in
+OpenMS/streamlit-template (`docs/quantification-spec.md`).
+
+```python
+from openms_insight.analysis.differential import (
+    count_significant, describe_settings, run_differential,
+)
+
+settings = {"postproc-stat-test": "welch"}  # missing keys take the defaults
+out = run_differential(
+    abundances,                      # id column + one column per sample
+    {"a1": "control", "a2": "control", "b1": "treated", "b2": "treated"},
+    id_col="ProteinName",
+    settings=settings,
+    replicates={"a1": 1, "a2": 2, "b1": 1, "b2": 2},  # pairs samples for "paired"
+    entity="protein",                # noun used in messages
+)
+out["statistics_df"]                 # log2FC, p-value, p-adj, stat
+out["stat_test"]                     # the test applied (falls back to limma_like
+                                     # when the chosen one does not fit the design)
+up, down = count_significant(out["statistics_df"], fc=1.0, padj=0.05)
+describe_settings(settings, entity="protein")  # one plain-language line per step
+```
+
+Pass tables already made by step-by-step pages as `done={"normalized_df": ...}` and
+the chain continues after the latest of them. Samples mapped to `"Unassigned"` stay
+in the tables but are not compared.
+
+### Diagnostic figures
+
+`openms_insight.analysis.plots` draws the figures that help choose each setting, as
+Plotly figures: `filter_threshold_curve`, `missingness_vs_intensity`,
+`imputed_value_preview`, `sample_distributions` and `pvalue_histogram`. Each takes
+`entities=` ("Proteins", "Proteoforms", "Features") for its labels. Needs the
+`analysis` extra.
 
 ### GO enrichment
 
