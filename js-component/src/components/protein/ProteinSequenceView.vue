@@ -295,9 +295,16 @@
           @row-selected="onFragmentTableRowSelected"
         >
           <template #default>{{ fragmentTableTitle }}</template>
-          <template #end-title-row
-            >% Residue cleavage: {{ residueCleavagePercentage.toFixed(3) }}%</template
-          >
+          <template #end-title-row>
+            <span v-if="pScoreText !== ''" class="mr-4 text-no-wrap">
+              P-score: {{ pScoreText }}
+              <v-tooltip activator="parent" location="bottom" max-width="360">
+                Probability of matching at least this many of the observed masses by
+                chance (Poisson model, as in ProSight). {{ pScoreDetail }}
+              </v-tooltip>
+            </span>
+            <span class="text-no-wrap">% Residue cleavage: {{ residueCleavagePercentage.toFixed(3) }}%</span>
+          </template>
         </FragmentTable>
       </template>
     </div>
@@ -408,6 +415,7 @@ import {
   type IonSeries,
   type ToleranceUnit,
 } from './fragment-ions'
+import { formatPScore, pScore, type PScore } from './p-score'
 
 // Fixed decimals for long numbers in the fragment tables
 const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => unknown }) => {
@@ -568,6 +576,9 @@ export default defineComponent({
       selectedResidue: undefined as number | undefined,
       fragmentTableTitle: '' as string,
       residueCleavagePercentage: 0 as number,
+      // P-score of the locally matched fragments (none with annotated fragments)
+      fragmentPScore: null as PScore | null,
+      fragmentPScoreCounts: { matched: 0, observed: 0 },
       sequenceObjects: [] as SequenceObject[],
       selectedFragTableRowIndex: undefined as number | undefined,
       copySnackbar: false as boolean,
@@ -775,6 +786,14 @@ export default defineComponent({
         '--amino-acid-cell-hover-color': '#fff',
         '--amino-acid-cell-hover-bg-color': this.theme?.secondaryBackgroundColor ?? '#000',
       }
+    },
+    pScoreText(): string {
+      return this.fragmentPScore === null ? '' : formatPScore(this.fragmentPScore)
+    },
+    pScoreDetail(): string {
+      if (this.fragmentPScore === null) return ''
+      const { matched, observed } = this.fragmentPScoreCounts
+      return `${matched} of ${observed} masses matched, ${this.fragmentPScore.expected.toFixed(2)} expected at random.`
     },
     calculateCleavagePercentage(): number {
       let explained_cleavage = 0
@@ -1054,10 +1073,23 @@ export default defineComponent({
         this.massData.push(`Fragmentation : ${this.spectrumFragmentation}`)
       }
     },
+    // Upper end of the fragment mass range for the P-score: the proteoform's
+    // theoretical mass with its variable modifications, else the precursor mass
+    pScoreMassRange(): number {
+      let mass = this.theoreticalMass
+      if (mass > 0 && !this.variableModData.isEmpty) {
+        Object.values(this.variableModifications).forEach((varMass) => {
+          mass += varMass
+        })
+      }
+      if (mass > 0) return mass
+      return this.entryObservedMass ?? this.spectrum?.precursorMass ?? 0
+    },
     prepareFragmentTable(): void {
       this.selectedFragment = undefined
       this.selectedResidue = undefined
       this.publishSelectedFragment(undefined)
+      this.fragmentPScore = null
       if (this.usesAnnotator) {
         this.prepareAnnotatedFragmentTable()
         return
@@ -1092,6 +1124,10 @@ export default defineComponent({
       // calculate matching masses
       let matching_fragments: Record<string, unknown>[] = []
       const sequence_size = this.sequence_end
+      // For the P-score: observed masses that match any fragment, and the
+      // summed width of all theoretical fragments' tolerance windows
+      const matchedObserved = new Set<number>()
+      let windowWidth = 0
       
       this.selectedIonSeries
         .forEach((series) => {
@@ -1132,6 +1168,10 @@ export default defineComponent({
                   }
                 })
             }
+            extraFragments.forEach(({ typeMass }) => {
+              const thisTypeMass = theoretical_mass + series.offset + typeMass
+              windowWidth += 2 * toleranceDa(thisTypeMass, tolerance, unit)
+            })
             for (
               let obsIndex = 0, obsSize = observed_masses.length;
               obsIndex < obsSize;
@@ -1157,6 +1197,7 @@ export default defineComponent({
                   MassDiffPpm: massDiffPpm.toFixed(3),
                 }
                 matching_fragments.push(matched)
+                matchedObserved.add(obsIndex)
                 // setting the fragment mark for fragment map
                 let aa_index = aaIndex
                 if (iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c')
@@ -1174,6 +1215,13 @@ export default defineComponent({
         }
         })
       this.residueCleavagePercentage = this.calculateCleavagePercentage
+      this.fragmentPScoreCounts = { matched: matchedObserved.size, observed: observed_masses.length }
+      this.fragmentPScore = pScore(
+        matchedObserved.size,
+        observed_masses.length,
+        windowWidth,
+        this.pScoreMassRange()
+      )
       this.fragmentTableData = matching_fragments
       this.fragmentTableTitle = `Matching fragments (# ${matching_fragments.length})`
     },
