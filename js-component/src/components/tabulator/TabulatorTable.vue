@@ -1199,7 +1199,9 @@ export default defineComponent({
         this.paginationState.page === page &&
         this.paginationState.page_size === pageSize &&
         sortMatch &&
-        this.tableData.length > 0
+        // A filter that leaves no rows is an answer too: without it the page
+        // counter kept the previous count
+        (this.tableData.length > 0 || this.paginationState.total_rows === 0)
       ) {
         console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: using cached data (page=${page}, sortCol=${cachedSortCol})`)
 
@@ -2367,8 +2369,14 @@ export default defineComponent({
         min-height: 0;
       `
 
-      this.renderColumnSelection(content)
-      this.renderFilterControls(content)
+      // A table with suggested thresholds opens on them; the column choice follows
+      if (Object.keys(this.numericFilterConfig).length > 0) {
+        this.renderFilterControls(content)
+        this.renderColumnSelection(content)
+      } else {
+        this.renderColumnSelection(content)
+        this.renderFilterControls(content)
+      }
 
       // Footer
       const footer = this.parentDocument.createElement('div')
@@ -2536,6 +2544,7 @@ export default defineComponent({
       if (this.selectedColumns.length === 0 || !this.parentDocument) return
 
       const filterSection = this.parentDocument.createElement('div')
+      filterSection.style.cssText = 'margin-bottom: 24px;'
 
       const filterTitle = this.parentDocument.createElement('h6')
       filterTitle.textContent = 'Filter Settings:'
