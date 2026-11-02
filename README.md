@@ -177,7 +177,10 @@ Table(
     search=True,  # or ["accession", "gene", "description"]
     search_placeholder="Accession, gene or protein name",
     numeric_filters={
-        "q_value": {"op": "<=", "suggestions": [{"value": 0.01, "label": "1 % (run)"}, 0.001]},
+        "q_value": {
+            "op": "<=",
+            "suggestions": [{"value": 0.01, "label": "1 % (run)"}, 0.001],
+        },
         "peptides": {"op": ">=", "suggestions": [2, 3], "default": 2},
     },
 )
