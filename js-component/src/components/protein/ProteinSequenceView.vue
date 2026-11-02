@@ -300,7 +300,7 @@
               P-score: {{ pScoreText }}
               <v-tooltip activator="parent" location="bottom" max-width="360">
                 Probability of matching at least this many of the observed masses by
-                chance (Poisson model, as in ProSight). {{ pScoreDetail }}
+                chance (Poisson model). {{ pScoreDetail }}
               </v-tooltip>
             </span>
             <span class="text-no-wrap">% Residue cleavage: {{ residueCleavagePercentage.toFixed(3) }}%</span>

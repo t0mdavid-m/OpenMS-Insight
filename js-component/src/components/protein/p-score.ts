@@ -1,8 +1,8 @@
-// ProSight-style P-score of a fragment match.
+// P-score of a fragment match: how likely it is to arise by chance.
 //
 // The P-score is the probability of matching at least `matched` of the
 // `observed` fragment masses to the sequence by chance, under a Poisson model
-// (ProSightPTM, Meng et al., Nat. Biotechnol. 2001). Here the chance that one
+// (Meng et al., Nat. Biotechnol. 2001). Here the chance that one
 // observed mass hits a random theoretical fragment is the fraction of the mass
 // range [0, mass] covered by the tolerance windows of all theoretical
 // fragments, so the expected number of random matches is
