@@ -1,5 +1,28 @@
 <template>
-  <div :id="id" class="clustered-heatmap-container"></div>
+  <div>
+    <div v-if="multiSelectEnabled" class="cheatmap-select-bar">
+      <span class="cheatmap-select-label">Select rows by</span>
+      <button
+        v-for="mode in dragModes"
+        :key="mode.value"
+        type="button"
+        class="cheatmap-select-button"
+        :class="{ active: dragmode === mode.value }"
+        @click="setDragmode(mode.value)"
+      >
+        {{ mode.label }}
+      </button>
+      <button type="button" class="cheatmap-select-button" :disabled="!selectedCount" @click="clearSelection">
+        Clear selection
+      </button>
+      <span class="cheatmap-select-hint">
+        {{ selectedCount ? `${selectedCount} selected · ` : '' }}Shift adds, Alt removes
+      </span>
+    </div>
+    <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
+         box or lasso selection ends) measures this element -->
+    <div :id="id" class="clustered-heatmap-container" :style="{ minHeight: `${args.height || 500}px` }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -7,6 +30,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { useMultiSelect } from '@/composables/useMultiSelect'
 import type { ClusteredHeatmapComponentArgs, ClusteredHeatmapData, DendrogramData } from '@/types/component'
 
 // Layout fractions for the 4 regions of the composite figure.
@@ -44,15 +68,29 @@ export default defineComponent({
       title: computed(() => props.args.title),
     })
 
+    const multi = useMultiSelect(computed(() => props.args.multiSelect))
+
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      multiSelectEnabled: multi.enabled,
+      selectedCount: multi.selectedCount,
+      multiSelectionKey: multi.selectionKey,
+      selectedSets: multi.selectedSets,
+      applySelectedRows: multi.applyRows,
+      clearSelection: multi.clear,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
       plotInitialized: false as boolean,
+      dragmode: 'select' as string,
+      selectModifier: 'replace' as 'replace' | 'add' | 'remove',
+      dragModes: [
+        { value: 'select', label: 'box' },
+        { value: 'lasso', label: 'lasso' },
+      ],
     }
   },
   computed: {
@@ -235,8 +273,70 @@ export default defineComponent({
       if (groupBar) {
         traces.push(groupBar)
       }
+      const cells = this.selectableCells
+      if (cells) {
+        traces.push(cells)
+      }
 
       return traces
+    },
+
+    /**
+     * multi_select: an invisible point in every cell, which box and lasso drags
+     * select (Plotly cannot select a heatmap trace). Its customdata is the row.
+     */
+    selectableCells(): Plotly.Data | null {
+      if (!this.multiSelectEnabled) return null
+      const x: number[] = []
+      const y: number[] = []
+      const rows: number[] = []
+      for (let r = 0; r < this.rowLabels.length; r++) {
+        for (let c = 0; c < this.colLabels.length; c++) {
+          x.push(c)
+          y.push(r)
+          rows.push(r)
+        }
+      }
+      return {
+        type: 'scatter',
+        mode: 'markers',
+        x,
+        y,
+        customdata: rows,
+        xaxis: 'x',
+        yaxis: 'y',
+        marker: { size: 6, opacity: 0 },
+        selected: { marker: { opacity: 0 } },
+        unselected: { marker: { opacity: 0 } },
+        hoverinfo: 'none',
+        showlegend: false,
+      } as unknown as Plotly.Data
+    },
+
+    /** Outlines of the selected rows (runs of adjacent rows share one). */
+    selectionShapes(): Partial<Plotly.Shape>[] {
+      if (!this.multiSelectEnabled) return []
+      void this.multiSelectionKey
+      const identifier = Object.keys(this.args.multiSelect || {})[0]
+      const selected = this.selectedSets[identifier]
+      if (!selected || selected.size === 0) return []
+      const shapes: Partial<Plotly.Shape>[] = []
+      const nCols = this.colLabels.length
+      let start = -1
+      for (let r = 0; r <= this.rowLabels.length; r++) {
+        const isSelected = r < this.rowLabels.length && selected.has(this.rowLabels[r])
+        if (isSelected && start < 0) start = r
+        if (!isSelected && start >= 0) {
+          shapes.push({
+            type: 'rect', xref: 'x', yref: 'y',
+            x0: -0.5, x1: nCols - 0.5, y0: start - 0.5, y1: r - 0.5,
+            line: { color: '#00B894', width: 2.5 },
+            fillcolor: 'rgba(0, 184, 148, 0.08)',
+          })
+          start = -1
+        }
+      }
+      return shapes
     },
 
     layout(): Partial<Plotly.Layout> {
@@ -256,6 +356,9 @@ export default defineComponent({
         // above) - each gets its own space instead of fighting over the
         // same fixed margin.
         margin: { l: 40, r: 200, t: this.args.title ? 60 : 20, b: 80 },
+        ...(this.multiSelectEnabled
+          ? { dragmode: this.dragmode, shapes: this.selectionShapes, hovermode: 'closest' }
+          : {}),
         xaxis: {
           domain: [heatmapLeft, this.heatmapRight],
           anchor: 'y',
@@ -349,6 +452,11 @@ export default defineComponent({
       },
       deep: true,
     },
+    multiSelectionKey() {
+      if (this.isInitialized && this.isDataReady) {
+        this.renderPlot()
+      }
+    },
   },
 
   mounted() {
@@ -393,6 +501,7 @@ export default defineComponent({
         if (!this.plotInitialized) {
           await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
           this.plotInitialized = true
+          this.setupSelectHandlers()
         } else {
           await Plotly.react(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
         }
@@ -405,6 +514,42 @@ export default defineComponent({
         this.plotInitialized = false
         this.renderFallback()
       }
+    },
+
+    setDragmode(mode: string) {
+      this.dragmode = mode
+      if (this.plotInitialized) {
+        Plotly.relayout(this.id, { dragmode: mode } as Partial<Plotly.Layout>)
+      }
+    },
+
+    setupSelectHandlers(): void {
+      if (!this.multiSelectEnabled) return
+      const element = document.getElementById(this.id) as Plotly.PlotlyHTMLElement | null
+      if (!element) return
+      element.addEventListener('mousedown', (e: MouseEvent) => {
+        this.selectModifier = e.shiftKey ? 'add' : e.altKey ? 'remove' : 'replace'
+      }, true)
+      element.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
+        if (!eventData || !eventData.points) return
+        const idCol = this.args.idCol
+        const rows = new Set<number>()
+        for (const point of eventData.points) {
+          const row = (point as unknown as { customdata?: unknown }).customdata
+          if (typeof row === 'number') rows.add(row)
+        }
+        const picked = Array.from(rows).map((r) => ({ [idCol]: this.rowLabels[r] }))
+        if (picked.length === 0 && this.selectModifier === 'replace') {
+          this.clearSelection()
+        } else {
+          this.applySelectedRows(picked, this.selectModifier)
+        }
+        // The rows are outlined; Plotly's own outline would only show the last region
+        Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+      })
+      element.on('plotly_deselect', () => {
+        this.clearSelection()
+      })
     },
 
     getFallbackData(): Plotly.Data[] {
@@ -436,6 +581,39 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.cheatmap-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 2px;
+  font-size: 13px;
+}
+.cheatmap-select-label {
+  font-weight: 600;
+  opacity: 0.8;
+}
+.cheatmap-select-button {
+  padding: 2px 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.cheatmap-select-button.active {
+  border-color: #00b894;
+  background: rgba(0, 184, 148, 0.15);
+}
+.cheatmap-select-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cheatmap-select-hint {
+  opacity: 0.65;
+  font-size: 12px;
+}
 .clustered-heatmap-container {
   position: relative;
   width: 100%;

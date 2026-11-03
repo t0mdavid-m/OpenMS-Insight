@@ -699,6 +699,28 @@ All components accept these common arguments:
 | `regenerate_cache` | `bool` | `False` | Force cache regeneration |
 | `height` | `int` | `400` | Component height in pixels (render-time parameter) |
 
+### Selecting several entries (`multi_select`)
+
+`Table`, `VolcanoPlot`, `Heatmap` and `ClusteredHeatmap` take
+`multi_select={identifier: column}`. The user then picks several rows or points at
+once, and the identifier holds the sorted distinct values of `column` over them
+(None when nothing is picked). Components with the same identifier show and change
+the same set, so any page can read it with `state_manager.get_selection(identifier)`.
+
+| Component | How the user selects |
+|-----------|----------------------|
+| `Table` | A check box per row; Shift-click ticks a range; the header box ticks every row passing the filters (on a paginated table, in Python over all pages) |
+| `VolcanoPlot` | A box or lasso drag (Shift adds), and the buttons **All changed**, **Up** and **Down** at the plot's cut-offs; `preset_labels={"up": ..., "down": ..., "changed": ..., "clear": ...}` renames them |
+| `Heatmap` | **Select (box)** / **Select (lasso)** above the plot; the region is resolved in Python on the full data, not the downsampled level shown; Shift adds, Alt removes; every point of the picked entries is marked |
+| `ClusteredHeatmap` | A box or lasso over rows (the column must be `id_col`); selected rows are outlined |
+
+```python
+volcano = VolcanoPlot(..., label_column="name", multi_select={"proteins": "accession"},
+                      preset_labels={"up": "Higher in treated", "down": "Lower in treated"})
+table = Table(..., multi_select={"proteins": "accession"})
+picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
+```
+
 ## Memory-Efficient Preprocessing
 
 When working with large datasets (especially heatmaps with millions of points), use `data_path` instead of `data` to enable subprocess preprocessing:
@@ -922,7 +944,22 @@ if status == "success":
 ```
 
 `status` is `"success"`, `"insufficient_proteins"` (fewer than 3 proteins pass the
-cutoffs) or `"empty_data"`. This function needs the `analysis` extra:
+cutoffs) or `"empty_data"`.
+
+For a set the user picked (see `multi_select`), `go_enrichment` takes the
+foreground and background directly, and the annotations from
+`fetch_go_annotations`, so an app can cache them per protein:
+
+```python
+from openms_insight.analysis.enrichment import fetch_go_annotations, go_enrichment
+
+annotations = fetch_go_annotations(background)  # query, BP_terms, CC_terms, MF_terms
+result = go_enrichment(annotations, foreground=picked, background=background)
+result["categories"]["BP"]  # GO_Term, Count, Background, GeneRatio, BgRatio,
+                            # FoldEnrichment, p_value, -log10(p), p_adj, Proteins
+```
+
+These functions need the `analysis` extra:
 
 ```bash
 pip install "openms-insight[analysis]"

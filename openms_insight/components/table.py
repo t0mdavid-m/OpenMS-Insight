@@ -7,6 +7,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.multi_select import combine, normalize_multi_select, selection_values
 from ..core.registry import register_component
 from ..preprocessing.filtering import compute_dataframe_hash
 
@@ -131,6 +132,7 @@ class Table(BaseComponent):
         reset_sort_on: list[str] | None = None,
         fill_height: bool = False,
         row_overview: bool | str = False,
+        multi_select: dict[str, str] | None = None,
         **kwargs,
     ):
         """
@@ -233,6 +235,12 @@ class Table(BaseComponent):
             fill_height: Without pagination, keep the table at the height it is
                 rendered with instead of shrinking it to its rows, so tables
                 rendered side by side with one height line up.
+            multi_select: Mapping of identifier names to column names for
+                selecting several rows at once with a check box column (Shift
+                selects a range; the header box selects or unselects every row
+                passing the table's filters, on all pages). The identifier holds
+                the sorted distinct values of the column over the checked rows,
+                or None. Independent of the clicked row (``interactivity``).
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -272,6 +280,7 @@ class Table(BaseComponent):
                 f"not {scroll_position!r}"
             )
         self._scroll_position = scroll_position
+        self._multi_select = normalize_multi_select(multi_select)
 
         super().__init__(
             cache_id=cache_id,
@@ -304,8 +313,10 @@ class Table(BaseComponent):
             reset_sort_on=reset_sort_on,
             fill_height=fill_height,
             row_overview=row_overview,
+            multi_select=multi_select,
             **kwargs,
         )
+        self._config.pop("multi_select", None)
 
     @staticmethod
     def _normalize_toggle_filters(
@@ -364,6 +375,7 @@ class Table(BaseComponent):
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
             **({"fill_height": True} if self._fill_height else {}),
             **({"row_overview": self._row_overview} if self._row_overview else {}),
+            **({"multi_select": self._multi_select} if self._multi_select else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -391,6 +403,7 @@ class Table(BaseComponent):
         self._reset_sort_on = config.get("reset_sort_on") or []
         self._fill_height = config.get("fill_height", False)
         self._row_overview = config.get("row_overview", False)
+        self._multi_select = dict(config.get("multi_select") or {})
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in (
             "toggle_filters",
@@ -404,6 +417,7 @@ class Table(BaseComponent):
             "reset_sort_on",
             "fill_height",
             "row_overview",
+            "multi_select",
         ):
             self._config.pop(key, None)
 
@@ -742,6 +756,9 @@ class Table(BaseComponent):
             for col in self._interactivity.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        for col in self._multi_select.values():
+            if col not in columns_to_select:
+                columns_to_select.append(col)
         # Include columns needed for filtering
         if self._filters:
             for col in self._filters.values():
@@ -1346,6 +1363,28 @@ class Table(BaseComponent):
         rest = [c for c in df.columns if c not in shown]
         return df.select(shown + rest)
 
+    def _handle_event(self, event: dict[str, Any]) -> bool:
+        """The header check box: select (or unselect) every row passing the
+        table's filters, on all pages."""
+        if event.get("type") != "multi_select_all" or not self._multi_select:
+            return False
+        from ..core.state import get_render_state_manager
+
+        state_manager = get_render_state_manager()
+        state = state_manager.get_all_selections()
+        mode = "remove" if event.get("mode") == "remove" else "add"
+        rows = self.export_data(state)
+        changed = False
+        for identifier, column in self._multi_select.items():
+            if column not in rows.columns:
+                continue
+            picked = selection_values(rows[column].to_list())
+            if state_manager.set_selection(
+                identifier, combine(state.get(identifier), picked, mode)
+            ):
+                changed = True
+        return changed
+
     def export_data(self, state: dict[str, Any] | None = None) -> pl.DataFrame:
         """
         Return the table's full data for export.
@@ -1450,6 +1489,8 @@ class Table(BaseComponent):
             args["rowOverview"] = True
             if isinstance(self._row_overview, str):
                 args["rowOverviewTitle"] = self._row_overview
+        if self._multi_select:
+            args["multiSelect"] = self._multi_select
 
         # Add any extra config options
         args.update(self._config)
@@ -1465,6 +1506,7 @@ class Table(BaseComponent):
             "reset_sort_on",
             "fill_height",
             "row_overview",
+            "multi_select",
         ):
             args.pop(key, None)
 

@@ -146,6 +146,7 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { TableComponentArgs, PaginationState, ColumnMetadata } from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
+import { combineSelection } from '@/composables/useMultiSelect'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -237,9 +238,22 @@ export default defineComponent({
       requestedSortDir: 'asc' as 'asc' | 'desc',
       // Track the counter value when AJAX request was made (for stale response detection)
       pendingRequestCounter: null as number | null,
+      // multi_select: last check box toggled (for Shift ranges), and a check box
+      // click, which must not also select the row
+      lastCheckedPosition: null as number | null,
+      checkboxClicked: false as boolean,
     }
   },
   computed: {
+    multiSelectEnabled(): boolean {
+      return Object.keys(this.args.multiSelect || {}).length > 0
+    },
+    // Changes whenever a multi_select set changes
+    multiSelectionKey(): string {
+      return JSON.stringify(
+        Object.keys(this.args.multiSelect || {}).map((identifier) => this.selectionStore.$state[identifier] ?? null),
+      )
+    },
     selectionScrollPosition(): 'top' | 'center' | 'bottom' | 'nearest' {
       return this.args.scrollPosition || 'center'
     },
@@ -402,6 +416,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // The checked rows changed (here or in another component)
+    multiSelectionKey() {
+      this.refreshCheckboxes()
+    },
     // Save the CSV once per request. The payload stays in the data store after
     // later merges, so only the id this table asked for is honoured.
     downloadPayload(payload) {
@@ -708,7 +726,7 @@ export default defineComponent({
           title: '',
           hozAlign: 'right',
         },
-        columns: [...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
+        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
@@ -841,6 +859,7 @@ export default defineComponent({
       // Only sync if no row is currently selected to avoid infinite loops
       // (selecting a row triggers render, which would trigger sync again).
       this.tabulator.on('renderComplete', () => {
+        this.refreshCheckboxes()
         const selectedRows = this.tabulator?.getSelectedRows() || []
         if (selectedRows.length === 0 && !this.skipNextSync) {
           this.syncSelectionFromStore()
@@ -1471,6 +1490,11 @@ export default defineComponent({
     },
 
     onRowClick(row: any): void {
+      // A click on a check box (multi_select) checks the row, nothing more
+      if (this.checkboxClicked) {
+        this.checkboxClicked = false
+        return
+      }
       // Get the row data directly from Tabulator's row object
       const rowData = row.getData()
       const rowIndex = row.getIndex()
@@ -2014,6 +2038,112 @@ export default defineComponent({
       delete this.filterTypes[columnField]
       delete this.columnAnalysis[columnField]
       this.applyFilters()
+    },
+
+    // multi_select: a check box per row, and one in the header for all rows
+    multiSelectColumns(): ColumnDefinition[] {
+      if (!this.multiSelectEnabled) return []
+      return [{
+        title: '',
+        field: '__multi_select',
+        headerSort: false,
+        resizable: false,
+        width: 36,
+        minWidth: 36,
+        hozAlign: 'center',
+        headerHozAlign: 'center',
+        download: false,
+        responsive: 0,
+        headerTooltip: false,
+        tooltip: 'Add to the selection (Shift: a range)',
+        formatter: (cell: CellComponent) => this.checkboxHtml(this.isRowChecked(cell.getRow().getData() as Record<string, unknown>)),
+        titleFormatter: () => `<span class="multi-select-header" title="Select every row (all pages, filters applied)">${this.checkboxHtml(false)}</span>`,
+        headerClick: () => {
+          this.toggleAllRows()
+        },
+        cellClick: (event: UIEvent, cell: CellComponent) => {
+          this.checkboxClicked = true
+          // rowClick fires after cellClick; reset the flag if it does not
+          setTimeout(() => { this.checkboxClicked = false }, 0)
+          this.toggleRow(cell, (event as MouseEvent).shiftKey)
+        },
+      } as unknown as ColumnDefinition]
+    },
+
+    checkboxHtml(checked: boolean | 'some'): string {
+      const icon = checked === 'some' ? 'mdi-minus-box' : checked ? 'mdi-checkbox-marked' : 'mdi-checkbox-blank-outline'
+      return `<i class="mdi ${icon} multi-select-box${checked ? ' checked' : ''}" aria-label="${checked ? 'Selected' : 'Not selected'}"></i>`
+    },
+
+    isRowChecked(row: Record<string, unknown>): boolean {
+      for (const [identifier, column] of Object.entries(this.args.multiSelect || {})) {
+        const set = this.selectionStore.$state[identifier]
+        if (Array.isArray(set) && row[column] !== undefined && set.includes(row[column])) return true
+      }
+      return false
+    },
+
+    applyCheckedRows(rows: Record<string, unknown>[], mode: 'add' | 'remove'): void {
+      for (const [identifier, column] of Object.entries(this.args.multiSelect || {})) {
+        const current = this.selectionStore.$state[identifier] ?? null
+        const next = combineSelection(current, rows.map((r) => r[column]), mode)
+        if (JSON.stringify(current) !== JSON.stringify(next)) {
+          this.selectionStore.updateSelection(identifier, next)
+        }
+      }
+    },
+
+    toggleRow(cell: CellComponent, shift: boolean): void {
+      const row = cell.getRow()
+      const data = row.getData() as Record<string, unknown>
+      const mode = this.isRowChecked(data) ? 'remove' : 'add'
+      const active = this.tabulator ? this.tabulator.getRows('active') : []
+      const position = active.findIndex((r) => r.getIndex() === row.getIndex())
+      let rows = [data]
+      if (shift && this.lastCheckedPosition !== null && position >= 0) {
+        const from = Math.min(this.lastCheckedPosition, position)
+        const to = Math.max(this.lastCheckedPosition, position)
+        rows = active.slice(from, to + 1).map((r) => r.getData() as Record<string, unknown>)
+      }
+      if (position >= 0) this.lastCheckedPosition = position
+      this.applyCheckedRows(rows, mode)
+    },
+
+    /** Header box: every row passing the filters, or none of them. */
+    toggleAllRows(): void {
+      if (!this.tabulator) return
+      const active = this.tabulator.getRows('active').map((r) => r.getData() as Record<string, unknown>)
+      const allChecked = active.length > 0 && active.every((row) => this.isRowChecked(row))
+      const mode = allChecked ? 'remove' : 'add'
+      if (this.isServerSidePagination) {
+        // Only one page is here: Python selects the rows of every page
+        this.streamlitDataStore.sendEvent({ type: 'multi_select_all', mode })
+      } else {
+        this.applyCheckedRows(active, mode)
+      }
+    },
+
+    /** Redraw the check boxes after the checked rows changed. */
+    refreshCheckboxes(): void {
+      if (!this.tabulator || !this.isTableBuilt || !this.multiSelectEnabled) return
+      const rows = this.tabulator.getRows('active')
+      let checked = 0
+      for (const row of rows) {
+        const data = row.getData() as Record<string, unknown>
+        const isChecked = this.isRowChecked(data)
+        if (isChecked) checked += 1
+        const cell = (row as unknown as { getCell: (f: string) => { getElement: () => HTMLElement } | false }).getCell('__multi_select')
+        if (cell) {
+          const element = cell.getElement()
+          const html = this.checkboxHtml(isChecked)
+          if (element.innerHTML !== html) element.innerHTML = html
+        }
+      }
+      const header = document.querySelector(`#${this.id} .multi-select-header`)
+      if (header) {
+        const state = checked === 0 ? false : checked === rows.length ? true : 'some'
+        header.innerHTML = this.checkboxHtml(state)
+      }
     },
 
     // Row overview: a button per row that shows every column of that row
@@ -2876,6 +3006,16 @@ export default defineComponent({
 .tabulator .tabulator-footer .tabulator-page-counter {
   font-size: 11px;
   margin-right: 8px;
+}
+
+.multi-select-box {
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 0.55;
+}
+.multi-select-box.checked {
+  opacity: 1;
+  color: #00b894;
 }
 
 /* Dark mode pagination styling */

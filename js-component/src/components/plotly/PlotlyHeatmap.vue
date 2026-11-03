@@ -1,5 +1,28 @@
 <template>
-  <div :id="id" class="heatmap-container"></div>
+  <div>
+    <div v-if="multiSelectEnabled" class="heatmap-select-bar">
+      <span class="heatmap-select-label">Drag to</span>
+      <button
+        v-for="mode in dragModes"
+        :key="mode.value"
+        type="button"
+        class="heatmap-select-button"
+        :class="{ active: dragmode === mode.value }"
+        @click="setDragmode(mode.value)"
+      >
+        {{ mode.label }}
+      </button>
+      <button type="button" class="heatmap-select-button" :disabled="!selectedCount" @click="clearMultiSelect">
+        Clear selection
+      </button>
+      <span class="heatmap-select-hint">
+        {{ selectedCount ? `${selectedCount} selected · ` : '' }}Shift adds, Alt removes
+      </span>
+    </div>
+    <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
+         box or lasso selection ends) measures this element -->
+    <div :id="id" class="heatmap-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -7,6 +30,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { useMultiSelect } from '@/composables/useMultiSelect'
 import type { HeatmapComponentArgs, HeatmapData } from '@/types/component'
 
 export default defineComponent({
@@ -38,14 +62,26 @@ export default defineComponent({
       onSelect: computed(() => props.args.onSelect),
     })
 
+    const multi = useMultiSelect(computed(() => props.args.multiSelect))
+
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      multiSelectEnabled: multi.enabled,
+      selectedCount: multi.selectedCount,
+      clearMultiSelect: multi.clear,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
+      dragmode: 'zoom' as string,
+      selectModifier: 'replace' as 'replace' | 'add' | 'remove',
+      dragModes: [
+        { value: 'zoom', label: 'Zoom' },
+        { value: 'select', label: 'Select (box)' },
+        { value: 'lasso', label: 'Select (lasso)' },
+      ],
       zoomRange: undefined as { xRange: number[]; yRange: number[] } | undefined,
       colorbarVisible: true,
       userOverrideColorbar: false,
@@ -177,6 +213,34 @@ export default defineComponent({
         | { x?: number[]; y?: number[] }
         | undefined
       return { x: points?.x ?? [], y: points?.y ?? [] }
+    },
+
+    /** Points of the selected set (multi_select), sent by Python. */
+    multiSelectPoints(): { x: number[]; y: number[] } {
+      const points = this.streamlitDataStore.allDataForDrawing?.multiSelectPoints as
+        | { x?: number[]; y?: number[] }
+        | undefined
+      return { x: points?.x ?? [], y: points?.y ?? [] }
+    },
+
+    /** The selected set, drawn as small open diamonds over the points. */
+    multiSelectTrace(): Plotly.Data | null {
+      if (!this.multiSelectEnabled || this.multiSelectPoints.x.length === 0) return null
+      return {
+        type: 'scattergl',
+        name: 'in selection',
+        x: this.multiSelectPoints.x,
+        y: this.multiSelectPoints.y,
+        mode: 'markers',
+        marker: {
+          symbol: 'diamond-open',
+          size: 11,
+          color: '#00B894',
+          line: { width: 2, color: '#00B894' },
+        },
+        hoverinfo: 'skip',
+        showlegend: false,
+      } as Plotly.Data
     },
 
     /**
@@ -334,10 +398,12 @@ export default defineComponent({
       }
 
       const ring = this.highlightTrace
+      const marks = this.multiSelectTrace
+      const overlays = [marks, ring].filter((t): t is Plotly.Data => t !== null)
       // Categorical mode: create separate traces per category
       if (this.isCategoricalMode) {
         const traces = this.buildCategoricalTraces()
-        return ring ? [...traces, ring] : traces
+        return [...traces, ...overlays]
       }
 
       // Continuous mode: single trace with colorscale
@@ -371,7 +437,7 @@ export default defineComponent({
           hoverinfo: 'x+y+text',
         },
       ]
-      return ring ? [...points, ring] : points
+      return [...points, ...overlays]
     },
 
     /**
@@ -400,6 +466,7 @@ export default defineComponent({
             }
           : undefined,
         height: this.args.height || 400,
+        dragmode: this.dragmode as Plotly.Layout['dragmode'],
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           range: this.xRange,
@@ -613,6 +680,49 @@ export default defineComponent({
 
       // Handle click events via composable
       this.setupClickHandler()
+      this.setupMultiSelectHandlers(plotElement)
+    },
+
+    setDragmode(mode: string) {
+      this.dragmode = mode
+      if (this.plotInitialized) {
+        Plotly.relayout(this.id, { dragmode: mode } as Partial<Plotly.Layout>)
+      }
+    },
+
+    /**
+     * A box or lasso drawn in select mode is sent to Python, which selects the
+     * points in it from the full data (the plot shows only a level of it).
+     */
+    setupMultiSelectHandlers(plotElement: Plotly.PlotlyHTMLElement) {
+      if (!this.multiSelectEnabled) return
+      plotElement.addEventListener('mousedown', (e: MouseEvent) => {
+        this.selectModifier = e.shiftKey ? 'add' : e.altKey ? 'remove' : 'replace'
+      }, true)
+      plotElement.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        const mode = (eventData as Record<string, unknown>).dragmode
+        if (typeof mode === 'string') this.dragmode = mode
+      })
+      plotElement.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
+        if (!eventData) return
+        const event = eventData as unknown as {
+          range?: { x?: number[]; y?: number[] }
+          lassoPoints?: { x?: number[]; y?: number[] }
+        }
+        let region: Record<string, unknown> | null = null
+        if (event.lassoPoints?.x && event.lassoPoints?.y) {
+          region = { type: 'lasso', x: event.lassoPoints.x, y: event.lassoPoints.y }
+        } else if (event.range?.x && event.range?.y) {
+          region = { type: 'box', x: event.range.x, y: event.range.y }
+        }
+        if (!region) return
+        this.streamlitDataStore.sendEvent({ type: 'multi_select', region, mode: this.selectModifier })
+        // Python marks the selection; Plotly's own outline would only show the last region
+        Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+      })
+      plotElement.on('plotly_deselect', () => {
+        this.clearMultiSelect()
+      })
     },
 
     /**
@@ -785,6 +895,39 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.heatmap-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 2px;
+  font-size: 13px;
+}
+.heatmap-select-label {
+  font-weight: 600;
+  opacity: 0.8;
+}
+.heatmap-select-button {
+  padding: 2px 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.heatmap-select-button.active {
+  border-color: #00b894;
+  background: rgba(0, 184, 148, 0.15);
+}
+.heatmap-select-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.heatmap-select-hint {
+  opacity: 0.65;
+  font-size: 12px;
+}
 .heatmap-container {
   position: relative;
   width: 100%;
