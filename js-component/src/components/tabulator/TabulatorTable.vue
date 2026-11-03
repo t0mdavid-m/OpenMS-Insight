@@ -140,7 +140,7 @@
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
-import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 'tabulator-tables'
+import { TabulatorFull as Tabulator, type CellComponent, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -708,7 +708,7 @@ export default defineComponent({
           title: '',
           hozAlign: 'right',
         },
-        columns: (this.args.columnDefinitions || []).map((col) => {
+        columns: [...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
@@ -731,7 +731,7 @@ export default defineComponent({
             }
           }
           return colDef as ColumnDefinition
-        }),
+        })],
         initialSort: this.args.initialSort,
       }
 
@@ -2016,6 +2016,128 @@ export default defineComponent({
       this.applyFilters()
     },
 
+    // Row overview: a button per row that shows every column of that row
+    rowOverviewColumns(): ColumnDefinition[] {
+      if (!this.args.rowOverview) return []
+      return [{
+        title: '',
+        field: '__row_overview',
+        headerSort: false,
+        resizable: false,
+        width: 36,
+        minWidth: 36,
+        hozAlign: 'center',
+        download: false,
+        // Never folded away by the collapsed layout
+        responsive: 0,
+        headerTooltip: false,
+        tooltip: 'Show the whole row',
+        formatter: () => '<i class="mdi mdi-text-box-search-outline row-overview-button" aria-label="Show the whole row"></i>',
+        cellClick: (_event: UIEvent, cell: CellComponent) => {
+          this.openRowOverview(cell.getRow().getData() as Record<string, unknown>)
+        },
+      } as unknown as ColumnDefinition]
+    },
+
+    rowOverviewValue(col: Record<string, any>, value: unknown): string {
+      const placeholders = (col.formatterParams && col.formatterParams.placeholders) || {}
+      if (value !== null && value !== undefined && String(value) in placeholders) {
+        return String(placeholders[String(value)])
+      }
+      if (value === null || value === undefined || value === '') return '-'
+      if (typeof value === 'number') {
+        if (Number.isNaN(value)) return '-'
+        const precision = col.formatterParams && col.formatterParams.precision
+        if (typeof precision === 'number' && !Number.isInteger(value)) return value.toFixed(precision)
+        return Number.isInteger(value) ? String(value) : String(Math.round(value * 1e4) / 1e4)
+      }
+      if (typeof value === 'boolean') return value ? 'yes' : 'no'
+      if (Array.isArray(value)) return value.map((v) => (v === null ? '-' : String(v))).join(', ')
+      return String(value)
+    },
+
+    // Title of the overview: rowOverviewTitle with {field} replaced by the row's values
+    rowOverviewTitle(row: Record<string, unknown>): string {
+      const template = this.args.rowOverviewTitle
+      if (!template) return 'Row details'
+      const columns = (this.args.columnDefinitions || []) as Record<string, any>[]
+      return template.replace(/\{([^{}]+)\}/g, (_match: string, field: string) => {
+        const col = columns.find((c) => c.field === field) || {}
+        return this.rowOverviewValue(col, row[field])
+      })
+    },
+
+    openRowOverview(row: Record<string, unknown>): void {
+      if (!this.parentDocument) this.initializeTeleport()
+      if (!this.parentDocument || this.teleportBackdrop) return
+      const doc = this.parentDocument
+      const dark = this.streamlitDataStore.theme?.base === 'dark'
+      const colors = dark
+        ? { bg: '#262730', fg: '#fafafa', muted: '#a3a8b8', line: '#3d3f4b' }
+        : { bg: '#ffffff', fg: '#31333f', muted: '#6b6f80', line: '#e6e7eb' }
+
+      this.createTeleportBackdrop()
+      this.createTeleportContainer()
+      const container = this.teleportContainer as HTMLElement
+      container.style.background = colors.bg
+      container.style.color = colors.fg
+      container.style.width = '640px'
+
+      const header = doc.createElement('div')
+      header.style.cssText = `display: flex; justify-content: space-between; align-items: center;
+        padding: 14px 20px; border-bottom: 1px solid ${colors.line};`
+      const title = doc.createElement('span')
+      title.textContent = this.rowOverviewTitle(row)
+      title.style.cssText = 'font-size: 18px; font-weight: 600;'
+      const close = doc.createElement('button')
+      close.textContent = '×'
+      close.setAttribute('aria-label', 'Close')
+      close.style.cssText = `background: none; border: none; font-size: 24px; cursor: pointer;
+        color: ${colors.muted}; padding: 0 6px;`
+      header.append(title, close)
+
+      const body = doc.createElement('div')
+      body.style.cssText = 'overflow: auto; padding: 8px 20px 16px;'
+      const table = doc.createElement('table')
+      table.style.cssText = 'width: 100%; border-collapse: collapse; font-size: 14px;'
+      for (const col of (this.args.columnDefinitions || []) as Record<string, any>[]) {
+        if (!col.field) continue
+        const tr = doc.createElement('tr')
+        tr.style.borderBottom = `1px solid ${colors.line}`
+        const name = doc.createElement('th')
+        name.textContent = String(col.title || col.field)
+        name.style.cssText = `text-align: left; font-weight: 500; color: ${colors.muted};
+          padding: 6px 16px 6px 0; vertical-align: top; white-space: nowrap;`
+        const value = doc.createElement('td')
+        value.textContent = this.rowOverviewValue(col, row[col.field])
+        value.style.cssText = 'padding: 6px 0; word-break: break-word;'
+        tr.append(name, value)
+        table.appendChild(tr)
+      }
+      body.appendChild(table)
+      container.append(header, body)
+
+      // Close on the button, a click outside or Escape; each way removes the
+      // Escape listeners so they cannot close a later dialog. Escape is heard
+      // on the page and in this component's frame, which keeps the focus
+      // after the row button is clicked.
+      const docs = doc === document ? [doc] : [doc, document]
+      const unlisten = () => docs.forEach((d) => d.removeEventListener('keydown', onKey))
+      const closeOverview = () => {
+        unlisten()
+        this.closeTeleportDialog()
+      }
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') closeOverview()
+      }
+      close.addEventListener('click', closeOverview)
+      const backdrop = this.teleportBackdrop as HTMLElement | null
+      backdrop?.addEventListener('click', (event: MouseEvent) => {
+        if (event.target === backdrop) unlisten()
+      })
+      docs.forEach((d) => d.addEventListener('keydown', onKey))
+    },
+
     // Teleport functionality for filter dialog
     canUseTeleport(): boolean {
       try {
@@ -2757,6 +2879,15 @@ export default defineComponent({
 }
 
 /* Dark mode pagination styling */
+.row-overview-button {
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 0.7;
+}
+.row-overview-button:hover {
+  opacity: 1;
+}
+
 .table-dark .tabulator-footer {
   background-color: #1e1e1e;
   border-color: #444;

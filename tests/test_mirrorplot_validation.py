@@ -38,12 +38,14 @@ class TestMirrorPlotValidation:
     ):
         """Both halves may follow one selection, each through its own column
         (e.g. observed and theoretical peaks of the selected spectrum)."""
-        data = pl.LazyFrame({
-            "observed_scan": [1, 1, None, None, 2],
-            "theoretical_scan": [None, None, 1, 1, None],
-            "mass": [100.0, 101.0, 100.0, 101.0, 200.0],
-            "intensity": [10.0, 5.0, 9.0, 6.0, 1.0],
-        })
+        data = pl.LazyFrame(
+            {
+                "observed_scan": [1, 1, None, None, 2],
+                "theoretical_scan": [None, None, 1, 1, None],
+                "mass": [100.0, 101.0, 100.0, 101.0, 200.0],
+                "intensity": [10.0, 5.0, 9.0, 6.0, 1.0],
+            }
+        )
         mirror = MirrorPlot(
             cache_id="test_shared_identifier",
             data=data,

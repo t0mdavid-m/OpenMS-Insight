@@ -83,6 +83,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   resetSortOn?: string[]
   /** Without pagination, stay at the given height instead of shrinking to the rows */
   fillHeight?: boolean
+  rowOverview?: boolean
+  rowOverviewTitle?: string
   /** False hides the column menu */
   columnMenu?: boolean
 }

@@ -173,7 +173,8 @@ class SeriesPlot(BaseComponent):
             **({"font": self._font} if self._font else {}),
             **(
                 {"y_range_mode": self._y_range_mode}
-                if self._y_range_mode != "nonnegative" else {}
+                if self._y_range_mode != "nonnegative"
+                else {}
             ),
             **({"hover_column": self._hover_column} if self._hover_column else {}),
         }

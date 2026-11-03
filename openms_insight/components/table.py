@@ -130,6 +130,7 @@ class Table(BaseComponent):
         reset_sort: bool = False,
         reset_sort_on: list[str] | None = None,
         fill_height: bool = False,
+        row_overview: bool | str = False,
         **kwargs,
     ):
         """
@@ -222,6 +223,13 @@ class Table(BaseComponent):
             reset_sort_on: Identifiers whose selection, when it changes, sorts
                 the rows by ``initial_sort`` again, whether or not the rows
                 change (e.g. a table of the tags of the selected protein).
+            row_overview: Add a button to each row that opens the whole row
+                as an overview: every column of ``column_definitions``, the
+                hidden ones included, as title and value. Lets a table show a
+                few essential columns and keep the rest one click away. True
+                titles the overview "Row details"; a string is the title
+                itself, with ``{field}`` replaced by that column's value in
+                the row, e.g. ``"{accession}, scan {scan}"``.
             fill_height: Without pagination, keep the table at the height it is
                 rendered with instead of shrinking it to its rows, so tables
                 rendered side by side with one height line up.
@@ -242,6 +250,11 @@ class Table(BaseComponent):
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
+        self._row_overview = (
+            row_overview
+            if isinstance(row_overview, str) and row_overview
+            else bool(row_overview)
+        )
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -290,6 +303,7 @@ class Table(BaseComponent):
             reset_sort=reset_sort,
             reset_sort_on=reset_sort_on,
             fill_height=fill_height,
+            row_overview=row_overview,
             **kwargs,
         )
 
@@ -349,6 +363,7 @@ class Table(BaseComponent):
             **({"reset_sort": True} if self._reset_sort else {}),
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
             **({"fill_height": True} if self._fill_height else {}),
+            **({"row_overview": self._row_overview} if self._row_overview else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -375,6 +390,7 @@ class Table(BaseComponent):
         self._reset_sort = config.get("reset_sort", False)
         self._reset_sort_on = config.get("reset_sort_on") or []
         self._fill_height = config.get("fill_height", False)
+        self._row_overview = config.get("row_overview", False)
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in (
             "toggle_filters",
@@ -387,6 +403,7 @@ class Table(BaseComponent):
             "reset_sort",
             "reset_sort_on",
             "fill_height",
+            "row_overview",
         ):
             self._config.pop(key, None)
 
@@ -1429,6 +1446,10 @@ class Table(BaseComponent):
             args["resetSortOn"] = self._reset_sort_on
         if self._fill_height:
             args["fillHeight"] = True
+        if self._row_overview:
+            args["rowOverview"] = True
+            if isinstance(self._row_overview, str):
+                args["rowOverviewTitle"] = self._row_overview
 
         # Add any extra config options
         args.update(self._config)
@@ -1443,6 +1464,7 @@ class Table(BaseComponent):
             "reset_sort",
             "reset_sort_on",
             "fill_height",
+            "row_overview",
         ):
             args.pop(key, None)
 
