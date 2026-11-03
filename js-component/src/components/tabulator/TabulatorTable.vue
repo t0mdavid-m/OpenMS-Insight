@@ -52,6 +52,15 @@
             @click="toggleGoTo"
             color="default"
           />
+          <v-btn
+            v-if="multiSelectEnabled"
+            variant="text"
+            size="small"
+            icon="mdi-checkbox-multiple-marked-outline"
+            :color="checkboxesShown ? 'primary' : 'default'"
+            :title="checkboxesShown ? 'Hide the check boxes' : 'Tick rows to select several'"
+            @click="toggleCheckboxes"
+          />
         </div>
         <div class="table-toolbar-title">
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
@@ -242,6 +251,8 @@ export default defineComponent({
       // click, which must not also select the row
       lastCheckedPosition: null as number | null,
       checkboxClicked: false as boolean,
+      // The check box column is shown once the user asks for it
+      checkboxesShown: false as boolean,
     }
   },
   computed: {
@@ -2046,6 +2057,7 @@ export default defineComponent({
       return [{
         title: '',
         field: '__multi_select',
+        visible: this.checkboxesShown,
         headerSort: false,
         resizable: false,
         width: 36,
@@ -2068,6 +2080,16 @@ export default defineComponent({
           this.toggleRow(cell, (event as MouseEvent).shiftKey)
         },
       } as unknown as ColumnDefinition]
+    },
+
+    toggleCheckboxes(): void {
+      this.checkboxesShown = !this.checkboxesShown
+      const column = this.tabulator?.getColumn('__multi_select')
+      if (column) {
+        if (this.checkboxesShown) column.show()
+        else column.hide()
+      }
+      this.refreshCheckboxes()
     },
 
     checkboxHtml(checked: boolean | 'some'): string {
@@ -2132,6 +2154,8 @@ export default defineComponent({
         const data = row.getData() as Record<string, unknown>
         const isChecked = this.isRowChecked(data)
         if (isChecked) checked += 1
+        // Selected rows are marked whether or not the check boxes are shown
+        row.getElement().classList.toggle('multi-selected', isChecked)
         const cell = (row as unknown as { getCell: (f: string) => { getElement: () => HTMLElement } | false }).getCell('__multi_select')
         if (cell) {
           const element = cell.getElement()
@@ -3016,6 +3040,9 @@ export default defineComponent({
 .multi-select-box.checked {
   opacity: 1;
   color: #00b894;
+}
+.tabulator-row.multi-selected {
+  box-shadow: inset 4px 0 0 #00b894;
 }
 
 /* Dark mode pagination styling */

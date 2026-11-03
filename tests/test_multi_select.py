@@ -287,3 +287,53 @@ def test_clustered_heatmap_multi_select_rows(mock_streamlit, temp_cache_dir):
             cache_id="ch_bad", data=data, id_col="Proteoform", cache_path=str(temp_cache_dir),
             multi_select={"forms": "s1"},
         )
+
+
+# -- A multi-selection as a filter ----------------------------------------------
+
+
+def test_filters_accept_a_multi_selection(mock_streamlit, temp_cache_dir, proteins):
+    from openms_insight.preprocessing.filtering import filter_and_collect_cached
+
+    frame, _ = filter_and_collect_cached(
+        proteins, {"proteins": "accession"}, {"proteins": ["P2", "P7"]}
+    )
+    assert frame["accession"].tolist() == ["P2", "P7"]
+    # Whole floats from the browser match an integer column
+    frame, _ = filter_and_collect_cached(proteins, {"ids": "id"}, {"ids": [1.0, 3.0]})
+    assert frame["id"].tolist() == [1, 3]
+    frame, _ = filter_and_collect_cached(proteins, {"proteins": "accession"}, {"proteins": None})
+    assert len(frame) == 0
+
+
+def test_table_filtered_by_a_multi_selection(mock_streamlit, temp_cache_dir, proteins):
+    table = Table(
+        cache_id="tbl_filtered_ms", data=proteins, cache_path=str(temp_cache_dir), index_field="id",
+        filters={"proteins": "accession"},
+    )
+    payload = table._prepare_vue_data({"proteins": ["P1", "P4", "P9"]})
+    assert sorted(payload["tableData"]["accession"].tolist()) == ["P1", "P4", "P9"]
+
+
+def test_heatmap_filtered_by_a_multi_selection(mock_streamlit, temp_cache_dir, hits):
+    plot = _heatmap(hits, temp_cache_dir, "ms_filter_set", filters={"proteins": "accession"})
+    shown = plot._prepare_vue_data({"proteins": ["P0001", "P0002"]})["heatmapData"]
+    expected = hits.filter(pl.col("accession").is_in(["P0001", "P0002"])).collect()
+    assert 0 < len(shown) <= expected.height
+    assert set(zip(shown["rt"], shown["mass"])) <= set(zip(expected["rt"], expected["mass"]))
+
+
+def test_volcano_selection_presets_are_optional(mock_streamlit, temp_cache_dir, volcano_data):
+    plain = VolcanoPlot(
+        cache_id="volcano_no_presets", data=volcano_data, cache_path=str(temp_cache_dir),
+        log2fc_column="log2FC", pvalue_column="padj", multi_select={"proteins": "accession"},
+    )
+    assert "selectionPresets" not in plain._get_component_args()
+    with_presets = VolcanoPlot(
+        cache_id="volcano_presets", data=volcano_data, cache_path=str(temp_cache_dir),
+        log2fc_column="log2FC", pvalue_column="padj", multi_select={"proteins": "accession"},
+        selection_presets=True,
+    )
+    assert with_presets._get_component_args()["selectionPresets"] is True
+    again = VolcanoPlot(cache_id="volcano_presets", cache_path=str(temp_cache_dir))
+    assert again._get_component_args()["selectionPresets"] is True

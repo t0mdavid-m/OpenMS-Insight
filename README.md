@@ -707,17 +707,25 @@ once, and the identifier holds the sorted distinct values of `column` over them
 (None when nothing is picked). Components with the same identifier show and change
 the same set, so any page can read it with `state_manager.get_selection(identifier)`.
 
+A multi-selection is a selection level like any other. In `filters` it keeps the rows
+whose column is in the set, so `Table(..., filters={"proteins": "accession"})` lists the
+picked proteins, and the same works for masses, scans or any other column.
+
 | Component | How the user selects |
 |-----------|----------------------|
-| `Table` | A check box per row; Shift-click ticks a range; the header box ticks every row passing the filters (on a paginated table, in Python over all pages) |
-| `VolcanoPlot` | A box or lasso drag (Shift adds), and the buttons **All changed**, **Up** and **Down** at the plot's cut-offs; `preset_labels={"up": ..., "down": ..., "changed": ..., "clear": ...}` renames them |
-| `Heatmap` | **Select (box)** / **Select (lasso)** above the plot; the region is resolved in Python on the full data, not the downsampled level shown; Shift adds, Alt removes; every point of the picked entries is marked |
-| `ClusteredHeatmap` | A box or lasso over rows (the column must be `id_col`); selected rows are outlined |
+| `Table` | A check mark button in the toolbar shows a check box per row (hidden until then); Shift-click ticks a range; the header box ticks every row passing the filters (on a paginated table, in Python over all pages). Selected rows are marked by a bar on the left whether or not the boxes are shown |
+| `VolcanoPlot` | Box or lasso select in Plotly's mode bar (Shift adds). With `selection_presets=True`, buttons above the plot select **All changed**, **Up** or **Down** at the plot's cut-offs; `preset_labels={"up": ..., "down": ..., "changed": ..., "clear": ...}` renames them |
+| `Heatmap` | Box or lasso select in Plotly's mode bar (Shift adds); the region is resolved in Python on the full data, not the downsampled level shown; every point of the picked entries is marked |
+| `ClusteredHeatmap` | Box or lasso select over rows (the column must be `id_col`); selected rows are outlined |
+
+Each plot's mode bar gets a **Clear selection** button (the eraser).
 
 ```python
 volcano = VolcanoPlot(..., label_column="name", multi_select={"proteins": "accession"},
+                      selection_presets=True,
                       preset_labels={"up": "Higher in treated", "down": "Lower in treated"})
 table = Table(..., multi_select={"proteins": "accession"})
+picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
 picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
 ```
 

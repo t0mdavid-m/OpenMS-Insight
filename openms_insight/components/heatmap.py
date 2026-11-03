@@ -962,7 +962,8 @@ class Heatmap(BaseComponent):
                     continue
 
                 selected_value = state.get(filter_id)
-                if selected_value is None:
+                # A multi-selection has no per-value levels of its own
+                if selected_value is None or isinstance(selected_value, list):
                     continue
 
                 # Convert float to int if needed (JS numbers come as floats)

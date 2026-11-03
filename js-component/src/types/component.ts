@@ -250,6 +250,7 @@ export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
   maxLabels?: number
   interactivity?: InteractivityMapping
   /** Labels of the selection buttons: changed, up, down, clear */
+  selectionPresets?: boolean
   presetLabels?: Record<string, string>
   height?: number
 }

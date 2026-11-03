@@ -7,6 +7,10 @@ sorted list of the distinct values of the column over the picked entries, or
 None when nothing is picked. Every component with the same identifier shows
 the same set, and any component or page can read it with
 ``state_manager.get_selection('proteins')``.
+
+A multi-selection is a selection level like any other: a component with
+``filters={'proteins': 'accession'}`` shows the rows whose accession is in the
+set, just as it shows the rows of one selected value for a single selection.
 """
 
 from __future__ import annotations
@@ -15,6 +19,28 @@ from typing import Any
 
 import numpy as np
 import polars as pl
+
+
+def _int_if_whole(value: Any) -> Any:
+    # JavaScript numbers arrive as floats; an Int64 column needs an int
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def selection_key(value: Any) -> Any:
+    """A hashable form of a selection value (a list becomes a tuple)."""
+    if isinstance(value, list):
+        return tuple(value)
+    return value
+
+
+def match_selection(column: str, value: Any) -> pl.Expr:
+    """Rows of ``column`` matching a selection: the one selected value, or any
+    of the values of a multi-selection (a list)."""
+    if isinstance(value, (list, tuple)):
+        return pl.col(column).is_in([_int_if_whole(v) for v in value])
+    return pl.col(column) == _int_if_whole(value)
 
 
 def normalize_multi_select(multi_select: dict[str, str] | None) -> dict[str, str]:

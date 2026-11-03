@@ -7,6 +7,7 @@
  */
 
 import { computed, type ComputedRef } from 'vue'
+import Plotly from 'plotly.js-dist-min'
 import { useSelectionStore } from '@/stores/selection'
 
 export type MultiSelectMode = 'replace' | 'add' | 'remove'
@@ -100,4 +101,18 @@ export function useMultiSelect(multiSelect: ComputedRef<Record<string, string> |
   }
 
   return { enabled, selectedSets, selectedCount, selectionKey, isRowSelected, applyRows, clear }
+}
+
+/**
+ * A mode bar button that clears the selection, next to Plotly's own box and
+ * lasso select buttons.
+ */
+export function clearSelectionButton(onClick: () => void): Plotly.ModeBarButton {
+  const icons = Plotly.Icons as unknown as Record<string, Plotly.Icon>
+  return {
+    title: 'Clear selection',
+    name: 'clearMultiSelect',
+    icon: icons.eraseshape,
+    click: () => onClick(),
+  }
 }

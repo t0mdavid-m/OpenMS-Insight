@@ -1,24 +1,5 @@
 <template>
   <div>
-    <div v-if="multiSelectEnabled" class="heatmap-select-bar">
-      <span class="heatmap-select-label">Drag to</span>
-      <button
-        v-for="mode in dragModes"
-        :key="mode.value"
-        type="button"
-        class="heatmap-select-button"
-        :class="{ active: dragmode === mode.value }"
-        @click="setDragmode(mode.value)"
-      >
-        {{ mode.label }}
-      </button>
-      <button type="button" class="heatmap-select-button" :disabled="!selectedCount" @click="clearMultiSelect">
-        Clear selection
-      </button>
-      <span class="heatmap-select-hint">
-        {{ selectedCount ? `${selectedCount} selected · ` : '' }}Shift adds, Alt removes
-      </span>
-    </div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
@@ -30,7 +11,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionButton, useMultiSelect } from '@/composables/useMultiSelect'
 import type { HeatmapComponentArgs, HeatmapData } from '@/types/component'
 
 export default defineComponent({
@@ -78,11 +59,6 @@ export default defineComponent({
       dragmode: 'zoom' as string,
       removingOutline: false,
       selectModifier: 'replace' as 'replace' | 'add' | 'remove',
-      dragModes: [
-        { value: 'zoom', label: 'Zoom' },
-        { value: 'select', label: 'Select (box)' },
-        { value: 'lasso', label: 'Select (lasso)' },
-      ],
       zoomRange: undefined as { xRange: number[]; yRange: number[] } | undefined,
       colorbarVisible: true,
       userOverrideColorbar: false,
@@ -639,7 +615,9 @@ export default defineComponent({
           this.toggleColorbar()
         },
       }
-      return this.getPlotConfig([colorbarToggleButton])
+      const buttons = [colorbarToggleButton]
+      if (this.multiSelectEnabled) buttons.push(clearSelectionButton(() => this.clearMultiSelect()))
+      return this.getPlotConfig(buttons)
     },
 
     setupPlotEventHandlers() {
@@ -684,13 +662,6 @@ export default defineComponent({
       this.setupMultiSelectHandlers(plotElement)
     },
 
-    setDragmode(mode: string) {
-      this.dragmode = mode
-      if (this.plotInitialized) {
-        Plotly.relayout(this.id, { dragmode: mode } as Partial<Plotly.Layout>)
-      }
-    },
-
     /**
      * A box or lasso drawn in select mode is sent to Python, which selects the
      * points in it from the full data (the plot shows only a level of it).
@@ -698,7 +669,7 @@ export default defineComponent({
     setupMultiSelectHandlers(plotElement: Plotly.PlotlyHTMLElement) {
       if (!this.multiSelectEnabled) return
       plotElement.addEventListener('mousedown', (e: MouseEvent) => {
-        this.selectModifier = e.shiftKey ? 'add' : e.altKey ? 'remove' : 'replace'
+        this.selectModifier = e.shiftKey ? 'add' : 'replace'
       }, true)
       plotElement.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
         const mode = (eventData as Record<string, unknown>).dragmode
@@ -905,39 +876,6 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.heatmap-select-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 4px 2px;
-  font-size: 13px;
-}
-.heatmap-select-label {
-  font-weight: 600;
-  opacity: 0.8;
-}
-.heatmap-select-button {
-  padding: 2px 10px;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  border-radius: 12px;
-  cursor: pointer;
-}
-.heatmap-select-button.active {
-  border-color: #00b894;
-  background: rgba(0, 184, 148, 0.15);
-}
-.heatmap-select-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.heatmap-select-hint {
-  opacity: 0.65;
-  font-size: 12px;
-}
 .heatmap-container {
   position: relative;
   width: 100%;

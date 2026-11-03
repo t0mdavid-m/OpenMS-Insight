@@ -1,24 +1,5 @@
 <template>
   <div>
-    <div v-if="multiSelectEnabled" class="cheatmap-select-bar">
-      <span class="cheatmap-select-label">Select rows by</span>
-      <button
-        v-for="mode in dragModes"
-        :key="mode.value"
-        type="button"
-        class="cheatmap-select-button"
-        :class="{ active: dragmode === mode.value }"
-        @click="setDragmode(mode.value)"
-      >
-        {{ mode.label }}
-      </button>
-      <button type="button" class="cheatmap-select-button" :disabled="!selectedCount" @click="clearSelection">
-        Clear selection
-      </button>
-      <span class="cheatmap-select-hint">
-        {{ selectedCount ? `${selectedCount} selected · ` : '' }}Shift adds, Alt removes
-      </span>
-    </div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div :id="id" class="clustered-heatmap-container" :style="{ minHeight: `${args.height || 500}px` }"></div>
@@ -30,7 +11,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionButton, useMultiSelect } from '@/composables/useMultiSelect'
 import type { ClusteredHeatmapComponentArgs, ClusteredHeatmapData, DendrogramData } from '@/types/component'
 
 // Layout fractions for the 4 regions of the composite figure.
@@ -88,10 +69,6 @@ export default defineComponent({
       dragmode: 'select' as string,
       removingOutline: false,
       selectModifier: 'replace' as 'replace' | 'add' | 'remove',
-      dragModes: [
-        { value: 'select', label: 'box' },
-        { value: 'lasso', label: 'lasso' },
-      ],
     }
   },
   computed: {
@@ -488,7 +465,8 @@ export default defineComponent({
      * layout level.
      */
     getHeatmapPlotConfig(): Partial<Plotly.Config> {
-      return { ...this.getPlotConfig(), scrollZoom: false }
+      const buttons = this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []
+      return { ...this.getPlotConfig(buttons), scrollZoom: false }
     },
 
     async renderPlot(): Promise<void> {
@@ -517,20 +495,18 @@ export default defineComponent({
       }
     },
 
-    setDragmode(mode: string) {
-      this.dragmode = mode
-      if (this.plotInitialized) {
-        Plotly.relayout(this.id, { dragmode: mode } as Partial<Plotly.Layout>)
-      }
-    },
-
     setupSelectHandlers(): void {
       if (!this.multiSelectEnabled) return
       const element = document.getElementById(this.id) as Plotly.PlotlyHTMLElement | null
       if (!element) return
       element.addEventListener('mousedown', (e: MouseEvent) => {
-        this.selectModifier = e.shiftKey ? 'add' : e.altKey ? 'remove' : 'replace'
+        this.selectModifier = e.shiftKey ? 'add' : 'replace'
       }, true)
+      // Keep the mode picked in the mode bar across re-renders
+      element.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        const mode = (eventData as Record<string, unknown>).dragmode
+        if (typeof mode === 'string') this.dragmode = mode
+      })
       element.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
         if (!eventData || !eventData.points) return
         // Plotly reports the removed outline as an empty selection
@@ -591,39 +567,6 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.cheatmap-select-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 4px 2px;
-  font-size: 13px;
-}
-.cheatmap-select-label {
-  font-weight: 600;
-  opacity: 0.8;
-}
-.cheatmap-select-button {
-  padding: 2px 10px;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  border-radius: 12px;
-  cursor: pointer;
-}
-.cheatmap-select-button.active {
-  border-color: #00b894;
-  background: rgba(0, 184, 148, 0.15);
-}
-.cheatmap-select-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.cheatmap-select-hint {
-  opacity: 0.65;
-  font-size: 12px;
-}
 .clustered-heatmap-container {
   position: relative;
   width: 100%;

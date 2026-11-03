@@ -72,6 +72,7 @@ class VolcanoPlot(BaseComponent):
         show_threshold_lines: bool = True,
         threshold_line_style: str = "dash",
         multi_select: dict[str, str] | None = None,
+        selection_presets: bool = False,
         preset_labels: dict[str, str] | None = None,
         **kwargs,
     ):
@@ -106,15 +107,17 @@ class VolcanoPlot(BaseComponent):
             show_threshold_lines: Show threshold lines on plot (default: True).
             threshold_line_style: Line style for thresholds (default: "dash").
             multi_select: Mapping of identifier names to column names for
-                selecting several points at once: a box or lasso drag (Shift
-                adds to the selection), or the buttons above the plot that
-                select every significant, every up- or every down-regulated
-                point. The identifier holds the sorted distinct values of the
-                column over the selected points (None when none are), and the
-                selected points are marked, whichever component chose them.
-            preset_labels: Labels of the selection buttons, keys "changed",
-                "up", "down" and "clear" (defaults: "All changed", "Up",
-                "Down", "Clear").
+                selecting several points at once with Plotly's box and lasso
+                select (mode bar; Shift adds to the selection). The identifier
+                holds the sorted distinct values of the column over the
+                selected points (None when none are), and the selected points
+                are marked, whichever component chose them.
+            selection_presets: With ``multi_select``, show buttons above the
+                plot that select every significant, every up- or every
+                down-regulated point (default: False).
+            preset_labels: Labels of those buttons, keys "changed", "up",
+                "down" and "clear" (defaults: "All changed", "Up", "Down",
+                "Clear").
             **kwargs: Additional configuration options.
         """
         self._log2fc_column = log2fc_column
@@ -129,6 +132,7 @@ class VolcanoPlot(BaseComponent):
         self._show_threshold_lines = show_threshold_lines
         self._threshold_line_style = threshold_line_style
         self._multi_select = normalize_multi_select(multi_select)
+        self._selection_presets = bool(selection_presets)
         self._preset_labels = dict(preset_labels or {})
 
         # Render-time threshold values (set in __call__)
@@ -149,11 +153,12 @@ class VolcanoPlot(BaseComponent):
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
             multi_select=multi_select,
+            selection_presets=selection_presets,
             preset_labels=preset_labels,
             **kwargs,
         )
-        self._config.pop("multi_select", None)
-        self._config.pop("preset_labels", None)
+        for key in ("multi_select", "selection_presets", "preset_labels"):
+            self._config.pop(key, None)
 
     def _validate_columns(self, schema: pl.Schema) -> None:
         """Validate that required columns exist in the data schema."""
@@ -205,6 +210,7 @@ class VolcanoPlot(BaseComponent):
             "threshold_line_style": self._threshold_line_style,
             # Only when set, so caches built without them keep their hash
             **({"multi_select": self._multi_select} if self._multi_select else {}),
+            **({"selection_presets": True} if self._selection_presets else {}),
             **({"preset_labels": self._preset_labels} if self._preset_labels else {}),
         }
 
@@ -228,9 +234,10 @@ class VolcanoPlot(BaseComponent):
         self._show_threshold_lines = config.get("show_threshold_lines", True)
         self._threshold_line_style = config.get("threshold_line_style", "dash")
         self._multi_select = dict(config.get("multi_select") or {})
+        self._selection_presets = bool(config.get("selection_presets", False))
         self._preset_labels = dict(config.get("preset_labels") or {})
-        self._config.pop("multi_select", None)
-        self._config.pop("preset_labels", None)
+        for key in ("multi_select", "selection_presets", "preset_labels"):
+            self._config.pop(key, None)
 
     def _preprocess(self) -> None:
         """Preprocess data for volcano plot.
@@ -369,6 +376,7 @@ class VolcanoPlot(BaseComponent):
             "maxLabels": self._current_max_labels,
             "interactivity": self._interactivity or {},
             **({"multiSelect": self._multi_select} if self._multi_select else {}),
+            **({"selectionPresets": True} if self._selection_presets else {}),
             **({"presetLabels": self._preset_labels} if self._preset_labels else {}),
         }
 

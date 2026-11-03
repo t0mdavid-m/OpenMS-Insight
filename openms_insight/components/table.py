@@ -7,7 +7,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
-from ..core.multi_select import combine, normalize_multi_select, selection_values
+from ..core.multi_select import combine, match_selection, normalize_multi_select, selection_values
 from ..core.registry import register_component
 from ..preprocessing.filtering import compute_dataframe_hash
 
@@ -851,10 +851,7 @@ class Table(BaseComponent):
                     "_auto_selection": {},  # No data = no auto-selection
                 }
 
-            # Convert float to int for integer columns (JS numbers come as floats)
-            if isinstance(selected_value, float) and selected_value.is_integer():
-                selected_value = int(selected_value)
-            data = data.filter(pl.col(column) == selected_value)
+            data = data.filter(match_selection(column, selected_value))
 
         data = self._apply_range_filters(data, state)
 
@@ -1418,9 +1415,7 @@ class Table(BaseComponent):
                 selected_value = self._filter_defaults.get(identifier)
             if selected_value is None:
                 continue
-            if isinstance(selected_value, float) and selected_value.is_integer():
-                selected_value = int(selected_value)
-            data = data.filter(pl.col(column) == selected_value)
+            data = data.filter(match_selection(column, selected_value))
         data = self._apply_range_filters(data, state)
 
         pagination_state = state.get(self._pagination_identifier) or {}

@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div v-if="multiSelectEnabled" class="volcano-select-bar">
+    <div v-if="multiSelectEnabled && args.selectionPresets" class="volcano-select-bar">
       <span class="volcano-select-label">Select</span>
       <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
         {{ presetLabel('changed') }} ({{ presetCounts.changed }})
@@ -16,9 +16,7 @@
       <button type="button" class="volcano-select-button" :disabled="!selectedCount" @click="clearSelection">
         {{ presetLabel('clear') }}
       </button>
-      <span class="volcano-select-hint">
-        {{ selectedCount ? `${selectedCount} selected · ` : '' }}drag a box or lasso; Shift adds
-      </span>
+      <span v-if="selectedCount" class="volcano-select-hint">{{ selectedCount }} selected</span>
     </div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
@@ -31,7 +29,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionButton, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 
 /**
@@ -502,7 +500,10 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig())
+        await Plotly.newPlot(
+          this.id, this.plotData, this.layout,
+          this.getPlotConfig(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
+        )
         this.setupClickHandler()
         this.setupSelectHandlers()
 
