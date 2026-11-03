@@ -760,10 +760,17 @@ export default defineComponent({
       } else {
         // For non-paginated tables, set data directly
         tabulatorOptions.data = this.preparedTableData
-        // The table is as tall as its rows, up to the height it was given
-        delete tabulatorOptions.height
-        tabulatorOptions.minHeight = 50
-        tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        if (this.args.fillHeight) {
+          // Always the height it was given, so tables side by side line up
+          tabulatorOptions.height = Math.max(tableMaxHeight, 50)
+          tabulatorOptions.minHeight = Math.max(tableMaxHeight, 50)
+          tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        } else {
+          // The table is as tall as its rows, up to the height it was given
+          delete tabulatorOptions.height
+          tabulatorOptions.minHeight = 50
+          tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        }
         // Only use virtual DOM if pagination is disabled and dataset is large
         const useVirtualDom = this.preparedTableData.length > 100
         tabulatorOptions.renderVertical = useVirtualDom ? 'virtual' : 'basic'

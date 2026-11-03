@@ -104,6 +104,9 @@ class Heatmap(BaseComponent):
         downsample_zoomed: bool = True,
         svg_filename: str | None = None,
         scroll_zoom: bool = True,
+        hover_column: str | None = None,
+        highlight: dict[str, str] | None = None,
+        on_select: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -176,6 +179,18 @@ class Heatmap(BaseComponent):
             svg_filename: File name for the SVG download (default: title).
             scroll_zoom: If False, the mouse wheel scrolls the page instead of
                 zooming the plot.
+            hover_column: Column whose text is shown when hovering a point, above
+                its intensity (e.g. the name of what the point stands for).
+            highlight: Mapping of identifier names to column names. The points
+                whose column value equals the identifier's selected value are
+                ringed, whether the selection came from this plot or from another
+                component (e.g. ``{'protein': 'protein_id'}`` marks the selected
+                protein's points). The points are looked up in the full data, so
+                they are marked even where the shown level dropped them.
+            on_select: Selections to set whenever a click changes the selection,
+                in addition to those in ``interactivity``. A value of None clears
+                the identifier, e.g. ``{'peak': None}`` clears a dependent
+                selection (as Table's ``on_select``).
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -207,6 +222,9 @@ class Heatmap(BaseComponent):
         self._intensity_label = intensity_label
         self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
+        self._hover_column = hover_column
+        self._highlight = dict(highlight or {})
+        self._on_select = dict(on_select or {})
 
         super().__init__(
             cache_id=cache_id,
@@ -238,6 +256,9 @@ class Heatmap(BaseComponent):
             downsample_zoomed=downsample_zoomed,
             svg_filename=svg_filename,
             scroll_zoom=scroll_zoom,
+            hover_column=hover_column,
+            highlight=highlight,
+            on_select=on_select,
             **kwargs,
         )
 
@@ -280,6 +301,9 @@ class Heatmap(BaseComponent):
             # so a component loaded from its cache keeps them
             **({"svg_filename": self._svg_filename} if self._svg_filename else {}),
             **({"scroll_zoom": False} if not self._scroll_zoom else {}),
+            **({"hover_column": self._hover_column} if self._hover_column else {}),
+            **({"highlight": self._highlight} if self._highlight else {}),
+            **({"on_select": self._on_select} if self._on_select else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -308,6 +332,9 @@ class Heatmap(BaseComponent):
         self._downsample_zoomed = config.get("downsample_zoomed", True)
         self._svg_filename = config.get("svg_filename")
         self._scroll_zoom = config.get("scroll_zoom", True)
+        self._hover_column = config.get("hover_column")
+        self._highlight = dict(config.get("highlight") or {})
+        self._on_select = dict(config.get("on_select") or {})
         # category_colors is not stored in cache (render-time styling)
 
     def get_state_dependencies(self) -> list:
@@ -322,6 +349,9 @@ class Heatmap(BaseComponent):
         """
         deps = list(self._filters.keys()) if self._filters else []
         deps.append(self._zoom_identifier)
+        for identifier in self._highlight:
+            if identifier not in deps:
+                deps.append(identifier)
         return deps
 
     def _preprocess(self) -> None:
@@ -1105,6 +1135,8 @@ class Heatmap(BaseComponent):
             for col in self._filters.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        if self._hover_column and self._hover_column not in columns_to_select:
+            columns_to_select.append(self._hover_column)
 
         # Get levels based on current state (may use per-filter levels)
         levels, filtered_raw = self._get_levels_for_state(state)
@@ -1194,10 +1226,47 @@ class Heatmap(BaseComponent):
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 
-        return {
+        result = {
             "heatmapData": df_pandas,
             "_hash": data_hash,
         }
+        if self._highlight:
+            highlighted = self._highlighted_points(state, levels)
+            result["highlightPoints"] = {
+                "x": highlighted[self._x_column].to_list(),
+                "y": highlighted[self._y_column].to_list(),
+            }
+            # The points data may be unchanged while the marked points move
+            result["_hash"] = f"{data_hash}:{compute_dataframe_hash(highlighted)}"
+        return result
+
+    def _highlighted_points(self, state: dict[str, Any], levels: list) -> pl.DataFrame:
+        """x and y of the points matching the selected value of each
+        `highlight` identifier, from the full-resolution data."""
+        columns = [self._x_column, self._y_column]
+        empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
+        conditions = [
+            pl.col(column) == state[identifier]
+            for identifier, column in self._highlight.items()
+            if state.get(identifier) is not None
+        ]
+        if not conditions or not levels:
+            return empty
+        full = levels[-1]
+        if isinstance(full, pl.DataFrame):
+            full = full.lazy()
+        schema = full.collect_schema().names()
+        if any(column not in schema for column in self._highlight.values()):
+            return empty
+        condition = conditions[0]
+        for other in conditions[1:]:
+            condition = condition | other
+        # Filters still apply: a point another component filtered out stays hidden
+        for identifier, column in (self._filters or {}).items():
+            value = state.get(identifier, (self._filter_defaults or {}).get(identifier))
+            if value is not None and column in schema:
+                condition = condition & (pl.col(column) == value)
+        return full.filter(condition).select(columns).collect()
 
     def _get_component_args(self) -> dict[str, Any]:
         """
@@ -1225,6 +1294,12 @@ class Heatmap(BaseComponent):
             args["svgFilename"] = self._svg_filename
         if not self._scroll_zoom:
             args["scrollZoom"] = False
+        if self._hover_column:
+            args["hoverColumn"] = self._hover_column
+        if self._highlight:
+            args["highlight"] = self._highlight
+        if self._on_select:
+            args["onSelect"] = self._on_select
 
         # Add category column configuration for categorical coloring mode
         if self._category_column:

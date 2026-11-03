@@ -81,6 +81,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   resetSort?: boolean
   /** Identifiers whose selection change sorts by initialSort again */
   resetSortOn?: string[]
+  /** Without pagination, stay at the given height instead of shrinking to the rows */
+  fillHeight?: boolean
   /** False hides the column menu */
   columnMenu?: boolean
 }
@@ -153,6 +155,12 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   logScale?: boolean
   /** Custom label for the colorbar (default: "Intensity") */
   intensityLabel?: string
+  /** Column whose text is shown above the intensity when hovering a point */
+  hoverColumn?: string
+  /** Identifier → column; the points of each identifier's selected value are ringed */
+  highlight?: Record<string, string>
+  /** Selections a click sets besides `interactivity` (null clears one) */
+  onSelect?: Record<string, unknown>
 }
 
 /**
