@@ -2083,7 +2083,6 @@ export default defineComponent({
       close.setAttribute('aria-label', 'Close')
       close.style.cssText = `background: none; border: none; font-size: 24px; cursor: pointer;
         color: ${colors.muted}; padding: 0 6px;`
-      close.addEventListener('click', () => this.closeTeleportDialog())
       header.append(title, close)
 
       const body = doc.createElement('div')
@@ -2107,12 +2106,20 @@ export default defineComponent({
       body.appendChild(table)
       container.append(header, body)
 
-      const onKey = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-          doc.removeEventListener('keydown', onKey)
-          this.closeTeleportDialog()
-        }
+      // Close on the button, a click outside or Escape; each way removes the
+      // Escape listener so it cannot close a later dialog
+      const closeOverview = () => {
+        doc.removeEventListener('keydown', onKey)
+        this.closeTeleportDialog()
       }
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') closeOverview()
+      }
+      close.addEventListener('click', closeOverview)
+      const backdrop = this.teleportBackdrop as HTMLElement | null
+      backdrop?.addEventListener('click', (event: MouseEvent) => {
+        if (event.target === backdrop) doc.removeEventListener('keydown', onKey)
+      })
       doc.addEventListener('keydown', onKey)
     },
 
