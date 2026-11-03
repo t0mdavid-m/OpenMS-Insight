@@ -767,9 +767,7 @@ class SequenceView:
         # Load cached LazyFrames
         self._cached_sequences = scan_parquet(self._cache_dir / "sequences.parquet")
         peaks_path = self._cache_dir / "peaks.parquet"
-        self._cached_peaks = (
-            scan_parquet(peaks_path) if peaks_path.exists() else None
-        )
+        self._cached_peaks = scan_parquet(peaks_path) if peaks_path.exists() else None
 
     def _create_cache(self) -> None:
         """Create cache from source data."""
