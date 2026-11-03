@@ -459,6 +459,12 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   aaIdentifier?: string | null
   /** Identifier the change-sequence dialog writes the new sequence to */
   sequenceIdentifier?: string | null
+  // Fixed modifications offered in the change-sequence dialog
+  modificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
+  // Identifier the dialog writes the picked modification ids to
+  modificationsIdentifier?: string | null
+  // Ids preselected in the picker
+  modifications?: string[] | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
   /** Fragment ion types (or fragmentation method) and tolerance to start from */

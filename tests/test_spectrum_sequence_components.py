@@ -570,6 +570,86 @@ class TestProteinSequenceView:
         masses = view._prepare_vue_data({"protein": 0})["spectrumData"]["masses"]
         assert math.isclose(masses[0], 12345.678901, abs_tol=1e-9)
 
+    def test_modification_picker_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        default = ProteinSequenceView(
+            cache_id="seq_mods_off",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+        )
+        args = default._get_component_args()
+        assert args["modificationLibrary"] is None
+        assert args["modificationsIdentifier"] is None
+        assert args["modifications"] == []
+
+        view = ProteinSequenceView(
+            cache_id="seq_mods_on",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+            modification_library=[
+                {"id": "Carbamidomethyl (C)", "mass": 57.021464, "site": "C"},
+                {"id": "Acetyl (Protein N-term)", "mass": 42.010565},
+            ],
+            modifications_identifier="fixed_mods",
+            modifications=("Carbamidomethyl (C)",),
+        )
+        args = view._get_component_args()
+        assert args["modificationLibrary"] == [
+            {"id": "Carbamidomethyl (C)", "mass": 57.021464, "site": "C"},
+            {"id": "Acetyl (Protein N-term)", "mass": 42.010565, "site": None},
+        ]
+        assert args["modificationsIdentifier"] == "fixed_mods"
+        assert args["modifications"] == ["Carbamidomethyl (C)"]
+
+    def test_modification_picker_from_pyopenms(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        pytest.importorskip("pyopenms")
+        from openms_insight import pyopenms_modification_library
+
+        library = pyopenms_modification_library()
+        by_id = {m["id"]: m for m in library}
+        assert len(library) > 1000 and len(by_id) == len(library)
+        assert by_id["Carbamidomethyl (C)"]["site"] == "C"
+        assert by_id["Carbamidomethyl (C)"]["mass"] == pytest.approx(
+            57.021464, abs=1e-5
+        )
+        assert by_id["Acetyl (Protein N-term)"]["site"] == "N-term"
+        assert by_id["Amidated (C-term)"]["site"] == "C-term"
+
+        view = ProteinSequenceView(
+            cache_id="seq_mods_pyopenms",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+            modification_library="pyopenms",
+            modifications_identifier="fixed_mods",
+        )
+        assert view._get_component_args()["modificationLibrary"] == library
+        with pytest.raises(ValueError):
+            view.set_modification_picker("unimod")
+        # Not part of the cache: the same data cache serves both
+        assert "modification_library" not in view._get_cache_config()
+
 
 def test_table_navigation_uses_render_state_manager():
     """Navigation state goes to the manager the table is rendered with, and
