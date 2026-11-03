@@ -250,7 +250,11 @@ class Table(BaseComponent):
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
-        self._row_overview = row_overview if isinstance(row_overview, str) and row_overview else bool(row_overview)
+        self._row_overview = (
+            row_overview
+            if isinstance(row_overview, str) and row_overview
+            else bool(row_overview)
+        )
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)

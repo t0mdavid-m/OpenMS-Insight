@@ -35,7 +35,9 @@ def test_reaches_args_and_survives_reload(mock_streamlit, temp_cache_dir):
     assert "row_overview" not in args
 
 
-def test_title_template_reaches_args_and_survives_reload(mock_streamlit, temp_cache_dir):
+def test_title_template_reaches_args_and_survives_reload(
+    mock_streamlit, temp_cache_dir
+):
     _table(temp_cache_dir, "titled", row_overview="{name}, id {id}")
 
     reloaded = Table(cache_id="titled", cache_path=str(temp_cache_dir))
