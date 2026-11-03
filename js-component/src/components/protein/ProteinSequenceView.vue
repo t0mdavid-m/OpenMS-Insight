@@ -1,7 +1,13 @@
 <template>
   <!-- At least as wide as the residue grid: a narrow frame scrolls sideways
        instead of squeezing the header and the fragment table -->
-  <div class="sequence-view-row">
+  <!-- The Change sequence dialog is drawn inside this frame, which fits the
+       view: while it is open, the view is at least as tall as the dialog and
+       the fixed-modification list below its field -->
+  <div
+    class="sequence-view-row"
+    :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT}px` } : undefined"
+  >
   <div class="sequence-view-column">
   <div v-if="args.title" class="d-flex justify-center">
     <h4>{{ args.title }}</h4>
@@ -426,6 +432,10 @@ import {
 } from './fragment-ions'
 
 // Fixed decimals for long numbers in the fragment tables
+// Height (px) the Change sequence dialog needs: title, the sequence field,
+// the fixed-modification picker with its open list, and the buttons
+const SEQUENCE_DIALOG_HEIGHT = 640
+
 const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => unknown }) => {
   const value = cell.getValue()
   if (value === null || value === undefined) return ''
@@ -596,6 +606,7 @@ export default defineComponent({
       regexHighlightedIndices: new Set<number>(),
       // Sequence change dialog properties
       sequenceDialog: false as boolean,
+      SEQUENCE_DIALOG_HEIGHT,
       // Modification ids picked in the change-sequence dialog
       customModifications: [] as string[],
       customSequenceInput: '' as string,
