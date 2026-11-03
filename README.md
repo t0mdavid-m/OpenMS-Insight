@@ -321,8 +321,8 @@ Heatmap(
     intensity_label="Score",
     hover_column="name",
     interactivity={"hit": "hit_id"},  # a click selects the hit ...
-    highlight={"hit": "hit_id"},      # ... and the selected hit is ringed,
-)                                     # also when a table selected it
+    highlight={"hit": "hit_id"},  # ... and the selected hit is ringed,
+)  # also when a table selected it
 ```
 
 **Linear scale example:**
