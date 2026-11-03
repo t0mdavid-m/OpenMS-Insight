@@ -35,6 +35,7 @@ export default defineComponent({
       title: computed(() => props.args.title),
       svgFilename: computed(() => props.args.svgFilename as string | undefined),
       scrollZoom: computed(() => props.args.scrollZoom as boolean | undefined),
+      onSelect: computed(() => props.args.onSelect),
     })
 
     return {

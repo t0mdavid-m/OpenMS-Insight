@@ -144,3 +144,19 @@ def test_config_survives_cache_reload(mock_streamlit, temp_cache_dir, hits):
 
     assert reloaded._get_component_args()["hoverColumn"] == "label"
     assert reloaded._prepare_vue_data({"hit": 5})["highlightPoints"]["x"] == [5.0]
+
+
+def test_on_select_reaches_args_and_survives_reload(
+    mock_streamlit, temp_cache_dir, hits
+):
+    _heatmap(
+        hits,
+        temp_cache_dir,
+        "on_select",
+        interactivity={"hit": "hit_id"},
+        on_select={"peak": None},
+    )
+
+    reloaded = Heatmap(cache_id="on_select", cache_path=str(temp_cache_dir))
+
+    assert reloaded._get_component_args()["onSelect"] == {"peak": None}

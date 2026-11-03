@@ -106,6 +106,7 @@ class Heatmap(BaseComponent):
         scroll_zoom: bool = True,
         hover_column: str | None = None,
         highlight: dict[str, str] | None = None,
+        on_select: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -186,6 +187,10 @@ class Heatmap(BaseComponent):
                 component (e.g. ``{'protein': 'protein_id'}`` marks the selected
                 protein's points). The points are looked up in the full data, so
                 they are marked even where the shown level dropped them.
+            on_select: Selections to set whenever a click changes the selection,
+                in addition to those in ``interactivity``. A value of None clears
+                the identifier, e.g. ``{'peak': None}`` clears a dependent
+                selection (as Table's ``on_select``).
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -219,6 +224,7 @@ class Heatmap(BaseComponent):
         self._categorical_filters = categorical_filters or []
         self._hover_column = hover_column
         self._highlight = dict(highlight or {})
+        self._on_select = dict(on_select or {})
 
         super().__init__(
             cache_id=cache_id,
@@ -252,6 +258,7 @@ class Heatmap(BaseComponent):
             scroll_zoom=scroll_zoom,
             hover_column=hover_column,
             highlight=highlight,
+            on_select=on_select,
             **kwargs,
         )
 
@@ -296,6 +303,7 @@ class Heatmap(BaseComponent):
             **({"scroll_zoom": False} if not self._scroll_zoom else {}),
             **({"hover_column": self._hover_column} if self._hover_column else {}),
             **({"highlight": self._highlight} if self._highlight else {}),
+            **({"on_select": self._on_select} if self._on_select else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -326,6 +334,7 @@ class Heatmap(BaseComponent):
         self._scroll_zoom = config.get("scroll_zoom", True)
         self._hover_column = config.get("hover_column")
         self._highlight = dict(config.get("highlight") or {})
+        self._on_select = dict(config.get("on_select") or {})
         # category_colors is not stored in cache (render-time styling)
 
     def get_state_dependencies(self) -> list:
@@ -1289,6 +1298,8 @@ class Heatmap(BaseComponent):
             args["hoverColumn"] = self._hover_column
         if self._highlight:
             args["highlight"] = self._highlight
+        if self._on_select:
+            args["onSelect"] = self._on_select
 
         # Add category column configuration for categorical coloring mode
         if self._category_column:

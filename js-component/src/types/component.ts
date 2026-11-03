@@ -157,6 +157,8 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   hoverColumn?: string
   /** Identifier → column; the points of each identifier's selected value are ringed */
   highlight?: Record<string, string>
+  /** Selections a click sets besides `interactivity` (null clears one) */
+  onSelect?: Record<string, unknown>
 }
 
 /**
