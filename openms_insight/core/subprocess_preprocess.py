@@ -19,7 +19,6 @@ def _preprocess_worker(
 ) -> None:
     """Worker function that runs in subprocess to do preprocessing."""
     try:
-
         # Set mimalloc to release memory aggressively (in case not inherited)
         os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
 
