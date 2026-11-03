@@ -76,6 +76,7 @@ export default defineComponent({
     return {
       isInitialized: false as boolean,
       dragmode: 'zoom' as string,
+      removingOutline: false,
       selectModifier: 'replace' as 'replace' | 'add' | 'remove',
       dragModes: [
         { value: 'zoom', label: 'Zoom' },
@@ -705,6 +706,8 @@ export default defineComponent({
       })
       plotElement.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
         if (!eventData) return
+        // Plotly reports the removed outline as an empty selection
+        if (this.removingOutline) return
         const event = eventData as unknown as {
           range?: { x?: number[]; y?: number[] }
           lassoPoints?: { x?: number[]; y?: number[] }
@@ -717,10 +720,17 @@ export default defineComponent({
         }
         if (!region) return
         this.streamlitDataStore.sendEvent({ type: 'multi_select', region, mode: this.selectModifier })
-        // Python marks the selection; Plotly's own outline would only show the last region
-        Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+        // Python marks the selection; Plotly's own outline would only show the last region.
+        // Removing it may fire plotly_deselect, which must not clear the selection just sent.
+        this.removingOutline = true
+        Promise.resolve(
+          Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+        ).finally(() => {
+          this.removingOutline = false
+        })
       })
       plotElement.on('plotly_deselect', () => {
+        if (this.removingOutline) return
         this.clearMultiSelect()
       })
     },

@@ -86,6 +86,7 @@ export default defineComponent({
       isInitialized: false as boolean,
       plotInitialized: false as boolean,
       dragmode: 'select' as string,
+      removingOutline: false,
       selectModifier: 'replace' as 'replace' | 'add' | 'remove',
       dragModes: [
         { value: 'select', label: 'box' },
@@ -532,6 +533,8 @@ export default defineComponent({
       }, true)
       element.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
         if (!eventData || !eventData.points) return
+        // Plotly reports the removed outline as an empty selection
+        if (this.removingOutline) return
         const idCol = this.args.idCol
         const rows = new Set<number>()
         for (const point of eventData.points) {
@@ -544,10 +547,17 @@ export default defineComponent({
         } else {
           this.applySelectedRows(picked, this.selectModifier)
         }
-        // The rows are outlined; Plotly's own outline would only show the last region
-        Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+        // The rows are outlined; Plotly's own outline would only show the last region.
+        // Removing it fires plotly_deselect, which must not clear the rows just picked.
+        this.removingOutline = true
+        Promise.resolve(
+          Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+        ).finally(() => {
+          this.removingOutline = false
+        })
       })
       element.on('plotly_deselect', () => {
+        if (this.removingOutline) return
         this.clearSelection()
       })
     },
