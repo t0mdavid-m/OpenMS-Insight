@@ -2107,9 +2107,13 @@ export default defineComponent({
       container.append(header, body)
 
       // Close on the button, a click outside or Escape; each way removes the
-      // Escape listener so it cannot close a later dialog
+      // Escape listeners so they cannot close a later dialog. Escape is heard
+      // on the page and in this component's frame, which keeps the focus
+      // after the row button is clicked.
+      const docs = doc === document ? [doc] : [doc, document]
+      const unlisten = () => docs.forEach((d) => d.removeEventListener('keydown', onKey))
       const closeOverview = () => {
-        doc.removeEventListener('keydown', onKey)
+        unlisten()
         this.closeTeleportDialog()
       }
       const onKey = (event: KeyboardEvent) => {
@@ -2118,9 +2122,9 @@ export default defineComponent({
       close.addEventListener('click', closeOverview)
       const backdrop = this.teleportBackdrop as HTMLElement | null
       backdrop?.addEventListener('click', (event: MouseEvent) => {
-        if (event.target === backdrop) doc.removeEventListener('keydown', onKey)
+        if (event.target === backdrop) unlisten()
       })
-      doc.addEventListener('keydown', onKey)
+      docs.forEach((d) => d.addEventListener('keydown', onKey))
     },
 
     // Teleport functionality for filter dialog
