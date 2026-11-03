@@ -145,6 +145,63 @@ export default defineComponent({
     },
 
     /**
+     * Hover text of each point: its intensity, below the hover column's text
+     * when one is set.
+     */
+    hoverTexts(): string[] {
+      const hoverCol = this.args.hoverColumn
+      if (!hoverCol) {
+        return this.intensityValues.map((v) => v.toExponential(2))
+      }
+      const label = this.colorbarLabel
+      return this.heatmapData.map((row, i) => {
+        const v = this.intensityValues[i]
+        const value =
+          typeof v !== 'number' || !Number.isFinite(v)
+            ? '-'
+            : this.isLogScale
+              ? v.toExponential(2)
+              : String(Number(v.toPrecision(4)))
+        const text = row[hoverCol]
+        const head = text === null || text === undefined || text === '' ? '' : `${text}<br>`
+        return `${head}${label}: ${value}`
+      })
+    },
+
+    /**
+     * Points of the selected value(s) of the `highlight` identifiers, sent by Python.
+     */
+    highlightPoints(): { x: number[]; y: number[] } {
+      const points = this.streamlitDataStore.allDataForDrawing?.highlightPoints as
+        | { x?: number[]; y?: number[] }
+        | undefined
+      return { x: points?.x ?? [], y: points?.y ?? [] }
+    },
+
+    /**
+     * Ring around the highlighted points, drawn over every other trace. It takes
+     * no hover or click, so a click always lands on the point beneath it.
+     */
+    highlightTrace(): Plotly.Data | null {
+      if (!this.args.highlight || this.highlightPoints.x.length === 0) return null
+      return {
+        type: 'scattergl',
+        name: 'selected',
+        x: this.highlightPoints.x,
+        y: this.highlightPoints.y,
+        mode: 'markers',
+        marker: {
+          symbol: 'circle-open',
+          size: 16,
+          color: this.theme?.textColor || 'black',
+          line: { width: 2.5, color: this.theme?.textColor || 'black' },
+        },
+        hoverinfo: 'skip',
+        showlegend: false,
+      } as Plotly.Data
+    },
+
+    /**
      * Get the colorbar label.
      */
     colorbarLabel(): string {
@@ -275,9 +332,11 @@ export default defineComponent({
         return this.getFallbackData()
       }
 
+      const ring = this.highlightTrace
       // Categorical mode: create separate traces per category
       if (this.isCategoricalMode) {
-        return this.buildCategoricalTraces()
+        const traces = this.buildCategoricalTraces()
+        return ring ? [...traces, ring] : traces
       }
 
       // Continuous mode: single trace with colorscale
@@ -293,7 +352,7 @@ export default defineComponent({
         colorbarConfig.tickmode = 'array'
       }
 
-      return [
+      const points: Plotly.Data[] = [
         {
           type: 'scattergl',
           name: 'points',
@@ -307,10 +366,11 @@ export default defineComponent({
             showscale: this.effectiveColorbarVisible,
             colorbar: colorbarConfig,
           },
-          hovertext: this.intensityValues.map((v) => v.toExponential(2)),
+          hovertext: this.hoverTexts,
           hoverinfo: 'x+y+text',
         },
       ]
+      return ring ? [...points, ring] : points
     },
 
     /**
@@ -434,7 +494,8 @@ export default defineComponent({
         // Extract x, y, and hovertext for this category
         const x = indices.map((i) => this.xValues[i])
         const y = indices.map((i) => this.yValues[i])
-        const hovertext = indices.map((i) => this.intensityValues[i].toExponential(2))
+        const texts = this.hoverTexts
+        const hovertext = indices.map((i) => texts[i])
 
         traces.push({
           type: 'scattergl',

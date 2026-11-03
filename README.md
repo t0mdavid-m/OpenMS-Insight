@@ -305,6 +305,24 @@ Heatmap(
 - `log_scale`: Use log10 color mapping (default: True). Set to False for linear.
 - `low_values_on_top`: Prioritize low values during downsampling and display them on top (default: False). Use for scores where lower = better (e.g., e-values, PEP, q-values).
 - `intensity_label`: Custom colorbar label (default: 'Intensity')
+- `hover_column`: Column whose text is shown when hovering a point, above its intensity
+- `highlight`: Mapping of identifier names to column names. The points whose column value is the identifier's selected value are ringed, whichever component selected it (looked up in the full data, so a point the current level dropped is still marked)
+
+**Marking a selection made elsewhere:**
+```python
+Heatmap(
+    cache_id="identifications",
+    data=hits,  # one row per identified spectrum
+    x_column="rt",
+    y_column="mass",
+    intensity_column="score",
+    log_scale=False,
+    intensity_label="Score",
+    hover_column="name",
+    interactivity={"hit": "hit_id"},  # a click selects the hit ...
+    highlight={"hit": "hit_id"},      # ... and the selected hit is ringed,
+)                                     # also when a table selected it
+```
 
 **Linear scale example:**
 ```python

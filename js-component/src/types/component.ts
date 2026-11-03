@@ -153,6 +153,10 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   logScale?: boolean
   /** Custom label for the colorbar (default: "Intensity") */
   intensityLabel?: string
+  /** Column whose text is shown above the intensity when hovering a point */
+  hoverColumn?: string
+  /** Identifier → column; the points of each identifier's selected value are ringed */
+  highlight?: Record<string, string>
 }
 
 /**
