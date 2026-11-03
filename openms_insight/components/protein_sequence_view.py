@@ -170,6 +170,9 @@ class ProteinSequenceView(BaseComponent):
         mass_identifier: str | None = None,
         aa_identifier: str | None = None,
         sequence_identifier: str | None = None,
+        modification_library: list[dict[str, Any]] | None = None,
+        modifications_identifier: str | None = None,
+        modifications: list[str] | None = None,
         settings: dict[str, Any] | None = None,
         title: str | None = "Sequence View",
         annotation_title: str = "Fragment annotation",
@@ -216,6 +219,15 @@ class ProteinSequenceView(BaseComponent):
             sequence_identifier: Identifier the "change sequence" dialog writes a
                 new sequence to. None hides the button. The app reads it and
                 rebuilds the view for the new sequence.
+            modification_library: Fixed modifications offered in the "change
+                sequence" dialog, as dicts with ``id`` (e.g.
+                ``'Carbamidomethyl (C)'``) and ``mass`` (the mass shift); a
+                ``site`` key is shown when given. None shows no picker.
+            modifications_identifier: Identifier the dialog writes the ids of
+                the picked modifications to (a list), before it writes the
+                sequence. Needs ``modification_library``.
+            modifications: Ids preselected in the picker, e.g. the fixed
+                modifications the current sequence carries.
             settings: Initial fragment settings, all keys optional:
                 ``tolerance`` (default 10), ``tolerance_unit`` ('ppm' default,
                 or 'Da'), ``ion_types`` (a b c x y z and the variants a• x•
@@ -248,6 +260,10 @@ class ProteinSequenceView(BaseComponent):
         self._mass_identifier = mass_identifier
         self._aa_identifier = aa_identifier
         self._sequence_identifier = sequence_identifier
+        # Per render, not cached: the picker of the "change sequence" dialog
+        self.set_modification_picker(
+            modification_library, modifications_identifier, modifications
+        )
         check_fragment_settings(settings)
         self._settings = settings
         self._title = title
@@ -449,6 +465,33 @@ class ProteinSequenceView(BaseComponent):
             self._tag = {"startPos": int(start), "endPos": int(end)}
         return self
 
+    def set_modification_picker(
+        self,
+        library: list[dict[str, Any]] | None,
+        identifier: str | None = None,
+        selected: list[str] | None = None,
+    ) -> "ProteinSequenceView":
+        """Offer fixed modifications in the "change sequence" dialog.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``modification_library``, ``modifications_identifier`` and
+        ``modifications`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._modification_library = (
+            [
+                {"id": str(m["id"]), "mass": float(m["mass"]), "site": m.get("site")}
+                for m in library
+            ]
+            if library is not None
+            else None
+        )
+        self._modifications_identifier = identifier
+        self._modifications = list(selected) if selected is not None else []
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -457,6 +500,9 @@ class ProteinSequenceView(BaseComponent):
             "massIdentifier": self._mass_identifier,
             "aaIdentifier": self._aa_identifier,
             "sequenceIdentifier": self._sequence_identifier,
+            "modificationLibrary": self._modification_library,
+            "modificationsIdentifier": self._modifications_identifier,
+            "modifications": self._modifications,
             "settings": self._settings,
             "tag": self._tag,
             "svgFilename": self._svg_filename,

@@ -323,7 +323,7 @@
   </v-snackbar>
 
   <!-- Sequence Input Dialog -->
-  <v-dialog v-model="sequenceDialog" max-width="600" persistent>
+  <v-dialog v-model="sequenceDialog" max-width="600" persistent scrollable>
     <v-card>
       <v-card-title class="text-h6">
         Enter Custom Sequence
@@ -336,7 +336,7 @@
           :placeholder="sequenceInputFocused ? 'Enter amino acid sequence (e.g., MKFLVNVALVF...)' : undefined"
           @update:focused="sequenceInputFocused = $event"
           :error-messages="sequenceInputError"
-          rows="6"
+          :rows="modificationItems.length > 0 ? 3 : 6"
           auto-grow
           counter
           hint="Enter single-letter amino acid codes only"
@@ -346,6 +346,22 @@
             <v-icon>mdi-dna</v-icon>
           </template>
         </v-textarea>
+        <v-autocomplete
+          v-if="modificationItems.length > 0"
+          v-model="customModifications"
+          :items="modificationItems"
+          item-title="title"
+          item-value="value"
+          label="Fixed modifications"
+          placeholder="Search by name or mass, e.g. Carbamidomethyl or 57.02"
+          hint="Each goes on every residue of its kind, or on the terminus"
+          persistent-hint
+          multiple
+          chips
+          closable-chips
+          clearable
+          class="mt-4"
+        ></v-autocomplete>
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
@@ -580,6 +596,8 @@ export default defineComponent({
       regexHighlightedIndices: new Set<number>(),
       // Sequence change dialog properties
       sequenceDialog: false as boolean,
+      // Modification ids picked in the change-sequence dialog
+      customModifications: [] as string[],
       customSequenceInput: '' as string,
       sequenceInputError: '' as string,
       sequenceInputFocused: false,
@@ -830,6 +848,12 @@ export default defineComponent({
       return false
     },
     // Sequence change button computed properties
+    modificationItems(): { title: string; value: string }[] {
+      return (this.args.modificationLibrary ?? []).map((m) => {
+        const sign = m.mass >= 0 ? '+' : ''
+        return { title: `${m.id}  ${sign}${m.mass.toFixed(4)} Da`, value: m.id }
+      })
+    },
     shouldShowSequenceChangeButton(): boolean {
       return !this.showIdentification && !!this.args.sequenceIdentifier
     },
@@ -1587,6 +1611,7 @@ export default defineComponent({
     // Sequence change dialog methods
     openSequenceDialog(): void {
       this.customSequenceInput = ''
+      this.customModifications = [...(this.args.modifications ?? [])]
       this.sequenceInputError = ''
       this.sequenceDialog = true
     },
@@ -1596,6 +1621,13 @@ export default defineComponent({
       this.sequenceInputError = ''
     },
     submitCustomSequence(): void {
+      // The picked modifications first, so the rebuild for the sequence uses them
+      if (this.args.modificationsIdentifier && this.modificationItems.length > 0) {
+        this.selectionStore.updateSelection(
+          this.args.modificationsIdentifier,
+          [...this.customModifications]
+        )
+      }
       // Python rebuilds the view for the new sequence
       if (this.args.sequenceIdentifier) {
         this.selectionStore.updateSelection(
