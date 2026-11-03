@@ -57,7 +57,7 @@
             variant="text"
             size="small"
             icon="mdi-checkbox-multiple-marked-outline"
-            :color="checkboxesShown ? 'primary' : 'default'"
+            :class="['multi-select-toggle', { active: checkboxesShown }]"
             :title="checkboxesShown ? 'Hide the check boxes' : 'Tick rows to select several'"
             @click="toggleCheckboxes"
           />
@@ -2093,8 +2093,9 @@ export default defineComponent({
     },
 
     checkboxHtml(checked: boolean | 'some'): string {
-      const icon = checked === 'some' ? 'mdi-minus-box' : checked ? 'mdi-checkbox-marked' : 'mdi-checkbox-blank-outline'
-      return `<i class="mdi ${icon} multi-select-box${checked ? ' checked' : ''}" aria-label="${checked ? 'Selected' : 'Not selected'}"></i>`
+      const state = checked === 'some' ? ' some' : checked ? ' checked' : ''
+      const mark = checked === 'some' ? 'mdi-minus' : 'mdi-check'
+      return `<span class="multi-select-box${state}" role="checkbox" aria-checked="${checked === 'some' ? 'mixed' : !!checked}"><i class="mdi ${mark}"></i></span>`
     },
 
     isRowChecked(row: Record<string, unknown>): boolean {
@@ -3033,16 +3034,53 @@ export default defineComponent({
 }
 
 .multi-select-box {
+  --ms-accent: #00b894;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid currentColor;
+  border-radius: 5px;
+  opacity: 0.45;
   cursor: pointer;
-  font-size: 18px;
-  opacity: 0.55;
+  vertical-align: middle;
+  transition: background-color 0.12s, border-color 0.12s, opacity 0.12s, transform 0.12s;
 }
-.multi-select-box.checked {
+.multi-select-box .mdi {
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  transform: scale(0);
+  transition: transform 0.12s;
+}
+.tabulator-cell:hover .multi-select-box,
+.multi-select-header:hover .multi-select-box {
+  opacity: 0.8;
+  border-color: var(--ms-accent);
+}
+.multi-select-box.checked,
+.multi-select-box.some {
   opacity: 1;
-  color: #00b894;
+  background: var(--ms-accent);
+  border-color: var(--ms-accent);
+  box-shadow: 0 0 0 3px rgba(0, 184, 148, 0.18);
+}
+.multi-select-box.checked .mdi,
+.multi-select-box.some .mdi {
+  transform: scale(1);
 }
 .tabulator-row.multi-selected {
-  box-shadow: inset 4px 0 0 #00b894;
+  box-shadow: inset 3px 0 0 #00b894;
+  background-image: linear-gradient(90deg, rgba(0, 184, 148, 0.12), rgba(0, 184, 148, 0) 60%);
+}
+.multi-select-toggle {
+  border-radius: 8px !important;
+  transition: background-color 0.15s, color 0.15s;
+}
+.multi-select-toggle.active {
+  color: #00b894 !important;
+  background: rgba(0, 184, 148, 0.14);
 }
 
 /* Dark mode pagination styling */
