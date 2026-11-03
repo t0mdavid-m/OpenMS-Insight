@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+from functools import lru_cache
 from typing import Any
 
 import polars as pl
@@ -102,6 +103,59 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _pyopenms_text(value: Any) -> str:
+    """pyOpenMS returns some names as bytes (latin-1 for the "®" in TMT names)."""
+    if not isinstance(value, bytes):
+        return str(value)
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("latin-1")
+
+
+@lru_cache(maxsize=1)
+def _pyopenms_modifications() -> tuple:
+    try:
+        from pyopenms import ModificationsDB, ResidueModification
+    except ImportError as e:  # pragma: no cover - depends on the environment
+        raise ImportError(
+            "modification_library='pyopenms' needs pyopenms (pip install pyopenms)"
+        ) from e
+    term = ResidueModification.TermSpecificity
+    db = ModificationsDB()
+    entries: dict[str, dict[str, Any]] = {}
+    for i in range(db.getNumberOfModifications()):
+        mod = db.getModification(i)
+        full_id = _pyopenms_text(mod.getFullId())
+        if full_id in entries:
+            continue
+        specificity = mod.getTermSpecificity()
+        if specificity in (term.N_TERM, term.PROTEIN_N_TERM):
+            site = "N-term"
+        elif specificity in (term.C_TERM, term.PROTEIN_C_TERM):
+            site = "C-term"
+        else:
+            site = _pyopenms_text(mod.getOrigin())
+        entries[full_id] = {
+            "id": full_id,
+            "mass": float(mod.getDiffMonoMass()),
+            "site": site,
+        }
+    return tuple(sorted(entries.values(), key=lambda e: (e["id"].lower(), e["site"])))
+
+
+def pyopenms_modification_library() -> list[dict[str, Any]]:
+    """Every modification in pyOpenMS ``ModificationsDB`` (Unimod and more), as
+    the dicts ``modification_library`` takes: ``id`` (the full id, e.g.
+    ``'Carbamidomethyl (C)'``, which ``AASequence.fromString`` and
+    ``ModificationsDB.getModification`` accept), ``mass`` (monoisotopic mass
+    shift) and ``site`` (a residue, ``'N-term'`` or ``'C-term'``).
+
+    Raises ImportError without pyopenms.
+    """
+    return [dict(e) for e in _pyopenms_modifications()]
+
+
 @register_component("protein_sequence_view")
 class ProteinSequenceView(BaseComponent):
     """
@@ -170,7 +224,7 @@ class ProteinSequenceView(BaseComponent):
         mass_identifier: str | None = None,
         aa_identifier: str | None = None,
         sequence_identifier: str | None = None,
-        modification_library: list[dict[str, Any]] | None = None,
+        modification_library: list[dict[str, Any]] | str | None = None,
         modifications_identifier: str | None = None,
         modifications: list[str] | None = None,
         settings: dict[str, Any] | None = None,
@@ -222,7 +276,10 @@ class ProteinSequenceView(BaseComponent):
             modification_library: Fixed modifications offered in the "change
                 sequence" dialog, as dicts with ``id`` (e.g.
                 ``'Carbamidomethyl (C)'``) and ``mass`` (the mass shift); a
-                ``site`` key is shown when given. None shows no picker.
+                ``site`` key is shown when given. ``'pyopenms'`` offers every
+                modification in pyOpenMS ``ModificationsDB`` (see
+                ``pyopenms_modification_library``; needs pyopenms). None shows
+                no picker.
             modifications_identifier: Identifier the dialog writes the ids of
                 the picked modifications to (a list), before it writes the
                 sequence. Needs ``modification_library``.
@@ -467,7 +524,7 @@ class ProteinSequenceView(BaseComponent):
 
     def set_modification_picker(
         self,
-        library: list[dict[str, Any]] | None,
+        library: list[dict[str, Any]] | str | None,
         identifier: str | None = None,
         selected: list[str] | None = None,
     ) -> "ProteinSequenceView":
@@ -480,6 +537,12 @@ class ProteinSequenceView(BaseComponent):
         Returns:
             Self for method chaining.
         """
+        if isinstance(library, str):
+            if library != "pyopenms":
+                raise ValueError(
+                    f"modification_library must be a list, 'pyopenms' or None, not {library!r}"
+                )
+            library = _pyopenms_modifications()
         self._modification_library = (
             [
                 {"id": str(m["id"]), "mass": float(m["mass"]), "site": m.get("site")}
