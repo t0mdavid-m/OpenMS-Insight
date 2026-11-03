@@ -10,6 +10,7 @@ import polars as pl
 
 from ..core.cache import atomic_write, cache_lock
 from ..core.registry import register_component
+from ..core.storage import scan_parquet
 from ..preprocessing.filtering import optimize_for_transfer
 
 # Proton mass for m/z calculations
@@ -610,7 +611,7 @@ class SequenceView:
             self._source_static_charge: int = 1
 
             if sequence_data_path is not None:
-                self._source_sequence_data = pl.scan_parquet(sequence_data_path)
+                self._source_sequence_data = scan_parquet(sequence_data_path)
             elif isinstance(sequence_data, pl.LazyFrame):
                 self._source_sequence_data = sequence_data
             elif isinstance(sequence_data, tuple):
@@ -628,7 +629,7 @@ class SequenceView:
 
             self._source_peaks_data: pl.LazyFrame | None = None
             if peaks_data_path is not None:
-                self._source_peaks_data = pl.scan_parquet(peaks_data_path)
+                self._source_peaks_data = scan_parquet(peaks_data_path)
             elif peaks_data is not None:
                 self._source_peaks_data = peaks_data
 
@@ -658,12 +659,12 @@ class SequenceView:
                 self._source_peaks_data = None
 
                 # Load cached LazyFrames for reading
-                self._cached_sequences = pl.scan_parquet(
+                self._cached_sequences = scan_parquet(
                     self._cache_dir / "sequences.parquet"
                 )
                 peaks_path = self._cache_dir / "peaks.parquet"
                 self._cached_peaks = (
-                    pl.scan_parquet(peaks_path) if peaks_path.exists() else None
+                    scan_parquet(peaks_path) if peaks_path.exists() else None
                 )
 
     def _get_cache_config(self) -> dict[str, Any]:
@@ -764,10 +765,10 @@ class SequenceView:
         self._config = {}
 
         # Load cached LazyFrames
-        self._cached_sequences = pl.scan_parquet(self._cache_dir / "sequences.parquet")
+        self._cached_sequences = scan_parquet(self._cache_dir / "sequences.parquet")
         peaks_path = self._cache_dir / "peaks.parquet"
         self._cached_peaks = (
-            pl.scan_parquet(peaks_path) if peaks_path.exists() else None
+            scan_parquet(peaks_path) if peaks_path.exists() else None
         )
 
     def _create_cache(self) -> None:

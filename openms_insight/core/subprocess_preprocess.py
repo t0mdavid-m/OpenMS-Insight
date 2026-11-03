@@ -25,7 +25,9 @@ def _preprocess_worker(
         os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
 
         # Create component with data - this triggers preprocessing and cache save
-        data = pl.scan_parquet(data_path)
+        from openms_insight.core.storage import scan_parquet
+
+        data = scan_parquet(data_path)
         component_class(data=data, **kwargs)
         # Subprocess exits here, releasing all memory
         error_queue.put(None)
