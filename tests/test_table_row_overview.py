@@ -33,3 +33,19 @@ def test_reaches_args_and_survives_reload(mock_streamlit, temp_cache_dir):
 
     assert args["rowOverview"] is True
     assert "row_overview" not in args
+
+
+def test_title_template_reaches_args_and_survives_reload(mock_streamlit, temp_cache_dir):
+    _table(temp_cache_dir, "titled", row_overview="{name}, id {id}")
+
+    reloaded = Table(cache_id="titled", cache_path=str(temp_cache_dir))
+    args = reloaded._get_component_args()
+
+    assert args["rowOverview"] is True
+    assert args["rowOverviewTitle"] == "{name}, id {id}"
+
+
+def test_true_sends_no_title(mock_streamlit, temp_cache_dir):
+    args = _table(temp_cache_dir, "untitled", row_overview=True)._get_component_args()
+
+    assert "rowOverviewTitle" not in args

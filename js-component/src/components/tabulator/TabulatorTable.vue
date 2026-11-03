@@ -2056,6 +2056,17 @@ export default defineComponent({
       return String(value)
     },
 
+    // Title of the overview: rowOverviewTitle with {field} replaced by the row's values
+    rowOverviewTitle(row: Record<string, unknown>): string {
+      const template = this.args.rowOverviewTitle
+      if (!template) return 'Row details'
+      const columns = (this.args.columnDefinitions || []) as Record<string, any>[]
+      return template.replace(/\{([^{}]+)\}/g, (_match: string, field: string) => {
+        const col = columns.find((c) => c.field === field) || {}
+        return this.rowOverviewValue(col, row[field])
+      })
+    },
+
     openRowOverview(row: Record<string, unknown>): void {
       if (!this.parentDocument) this.initializeTeleport()
       if (!this.parentDocument || this.teleportBackdrop) return
@@ -2076,7 +2087,7 @@ export default defineComponent({
       header.style.cssText = `display: flex; justify-content: space-between; align-items: center;
         padding: 14px 20px; border-bottom: 1px solid ${colors.line};`
       const title = doc.createElement('span')
-      title.textContent = this.args.title ? `${this.args.title}: overview` : 'Overview'
+      title.textContent = this.rowOverviewTitle(row)
       title.style.cssText = 'font-size: 18px; font-weight: 600;'
       const close = doc.createElement('button')
       close.textContent = '×'
