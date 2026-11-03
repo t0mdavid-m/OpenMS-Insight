@@ -81,6 +81,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   resetSort?: boolean
   /** Identifiers whose selection change sorts by initialSort again */
   resetSortOn?: string[]
+  /** Without pagination, stay at the given height instead of shrinking to the rows */
+  fillHeight?: boolean
   /** False hides the column menu */
   columnMenu?: boolean
 }

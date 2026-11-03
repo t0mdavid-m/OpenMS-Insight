@@ -129,6 +129,7 @@ class Table(BaseComponent):
         column_menu: bool = True,
         reset_sort: bool = False,
         reset_sort_on: list[str] | None = None,
+        fill_height: bool = False,
         **kwargs,
     ):
         """
@@ -221,6 +222,9 @@ class Table(BaseComponent):
             reset_sort_on: Identifiers whose selection, when it changes, sorts
                 the rows by ``initial_sort`` again, whether or not the rows
                 change (e.g. a table of the tags of the selected protein).
+            fill_height: Without pagination, keep the table at the height it is
+                rendered with instead of shrinking it to its rows, so tables
+                rendered side by side with one height line up.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -237,6 +241,7 @@ class Table(BaseComponent):
         self._column_menu = bool(column_menu)
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
+        self._fill_height = bool(fill_height)
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -284,6 +289,7 @@ class Table(BaseComponent):
             column_menu=column_menu,
             reset_sort=reset_sort,
             reset_sort_on=reset_sort_on,
+            fill_height=fill_height,
             **kwargs,
         )
 
@@ -342,6 +348,7 @@ class Table(BaseComponent):
             **({"column_menu": False} if not self._column_menu else {}),
             **({"reset_sort": True} if self._reset_sort else {}),
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
+            **({"fill_height": True} if self._fill_height else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -367,6 +374,7 @@ class Table(BaseComponent):
         self._column_menu = config.get("column_menu", True)
         self._reset_sort = config.get("reset_sort", False)
         self._reset_sort_on = config.get("reset_sort_on") or []
+        self._fill_height = config.get("fill_height", False)
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in (
             "toggle_filters",
@@ -378,6 +386,7 @@ class Table(BaseComponent):
             "column_menu",
             "reset_sort",
             "reset_sort_on",
+            "fill_height",
         ):
             self._config.pop(key, None)
 
@@ -1418,6 +1427,8 @@ class Table(BaseComponent):
             args["resetSort"] = True
         if self._reset_sort_on:
             args["resetSortOn"] = self._reset_sort_on
+        if self._fill_height:
+            args["fillHeight"] = True
 
         # Add any extra config options
         args.update(self._config)
@@ -1431,6 +1442,7 @@ class Table(BaseComponent):
             "column_menu",
             "reset_sort",
             "reset_sort_on",
+            "fill_height",
         ):
             args.pop(key, None)
 
