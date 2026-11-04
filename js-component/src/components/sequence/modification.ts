@@ -38,6 +38,51 @@ export const potentialModificationMap: Record<string, KnownModification[]> = {
   Y: ['Phospho'],
 }
 
+/** A modification of an app-provided library (e.g. pyOpenMS ModificationsDB). */
+export interface LibraryModification {
+  id: string
+  mass: number
+  site?: string | null
+}
+
+/** One entry of a residue's modification menu. */
+export interface ModificationOption {
+  title: string
+  value: string
+  mass: number | null
+}
+
+/**
+ * The modification menu of a residue (one-letter code) or terminus
+ * ('N-term' / 'C-term'): None, Custom, then the library's modifications at
+ * that site, or the built-in ones without a library.
+ */
+export function modificationOptions(
+  site: string,
+  library?: LibraryModification[] | null
+): ModificationOption[] {
+  const options: ModificationOption[] = [
+    { title: 'None', value: 'None', mass: null },
+    { title: 'Custom', value: 'Custom', mass: null },
+  ]
+  if (library && library.length > 0) {
+    for (const m of library) {
+      if (m.site === site) {
+        const mass = m.mass.toLocaleString('en-US', {
+          signDisplay: 'always',
+          maximumFractionDigits: 4,
+        })
+        options.push({ title: `${m.id}  ${mass} Da`, value: m.id, mass: m.mass })
+      }
+    }
+    return options
+  }
+  for (const name of potentialModificationMap[site] ?? []) {
+    options.push({ title: name, value: name, mass: modificationMassMap[name] })
+  }
+  return options
+}
+
 export type ExtraFragmentType = 'water loss' | 'ammonium loss' | 'proton loss/addition'
 
 export const extraFragmentTypeObject: Record<

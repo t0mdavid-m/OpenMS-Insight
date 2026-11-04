@@ -518,6 +518,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   modificationsIdentifier?: string | null
   // Ids preselected in the picker
   modifications?: string[] | null
+  // Variable modifications the residue menus offer (instead of the built-in list)
+  variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
   /** Fragment ion types (or fragmentation method) and tolerance to start from */

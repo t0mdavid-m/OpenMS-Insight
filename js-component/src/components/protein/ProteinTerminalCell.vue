@@ -8,14 +8,32 @@ class="d-flex justify-center align-center rounded-lg" :class="proteinTerminalCel
     <div v-if="!determined" class="undetermined">??</div>
     <v-menu
 v-model="menuOpen" activator="parent" location="end" :open-on-click="false" :close-on-content-click="false"
-      width="200px">
+      :width="hasLibrary ? '360px' : '200px'">
       <v-list>
         <v-list-item>
+          <v-autocomplete
+            v-if="hasLibrary"
+            v-model="selectedModification"
+            clearable
+            label="Modification"
+            placeholder="Search by name or mass"
+            density="compact"
+            :items="modificationsForSelect"
+            item-title="title"
+            item-value="value"
+            @update:model-value="updateSelectedModification"
+          />
           <v-select
-v-model="selectedModification" clearable label="Modification" density="compact"
-            :items="modificationsForSelect" @update:modelValue="updateSelectedModification"
-            @click:clear="selectedModification = undefined">
-          </v-select>
+            v-else
+            v-model="selectedModification"
+            clearable
+            label="Modification"
+            density="compact"
+            :items="modificationsForSelect"
+            item-title="title"
+            item-value="value"
+            @update:model-value="updateSelectedModification"
+          />
         </v-list-item>
         <v-list-item v-if="customSelected">
           <v-form @submit.prevent>
@@ -37,7 +55,7 @@ import { useModificationStore } from '@/stores/variable-modification'
 import type { Theme } from 'streamlit-component-lib'
 import type { PropType } from 'vue'
 import { defineComponent } from 'vue'
-import { potentialModificationMap, type KnownModification, modificationMassMap } from '@/components/sequence/modification'
+import { modificationOptions, type ModificationOption } from '@/components/sequence/modification'
 
 export default defineComponent({
   name: 'ProteinTerminalCell',
@@ -77,7 +95,7 @@ export default defineComponent({
   data() {
     return {
       menuOpen: false,
-      selectedModification: undefined as KnownModification | undefined,
+      selectedModification: undefined as string | undefined,
       customSelected: false,
       customModMass: '0' as string,
     }
@@ -96,8 +114,15 @@ export default defineComponent({
       return this.variableModData.variableModifications[this.index] !== undefined
         && this.variableModData.variableModifications[this.index] !== 0
     },
-    modificationsForSelect(): string[] {
-      return ['None', 'Custom', ...this.potentialModifications]
+    modificationsForSelect(): ModificationOption[] {
+      return modificationOptions(this.proteinTerminal, this.variableModData.library)
+    },
+    hasLibrary(): boolean {
+      return this.variableModData.library !== null
+    },
+    // This residue's entry in the store (0 or undefined: unmodified)
+    storedModificationMass(): number | undefined {
+      return this.variableModData.variableModifications[this.index]
     },
     proteinTerminalCellStyles(): Record<string, string> {
       return {
@@ -113,8 +138,15 @@ export default defineComponent({
         'protein-terminal-modified': this.selectedModification !== undefined || this.hasVariableModification,
       }
     },
-    potentialModifications(): KnownModification[] {
-      return potentialModificationMap[this.proteinTerminal] ?? []
+  },
+  watch: {
+    // Removed elsewhere (the list of applied modifications)
+    storedModificationMass(mass: number | undefined) {
+      if (!mass) {
+        this.selectedModification = undefined
+        this.customSelected = false
+        this.customModMass = '0'
+      }
     },
   },
   methods: {
@@ -124,24 +156,32 @@ export default defineComponent({
       }
       this.menuOpen = !this.menuOpen
     },
-    updateSelectedModification(modification: 'None' | 'Custom' | KnownModification) {
-      if (modification === 'None') {
-        this.selectedModification = undefined
-      } else if (modification === 'Custom') {
+    optionMass(value: string | undefined): number {
+      return this.modificationsForSelect.find((o) => o.value === value)?.mass ?? 0
+    },
+    updateSelectedModification(modification: string | null) {
+      if (modification === 'Custom') {
         this.customSelected = true
         return
-      } else {
-        this.selectedModification = modification as KnownModification
       }
+      this.selectedModification =
+        modification === null || modification === 'None' ? undefined : modification
       this.toggleMenuOpen()
       this.customSelected = false
+      this.customModMass = '0'
       this.variableModData.updateVariableModifications(
         this.index,
-        this.selectedModification ? modificationMassMap[this.selectedModification] : 0
+        this.optionMass(this.selectedModification),
+        this.selectedModification
       )
     },
     updateCustomModification() {
-      this.variableModData.updateVariableModifications(this.index, parseFloat(this.customModMass))
+      this.selectedModification = undefined
+      this.variableModData.updateVariableModifications(
+        this.index,
+        parseFloat(this.customModMass),
+        'Custom'
+      )
       this.toggleMenuOpen()
     },
   },
