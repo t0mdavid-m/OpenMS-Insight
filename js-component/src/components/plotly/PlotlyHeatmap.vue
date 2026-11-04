@@ -11,7 +11,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { clearSelectionButton, useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { HeatmapComponentArgs, HeatmapData } from '@/types/component'
 
 export default defineComponent({
@@ -200,24 +200,15 @@ export default defineComponent({
       return { x: points?.x ?? [], y: points?.y ?? [] }
     },
 
-    /** The selected set, drawn as small open diamonds over the points. */
-    multiSelectTrace(): Plotly.Data | null {
-      if (!this.multiSelectEnabled || this.multiSelectPoints.x.length === 0) return null
-      return {
-        type: 'scattergl',
-        name: 'in selection',
-        x: this.multiSelectPoints.x,
-        y: this.multiSelectPoints.y,
-        mode: 'markers',
-        marker: {
-          symbol: 'diamond-open',
-          size: 11,
-          color: '#00B894',
-          line: { width: 2, color: '#00B894' },
-        },
-        hoverinfo: 'skip',
-        showlegend: false,
-      } as Plotly.Data
+    /** The selected set, accent dots with a glow over the points. */
+    /** Points outside the selection fade while something is selected. */
+    baseOpacity(): number {
+      return this.multiSelectEnabled && this.multiSelectPoints.x.length > 0 ? 0.35 : 1
+    },
+
+    multiSelectTraces(): Plotly.Data[] {
+      if (!this.multiSelectEnabled) return []
+      return selectionOverlay(this.multiSelectPoints.x, this.multiSelectPoints.y, 7)
     },
 
     /**
@@ -375,8 +366,7 @@ export default defineComponent({
       }
 
       const ring = this.highlightTrace
-      const marks = this.multiSelectTrace
-      const overlays = [marks, ring].filter((t): t is Plotly.Data => t !== null)
+      const overlays = [...this.multiSelectTraces, ring].filter((t): t is Plotly.Data => t !== null)
       // Categorical mode: create separate traces per category
       if (this.isCategoricalMode) {
         const traces = this.buildCategoricalTraces()
@@ -409,6 +399,7 @@ export default defineComponent({
             reversescale: this.args.reversescale ?? false,
             showscale: this.effectiveColorbarVisible,
             colorbar: colorbarConfig,
+            opacity: this.baseOpacity,
           },
           hovertext: this.hoverTexts,
           hoverinfo: 'x+y+text',
@@ -444,6 +435,7 @@ export default defineComponent({
           : undefined,
         height: this.args.height || 400,
         dragmode: this.dragmode as Plotly.Layout['dragmode'],
+        ...SELECTION_LAYOUT,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           range: this.xRange,
@@ -551,6 +543,7 @@ export default defineComponent({
           marker: {
             color: getColor(category),
             size: 6,
+            opacity: this.baseOpacity,
           },
           hovertext,
           hoverinfo: 'x+y+text',

@@ -116,3 +116,31 @@ export function clearSelectionButton(onClick: () => void): Plotly.ModeBarButton 
     click: () => onClick(),
   }
 }
+
+/** Accent color of a multi-selection, shared by every component. */
+export const SELECTION_ACCENT = '#1e88e5'
+const SELECTION_GLOW = 'rgba(30, 136, 229, 0.25)'
+
+/**
+ * The selected points as accent dots with a white rim and a soft glow,
+ * drawn over the plot.
+ * `size` is the marker size of the points underneath.
+ */
+export function selectionOverlay(x: number[], y: number[], size = 8): Plotly.Data[] {
+  if (x.length === 0) return []
+  const common = { type: 'scattergl', x, y, mode: 'markers', hoverinfo: 'skip', showlegend: false }
+  return [
+    { ...common, name: 'selection glow', marker: { symbol: 'circle', size: size + 7, color: SELECTION_GLOW } },
+    {
+      ...common,
+      name: 'in selection',
+      marker: { symbol: 'circle', size: size + 1, color: SELECTION_ACCENT, line: { width: 1.5, color: '#ffffff' } },
+    },
+  ] as Plotly.Data[]
+}
+
+/** Layout of the box and lasso while dragging and after: the accent, dotted. */
+export const SELECTION_LAYOUT = {
+  newselection: { line: { color: SELECTION_ACCENT, width: 1.5, dash: 'dot' } },
+  activeselection: { fillcolor: 'rgba(30, 136, 229, 0.10)', opacity: 1 },
+}

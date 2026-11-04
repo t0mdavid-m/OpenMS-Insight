@@ -11,7 +11,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { clearSelectionButton, useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionButton, SELECTION_ACCENT, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { ClusteredHeatmapComponentArgs, ClusteredHeatmapData, DendrogramData } from '@/types/component'
 
 // Layout fractions for the 4 regions of the composite figure.
@@ -308,8 +308,8 @@ export default defineComponent({
           shapes.push({
             type: 'rect', xref: 'x', yref: 'y',
             x0: -0.5, x1: nCols - 0.5, y0: start - 0.5, y1: r - 0.5,
-            line: { color: '#00B894', width: 2.5 },
-            fillcolor: 'rgba(0, 184, 148, 0.08)',
+            line: { color: SELECTION_ACCENT, width: 2.5 },
+            fillcolor: 'rgba(30, 136, 229, 0.12)',
           })
           start = -1
         }
@@ -335,7 +335,7 @@ export default defineComponent({
         // same fixed margin.
         margin: { l: 40, r: 200, t: this.args.title ? 60 : 20, b: 80 },
         ...(this.multiSelectEnabled
-          ? { dragmode: this.dragmode, shapes: this.selectionShapes, hovermode: 'closest' }
+          ? { dragmode: this.dragmode, shapes: this.selectionShapes, hovermode: 'closest', ...SELECTION_LAYOUT }
           : {}),
         xaxis: {
           domain: [heatmapLeft, this.heatmapRight],

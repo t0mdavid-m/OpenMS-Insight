@@ -52,18 +52,18 @@
             @click="toggleGoTo"
             color="default"
           />
+        </div>
+        <div class="table-toolbar-title">
+          <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
           <v-btn
             v-if="multiSelectEnabled"
             variant="text"
-            size="small"
+            size="x-small"
             icon="mdi-checkbox-multiple-marked-outline"
             :class="['multi-select-toggle', { active: checkboxesShown }]"
             :title="checkboxesShown ? 'Hide the check boxes' : 'Tick rows to select several'"
             @click="toggleCheckboxes"
           />
-        </div>
-        <div class="table-toolbar-title">
-          <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
         </div>
         <div class="table-toolbar-toggles">
           <v-checkbox
@@ -2943,7 +2943,10 @@ export default defineComponent({
 
 .table-toolbar-title {
   min-width: 0;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
 }
 
 .table-toolbar-title h4 {
@@ -3033,8 +3036,12 @@ export default defineComponent({
   margin-right: 8px;
 }
 
+.tabulator,
+.table-toolbar {
+  --ms-accent: #1e88e5;
+  --ms-accent-soft: rgba(30, 136, 229, 0.16);
+}
 .multi-select-box {
-  --ms-accent: #00b894;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3064,23 +3071,23 @@ export default defineComponent({
   opacity: 1;
   background: var(--ms-accent);
   border-color: var(--ms-accent);
-  box-shadow: 0 0 0 3px rgba(0, 184, 148, 0.18);
+  box-shadow: 0 0 0 3px var(--ms-accent-soft);
 }
 .multi-select-box.checked .mdi,
 .multi-select-box.some .mdi {
   transform: scale(1);
 }
 .tabulator-row.multi-selected {
-  box-shadow: inset 3px 0 0 #00b894;
-  background-image: linear-gradient(90deg, rgba(0, 184, 148, 0.12), rgba(0, 184, 148, 0) 60%);
+  box-shadow: inset 3px 0 0 var(--ms-accent);
+  background-image: linear-gradient(90deg, var(--ms-accent-soft), transparent 60%);
 }
 .multi-select-toggle {
   border-radius: 8px !important;
   transition: background-color 0.15s, color 0.15s;
 }
 .multi-select-toggle.active {
-  color: #00b894 !important;
-  background: rgba(0, 184, 148, 0.14);
+  color: var(--ms-accent) !important;
+  background: var(--ms-accent-soft);
 }
 
 /* Dark mode pagination styling */

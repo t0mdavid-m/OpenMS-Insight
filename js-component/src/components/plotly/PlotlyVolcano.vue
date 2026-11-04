@@ -29,7 +29,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { clearSelectionButton, useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 
 /**
@@ -276,6 +276,20 @@ export default defineComponent({
         })
       }
 
+      if (this.multiSelectEnabled && this.selectedRowIndices.size > 0) {
+        const x: number[] = []
+        const y: number[] = []
+        for (const group of [ns, down, up]) {
+          group.indices.forEach((rowIndex, i) => {
+            if (this.selectedRowIndices.has(rowIndex)) {
+              x.push(group.x[i])
+              y.push(group.y[i])
+            }
+          })
+        }
+        traces.push(...selectionOverlay(x, y, 8))
+      }
+
       return traces
     },
 
@@ -415,6 +429,7 @@ export default defineComponent({
         },
         height: this.args.height || 400,
         dragmode: this.dragmode as Plotly.Layout['dragmode'],
+        ...SELECTION_LAYOUT,
         xaxis: {
           title: { text: this.args.xLabel || 'log2 Fold Change' },
           zeroline: true,
@@ -527,8 +542,8 @@ export default defineComponent({
       })
       return {
         selectedpoints: points,
-        selected: { marker: { opacity: 1, size: 10 } },
-        unselected: { marker: { opacity: 0.2 } },
+        selected: { marker: { opacity: 1 } },
+        unselected: { marker: { opacity: 0.15 } },
       }
     },
 
