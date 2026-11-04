@@ -1,5 +1,9 @@
 <template>
-  <div :id="id" class="heatmap-container"></div>
+  <div>
+    <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
+         box or lasso selection ends) measures this element -->
+    <div :id="id" class="heatmap-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -7,6 +11,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { HeatmapComponentArgs, HeatmapData } from '@/types/component'
 
 export default defineComponent({
@@ -38,14 +43,22 @@ export default defineComponent({
       onSelect: computed(() => props.args.onSelect),
     })
 
+    const multi = useMultiSelect(computed(() => props.args.multiSelect))
+
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      multiSelectEnabled: multi.enabled,
+      selectedCount: multi.selectedCount,
+      clearMultiSelect: multi.clear,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
+      dragmode: 'zoom' as string,
+      removingOutline: false,
+      selectModifier: 'replace' as 'replace' | 'add' | 'remove',
       zoomRange: undefined as { xRange: number[]; yRange: number[] } | undefined,
       colorbarVisible: true,
       userOverrideColorbar: false,
@@ -177,6 +190,25 @@ export default defineComponent({
         | { x?: number[]; y?: number[] }
         | undefined
       return { x: points?.x ?? [], y: points?.y ?? [] }
+    },
+
+    /** Points of the selected set (multi_select), sent by Python. */
+    multiSelectPoints(): { x: number[]; y: number[] } {
+      const points = this.streamlitDataStore.allDataForDrawing?.multiSelectPoints as
+        | { x?: number[]; y?: number[] }
+        | undefined
+      return { x: points?.x ?? [], y: points?.y ?? [] }
+    },
+
+    /** The selected set, accent dots with a glow over the points. */
+    /** Points outside the selection fade while something is selected. */
+    baseOpacity(): number {
+      return this.multiSelectEnabled && this.multiSelectPoints.x.length > 0 ? 0.35 : 1
+    },
+
+    multiSelectTraces(): Plotly.Data[] {
+      if (!this.multiSelectEnabled) return []
+      return selectionOverlay(this.multiSelectPoints.x, this.multiSelectPoints.y, 7)
     },
 
     /**
@@ -334,10 +366,11 @@ export default defineComponent({
       }
 
       const ring = this.highlightTrace
+      const overlays = [...this.multiSelectTraces, ring].filter((t): t is Plotly.Data => t !== null)
       // Categorical mode: create separate traces per category
       if (this.isCategoricalMode) {
         const traces = this.buildCategoricalTraces()
-        return ring ? [...traces, ring] : traces
+        return [...traces, ...overlays]
       }
 
       // Continuous mode: single trace with colorscale
@@ -366,12 +399,13 @@ export default defineComponent({
             reversescale: this.args.reversescale ?? false,
             showscale: this.effectiveColorbarVisible,
             colorbar: colorbarConfig,
+            opacity: this.baseOpacity,
           },
           hovertext: this.hoverTexts,
           hoverinfo: 'x+y+text',
         },
       ]
-      return ring ? [...points, ring] : points
+      return [...points, ...overlays]
     },
 
     /**
@@ -400,6 +434,8 @@ export default defineComponent({
             }
           : undefined,
         height: this.args.height || 400,
+        dragmode: this.dragmode as Plotly.Layout['dragmode'],
+        ...SELECTION_LAYOUT,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           range: this.xRange,
@@ -507,6 +543,7 @@ export default defineComponent({
           marker: {
             color: getColor(category),
             size: 6,
+            opacity: this.baseOpacity,
           },
           hovertext,
           hoverinfo: 'x+y+text',
@@ -571,7 +608,9 @@ export default defineComponent({
           this.toggleColorbar()
         },
       }
-      return this.getPlotConfig([colorbarToggleButton])
+      const buttons = [colorbarToggleButton]
+      if (this.multiSelectEnabled) buttons.push(clearSelectionButton(() => this.clearMultiSelect()))
+      return this.getPlotConfig(buttons)
     },
 
     setupPlotEventHandlers() {
@@ -613,6 +652,51 @@ export default defineComponent({
 
       // Handle click events via composable
       this.setupClickHandler()
+      this.setupMultiSelectHandlers(plotElement)
+    },
+
+    /**
+     * A box or lasso drawn in select mode is sent to Python, which selects the
+     * points in it from the full data (the plot shows only a level of it).
+     */
+    setupMultiSelectHandlers(plotElement: Plotly.PlotlyHTMLElement) {
+      if (!this.multiSelectEnabled) return
+      plotElement.addEventListener('mousedown', (e: MouseEvent) => {
+        this.selectModifier = e.shiftKey ? 'add' : 'replace'
+      }, true)
+      plotElement.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        const mode = (eventData as Record<string, unknown>).dragmode
+        if (typeof mode === 'string') this.dragmode = mode
+      })
+      plotElement.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
+        if (!eventData) return
+        // Plotly reports the removed outline as an empty selection
+        if (this.removingOutline) return
+        const event = eventData as unknown as {
+          range?: { x?: number[]; y?: number[] }
+          lassoPoints?: { x?: number[]; y?: number[] }
+        }
+        let region: Record<string, unknown> | null = null
+        if (event.lassoPoints?.x && event.lassoPoints?.y) {
+          region = { type: 'lasso', x: event.lassoPoints.x, y: event.lassoPoints.y }
+        } else if (event.range?.x && event.range?.y) {
+          region = { type: 'box', x: event.range.x, y: event.range.y }
+        }
+        if (!region) return
+        this.streamlitDataStore.sendEvent({ type: 'multi_select', region, mode: this.selectModifier })
+        // Python marks the selection; Plotly's own outline would only show the last region.
+        // Removing it may fire plotly_deselect, which must not clear the selection just sent.
+        this.removingOutline = true
+        Promise.resolve(
+          Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+        ).finally(() => {
+          this.removingOutline = false
+        })
+      })
+      plotElement.on('plotly_deselect', () => {
+        if (this.removingOutline) return
+        this.clearMultiSelect()
+      })
     },
 
     /**

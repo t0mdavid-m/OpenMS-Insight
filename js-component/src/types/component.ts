@@ -10,6 +10,11 @@ import type { FragmentSettings } from './protein-sequence-data'
  */
 export interface BaseComponentArgs {
   componentType: string
+  /**
+   * Selecting several entries at once: identifier -> column. The identifier
+   * holds the sorted distinct values of the column over the selected entries.
+   */
+  multiSelect?: Record<string, string>
 }
 
 /**
@@ -244,6 +249,9 @@ export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
   /** Max number of labels to show on significant points */
   maxLabels?: number
   interactivity?: InteractivityMapping
+  /** Labels of the selection buttons: changed, up, down, clear */
+  selectionPresets?: boolean
+  presetLabels?: Record<string, string>
   height?: number
 }
 
