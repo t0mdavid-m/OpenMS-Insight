@@ -81,8 +81,15 @@ def go_term_table(res_go, fg_set, bg_set, go_type, adjust=True):
         Empty when no foreground protein has a term of the category.
     """
     columns = [
-        "GO_Term", "Count", "Background", "GeneRatio", "BgRatio",
-        "FoldEnrichment", "p_value", "-log10(p)", "Proteins",
+        "GO_Term",
+        "Count",
+        "Background",
+        "GeneRatio",
+        "BgRatio",
+        "FoldEnrichment",
+        "p_value",
+        "-log10(p)",
+        "Proteins",
     ]
     if adjust:
         columns.insert(columns.index("Proteins"), "p_adj")

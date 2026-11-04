@@ -23,7 +23,6 @@ from openms_insight.core.multi_select import (
 )
 from openms_insight.core.state import _render_state_manager
 
-
 # -- helpers -----------------------------------------------------------------
 
 
@@ -62,10 +61,17 @@ def test_region_mask_box_and_lasso():
 
 
 def test_values_in_region():
-    frame = pl.DataFrame({"x": [0.0, 1.0, 2.0], "y": [0.0, 1.0, 2.0], "acc": ["A", "B", "B"]})
+    frame = pl.DataFrame(
+        {"x": [0.0, 1.0, 2.0], "y": [0.0, 1.0, 2.0], "acc": ["A", "B", "B"]}
+    )
     region = {"type": "box", "x": [0.5, 2.5], "y": [0.5, 2.5]}
     assert values_in_region(frame, "x", "y", "acc", region) == ["B"]
-    assert values_in_region(frame.lazy(), "x", "y", "acc", {"type": "box", "x": [5, 6], "y": [5, 6]}) is None
+    assert (
+        values_in_region(
+            frame.lazy(), "x", "y", "acc", {"type": "box", "x": [5, 6], "y": [5, 6]}
+        )
+        is None
+    )
 
 
 # -- VolcanoPlot ---------------------------------------------------------------
@@ -84,10 +90,16 @@ def volcano_data() -> pl.LazyFrame:
     )
 
 
-def test_volcano_carries_multi_select_column(mock_streamlit, temp_cache_dir, volcano_data):
+def test_volcano_carries_multi_select_column(
+    mock_streamlit, temp_cache_dir, volcano_data
+):
     plot = VolcanoPlot(
-        cache_id="volcano_ms", data=volcano_data, cache_path=str(temp_cache_dir),
-        log2fc_column="log2FC", pvalue_column="padj", label_column="name",
+        cache_id="volcano_ms",
+        data=volcano_data,
+        cache_path=str(temp_cache_dir),
+        log2fc_column="log2FC",
+        pvalue_column="padj",
+        label_column="name",
         multi_select={"proteins": "accession"},
         preset_labels={"up": "Higher in B"},
     )
@@ -107,8 +119,11 @@ def test_volcano_without_multi_select_keeps_its_cache_config(
     mock_streamlit, temp_cache_dir, volcano_data
 ):
     plot = VolcanoPlot(
-        cache_id="volcano_plain", data=volcano_data, cache_path=str(temp_cache_dir),
-        log2fc_column="log2FC", pvalue_column="padj",
+        cache_id="volcano_plain",
+        data=volcano_data,
+        cache_path=str(temp_cache_dir),
+        log2fc_column="log2FC",
+        pvalue_column="padj",
     )
     assert "multi_select" not in plot._get_cache_config()
     assert "multiSelect" not in plot._get_component_args()
@@ -133,9 +148,14 @@ def hits() -> pl.LazyFrame:
 
 def _heatmap(data, cache_dir, cache_id, **kwargs):
     return Heatmap(
-        cache_id=cache_id, data=data, cache_path=str(cache_dir),
-        x_column="rt", y_column="mass", intensity_column="score",
-        min_points=1000, **kwargs,
+        cache_id=cache_id,
+        data=data,
+        cache_path=str(cache_dir),
+        x_column="rt",
+        y_column="mass",
+        intensity_column="score",
+        min_points=1000,
+        **kwargs,
     )
 
 
@@ -148,13 +168,18 @@ def _render_with(state_manager, fn):
 
 
 def test_heatmap_box_selects_from_full_data(mock_streamlit, temp_cache_dir, hits):
-    plot = _heatmap(hits, temp_cache_dir, "ms_box", multi_select={"proteins": "accession"})
+    plot = _heatmap(
+        hits, temp_cache_dir, "ms_box", multi_select={"proteins": "accession"}
+    )
     state_manager = StateManager()
     region = {"type": "box", "x": [0.0, 10.0], "y": [0.0, 1e9]}
 
-    changed = _render_with(state_manager, lambda: plot._handle_event(
-        {"type": "multi_select", "region": region, "mode": "replace", "nonce": "1"}
-    ))
+    changed = _render_with(
+        state_manager,
+        lambda: plot._handle_event(
+            {"type": "multi_select", "region": region, "mode": "replace", "nonce": "1"}
+        ),
+    )
 
     full = hits.filter(pl.col("rt") <= 10.0).collect()
     expected = sorted(full["accession"].unique().to_list())
@@ -165,47 +190,73 @@ def test_heatmap_box_selects_from_full_data(mock_streamlit, temp_cache_dir, hits
     assert len(shown[shown["rt"] <= 10.0]) < len(full)
 
     # Every point of the selected proteins is marked
-    marks = plot._prepare_vue_data(state_manager.get_all_selections())["multiSelectPoints"]
-    assert len(marks["x"]) == hits.filter(pl.col("accession").is_in(expected)).collect().height
+    marks = plot._prepare_vue_data(state_manager.get_all_selections())[
+        "multiSelectPoints"
+    ]
+    assert (
+        len(marks["x"])
+        == hits.filter(pl.col("accession").is_in(expected)).collect().height
+    )
 
 
 def test_heatmap_shift_adds_and_alt_removes(mock_streamlit, temp_cache_dir, hits):
-    plot = _heatmap(hits, temp_cache_dir, "ms_modes", multi_select={"proteins": "accession"})
+    plot = _heatmap(
+        hits, temp_cache_dir, "ms_modes", multi_select={"proteins": "accession"}
+    )
     state_manager = StateManager()
     state_manager.set_selection("proteins", ["P9999"])
     first = {"type": "box", "x": [0.0, 0.5], "y": [0.0, 1e9]}  # rt 0 only
 
-    _render_with(state_manager, lambda: plot._handle_event(
-        {"type": "multi_select", "region": first, "mode": "add", "nonce": "1"}
-    ))
-    at_zero = sorted(hits.filter(pl.col("rt") == 0.0).collect()["accession"].unique().to_list())
+    _render_with(
+        state_manager,
+        lambda: plot._handle_event(
+            {"type": "multi_select", "region": first, "mode": "add", "nonce": "1"}
+        ),
+    )
+    at_zero = sorted(
+        hits.filter(pl.col("rt") == 0.0).collect()["accession"].unique().to_list()
+    )
     assert state_manager.get_selection("proteins") == sorted(at_zero + ["P9999"])
 
-    _render_with(state_manager, lambda: plot._handle_event(
-        {"type": "multi_select", "region": first, "mode": "remove", "nonce": "2"}
-    ))
+    _render_with(
+        state_manager,
+        lambda: plot._handle_event(
+            {"type": "multi_select", "region": first, "mode": "remove", "nonce": "2"}
+        ),
+    )
     assert state_manager.get_selection("proteins") == ["P9999"]
 
-    _render_with(state_manager, lambda: plot._handle_event(
-        {"type": "multi_select", "clear": True, "nonce": "3"}
-    ))
+    _render_with(
+        state_manager,
+        lambda: plot._handle_event(
+            {"type": "multi_select", "clear": True, "nonce": "3"}
+        ),
+    )
     assert state_manager.get_selection("proteins") is None
 
 
 def test_heatmap_selection_respects_filters(mock_streamlit, temp_cache_dir, hits):
     plot = _heatmap(
-        hits, temp_cache_dir, "ms_filtered",
-        filters={"sample": "sample"}, multi_select={"proteins": "accession"},
+        hits,
+        temp_cache_dir,
+        "ms_filtered",
+        filters={"sample": "sample"},
+        multi_select={"proteins": "accession"},
     )
     state_manager = StateManager()
     state_manager.set_selection("sample", "A")
     region = {"type": "box", "x": [0.0, 3.0], "y": [0.0, 1e9]}
-    _render_with(state_manager, lambda: plot._handle_event(
-        {"type": "multi_select", "region": region, "nonce": "1"}
-    ))
+    _render_with(
+        state_manager,
+        lambda: plot._handle_event(
+            {"type": "multi_select", "region": region, "nonce": "1"}
+        ),
+    )
     expected = sorted(
         hits.filter((pl.col("rt") <= 3.0) & (pl.col("sample") == "A"))
-        .collect()["accession"].unique().to_list()
+        .collect()["accession"]
+        .unique()
+        .to_list()
     )
     assert state_manager.get_selection("proteins") == expected
 
@@ -217,8 +268,12 @@ def test_heatmap_ignores_other_events(mock_streamlit, temp_cache_dir, hits):
     assert "multiSelect" not in plain._get_component_args()
 
 
-def test_heatmap_multi_select_is_a_state_dependency(mock_streamlit, temp_cache_dir, hits):
-    plot = _heatmap(hits, temp_cache_dir, "ms_deps", multi_select={"proteins": "accession"})
+def test_heatmap_multi_select_is_a_state_dependency(
+    mock_streamlit, temp_cache_dir, hits
+):
+    plot = _heatmap(
+        hits, temp_cache_dir, "ms_deps", multi_select={"proteins": "accession"}
+    )
     assert "proteins" in plot.get_state_dependencies()
     again = Heatmap(cache_id="ms_deps", cache_path=str(temp_cache_dir))
     assert again._get_component_args()["multiSelect"] == {"proteins": "accession"}
@@ -241,7 +296,10 @@ def proteins() -> pl.LazyFrame:
 
 def test_table_sends_multi_select_column(mock_streamlit, temp_cache_dir, proteins):
     table = Table(
-        cache_id="tbl_ms", data=proteins, cache_path=str(temp_cache_dir), index_field="id",
+        cache_id="tbl_ms",
+        data=proteins,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
         column_definitions=[{"field": "score", "title": "Score"}],
         multi_select={"proteins": "accession"},
     )
@@ -252,19 +310,38 @@ def test_table_sends_multi_select_column(mock_streamlit, temp_cache_dir, protein
     assert "multi_select" not in again._get_component_args()
 
 
-def test_table_select_all_rows_passing_filters(mock_streamlit, temp_cache_dir, proteins):
+def test_table_select_all_rows_passing_filters(
+    mock_streamlit, temp_cache_dir, proteins
+):
     table = Table(
-        cache_id="tbl_all", data=proteins, cache_path=str(temp_cache_dir), index_field="id",
-        filters={"group": "group"}, multi_select={"proteins": "accession"},
+        cache_id="tbl_all",
+        data=proteins,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
+        filters={"group": "group"},
+        multi_select={"proteins": "accession"},
     )
     state_manager = StateManager()
     state_manager.set_selection("group", "b")
     state_manager.set_selection("proteins", ["P0"])
 
-    _render_with(state_manager, lambda: table._handle_event({"type": "multi_select_all", "mode": "add"}))
-    assert state_manager.get_selection("proteins") == ["P0", "P5", "P6", "P7", "P8", "P9"]
+    _render_with(
+        state_manager,
+        lambda: table._handle_event({"type": "multi_select_all", "mode": "add"}),
+    )
+    assert state_manager.get_selection("proteins") == [
+        "P0",
+        "P5",
+        "P6",
+        "P7",
+        "P8",
+        "P9",
+    ]
 
-    _render_with(state_manager, lambda: table._handle_event({"type": "multi_select_all", "mode": "remove"}))
+    _render_with(
+        state_manager,
+        lambda: table._handle_event({"type": "multi_select_all", "mode": "remove"}),
+    )
     assert state_manager.get_selection("proteins") == ["P0"]
 
 
@@ -276,15 +353,23 @@ def test_clustered_heatmap_multi_select_rows(mock_streamlit, temp_cache_dir):
         {"Proteoform": ["a", "b", "c"], "s1": [1.0, 2.0, 3.0], "s2": [3.0, 1.0, 2.0]}
     )
     plot = ClusteredHeatmap(
-        cache_id="ch_ms", data=data, id_col="Proteoform", cache_path=str(temp_cache_dir),
-        row_cluster=False, col_cluster=False, multi_select={"forms": "Proteoform"},
+        cache_id="ch_ms",
+        data=data,
+        id_col="Proteoform",
+        cache_path=str(temp_cache_dir),
+        row_cluster=False,
+        col_cluster=False,
+        multi_select={"forms": "Proteoform"},
     )
     assert plot._get_component_args()["multiSelect"] == {"forms": "Proteoform"}
     again = ClusteredHeatmap(cache_id="ch_ms", cache_path=str(temp_cache_dir))
     assert again._get_component_args()["multiSelect"] == {"forms": "Proteoform"}
     with pytest.raises(ValueError):
         ClusteredHeatmap(
-            cache_id="ch_bad", data=data, id_col="Proteoform", cache_path=str(temp_cache_dir),
+            cache_id="ch_bad",
+            data=data,
+            id_col="Proteoform",
+            cache_path=str(temp_cache_dir),
             multi_select={"forms": "s1"},
         )
 
@@ -302,13 +387,18 @@ def test_filters_accept_a_multi_selection(mock_streamlit, temp_cache_dir, protei
     # Whole floats from the browser match an integer column
     frame, _ = filter_and_collect_cached(proteins, {"ids": "id"}, {"ids": [1.0, 3.0]})
     assert frame["id"].tolist() == [1, 3]
-    frame, _ = filter_and_collect_cached(proteins, {"proteins": "accession"}, {"proteins": None})
+    frame, _ = filter_and_collect_cached(
+        proteins, {"proteins": "accession"}, {"proteins": None}
+    )
     assert len(frame) == 0
 
 
 def test_table_filtered_by_a_multi_selection(mock_streamlit, temp_cache_dir, proteins):
     table = Table(
-        cache_id="tbl_filtered_ms", data=proteins, cache_path=str(temp_cache_dir), index_field="id",
+        cache_id="tbl_filtered_ms",
+        data=proteins,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
         filters={"proteins": "accession"},
     )
     payload = table._prepare_vue_data({"proteins": ["P1", "P4", "P9"]})
@@ -316,22 +406,36 @@ def test_table_filtered_by_a_multi_selection(mock_streamlit, temp_cache_dir, pro
 
 
 def test_heatmap_filtered_by_a_multi_selection(mock_streamlit, temp_cache_dir, hits):
-    plot = _heatmap(hits, temp_cache_dir, "ms_filter_set", filters={"proteins": "accession"})
+    plot = _heatmap(
+        hits, temp_cache_dir, "ms_filter_set", filters={"proteins": "accession"}
+    )
     shown = plot._prepare_vue_data({"proteins": ["P0001", "P0002"]})["heatmapData"]
     expected = hits.filter(pl.col("accession").is_in(["P0001", "P0002"])).collect()
     assert 0 < len(shown) <= expected.height
-    assert set(zip(shown["rt"], shown["mass"])) <= set(zip(expected["rt"], expected["mass"]))
+    assert set(zip(shown["rt"], shown["mass"], strict=True)) <= set(
+        zip(expected["rt"], expected["mass"], strict=True)
+    )
 
 
-def test_volcano_selection_presets_are_optional(mock_streamlit, temp_cache_dir, volcano_data):
+def test_volcano_selection_presets_are_optional(
+    mock_streamlit, temp_cache_dir, volcano_data
+):
     plain = VolcanoPlot(
-        cache_id="volcano_no_presets", data=volcano_data, cache_path=str(temp_cache_dir),
-        log2fc_column="log2FC", pvalue_column="padj", multi_select={"proteins": "accession"},
+        cache_id="volcano_no_presets",
+        data=volcano_data,
+        cache_path=str(temp_cache_dir),
+        log2fc_column="log2FC",
+        pvalue_column="padj",
+        multi_select={"proteins": "accession"},
     )
     assert "selectionPresets" not in plain._get_component_args()
     with_presets = VolcanoPlot(
-        cache_id="volcano_presets", data=volcano_data, cache_path=str(temp_cache_dir),
-        log2fc_column="log2FC", pvalue_column="padj", multi_select={"proteins": "accession"},
+        cache_id="volcano_presets",
+        data=volcano_data,
+        cache_path=str(temp_cache_dir),
+        log2fc_column="log2FC",
+        pvalue_column="padj",
+        multi_select={"proteins": "accession"},
         selection_presets=True,
     )
     assert with_presets._get_component_args()["selectionPresets"] is True

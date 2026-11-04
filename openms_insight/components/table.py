@@ -7,7 +7,12 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
-from ..core.multi_select import combine, match_selection, normalize_multi_select, selection_values
+from ..core.multi_select import (
+    combine,
+    match_selection,
+    normalize_multi_select,
+    selection_values,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import compute_dataframe_hash
 
@@ -56,6 +61,26 @@ NUMERIC_DTYPES = (
     pl.UInt64,
     pl.Float32,
     pl.Float64,
+)
+
+# Table options sent to Vue under their own (camelCase) names, so they are kept
+# out of the extra options passed through as they are
+_VUE_OPTION_KEYS = (
+    "toggle_filters",
+    "range_filters",
+    "on_select",
+    "reclick",
+    "default_row_selects",
+    "scroll_position",
+    "column_menu",
+    "reset_sort",
+    "reset_sort_on",
+    "search",
+    "search_placeholder",
+    "numeric_filters",
+    "fill_height",
+    "row_overview",
+    "multi_select",
 )
 
 # Session state key for tracking last rendered selection per table component
@@ -133,6 +158,9 @@ class Table(BaseComponent):
         fill_height: bool = False,
         row_overview: bool | str = False,
         multi_select: dict[str, str] | None = None,
+        search: bool | list[str] = False,
+        search_placeholder: str | None = None,
+        numeric_filters: dict[str, dict[str, Any]] | None = None,
         **kwargs,
     ):
         """
@@ -241,6 +269,26 @@ class Table(BaseComponent):
                 passing the table's filters, on all pages). The identifier holds
                 the sorted distinct values of the column over the checked rows,
                 or None. Independent of the clicked row (``interactivity``).
+            search: Show a search box in the toolbar. True searches the text
+                columns of ``column_definitions``; a list of column names
+                searches those columns instead (they need not be shown, e.g. a
+                sequence in a second notation). The rows kept contain every
+                word of the search in one of the columns, ignoring case; the
+                words are matched literally, not as patterns. The search runs
+                on the server, over every row, not just the current page.
+            search_placeholder: Placeholder text of the search box.
+            numeric_filters: Numeric columns offered in the filter dialog as a
+                one-sided threshold that is quick to set, keyed by column. Each
+                value is a dict:
+                - op: "<=" (keep rows at or below the value) or ">=" (at or
+                  above). The viewer can still switch to the other side or to
+                  a range.
+                - suggestions: Optional values offered as one-click choices,
+                  each a number or {"value": number, "label": str}.
+                - default: Optional threshold applied until the viewer changes
+                  the table's filters.
+                Example: {'q_value': {'op': '<=', 'suggestions': [0.01, 0.001]},
+                'peptides': {'op': '>=', 'suggestions': [2, 3], 'default': 2}}
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -266,6 +314,12 @@ class Table(BaseComponent):
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
+        if isinstance(search, (list, tuple)):
+            self._search: bool | list[str] = [str(c) for c in search]
+        else:
+            self._search = bool(search)
+        self._search_placeholder = search_placeholder
+        self._numeric_filters = self._normalize_numeric_filters(numeric_filters)
         self._range_filters = {k: list(v) for k, v in (range_filters or {}).items()}
         self._on_select = dict(on_select) if on_select else {}
         if reclick not in ("keep", "unhighlight", "deselect"):
@@ -314,6 +368,9 @@ class Table(BaseComponent):
             fill_height=fill_height,
             row_overview=row_overview,
             multi_select=multi_select,
+            search=search,
+            search_placeholder=search_placeholder,
+            numeric_filters=numeric_filters,
             **kwargs,
         )
         self._config.pop("multi_select", None)
@@ -336,6 +393,41 @@ class Table(BaseComponent):
                     **({"color": entry["color"]} if entry.get("color") else {}),
                 }
             )
+        return normalized
+
+    @staticmethod
+    def _normalize_numeric_filters(
+        numeric_filters: dict[str, dict[str, Any]] | None,
+    ) -> dict[str, dict[str, Any]]:
+        """Validate numeric filter entries and fill in their defaults."""
+        normalized: dict[str, dict[str, Any]] = {}
+        for column, entry in (numeric_filters or {}).items():
+            entry = dict(entry or {})
+            op = entry.get("op", "<=")
+            if op not in ("<=", ">="):
+                raise ValueError(
+                    f"numeric_filters[{column!r}]['op'] must be '<=' or '>=', not {op!r}"
+                )
+            suggestions = []
+            for item in entry.get("suggestions") or []:
+                if isinstance(item, dict):
+                    if "value" not in item:
+                        raise ValueError(
+                            f"numeric_filters[{column!r}] suggestion needs a 'value': {item}"
+                        )
+                    value = float(item["value"])
+                    label = str(item.get("label") or "")
+                else:
+                    value, label = float(item), ""
+                suggestions.append(
+                    {"value": value, **({"label": label} if label else {})}
+                )
+            default = entry.get("default")
+            normalized[str(column)] = {
+                "op": op,
+                "suggestions": suggestions,
+                **({"default": float(default)} if default is not None else {}),
+            }
         return normalized
 
     def _get_cache_config(self) -> dict[str, Any]:
@@ -376,6 +468,17 @@ class Table(BaseComponent):
             **({"fill_height": True} if self._fill_height else {}),
             **({"row_overview": self._row_overview} if self._row_overview else {}),
             **({"multi_select": self._multi_select} if self._multi_select else {}),
+            **({"search": self._search} if self._search else {}),
+            **(
+                {"search_placeholder": self._search_placeholder}
+                if self._search_placeholder
+                else {}
+            ),
+            **(
+                {"numeric_filters": self._numeric_filters}
+                if self._numeric_filters
+                else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -401,24 +504,14 @@ class Table(BaseComponent):
         self._column_menu = config.get("column_menu", True)
         self._reset_sort = config.get("reset_sort", False)
         self._reset_sort_on = config.get("reset_sort_on") or []
+        self._search = config.get("search", False)
+        self._search_placeholder = config.get("search_placeholder")
+        self._numeric_filters = config.get("numeric_filters") or {}
         self._fill_height = config.get("fill_height", False)
         self._row_overview = config.get("row_overview", False)
         self._multi_select = dict(config.get("multi_select") or {})
         # These are passed on to Vue explicitly; keep them out of the extra options
-        for key in (
-            "toggle_filters",
-            "range_filters",
-            "on_select",
-            "reclick",
-            "default_row_selects",
-            "scroll_position",
-            "column_menu",
-            "reset_sort",
-            "reset_sort_on",
-            "fill_height",
-            "row_overview",
-            "multi_select",
-        ):
+        for key in _VUE_OPTION_KEYS:
             self._config.pop(key, None)
 
     def get_state_dependencies(self) -> list[str]:
@@ -636,6 +729,11 @@ class Table(BaseComponent):
                     meta["unique_values"] = [v for v in unique_vals if v is not None][
                         :100
                     ]
+                    # For a threshold on it (numeric_filters)
+                    if min_val is not None:
+                        meta["min"] = float(min_val)
+                    if max_val is not None:
+                        meta["max"] = float(max_val)
                 else:
                     meta["type"] = "numeric"
                     if min_val is not None:
@@ -868,12 +966,14 @@ class Table(BaseComponent):
         page_size = pagination_state.get("page_size", self._page_size)
         sort_column = pagination_state.get("sort_column")
         sort_dir = pagination_state.get("sort_dir", "asc")
-        column_filters = pagination_state.get("column_filters", [])
+        column_filters = self._effective_column_filters(pagination_state)
+        search = self._search_text(pagination_state)
         go_to_request = pagination_state.get("go_to_request")
         download_request = pagination_state.get("download_request")
 
         data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(data, column_filters)
+        data = self._apply_search(data, search)
         # Without pagination Tabulator sorts the rows itself, starting each sort
         # from the order they arrive in (it keeps that order on ties), so they
         # are sent unsorted
@@ -979,6 +1079,8 @@ class Table(BaseComponent):
             }
             if self._toggle_filters:
                 current_sort_filter["toggles"] = self._toggle_states(pagination_state)
+            if self._search:
+                current_sort_filter["search"] = search
 
             # DETECT what changed by comparing current vs previous
             selection_changed = current_selections != last_selections
@@ -1177,6 +1279,10 @@ class Table(BaseComponent):
                     if self._toggle_filters
                     else {}
                 ),
+                # The filters in force, so a view that is drawn again (e.g. after
+                # the page was left and opened again) shows them
+                **({"column_filters": column_filters} if column_filters else {}),
+                **({"search": search} if search else {}),
             },
             "_auto_selection": auto_selection,
         }
@@ -1297,6 +1403,88 @@ class Table(BaseComponent):
         for column, enabled in self._toggle_states(pagination_state).items():
             if enabled:
                 data = data.filter(pl.col(column))
+        return data
+
+    def _effective_column_filters(
+        self, pagination_state: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """The filter dialog's filters, or the ``numeric_filters`` defaults.
+
+        The defaults apply until the view sends filters of its own, including
+        none (a viewer who removed them).
+        """
+        if "column_filters" in pagination_state:
+            return list(pagination_state.get("column_filters") or [])
+        return [
+            {"field": field, "type": entry["op"], "value": entry["default"]}
+            for field, entry in self._numeric_filters.items()
+            if entry.get("default") is not None
+        ]
+
+    def _search_text(self, pagination_state: dict[str, Any]) -> str:
+        """The search box's text, normalised; empty when the table has none."""
+        if not self._search:
+            return ""
+        return " ".join(str(pagination_state.get("search") or "").split())
+
+    def _search_columns(self, schema: dict[str, Any] | None = None) -> list[str]:
+        """Columns the search box looks in.
+
+        The columns given in ``search``, else the text columns among
+        ``column_definitions``, by their type in ``schema`` (default: the
+        cached data's).
+        """
+        if isinstance(self._search, list):
+            return list(self._search)
+        if schema is None:
+            data = self._preprocessed_data.get("data")
+            if data is None:
+                data = self._raw_data
+            if data is None:
+                return []
+            schema = dict(data.collect_schema())
+        fields = [
+            col_def["field"]
+            for col_def in (self._column_definitions or [])
+            if col_def.get("field")
+        ] or list(schema)
+        return list(
+            dict.fromkeys(
+                f
+                for f in fields
+                if f in schema
+                and (
+                    schema[f] in (pl.Utf8, pl.Categorical)
+                    or isinstance(schema[f], pl.Enum)
+                )
+            )
+        )
+
+    def _apply_search(self, data: pl.LazyFrame, text: str) -> pl.LazyFrame:
+        """Keep rows containing every word of ``text`` in one of the search columns.
+
+        Case-insensitive and literal (a word is not a pattern). Columns that
+        are not text are searched in their text form.
+        """
+        words = text.lower().split()
+        if not words:
+            return data
+        schema = data.collect_schema()
+        if isinstance(self._search, list):
+            columns = [c for c in self._search if c in schema]
+        else:
+            columns = self._search_columns(dict(schema))
+        if not columns:
+            return data.filter(pl.lit(False))
+        lowered = [pl.col(c).cast(pl.Utf8).str.to_lowercase() for c in columns]
+        for word in words:
+            hit = pl.any_horizontal(
+                [
+                    col.str.contains(word, literal=True).fill_null(False)
+                    for col in lowered
+                ]
+            )
+            data = data.filter(hit)
         return data
 
     @staticmethod
@@ -1421,8 +1609,9 @@ class Table(BaseComponent):
         pagination_state = state.get(self._pagination_identifier) or {}
         data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(
-            data, pagination_state.get("column_filters", [])
+            data, self._effective_column_filters(pagination_state)
         )
+        data = self._apply_search(data, self._search_text(pagination_state))
         data = self._apply_sort(
             data,
             pagination_state.get("sort_column"),
@@ -1489,20 +1678,7 @@ class Table(BaseComponent):
 
         # Add any extra config options
         args.update(self._config)
-        for key in (
-            "toggle_filters",
-            "range_filters",
-            "on_select",
-            "reclick",
-            "default_row_selects",
-            "scroll_position",
-            "column_menu",
-            "reset_sort",
-            "reset_sort_on",
-            "fill_height",
-            "row_overview",
-            "multi_select",
-        ):
+        for key in _VUE_OPTION_KEYS:
             args.pop(key, None)
 
         if self._toggle_filters:
@@ -1515,6 +1691,13 @@ class Table(BaseComponent):
             args["highlightDefaultRow"] = True
         if self._scroll_position != "center":
             args["scrollPosition"] = self._scroll_position
+        if self._search:
+            args["search"] = True
+            args["searchColumns"] = self._search_columns()
+            if self._search_placeholder:
+                args["searchPlaceholder"] = self._search_placeholder
+        if self._numeric_filters:
+            args["numericFilters"] = self._numeric_filters
 
         return args
 

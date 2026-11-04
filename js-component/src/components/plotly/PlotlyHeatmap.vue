@@ -12,7 +12,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
-import type { HeatmapComponentArgs, HeatmapData } from '@/types/component'
+import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/component'
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
@@ -355,6 +355,44 @@ export default defineComponent({
       }
     },
 
+    /** Rectangles drawn over the points (e.g. detected features), visible range only. */
+    boxRows(): HeatmapBox[] {
+      if (!this.args.boxes) return []
+      const rows = this.streamlitDataStore.allDataForDrawing?.boxData
+      return (rows as HeatmapBox[]) || []
+    },
+
+    /** Id of the box selected through ``boxes.selection``, from any component. */
+    selectedBoxId(): unknown {
+      const identifier = this.args.boxes?.selection
+      if (!identifier) return undefined
+      return this.selectionStore.$state[identifier]
+    },
+
+    /** One line trace with every box outline, each closed and separated by a gap. */
+    boxTrace(): Plotly.Data | null {
+      if (this.boxRows.length === 0) return null
+      const x: (number | null)[] = []
+      const y: (number | null)[] = []
+      for (const b of this.boxRows) {
+        x.push(b.x0, b.x1, b.x1, b.x0, b.x0, null)
+        y.push(b.y0, b.y0, b.y1, b.y1, b.y0, null)
+      }
+      const label = this.args.boxes?.label
+      return {
+        type: 'scattergl',
+        mode: 'lines',
+        name: label || 'boxes',
+        showlegend: !!label,
+        x,
+        y,
+        line: { color: this.args.boxes?.color || '#2ca02c', width: 1 },
+        hoverinfo: 'skip',
+        // Not a row of heatmapData: keeps the shared click handler away from it
+        customdata: x.map(() => 'box'),
+      } as Plotly.Data
+    },
+
     /**
      * Build Plotly data trace(s).
      * In categorical mode, creates separate traces per category.
@@ -369,8 +407,7 @@ export default defineComponent({
       const overlays = [...this.multiSelectTraces, ring].filter((t): t is Plotly.Data => t !== null)
       // Categorical mode: create separate traces per category
       if (this.isCategoricalMode) {
-        const traces = this.buildCategoricalTraces()
-        return [...traces, ...overlays]
+        return this.withBoxes([...this.buildCategoricalTraces(), ...overlays])
       }
 
       // Continuous mode: single trace with colorscale
@@ -390,6 +427,7 @@ export default defineComponent({
         {
           type: 'scattergl',
           name: 'points',
+          showlegend: false,
           x: this.xValues,
           y: this.yValues,
           mode: 'markers',
@@ -405,7 +443,25 @@ export default defineComponent({
           hoverinfo: 'x+y+text',
         },
       ]
-      return [...points, ...overlays]
+      return this.withBoxes([...points, ...overlays])
+    },
+
+    /** Thick outline around the selected box. */
+    selectedBoxShapes(): Partial<Plotly.Shape>[] {
+      const selected = this.selectedBoxId
+      if (selected === undefined || selected === null) return []
+      return this.boxRows
+        .filter((b) => b.id === selected)
+        .map((b) => ({
+          type: 'rect',
+          xref: 'x',
+          yref: 'y',
+          x0: b.x0,
+          x1: b.x1,
+          y0: b.y0,
+          y1: b.y1,
+          line: { color: this.args.boxes?.color || '#2ca02c', width: 3 },
+        })) as Partial<Plotly.Shape>[]
     },
 
     /**
@@ -413,7 +469,7 @@ export default defineComponent({
      */
     layout(): Partial<Plotly.Layout> {
       // In categorical mode, show legend instead of colorbar
-      const showLegend = this.isCategoricalMode
+      const showLegend = this.isCategoricalMode || !!this.args.boxes?.label
       // Use extra right margin for colorbar (continuous) or legend (categorical)
       const needsExtraRightMargin = this.isCategoricalMode || this.effectiveColorbarVisible
 
@@ -423,10 +479,10 @@ export default defineComponent({
         showlegend: showLegend,
         legend: showLegend
           ? {
-              x: 1.02,
-              y: 1,
-              xanchor: 'left',
-              yanchor: 'top',
+              // Continuous mode only lists the boxes: above the plot, clear of the colorbar
+              ...(this.isCategoricalMode
+                ? { x: 1.02, y: 1, xanchor: 'left', yanchor: 'top' }
+                : { orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom' }),
               bgcolor:
                 this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
               bordercolor: this.theme?.base === 'dark' ? '#555' : '#ccc',
@@ -436,6 +492,7 @@ export default defineComponent({
         height: this.args.height || 400,
         dragmode: this.dragmode as Plotly.Layout['dragmode'],
         ...SELECTION_LAYOUT,
+        shapes: this.selectedBoxShapes,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           range: this.xRange,
@@ -471,6 +528,17 @@ export default defineComponent({
         }
       },
       deep: true,
+    },
+
+    'streamlitDataStore.allDataForDrawing.boxData': {
+      handler() {
+        if (this.isInitialized) this.renderPlot()
+      },
+      deep: true,
+    },
+
+    selectedBoxId() {
+      if (this.isInitialized && this.plotInitialized) this.renderPlot()
     },
 
     zoomRange: {
@@ -511,6 +579,30 @@ export default defineComponent({
   },
 
   methods: {
+    /** Append the box outlines, last so trace 0 stays the points. */
+    withBoxes(traces: Plotly.Data[]): Plotly.Data[] {
+      return this.boxTrace ? [...traces, this.boxTrace] : traces
+    },
+
+    /** Select the smallest box containing a clicked position. */
+    selectBoxAt(x: number, y: number): void {
+      const identifier = this.args.boxes?.selection
+      if (!identifier) return
+      let best: HeatmapBox | undefined
+      let bestArea = Infinity
+      for (const b of this.boxRows) {
+        if (x < b.x0 || x > b.x1 || y < b.y0 || y > b.y1) continue
+        const area = (b.x1 - b.x0) * (b.y1 - b.y0)
+        if (area < bestArea) {
+          best = b
+          bestArea = area
+        }
+      }
+      if (best && best.id !== undefined && best.id !== null) {
+        this.selectionStore.updateSelection(identifier, best.id)
+      }
+    },
+
     /**
      * Build separate traces for each category.
      * Each category gets its own color and appears in the legend.
@@ -652,6 +744,14 @@ export default defineComponent({
 
       // Handle click events via composable
       this.setupClickHandler()
+
+      // A click on a point inside a box also selects the box
+      plotElement.on('plotly_click', (eventData: Plotly.PlotMouseEvent) => {
+        const point = eventData.points?.[0]
+        if (point && typeof point.x === 'number' && typeof point.y === 'number') {
+          this.selectBoxAt(point.x, point.y)
+        }
+      })
       this.setupMultiSelectHandlers(plotElement)
     },
 

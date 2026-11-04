@@ -34,6 +34,24 @@ export interface PaginationState {
   sort_column?: string
   sort_dir?: 'asc' | 'desc'
   toggles?: Record<string, boolean>
+  /** The filter dialog's filters in force (sent only when there are any) */
+  column_filters?: ColumnFilter[]
+  /** The search in force (sent only when there is one) */
+  search?: string
+}
+
+/** One condition of the filter dialog, as Python applies it. */
+export interface ColumnFilter {
+  field: string
+  type: 'in' | '>=' | '<=' | 'regex' | string
+  value: unknown
+}
+
+/** A numeric column offered in the filter dialog as a one-sided threshold. */
+export interface NumericFilterConfig {
+  op: '<=' | '>='
+  suggestions?: Array<{ value: number; label?: string }>
+  default?: number
 }
 
 /**
@@ -92,6 +110,13 @@ export interface TableComponentArgs extends BaseComponentArgs {
   rowOverviewTitle?: string
   /** False hides the column menu */
   columnMenu?: boolean
+  /** Show the toolbar search box */
+  search?: boolean
+  /** Columns the search box looks in */
+  searchColumns?: string[]
+  searchPlaceholder?: string
+  /** Numeric columns offered as thresholds in the filter dialog */
+  numericFilters?: Record<string, NumericFilterConfig>
 }
 
 /**
@@ -168,6 +193,24 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   highlight?: Record<string, string>
   /** Selections a click sets besides `interactivity` (null clears one) */
   onSelect?: Record<string, unknown>
+  /** Rectangles drawn over the points, set by Heatmap.set_boxes() */
+  boxes?: {
+    /** Identifier the id of a clicked box is written to */
+    selection?: string | null
+    /** Legend entry of the outlines */
+    label?: string | null
+    color?: string
+    maxBoxes?: number
+  }
+}
+
+/** One rectangle of Heatmap.set_boxes(), in data coordinates. */
+export interface HeatmapBox {
+  x0: number
+  x1: number
+  y0: number
+  y1: number
+  id?: unknown
 }
 
 /**
@@ -321,6 +364,8 @@ export type VolcanoData = Record<string, unknown>
 export interface MirrorPlotComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyMirrorPlot'
   title?: string
+  /** File name (without extension) for the SVG download. */
+  svgFilename?: string
   /** Label shown inside the top half of the figure. */
   titleTop?: string
   /** Label shown inside the bottom half of the figure. */

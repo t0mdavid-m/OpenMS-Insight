@@ -27,7 +27,9 @@ def annotations():
 
 
 def test_selected_set_against_background(annotations):
-    result = go_enrichment(annotations, ["sp|A|NAME_A", "B", "C"], list("ABCDEF") + ["G"])
+    result = go_enrichment(
+        annotations, ["sp|A|NAME_A", "B", "C"], list("ABCDEF") + ["G"]
+    )
     # F and G have no GO term: not counted
     assert (result["fg_count"], result["bg_count"]) == (3, 5)
     assert (result["fg_total"], result["bg_total"]) == (3, 7)
@@ -65,7 +67,9 @@ def test_fetch_merges_genes_and_skips_not_found():
                 {"query": "P2", "notfound": True},
             ]
 
-    result = fetch_go_annotations(["sp|P1|X", "P2", "P1", None], mygene_client=FakeClient())
+    result = fetch_go_annotations(
+        ["sp|P1|X", "P2", "P1", None], mygene_client=FakeClient()
+    )
     assert result["query"].tolist() == ["P1"]
     assert result.loc[0, "BP_terms"] == ["a", "b"]
     assert result.loc[0, "MF_terms"] == ["m"]

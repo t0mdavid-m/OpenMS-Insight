@@ -161,6 +161,30 @@ Table(
 - `pagination`: Enable server-side pagination (default: True). Only the current page of data is sent to the browser, dramatically reducing memory usage for large datasets.
 - `page_size`: Rows per page (default: 100)
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
+- `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
+- `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+
+**Filters.** The filter button opens a dialog with a filter per column: values to
+keep, a text pattern, or for numbers "at least", "at most" or a range. Every
+filter, and the search, runs in Python over the whole table. The filters in force
+show as chips under the toolbar, each removable, with "Clear all"; they are kept
+when the table is drawn again.
+
+```python
+Table(
+    cache_id="proteins",
+    data=proteins,
+    search=True,  # or ["accession", "gene", "description"]
+    search_placeholder="Accession, gene or protein name",
+    numeric_filters={
+        "q_value": {
+            "op": "<=",
+            "suggestions": [{"value": 0.01, "label": "1 % (run)"}, 0.001],
+        },
+        "peptides": {"op": ">=", "suggestions": [2, 3], "default": 2},
+    },
+)
+```
 
 **Custom formatters:**
 In addition to Tabulator's built-in formatters, these custom formatters are available:
@@ -267,6 +291,7 @@ mirror(state_manager=state_manager, height=600)
 - `highlight_column`, `annotation_column`: Shared schema for highlights and label text
 - `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
+- `svg_filename`: File name for the modebar's "Download as SVG" button (default: `title`, then `mirror_plot`)
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
@@ -374,6 +399,24 @@ Heatmap(
         "Treatment_B": "#2ca02c",
     },
 )
+```
+
+**Boxes (e.g. LC-MS features):**
+`set_boxes()` draws rectangles over the points. Boxes are given per render, so
+call it before each render; only boxes in the visible range are sent. With
+`selection=`, clicking a point inside a box sets that identifier to the box's
+id, and the selected box is drawn with a thicker outline.
+
+```python
+heatmap.set_boxes(
+    features_df,
+    x_range=("rt_start", "rt_end"),
+    y_range=("mz_start", "mz_end"),
+    id_column="feature_id",
+    selection="feature",
+    label="Features",
+)
+heatmap(key="peak_map", state_manager=state_manager)
 ```
 
 ### ClusteredHeatmap
@@ -721,9 +764,13 @@ picked proteins, and the same works for masses, scans or any other column.
 Each plot's mode bar gets a **Clear selection** button (the eraser).
 
 ```python
-volcano = VolcanoPlot(..., label_column="name", multi_select={"proteins": "accession"},
-                      selection_presets=True,
-                      preset_labels={"up": "Higher in treated", "down": "Lower in treated"})
+volcano = VolcanoPlot(
+    ...,
+    label_column="name",
+    multi_select={"proteins": "accession"},
+    selection_presets=True,
+    preset_labels={"up": "Higher in treated", "down": "Lower in treated"},
+)
 table = Table(..., multi_select={"proteins": "accession"})
 picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
 picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
@@ -964,7 +1011,7 @@ from openms_insight.analysis.enrichment import fetch_go_annotations, go_enrichme
 annotations = fetch_go_annotations(background)  # query, BP_terms, CC_terms, MF_terms
 result = go_enrichment(annotations, foreground=picked, background=background)
 result["categories"]["BP"]  # GO_Term, Count, Background, GeneRatio, BgRatio,
-                            # FoldEnrichment, p_value, -log10(p), p_adj, Proteins
+# FoldEnrichment, p_value, -log10(p), p_adj, Proteins
 ```
 
 These functions need the `analysis` extra:

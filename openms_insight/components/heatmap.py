@@ -5,13 +5,13 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.cache import atomic_write
 from ..core.multi_select import (
     combine,
     normalize_multi_select,
     selected_set,
     values_in_region,
 )
-from ..core.cache import atomic_write
 from ..core.registry import register_component
 from ..preprocessing.compression import (
     compute_compression_levels,
@@ -240,6 +240,9 @@ class Heatmap(BaseComponent):
         self._highlight = dict(highlight or {})
         self._on_select = dict(on_select or {})
         self._multi_select = normalize_multi_select(multi_select)
+        self._boxes: pl.DataFrame | None = None
+        self._boxes_config: dict[str, Any] = {}
+        self._boxes_key: str | None = None
 
         super().__init__(
             cache_id=cache_id,
@@ -1178,7 +1181,9 @@ class Heatmap(BaseComponent):
             if not levels:
                 # No levels available
                 print("[HEATMAP] No levels available", file=sys.stderr)
-                return {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}
+                return self._add_boxes(
+                    {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}, zoom
+                )
 
             data = levels[0]
             using_cat = self._preprocessed_data.get("has_categorical_filters", False)
@@ -1266,12 +1271,14 @@ class Heatmap(BaseComponent):
                 "y": members[self._y_column].to_list(),
             }
             result["_hash"] = f"{result['_hash']}:{compute_dataframe_hash(members)}"
-        return result
+        return self._add_boxes(result, zoom)
 
     # Most points marked as selected; a larger set is marked in part
     MAX_MULTI_SELECT_MARKS = 20000
 
-    def _full_filtered(self, state: dict[str, Any], levels: list) -> pl.LazyFrame | None:
+    def _full_filtered(
+        self, state: dict[str, Any], levels: list
+    ) -> pl.LazyFrame | None:
         """The full-resolution data, with the filters applied."""
         if not levels:
             return None
@@ -1285,7 +1292,9 @@ class Heatmap(BaseComponent):
                 full = full.filter(pl.col(column) == value)
         return full
 
-    def _multi_selected_points(self, state: dict[str, Any], levels: list) -> pl.DataFrame:
+    def _multi_selected_points(
+        self, state: dict[str, Any], levels: list
+    ) -> pl.DataFrame:
         """x and y of the points whose `multi_select` column value is in the
         selected set, from the full-resolution data."""
         columns = [self._x_column, self._y_column]
@@ -1305,8 +1314,10 @@ class Heatmap(BaseComponent):
         for other in conditions[1:]:
             condition = condition | other
         return (
-            full.filter(condition).select(columns)
-            .head(self.MAX_MULTI_SELECT_MARKS).collect()
+            full.filter(condition)
+            .select(columns)
+            .head(self.MAX_MULTI_SELECT_MARKS)
+            .collect()
         )
 
     def _handle_event(self, event: dict[str, Any]) -> bool:
@@ -1329,14 +1340,18 @@ class Heatmap(BaseComponent):
             picked = {}
             for identifier, column in self._multi_select.items():
                 picked[identifier] = (
-                    None if full is None else values_in_region(
+                    None
+                    if full is None
+                    else values_in_region(
                         full, self._x_column, self._y_column, column, region
                     )
                 )
         changed = False
         for identifier, values in picked.items():
-            new = None if event.get("clear") else combine(
-                state.get(identifier), values, mode
+            new = (
+                None
+                if event.get("clear")
+                else combine(state.get(identifier), values, mode)
             )
             if state_manager.set_selection(identifier, new):
                 changed = True
@@ -1416,10 +1431,108 @@ class Heatmap(BaseComponent):
         if self._intensity_label:
             args["intensityLabel"] = self._intensity_label
 
+        if self._boxes is not None:
+            args["boxes"] = self._boxes_config
+
         # Add any extra config options
         args.update(self._config)
 
         return args
+
+    # ------------------------------------------------------------------
+    # Boxes drawn over the points (e.g. features on a peak map)
+    # ------------------------------------------------------------------
+
+    def set_boxes(
+        self,
+        boxes: pl.DataFrame | pl.LazyFrame | None,
+        x_range: tuple[str, str] = ("x0", "x1"),
+        y_range: tuple[str, str] = ("y0", "y1"),
+        id_column: str | None = None,
+        selection: str | None = None,
+        label: str | None = None,
+        color: str = "#2ca02c",
+        max_boxes: int = 5000,
+    ) -> "Heatmap":
+        """
+        Draw rectangles over the points, e.g. the extent of LC-MS features.
+
+        Boxes are given per render and are not part of the cache: call this
+        before every render (None removes them). Only boxes that overlap the
+        visible range are sent, at most ``max_boxes`` of them in the given
+        order, so put the important ones first.
+
+        Args:
+            boxes: One row per box.
+            x_range: Columns with the left and right edge of each box.
+            y_range: Columns with the bottom and top edge of each box.
+            id_column: Column identifying a box. Needed for ``selection``.
+            selection: Identifier set to a box's id when a point inside it is
+                clicked (the smallest box wins); the box with the selected id
+                is drawn highlighted, also when it was selected elsewhere.
+            label: Legend name of the boxes (default: no legend entry).
+            color: Line colour of the boxes.
+            max_boxes: Most boxes sent per render.
+
+        Returns:
+            Self for method chaining
+        """
+        if boxes is None:
+            self._boxes, self._boxes_config, self._boxes_key = None, {}, None
+            return self
+        if selection is not None and id_column is None:
+            raise ValueError("selection= needs id_column=")
+        columns = {
+            x_range[0]: "x0",
+            x_range[1]: "x1",
+            y_range[0]: "y0",
+            y_range[1]: "y1",
+        }
+        if id_column is not None:
+            columns[id_column] = "id"
+        frame = boxes.lazy() if isinstance(boxes, pl.DataFrame) else boxes
+        frame = frame.select(
+            [pl.col(src).alias(dst) for src, dst in columns.items()]
+        ).collect()
+        self._boxes = frame.with_columns(
+            pl.col(c).cast(pl.Float64) for c in ("x0", "x1", "y0", "y1")
+        )
+        self._boxes_config = {
+            "selection": selection,
+            "label": label,
+            "color": color,
+            "maxBoxes": max_boxes,
+        }
+        self._boxes_key = (
+            f"{self._boxes.hash_rows().sum()}:{self._boxes.height}:{self._boxes_config}"
+        )
+        return self
+
+    def _get_render_key(self) -> str | None:
+        return self._boxes_key
+
+    def _add_boxes(
+        self, result: dict[str, Any], zoom: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Add the boxes overlapping the visible range to the payload."""
+        if self._boxes is None:
+            return result
+        boxes = self._boxes
+        if not self._is_no_zoom(zoom):
+            x_lo, x_hi = sorted(zoom.get("xRange", [-1, -1]))
+            y_lo, y_hi = sorted(zoom.get("yRange", [-1, -1]))
+            boxes = boxes.filter(
+                (pl.col("x1") >= x_lo)
+                & (pl.col("x0") <= x_hi)
+                & (pl.col("y1") >= y_lo)
+                & (pl.col("y0") <= y_hi)
+            )
+        boxes = boxes.head(self._boxes_config.get("maxBoxes", 5000))
+        result["boxData"] = boxes.to_pandas()
+        result["_hash"] = (
+            f"{result.get('_hash', '')}:{compute_dataframe_hash(boxes)}:{self._boxes_key}"
+        )
+        return result
 
     def with_styling(
         self,

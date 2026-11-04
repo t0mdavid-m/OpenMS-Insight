@@ -147,7 +147,5 @@ def values_in_region(
         frame = frame.select(x_column, y_column, column)
     if frame.height == 0:
         return None
-    mask = region_mask(
-        frame[x_column].to_numpy(), frame[y_column].to_numpy(), region
-    )
+    mask = region_mask(frame[x_column].to_numpy(), frame[y_column].to_numpy(), region)
     return selection_values(frame.filter(pl.Series(mask))[column].to_list())
