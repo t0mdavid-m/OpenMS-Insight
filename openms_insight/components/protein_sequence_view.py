@@ -227,6 +227,7 @@ class ProteinSequenceView(BaseComponent):
         modification_library: list[dict[str, Any]] | str | None = None,
         modifications_identifier: str | None = None,
         modifications: list[str] | None = None,
+        proforma_copy: bool = False,
         settings: dict[str, Any] | None = None,
         title: str | None = "Sequence View",
         annotation_title: str = "Fragment annotation",
@@ -298,6 +299,9 @@ class ProteinSequenceView(BaseComponent):
             svg_filename: File name for the SVG download.
             accent_color: Colour of the dialog buttons (default: the theme's
                 primary colour).
+            proforma_copy: Show a "Copy as ProForma" button that copies the
+                shown proteoform in ProForma 2.0 notation, with its fixed,
+                localized and user-set modifications.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
@@ -321,6 +325,8 @@ class ProteinSequenceView(BaseComponent):
         self.set_modification_picker(
             modification_library, modifications_identifier, modifications
         )
+        # Per render, not cached
+        self._proforma_copy = bool(proforma_copy)
         check_fragment_settings(settings)
         self._settings = settings
         self._title = title
@@ -555,6 +561,18 @@ class ProteinSequenceView(BaseComponent):
         self._modifications = list(selected) if selected is not None else []
         return self
 
+    def set_proforma_copy(self, enabled: bool = True) -> "ProteinSequenceView":
+        """Show or hide the "Copy as ProForma" button.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``proforma_copy`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._proforma_copy = bool(enabled)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -566,6 +584,7 @@ class ProteinSequenceView(BaseComponent):
             "modificationLibrary": self._modification_library,
             "modificationsIdentifier": self._modifications_identifier,
             "modifications": self._modifications,
+            "proformaCopy": self._proforma_copy,
             "settings": self._settings,
             "tag": self._tag,
             "svgFilename": self._svg_filename,
