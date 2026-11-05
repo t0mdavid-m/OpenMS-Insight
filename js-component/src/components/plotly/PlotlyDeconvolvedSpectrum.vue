@@ -53,6 +53,8 @@ const DEFAULT_STYLING = {
   selectedColor: '#F3A712',
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
+  // Circles of the theoretical isotope envelope (set_envelope)
+  envelopeColor: '#2CA58D',
   annotationColors: {
     massButton: '#E4572E',
     selectedMassButton: '#F3A712',
@@ -211,6 +213,43 @@ export default defineComponent({
     },
     ladderJson(): string {
       return JSON.stringify(this.args.ladder ?? null)
+    },
+    envelopeJson(): string {
+      return JSON.stringify(this.args.envelope ?? null)
+    },
+    /** Theoretical isotope envelope of the selected mass as open circles on
+     * its raw peaks; drawn only while the mass it was computed for is selected. */
+    envelopeTrace(): Plotly.Data | null {
+      const envelope = this.args.envelope
+      if (!envelope || !this.isMzMode || !this.annotationsVisible) return null
+      if (envelope.massIndex !== this.selectedMassIndex) return null
+      const n = Math.min(envelope.mzs.length, envelope.intensities.length)
+      if (n === 0) return null
+      const hover: string[] = []
+      for (let i = 0; i < n; i++) {
+        const charge = envelope.charges?.[i]
+        const isotope = envelope.isotopes?.[i]
+        hover.push(
+          `Theoretical m/z ${envelope.mzs[i].toFixed(4)}` +
+            (charge !== undefined ? `<br>z=${charge}` : '') +
+            (isotope !== undefined ? `, isotope ${isotope}` : ''),
+        )
+      }
+      return {
+        x: envelope.mzs.slice(0, n),
+        y: envelope.intensities.slice(0, n),
+        mode: 'markers',
+        type: 'scatter',
+        name: 'Theoretical envelope',
+        marker: {
+          symbol: 'circle-open',
+          size: 9,
+          color: this.styling.envelopeColor,
+          line: { width: 1.5, color: this.styling.envelopeColor },
+        },
+        hoverinfo: 'text',
+        hovertext: hover,
+      } as Plotly.Data
     },
     ladderKey(): unknown {
       return this.args.ladder ? this.args.ladder.key ?? JSON.stringify(this.args.ladder.masses) : null
@@ -562,6 +601,7 @@ export default defineComponent({
           marker: { color: this.styling.selectedColor },
         } as Plotly.Data,
       ]
+      if (this.envelopeTrace) traces.push(this.envelopeTrace)
       if (this.annotationsVisible) traces.push(...this.annotationData.traces)
       return traces
     },
@@ -624,6 +664,9 @@ export default defineComponent({
     },
     // By value: the arguments arrive as a new object on every rerun
     ladderJson() {
+      this.requestGraph()
+    },
+    envelopeJson() {
       this.requestGraph()
     },
     selectedMassIndex() {
