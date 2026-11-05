@@ -188,11 +188,16 @@ export default defineComponent({
       },
       immediate: true,
     },
-    // Measurements added or removed: redraw the overlay only
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
     'measure.revision'() {
       const element = document.getElementById(this.id)
       if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
-      void Plotly.relayout(element, { shapes: this.layout.shapes, annotations: this.layout.annotations })
+      void Plotly.relayout(element, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
     },
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {

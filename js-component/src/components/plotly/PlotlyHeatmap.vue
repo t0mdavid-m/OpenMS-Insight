@@ -539,10 +539,15 @@ export default defineComponent({
   },
 
   watch: {
-    // Measurements added or removed: redraw the overlay only
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
     'measure.revision'() {
       if (!this.plotInitialized) return
-      void Plotly.relayout(this.id, { shapes: this.layout.shapes, annotations: this.layout.annotations })
+      void Plotly.relayout(this.id, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
     },
 
     isDataReady: {
