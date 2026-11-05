@@ -374,7 +374,9 @@ class TestDeconvolvedSpectrum:
         spectrum.set_ladder(None)
         assert spectrum._get_component_args()["ladder"] is None
 
-    def test_set_envelope(self, mock_streamlit, sample_deconvolved_spectra, temp_cache_dir):
+    def test_set_envelope(
+        self, mock_streamlit, sample_deconvolved_spectra, temp_cache_dir
+    ):
         spectrum = DeconvolvedSpectrum(
             cache_id="envelope",
             data=sample_deconvolved_spectra,
@@ -400,7 +402,9 @@ class TestDeconvolvedSpectrum:
         # Charges and isotopes are optional
         spectrum.set_envelope(0, [{"mz": 1.5, "intensity": 3}])
         assert spectrum._get_component_args()["envelope"] == {
-            "massIndex": 0, "mzs": [1.5], "intensities": [3.0],
+            "massIndex": 0,
+            "mzs": [1.5],
+            "intensities": [3.0],
         }
         spectrum.set_envelope(None, [{"mz": 1.5, "intensity": 3}])
         assert "envelope" not in spectrum._get_component_args()
