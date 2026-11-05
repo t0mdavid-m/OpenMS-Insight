@@ -1,27 +1,10 @@
 <template>
   <div class="mirror-plot" :style="cssCustomProperties">
-    <div v-if="args.measure" class="measure-toolbar">
-      <button
-        type="button"
-        class="measure-button"
-        :class="{ active: measureMode }"
-        :aria-pressed="measureMode"
-        title="Click two peaks of the same spectrum to measure their m/z difference"
-        @click="toggleMeasureMode"
-      >
-        Measure
-      </button>
-      <span v-if="measureHint" class="measure-hint">{{ measureHint }}</span>
-      <button
-        v-if="measurements.length > 0"
-        type="button"
-        class="measure-button"
-        title="Remove all measurements"
-        @click="clearMeasurements"
-      >
-        Clear
-      </button>
-    </div>
+    <MeasureToolbar
+      v-if="args.measure"
+      :measure="measure"
+      title="Click two peaks of the same spectrum to measure their m/z difference"
+    />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -33,7 +16,9 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { MirrorPlotComponentArgs } from '@/types/component'
-import { formatMeasureLabel, matchResidues } from '@/utils/measure'
+import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import MeasureToolbar from './MeasureToolbar.vue'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
 const DEFAULT_STYLING = {
@@ -57,28 +42,6 @@ interface AnnotatedPeak {
   index: number
 }
 
-/** An m/z difference measured between two peaks of one half. */
-interface Measurement {
-  id: number
-  side: 'top' | 'bottom'
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-  /** Stacking level among overlapping measurements of the same half. */
-  level: number
-  label: string
-}
-
-/** The first peak of a measurement still waiting for its second peak. */
-interface PendingMeasure {
-  side: 'top' | 'bottom'
-  x: number
-  y: number
-}
-
-const MEASURE_NAME_PREFIX = 'measure-'
-
 interface AnnotationBox {
   x: number
   y: number
@@ -93,6 +56,7 @@ interface AnnotationBox {
 
 export default defineComponent({
   name: 'PlotlyMirrorPlot',
+  components: { MeasureToolbar },
   props: {
     args: {
       type: Object as PropType<MirrorPlotComponentArgs>,
@@ -103,22 +67,17 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore }
+    const measure = useMeasure(() => !!props.args.measure)
+    return { streamlitDataStore, selectionStore, measure }
   },
   data() {
     return {
       isInitialized: false as boolean,
       manualXRange: undefined as number[] | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
-      measureMode: false as boolean,
-      measurements: [] as Measurement[],
-      pendingMeasure: null as PendingMeasure | null,
-      nextMeasureId: 1 as number,
-      /** spectrumKey of the spectra the measurements were taken on. */
-      measuredSpectrumKey: '' as string,
     }
   },
   computed: {
@@ -132,34 +91,27 @@ export default defineComponent({
       return { ...DEFAULT_STYLING, ...this.args.styling }
     },
     cssCustomProperties(): Record<string, string> {
-      return {
-        '--measure-text': this.theme?.textColor || '#262730',
-        '--measure-background': this.theme?.backgroundColor || 'white',
-        '--measure-accent': this.theme?.primaryColor || '#ff4b4b',
-        '--measure-font': this.theme?.font || 'sans-serif',
-      }
+      return {}
     },
     measureColor(): string {
       return this.theme?.textColor || '#262730'
     },
-    measureHint(): string {
-      if (!this.measureMode) return ''
-      if (this.pendingMeasure) return 'Click a second peak in the same spectrum (Esc cancels)'
-      if (this.measurements.length > 0) return 'Click a peak to measure again, or a label to remove it'
-      return 'Click a peak to start measuring'
+    /** Differences along m/z, matched to residues at 1+ and 2+. */
+    measureSpec(): MeasureSpec {
+      return {
+        kind: 'span',
+        xQuantity: 'm/z',
+        charges: MEASURE_CHARGES,
+        tolerance: this.args.measureTolerance,
+        residues: this.args.measureResidues,
+      }
     },
     /**
      * Identity of the plotted spectra, so a rerun that sends the same peaks
      * keeps the measurements.
      */
     spectrumKey(): string {
-      const sideKey = (side: SideData | undefined) => {
-        if (!side) return '-'
-        let sum = 0
-        for (let i = 0; i < side.x.length; i++) sum += side.x[i] * 7 + (side.y[i] ?? 0)
-        return `${side.x.length}:${side.x[0]}:${side.x[side.x.length - 1]}:${sum}`
-      }
-      return `${sideKey(this.topData)}|${sideKey(this.bottomData)}`
+      return `${pointsKey(this.topData?.x, this.topData?.y)}|${pointsKey(this.bottomData?.x, this.bottomData?.y)}`
     },
     /**
      * Get plot config from Python (sent with data, may have dynamic column names).
@@ -251,7 +203,7 @@ export default defineComponent({
       handler() {
         // Data changed (e.g., new spectrum selected) — reset zoom so the new
         // data is shown at full extent. Matches PlotlyLineplot's plotData watcher.
-        this.dropMeasurementsOfOtherSpectra()
+        this.measure.setDataKey(this.spectrumKey)
         this.manualXRange = undefined
         this.render()
       },
@@ -259,11 +211,15 @@ export default defineComponent({
     },
     bottomData: {
       handler() {
-        this.dropMeasurementsOfOtherSpectra()
+        this.measure.setDataKey(this.spectrumKey)
         this.manualXRange = undefined
         this.render()
       },
       deep: true,
+    },
+    // Measurements added or removed
+    'measure.revision'() {
+      this.recolor()
     },
     'selectionStore.$state': {
       handler() {
@@ -274,11 +230,8 @@ export default defineComponent({
     },
   },
   mounted() {
+    this.measure.setDataKey(this.spectrumKey)
     this.render()
-    window.addEventListener('keydown', this.onKeyDown)
-  },
-  beforeUnmount() {
-    window.removeEventListener('keydown', this.onKeyDown)
   },
   methods: {
     extractSide(
@@ -641,10 +594,16 @@ export default defineComponent({
         if (!sourceData) return
 
         // In measure mode a click picks a peak to measure, not a selection
-        if (this.args.measure && this.measureMode) {
+        if (this.measure.active) {
           const pointIndex = pt.pointIndex ?? pt.pointNumber
-          if (typeof pointIndex === 'number') {
-            this.onMeasureClick(traceIdx === 0 ? 'top' : 'bottom', pointIndex)
+          if (typeof pointIndex === 'number' && pointIndex >= 0 && pointIndex < sourceData.x.length) {
+            // A measurement stays in one half; the lower half is drawn negated
+            const side = traceIdx === 0 ? 'top' : 'bottom'
+            const y = sourceData.y[pointIndex]
+            this.measure.pick(
+              { x: sourceData.x[pointIndex], y: side === 'top' ? y : -y, group: side },
+              this.measureSpec,
+            )
           }
           return
         }
@@ -661,13 +620,7 @@ export default defineComponent({
       })
 
       // A click on a measurement's label removes that measurement
-      plotEl.removeAllListeners?.('plotly_clickannotation')
-      plotEl.on('plotly_clickannotation', (event: Plotly.ClickAnnotationEvent) => {
-        const name = (event.annotation as { name?: string } | undefined)?.name
-        if (name?.startsWith(MEASURE_NAME_PREFIX)) {
-          this.removeMeasurement(Number(name.slice(MEASURE_NAME_PREFIX.length)))
-        }
-      })
+      this.measure.bindLabelClicks(plotEl)
 
       // Wire relayout handler so x-zoom/pan triggers a re-render with
       // recomputed y-axis range and re-evaluated label visibility.
@@ -833,180 +786,14 @@ export default defineComponent({
       void Plotly.relayout(this.id, { shapes, annotations })
     },
 
-    toggleMeasureMode(): void {
-      this.measureMode = !this.measureMode
-      if (!this.measureMode && this.pendingMeasure) {
-        this.pendingMeasure = null
-        this.recolor()
-      }
-    },
-
-    /** First click remembers a peak; a second one in the same half measures. */
-    onMeasureClick(side: 'top' | 'bottom', index: number): void {
-      this.dropMeasurementsOfOtherSpectra()
-      const data = side === 'top' ? this.topData : this.bottomData
-      if (!data || index < 0 || index >= data.x.length) return
-      const x = data.x[index]
-      const y = data.y[index]
-      const pending = this.pendingMeasure
-      if (!pending || pending.side !== side) {
-        // Start (or restart in the other half: a measurement stays in one half)
-        this.pendingMeasure = { side, x, y }
-      } else if (pending.x === x) {
-        // Same peak twice: cancel
-        this.pendingMeasure = null
-      } else {
-        this.addMeasurement(side, pending.x, pending.y, x, y)
-        this.pendingMeasure = null
-      }
-      this.recolor()
-    },
-
-    addMeasurement(side: 'top' | 'bottom', xa: number, ya: number, xb: number, yb: number): void {
-      const [x1, y1, x2, y2] = xa <= xb ? [xa, ya, xb, yb] : [xb, yb, xa, ya]
-      const delta = x2 - x1
-      const matches = matchResidues(
-        delta,
-        this.args.measureTolerance ?? 0.02,
-        this.args.measureResidues ?? {},
-      )
-      // Stack above the measurements of this half it would overlap
-      const height = Math.max(y1, y2)
-      const overlapping = this.measurements.filter(
-        (m) => m.side === side && m.x1 <= x2 && x1 <= m.x2,
-      )
-      let level = 0
-      while (overlapping.some((m) => m.level === level && Math.max(m.y1, m.y2) >= height * 0.8)) {
-        level += 1
-      }
-      this.measurements.push({
-        id: this.nextMeasureId++,
-        side,
-        x1,
-        y1,
-        x2,
-        y2,
-        level,
-        label: formatMeasureLabel(delta, matches),
+    /** Brackets of the measurements, as shapes and annotations (see useMeasure). */
+    buildMeasureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.measureColor,
+        background: this.theme?.backgroundColor || 'white',
+        yScale: this.yMaxData,
+        ySign: (group) => (group === 'bottom' ? -1 : 1),
       })
-    },
-
-    removeMeasurement(id: number): void {
-      const before = this.measurements.length
-      this.measurements = this.measurements.filter((m) => m.id !== id)
-      if (this.measurements.length !== before) this.recolor()
-    },
-
-    clearMeasurements(): void {
-      this.measurements = []
-      this.pendingMeasure = null
-      this.recolor()
-    },
-
-    /**
-     * Measurements belong to the spectra they were taken on: drop them when
-     * other spectra are plotted. No redraw, the caller renders next.
-     */
-    dropMeasurementsOfOtherSpectra(): void {
-      const key = this.spectrumKey
-      if (key === this.measuredSpectrumKey) return
-      this.measuredSpectrumKey = key
-      this.measurements = []
-      this.pendingMeasure = null
-    },
-
-    onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape' && this.pendingMeasure) {
-        this.pendingMeasure = null
-        this.recolor()
-      }
-    },
-
-    /**
-     * Brackets and labels of the measurements, plus a marker on a peak
-     * waiting for its partner. Plain shapes and annotations, so the SVG
-     * download includes them.
-     */
-    buildMeasureOverlay(): {
-      shapes: Partial<Plotly.Shape>[]
-      annotations: Partial<Plotly.Annotations>[]
-    } {
-      const shapes: Partial<Plotly.Shape>[] = []
-      const annotations: Partial<Plotly.Annotations>[] = []
-      if (!this.args.measure) return { shapes, annotations }
-
-      const yMax = this.yMaxData
-      const color = this.measureColor
-      const gap = yMax * 0.05
-      const levelStep = yMax * 0.14
-
-      for (const m of this.measurements) {
-        const sign = m.side === 'top' ? 1 : -1
-        const bracketY = Math.max(m.y1, m.y2) + gap + m.level * levelStep
-        // Bracket: a horizontal bar at the taller peak's height with legs
-        // down to each peak
-        shapes.push(
-          {
-            type: 'line',
-            name: `${MEASURE_NAME_PREFIX}${m.id}`,
-            x0: m.x1,
-            x1: m.x2,
-            y0: sign * bracketY,
-            y1: sign * bracketY,
-            line: { color, width: 1.5 },
-          },
-          {
-            type: 'line',
-            x0: m.x1,
-            x1: m.x1,
-            y0: sign * (m.y1 + gap * 0.3),
-            y1: sign * bracketY,
-            line: { color, width: 1, dash: 'dot' },
-          },
-          {
-            type: 'line',
-            x0: m.x2,
-            x1: m.x2,
-            y0: sign * (m.y2 + gap * 0.3),
-            y1: sign * bracketY,
-            line: { color, width: 1, dash: 'dot' },
-          },
-        )
-        annotations.push({
-          name: `${MEASURE_NAME_PREFIX}${m.id}`,
-          x: (m.x1 + m.x2) / 2,
-          y: sign * bracketY,
-          xref: 'x',
-          yref: 'y',
-          text: m.label,
-          showarrow: false,
-          xanchor: 'center',
-          yanchor: m.side === 'top' ? 'bottom' : 'top',
-          yshift: m.side === 'top' ? 2 : -2,
-          font: { size: 12, color },
-          bgcolor: this.theme?.backgroundColor || 'white',
-          bordercolor: color,
-          borderwidth: 1,
-          borderpad: 2,
-          captureevents: true,
-          hovertext: 'Click to remove this measurement',
-          // Plotly accepts a name on annotations; its typings omit it
-        } as Partial<Plotly.Annotations>)
-      }
-
-      const pending = this.pendingMeasure
-      if (pending) {
-        const sign = pending.side === 'top' ? 1 : -1
-        shapes.push({
-          type: 'line',
-          x0: pending.x,
-          x1: pending.x,
-          y0: 0,
-          y1: sign * (pending.y + gap),
-          line: { color, width: 2, dash: 'dash' },
-        })
-      }
-      return { shapes, annotations }
     },
   },
 })
@@ -1015,39 +802,5 @@ export default defineComponent({
 <style scoped>
 .plot-container {
   width: 100%;
-}
-
-.measure-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 4px 4px;
-  font-family: var(--measure-font);
-  font-size: 13px;
-  color: var(--measure-text);
-}
-
-.measure-button {
-  font: inherit;
-  color: var(--measure-text);
-  background: var(--measure-background);
-  border: 1px solid color-mix(in srgb, var(--measure-text) 30%, transparent);
-  border-radius: 4px;
-  padding: 2px 10px;
-  cursor: pointer;
-}
-
-.measure-button:hover {
-  border-color: var(--measure-accent);
-}
-
-.measure-button.active {
-  color: var(--measure-accent);
-  border-color: var(--measure-accent);
-  background: color-mix(in srgb, var(--measure-accent) 10%, var(--measure-background));
-}
-
-.measure-hint {
-  opacity: 0.75;
 }
 </style>

@@ -1,9 +1,12 @@
 <template>
-  <div class="plot-wrapper" :style="cssCustomProperties">
-    <div :id="id" class="plot-container"></div>
-    <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
-      ↩
-    </button>
+  <div class="deconvolved-spectrum">
+    <MeasureToolbar v-if="args.measure" :measure="measure" :title="measureTitle" />
+    <div class="plot-wrapper" :style="cssCustomProperties">
+      <div :id="id" class="plot-container"></div>
+      <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
+        ↩
+      </button>
+    </div>
   </div>
 </template>
 
@@ -23,6 +26,9 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { DeconvolvedSpectrumComponentArgs } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
+import MeasureToolbar from './MeasureToolbar.vue'
 
 type Mode = 'deconvolved' | 'annotated' | 'ladder' | 'ladder-annotated'
 
@@ -86,6 +92,7 @@ let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlyDeconvolvedSpectrum',
+  components: { MeasureToolbar },
   props: {
     args: {
       type: Object as PropType<DeconvolvedSpectrumComponentArgs>,
@@ -96,10 +103,11 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
+    const measure = useMeasure(() => !!props.args.measure)
+    return { streamlitDataStore, selectionStore, measure, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -595,9 +603,39 @@ export default defineComponent({
           color: this.theme?.textColor,
           family: this.theme?.font,
         },
-        shapes: this.annotationData.shapes,
-        annotations: this.annotationData.annotations,
+        shapes: [...this.annotationData.shapes, ...this.measureOverlay.shapes],
+        annotations: [...this.annotationData.annotations, ...this.measureOverlay.annotations],
       }
+    },
+    /**
+     * Differences between masses are neutral: matched to residue masses as
+     * they are (1+). Between raw peaks they are m/z: matched at 1+ and 2+.
+     */
+    measureSpec(): MeasureSpec {
+      return {
+        kind: 'span',
+        xQuantity: this.isMzMode ? 'm/z' : 'mass',
+        charges: this.isMzMode ? MEASURE_CHARGES : [1],
+        tolerance: this.args.measureTolerance,
+        residues: this.args.measureResidues,
+      }
+    },
+    measureTitle(): string {
+      return this.isMzMode
+        ? 'Click two peaks to measure their m/z difference'
+        : 'Click two masses to measure their difference'
+    },
+    /** Identity of the plotted masses or peaks: others drop the measurements. */
+    measureKey(): string {
+      return `${this.isMzMode ? 'mz' : 'mass'}|${pointsKey(this.xColumnValues, this.yColumnValues)}`
+    },
+    /** Brackets of the measurements, spaced by the tallest visible peak. */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+        yScale: this.yRange[1] / 1.8,
+      })
     },
     cssCustomProperties(): Record<string, string> {
       return {
@@ -607,6 +645,19 @@ export default defineComponent({
     },
   },
   watch: {
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+      },
+      immediate: true,
+    },
+    // Measurements added or removed: redraw the overlay only
+    'measure.revision'() {
+      if (!this.isDataReady) return
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, { shapes: this.layout.shapes, annotations: this.layout.annotations })
+    },
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
         // A new spectrum: forget the zoom of the previous one
@@ -827,6 +878,19 @@ export default defineComponent({
       this.requestGraph()
     },
     onPlotClick(eventData: { points?: Array<{ x: number }> }): void {
+      // In measure mode a click picks the nearest mass or peak, not a selection
+      if (this.measure.active) {
+        const x = eventData.points?.[0]?.x
+        const xs = this.xColumnValues
+        const ys = this.yColumnValues
+        if (typeof x !== 'number' || xs.length === 0) return
+        let nearest = 0
+        for (let i = 1; i < xs.length; i++) {
+          if (Math.abs(xs[i] - x) < Math.abs(xs[nearest] - x)) nearest = i
+        }
+        this.measure.pick({ x: xs[nearest], y: ys[nearest] }, this.measureSpec)
+        return
+      }
       if (!eventData.points || eventData.points.length === 0 || !this.args.massIdentifier) return
       const x = eventData.points[0].x
       for (let i = 0; i < this.MassValues.length; i++) {
@@ -916,6 +980,7 @@ export default defineComponent({
       })) as unknown as { on: (event: string, handler: (data: never) => void) => void }
       plot.on('plotly_relayout', (eventData: Record<string, unknown>) => this.onRelayout(eventData))
       plot.on('plotly_click', (eventData: { points?: Array<{ x: number }> }) => this.onPlotClick(eventData))
+      this.measure.bindLabelClicks(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },
     async renderEmpty(): Promise<void> {

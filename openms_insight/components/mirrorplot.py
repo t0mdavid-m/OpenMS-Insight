@@ -1,12 +1,18 @@
 """Mirror plot component using Plotly.js — two spectra, one figure."""
 
 import hashlib
-import math
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.measure import (
+    DEFAULT_MEASURE_TOLERANCE,
+    measure_args,
+    validate_measure,
+    validate_measure_residues,
+    validate_measure_tolerance,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -67,8 +73,8 @@ class MirrorPlot(BaseComponent):
         y_label: str | None = None,
         svg_filename: str | None = None,
         # Measuring
-        measure: bool = False,
-        measure_tolerance: float = 0.02,
+        measure: bool = True,
+        measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
         # Visuals
         styling: dict[str, Any] | None = None,
@@ -116,16 +122,18 @@ class MirrorPlot(BaseComponent):
             y_label: Y-axis label (defaults to y_column).
             svg_filename: File name (without extension) for the "Download as
                 SVG" modebar button. Defaults to the title, then "mirror_plot".
-            measure: If True, show a "Measure" button above the plot. In measure
-                mode, clicking two peaks of the same half draws a bracket between
-                them labelled with their m/z difference ("Δm/z 128.059") and the
-                amino-acid residues that difference matches ("≈ K/Q"), also at
-                charge 2+ ("≈ G (2+)"). Esc cancels a half-finished measurement,
-                clicking a label removes that measurement and "Clear" removes
-                all. Measurements belong to the spectra shown: they are cleared
-                when the plotted data changes, and they are included in the SVG
-                download. Peak clicks select peaks as usual while measure mode is
-                off.
+            measure: Show a "Measure" button above the plot (default True;
+                False hides it). In measure mode, clicking two peaks of the same
+                half draws a bracket between them labelled with their m/z
+                difference ("Δm/z 128.059") and the amino-acid residues that
+                difference matches ("≈ K/Q"), also at charge 2+ ("≈ G (2+)").
+                Esc cancels a half-finished measurement, clicking a label
+                removes that measurement and "Clear" removes all. Measurements
+                belong to the spectra shown: they are cleared when the plotted
+                data changes, and they are included in the SVG download. Peak
+                clicks select peaks as usual while measure mode is off. The
+                measure options are render-time settings: they are not part of
+                the cache, so changing them never rebuilds it.
             measure_tolerance: Matching tolerance in Da per peak (default 0.02).
                 Both peaks carry this error, so a difference matches a residue
                 mass when ``|Δm/z - mass| <= 2 * measure_tolerance`` (at 2+:
@@ -164,9 +172,10 @@ class MirrorPlot(BaseComponent):
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
         self._svg_filename = svg_filename
-        self._measure = bool(measure)
-        self._measure_tolerance = self._validate_measure_tolerance(measure_tolerance)
-        self._measure_residues = self._validate_measure_residues(measure_residues)
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+        self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
+        self._measure_residues = validate_measure_residues(measure_residues)
         self._styling = styling or {}
         self._plot_config = config or {}
 
@@ -209,62 +218,8 @@ class MirrorPlot(BaseComponent):
             svg_filename=svg_filename,
             styling=styling,
             config=config,
-            # Forwarded for subprocess recreation (so the cache it writes has the
-            # same hash), and only when on: these kwargs also reach the component
-            # args, which stay as they were for a plot without measuring
-            **(
-                {
-                    "measure": True,
-                    "measure_tolerance": measure_tolerance,
-                    "measure_residues": measure_residues,
-                }
-                if measure
-                else {}
-            ),
             **kwargs,
         )
-
-    @staticmethod
-    def _validate_measure_tolerance(tolerance: Any) -> float:
-        if (
-            isinstance(tolerance, bool)
-            or not isinstance(tolerance, (int, float))
-            or not math.isfinite(tolerance)
-            or tolerance < 0
-        ):
-            raise ValueError(
-                f"measure_tolerance must be a non-negative number, got {tolerance!r}"
-            )
-        return float(tolerance)
-
-    @staticmethod
-    def _validate_measure_residues(
-        residues: dict[str, float] | None,
-    ) -> dict[str, float]:
-        if residues is None:
-            return {}
-        if not isinstance(residues, dict):
-            raise ValueError(
-                "measure_residues must be a dict of name -> mass, "
-                f"got {type(residues).__name__}"
-            )
-        validated: dict[str, float] = {}
-        for name, mass in residues.items():
-            if not isinstance(name, str) or not name:
-                raise ValueError(
-                    f"measure_residues names must be non-empty strings, got {name!r}"
-                )
-            if (
-                isinstance(mass, bool)
-                or not isinstance(mass, (int, float))
-                or not math.isfinite(mass)
-                or mass <= 0
-            ):
-                raise ValueError(
-                    f"measure_residues['{name}'] must be a positive mass, got {mass!r}"
-                )
-            validated[name] = float(mass)
-        return validated
 
     def _validate_mappings(self) -> None:
         """Validate per-side filters and shared schema columns."""
@@ -414,16 +369,6 @@ class MirrorPlot(BaseComponent):
             # Only when set, so caches built without it keep their hash; stored
             # so a component loaded from its cache keeps it
             **({"svg_filename": self._svg_filename} if self._svg_filename else {}),
-            # Likewise only when measuring is on
-            **(
-                {
-                    "measure": True,
-                    "measure_tolerance": self._measure_tolerance,
-                    "measure_residues": self._measure_residues,
-                }
-                if self._measure
-                else {}
-            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -444,12 +389,6 @@ class MirrorPlot(BaseComponent):
         self._styling = config.get("styling", {})
         self._plot_config = config.get("plot_config", {})
         self._svg_filename = config.get("svg_filename")
-        # A cache built without measuring keeps what was passed to __init__, so
-        # measure=True also works when loading such a cache by cache_id alone
-        if config.get("measure"):
-            self._measure = True
-            self._measure_tolerance = float(config.get("measure_tolerance", 0.02))
-            self._measure_residues = dict(config.get("measure_residues") or {})
         # Dynamic state (not cached) — reset to None
         self._top_dynamic_annotations = None
         self._bottom_dynamic_annotations = None
@@ -656,11 +595,9 @@ class MirrorPlot(BaseComponent):
         }
         if self._svg_filename:
             args["svgFilename"] = self._svg_filename
-        if self._measure:
-            args["measure"] = True
-            args["measureTolerance"] = self._measure_tolerance
-            if self._measure_residues:
-                args["measureResidues"] = self._measure_residues
+        args.update(
+            measure_args(self._measure, self._measure_tolerance, self._measure_residues)
+        )
         # Defensive: inject any unrecognised user **kwargs forwarded via super().__init__
         # without overwriting explicitly set args. All current MirrorPlot kwargs are
         # already covered above, so this loop is a no-op for normal usage.
