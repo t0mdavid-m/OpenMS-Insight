@@ -2,8 +2,10 @@
  * Measuring the distance between two points of a plot (`measure` on the
  * Python side). Shared by every 2D Plotly component.
  *
- * The "Measure" button (MeasureToolbar) switches clicks from selecting to
- * measuring. The first click picks a point, the second completes a
+ * The "Measure" button in Plotly's mode bar (`modeBarButtons()`) switches
+ * clicks from selecting to measuring; a second button clears all
+ * measurements. While measure mode is on, the button is highlighted and
+ * MeasureHint shows a short note over the plot. The first click picks a point, the second completes a
  * measurement. Two kinds:
  *
  * - `span` (spectra and other x-axis plots): a bracket above the two points,
@@ -22,7 +24,7 @@
  * it does without the tool.
  */
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type Plotly from 'plotly.js-dist-min'
 import {
   DEFAULT_MEASURE_TOLERANCE,
@@ -99,6 +101,33 @@ interface PendingPoint extends MeasurePoint {
 
 const DEFAULT_GROUP = ''
 
+/** Mode bar titles of the two buttons; the first also styles the active state. */
+const MEASURE_TITLE_PREFIX = 'Measure'
+const CLEAR_TITLE = 'Clear measurements'
+/** Class on the plot element while measure mode is on. */
+const ACTIVE_CLASS = 'measure-active'
+
+// A ruler, and a ruler crossed out
+const RULER_PATH =
+  'M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 10H3V8h2v4h2V8h2v4h2V8h2v4h2V8h2v4h2V8h2v8z'
+const CLEAR_PATH =
+  'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z'
+
+let styleInstalled = false
+
+/** The highlighted Measure button while measure mode is on (once per page). */
+function installStyle(): void {
+  if (styleInstalled || typeof document === 'undefined') return
+  styleInstalled = true
+  const style = document.createElement('style')
+  style.textContent =
+    `.${ACTIVE_CLASS} .modebar-btn[data-title^="${MEASURE_TITLE_PREFIX}"] path` +
+    ' { fill: #ff4b4b !important; }' +
+    `.${ACTIVE_CLASS} .modebar-btn[data-title^="${MEASURE_TITLE_PREFIX}"]` +
+    ' { opacity: 1 !important; }'
+  document.head.appendChild(style)
+}
+
 export function useMeasure(enabled: () => boolean) {
   const mode = ref(false)
   const measurements = ref<Measurement[]>([])
@@ -107,14 +136,22 @@ export function useMeasure(enabled: () => boolean) {
   const revision = ref(0)
   let nextId = 1
   let dataKey: string | undefined
+  /** The plot element last drawn, which carries the active class. */
+  let plotElement: HTMLElement | null = null
+  installStyle()
+
+  function markActive(): void {
+    plotElement?.classList.toggle(ACTIVE_CLASS, mode.value && enabled())
+  }
+  watch(mode, markActive)
 
   const active = computed(() => enabled() && mode.value)
 
   const hint = computed(() => {
     if (!mode.value) return ''
-    if (pending.value) return 'Click a second point (Esc cancels)'
-    if (measurements.value.length > 0) return 'Click a point to measure again, or a label to remove it'
-    return 'Click a point to start measuring'
+    if (pending.value) return 'Measuring: click a second point (Esc cancels)'
+    if (measurements.value.length > 0) return 'Measuring: click a point, or a label to remove it'
+    return 'Measuring: click a point'
   })
 
   function changed(): void {
@@ -248,10 +285,13 @@ export function useMeasure(enabled: () => boolean) {
   }
 
   /**
-   * Listen for clicks on measurement labels. Call after each Plotly.newPlot
-   * (which drops listeners); calling it again on the same plot is harmless.
+   * Listen for clicks on measurement labels and mark the plot element while
+   * measuring. Call after each Plotly.newPlot (which drops listeners);
+   * calling it again on the same plot is harmless.
    */
   function bindLabelClicks(element: HTMLElement | null): void {
+    plotElement = element
+    markActive()
     const plot = element as unknown as {
       on?: (event: string, handler: (event: Plotly.ClickAnnotationEvent) => void) => void
       removeListener?: (event: string, handler: (event: Plotly.ClickAnnotationEvent) => void) => void
@@ -397,6 +437,31 @@ export function useMeasure(enabled: () => boolean) {
     return { shapes, annotations }
   }
 
+  /**
+   * The Measure toggle and the Clear button for Plotly's mode bar (none when
+   * the tool is off). Mode bar buttons are left out of the SVG download.
+   * `title` is the Measure button's tooltip; it must start with "Measure".
+   */
+  function modeBarButtons(
+    title = 'Measure: click two points to measure the distance between them (Esc cancels)',
+  ): Plotly.ModeBarButton[] {
+    if (!enabled()) return []
+    return [
+      {
+        name: 'measure',
+        title,
+        icon: { width: 24, height: 24, path: RULER_PATH },
+        click: () => toggle(),
+      },
+      {
+        name: 'clearMeasurements',
+        title: CLEAR_TITLE,
+        icon: { width: 24, height: 24, path: CLEAR_PATH },
+        click: () => clear(),
+      },
+    ] as unknown as Plotly.ModeBarButton[]
+  }
+
   return reactive({
     mode,
     active,
@@ -410,6 +475,7 @@ export function useMeasure(enabled: () => boolean) {
     pick,
     setDataKey,
     bindLabelClicks,
+    modeBarButtons,
     overlay,
   })
 }

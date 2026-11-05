@@ -2,7 +2,7 @@
 
 Every 2D Plotly component (LinePlot, MirrorPlot, SeriesPlot,
 DeconvolvedSpectrum, Heatmap, VolcanoPlot, PCAPlot) takes ``measure``, on by
-default: a "Measure" button above the plot with which two clicked points are
+default: a "Measure" button in the Plotly mode bar with which two clicked points are
 measured (see ``js-component/src/composables/useMeasure.ts``). Components whose
 x axis is m/z or mass also take ``measure_tolerance`` and ``measure_residues``
 for matching a difference to amino-acid residue masses.

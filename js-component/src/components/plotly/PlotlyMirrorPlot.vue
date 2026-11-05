@@ -1,10 +1,6 @@
 <template>
   <div class="mirror-plot" :style="cssCustomProperties">
-    <MeasureToolbar
-      v-if="args.measure"
-      :measure="measure"
-      title="Click two peaks of the same spectrum to measure their m/z difference"
-    />
+    <MeasureHint v-if="args.measure" :measure="measure" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -18,7 +14,7 @@ import { useSelectionStore } from '@/stores/selection'
 import type { MirrorPlotComponentArgs } from '@/types/component'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
-import MeasureToolbar from './MeasureToolbar.vue'
+import MeasureHint from './MeasureHint.vue'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
 const DEFAULT_STYLING = {
@@ -56,7 +52,7 @@ interface AnnotationBox {
 
 export default defineComponent({
   name: 'PlotlyMirrorPlot',
-  components: { MeasureToolbar },
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<MirrorPlotComponentArgs>,
@@ -576,6 +572,7 @@ export default defineComponent({
               })
             },
           },
+          ...this.measure.modeBarButtons('Measure: click two peaks of the same spectrum (Esc cancels)'),
         ],
       })
       this.isInitialized = true
@@ -800,6 +797,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.mirror-plot {
+  position: relative;
+}
+
 .plot-container {
   width: 100%;
 }

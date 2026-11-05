@@ -1,6 +1,6 @@
 <template>
   <div class="pca-plot">
-    <MeasureToolbar v-if="args.measure" :measure="measure" />
+    <MeasureHint v-if="args.measure" :measure="measure" />
     <div :id="id" class="pca-container"></div>
   </div>
 </template>
@@ -13,7 +13,7 @@ import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import type { PCAPlotComponentArgs, PCAData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
-import MeasureToolbar from './MeasureToolbar.vue'
+import MeasureHint from './MeasureHint.vue'
 
 /** Default qualitative palette, shared with PlotlyHeatmap's categorical mode. */
 const DEFAULT_GROUP_COLORS = [
@@ -92,7 +92,7 @@ function computeEllipse(xs: number[], ys: number[], nPoints = 60): { x: number[]
 
 export default defineComponent({
   name: 'PlotlyPca',
-  components: { MeasureToolbar },
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<PCAPlotComponentArgs>,
@@ -442,7 +442,7 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig())
+        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig(this.measure.modeBarButtons()))
         this.setupPcaClickHandler()
         this.measure.bindLabelClicks(element)
 
@@ -527,6 +527,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.pca-plot {
+  position: relative;
+}
+
 .pca-container {
   position: relative;
   width: 100%;

@@ -132,17 +132,17 @@ class DeconvolvedSpectrum(BaseComponent):
             config: Label layout overrides: xPosScalingFactor (27.5),
                 xPosScalingThreshold (30).
             svg_filename: File name for the SVG download.
-            measure: Show a "Measure" button above the plot (default True;
+            measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two masses draws a
                 bracket labelled with their difference ("Δmass 128.095 ≈ K"),
                 matched to amino-acid residue masses as a neutral mass (1+
                 only). Between raw peaks (the 'annotated' view, or a ladder
-                drill-down) the difference is m/z and matched at 1+ and 2+.
-                Esc cancels a half-finished measurement, clicking a label
-                removes it and "Clear" removes all; they are cleared when other
-                data is plotted and are part of the SVG download. With measure
-                mode off, clicks select masses as before. Render-time only: not
-                part of the cache.
+                drill-down) the difference is m/z and matched at 1+ and 2+. Esc
+                cancels a half-finished measurement, clicking a label removes it
+                and "Clear measurements" removes all; they are cleared when
+                other data is plotted and are part of the SVG download. With
+                measure mode off, clicks select masses as before. Render-time
+                only: not part of the cache.
             measure_tolerance: Residue matching tolerance in Da per point
                 (default 0.02); a difference matches within twice this.
             measure_residues: Extra named masses to match besides the 20

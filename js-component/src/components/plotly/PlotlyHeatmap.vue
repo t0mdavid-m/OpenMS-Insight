@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <MeasureToolbar v-if="args.measure" :measure="measure" />
+  <div class="heatmap-plot">
+    <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
@@ -16,11 +16,11 @@ import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelec
 import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity } from '@/utils/measure'
-import MeasureToolbar from './MeasureToolbar.vue'
+import MeasureHint from './MeasureHint.vue'
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
-  components: { MeasureToolbar },
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -741,6 +741,7 @@ export default defineComponent({
       }
       const buttons = [colorbarToggleButton]
       if (this.multiSelectEnabled) buttons.push(clearSelectionButton(() => this.clearMultiSelect()))
+      buttons.push(...this.measure.modeBarButtons())
       return this.getPlotConfig(buttons)
     },
 
@@ -1010,6 +1011,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.heatmap-plot {
+  position: relative;
+}
+
 .heatmap-container {
   position: relative;
   width: 100%;

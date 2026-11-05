@@ -210,14 +210,14 @@ class Heatmap(BaseComponent):
                 the points in the drawn region, looked up in the full data (not
                 only the points of the level shown), or None. The selected
                 points are marked, whichever component chose them.
-            measure: Show a "Measure" button above the plot (default True;
+            measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two points draws a
                 line between them labelled with their x and y differences
                 (signed, second point minus first). Esc cancels a half-finished
-                measurement, clicking a label removes it and "Clear" removes
-                all; they are kept while zooming and are part of the SVG
-                download. With measure mode off, clicks select as before.
-                Render-time only: not part of the cache.
+                measurement, clicking a label removes it and "Clear
+                measurements" removes all; they are kept while zooming and are
+                part of the SVG download. With measure mode off, clicks select
+                as before. Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:

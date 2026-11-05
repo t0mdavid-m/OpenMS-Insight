@@ -1,6 +1,6 @@
 <template>
   <div class="series-plot">
-    <MeasureToolbar v-if="args.measure" :measure="measure" :title="measureTitle" />
+    <MeasureHint v-if="args.measure" :measure="measure" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -14,13 +14,13 @@ import { useSelectionStore } from '@/stores/selection'
 import type { SeriesPlotComponentArgs } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
-import MeasureToolbar from './MeasureToolbar.vue'
+import MeasureHint from './MeasureHint.vue'
 
 let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlySeries',
-  components: { MeasureToolbar },
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<SeriesPlotComponentArgs>,
@@ -125,7 +125,7 @@ export default defineComponent({
       return { kind: 'span', xQuantity: axisQuantity(this.args.xLabel, 'x') }
     },
     measureTitle(): string {
-      return `Click two points to measure their ${this.measureSpec.xQuantity} difference`
+      return `Measure: click two points for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
     },
     /** Identity of the plotted points: other data drops the measurements. */
     measureKey(): string {
@@ -246,6 +246,7 @@ export default defineComponent({
               })
             },
           },
+          ...this.measure.modeBarButtons(this.measureTitle),
         ],
         responsive: true,
       })
@@ -284,6 +285,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.series-plot {
+  position: relative;
+}
+
 .plot-container {
   width: 100%;
 }

@@ -780,10 +780,12 @@ picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or
 
 ### Measuring (`measure`)
 
-Every 2D plot has a **Measure** button above it: `LinePlot`, `MirrorPlot`,
-`SeriesPlot`, `DeconvolvedSpectrum`, `Heatmap`, `VolcanoPlot` and `PCAPlot`. It is
-on by default; `measure=False` removes the button. Pressing it switches clicks from
-selecting to measuring: click a point, then a second one.
+Every 2D plot has a **Measure** button (a ruler) in its Plotly mode bar: `LinePlot`,
+`MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum`, `Heatmap`, `VolcanoPlot` and
+`PCAPlot`. It is on by default; `measure=False` removes it. Pressing it switches
+clicks from selecting to measuring: click a point, then a second one. While measuring
+the ruler is highlighted and a short note sits over the plot's top-left corner; the
+plot keeps its height.
 
 | Component | What a measurement shows |
 |-----------|--------------------------|
@@ -800,7 +802,8 @@ matches within twice that, since both points carry the error) and
 the matching on `LinePlot`, `MirrorPlot` and `DeconvolvedSpectrum`.
 
 Several measurements can stay on a plot. Esc cancels a half-finished one,
-clicking a label removes that measurement and **Clear** removes all. They are
+clicking a label removes that measurement and the **Clear measurements** button (×)
+next to the ruler removes all. They are
 plain Plotly shapes and annotations, so the SVG download includes them. They are
 cleared when other data is plotted (a `Heatmap` keeps them while zooming). With
 measure mode off, clicks select as they always did.

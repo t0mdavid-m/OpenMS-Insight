@@ -106,14 +106,14 @@ class SeriesPlot(BaseComponent):
                 signed values such as mass errors).
             hover_column: Column whose text is shown when hovering a point
                 (e.g. a fragment name), above its x and y values.
-            measure: Show a "Measure" button above the plot (default True;
+            measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two points draws a
-                bracket labelled with their x difference ("ΔRT 12.400").
-                Esc cancels a half-finished measurement, clicking a label
-                removes it and "Clear" removes all; they are cleared when other
-                data is plotted and are part of the SVG download. With measure
-                mode off, clicks select as before. Render-time only: not part
-                of the cache.
+                bracket labelled with their x difference ("ΔRT 12.400"). Esc
+                cancels a half-finished measurement, clicking a label removes
+                it and "Clear measurements" removes all; they are cleared when
+                other data is plotted and are part of the SVG download. With
+                measure mode off, clicks select as before. Render-time only:
+                not part of the cache.
             **kwargs: Additional configuration options.
         """
         if y_range_mode not in ("nonnegative", "tozero", "normal"):

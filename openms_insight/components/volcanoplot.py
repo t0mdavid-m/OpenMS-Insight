@@ -123,15 +123,15 @@ class VolcanoPlot(BaseComponent):
             preset_labels: Labels of those buttons, keys "changed", "up",
                 "down" and "clear" (defaults: "All changed", "Up", "Down",
                 "Clear").
-            measure: Show a "Measure" button above the plot (default True;
+            measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two points draws a
                 line between them labelled with their fold change and p-value
                 differences (signed, second point minus first). Esc cancels a
                 half-finished measurement, clicking a label removes it and
-                "Clear" removes all; they are cleared when other data is
-                plotted and are part of the SVG download. With measure mode
-                off, clicks select as before. Render-time only: not part of
-                the cache.
+                "Clear measurements" removes all; they are cleared when other
+                data is plotted and are part of the SVG download. With measure
+                mode off, clicks select as before. Render-time only: not part
+                of the cache.
             **kwargs: Additional configuration options.
         """
         self._log2fc_column = log2fc_column

@@ -1,12 +1,10 @@
 <template>
-  <div class="deconvolved-spectrum">
-    <MeasureToolbar v-if="args.measure" :measure="measure" :title="measureTitle" />
-    <div class="plot-wrapper" :style="cssCustomProperties">
-      <div :id="id" class="plot-container"></div>
-      <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
-        ↩
-      </button>
-    </div>
+  <div class="plot-wrapper" :style="cssCustomProperties">
+    <div :id="id" class="plot-container"></div>
+    <MeasureHint v-if="args.measure" :measure="measure" />
+    <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
+      ↩
+    </button>
   </div>
 </template>
 
@@ -28,7 +26,7 @@ import { useSelectionStore } from '@/stores/selection'
 import type { DeconvolvedSpectrumComponentArgs } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
-import MeasureToolbar from './MeasureToolbar.vue'
+import MeasureHint from './MeasureHint.vue'
 
 type Mode = 'deconvolved' | 'annotated' | 'ladder' | 'ladder-annotated'
 
@@ -92,7 +90,7 @@ let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlyDeconvolvedSpectrum',
-  components: { MeasureToolbar },
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<DeconvolvedSpectrumComponentArgs>,
@@ -622,8 +620,8 @@ export default defineComponent({
     },
     measureTitle(): string {
       return this.isMzMode
-        ? 'Click two peaks to measure their m/z difference'
-        : 'Click two masses to measure their difference'
+        ? 'Measure: click two peaks for their m/z difference (Esc cancels)'
+        : 'Measure: click two masses for their difference (Esc cancels)'
     },
     /** Identity of the plotted masses or peaks: others drop the measurements. */
     measureKey(): string {
@@ -978,6 +976,7 @@ export default defineComponent({
           }
         },
       })
+      modeBarButtons.push(...(this.measure.modeBarButtons(this.measureTitle) as unknown as Array<Record<string, unknown>>))
       const plot = (await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: modeBarButtons as unknown as Plotly.ModeBarButton[],

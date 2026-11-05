@@ -1,6 +1,5 @@
 <template>
-  <div>
-    <MeasureToolbar v-if="args.measure" :measure="measure" />
+  <div class="volcano-plot">
     <div v-if="multiSelectEnabled && args.selectionPresets" class="volcano-select-bar">
       <span class="volcano-select-label">Select</span>
       <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
@@ -21,7 +20,10 @@
     </div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+    <div class="volcano-plot-area">
+      <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+      <MeasureHint v-if="args.measure" :measure="measure" />
+    </div>
   </div>
 </template>
 
@@ -34,7 +36,7 @@ import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelec
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
-import MeasureToolbar from './MeasureToolbar.vue'
+import MeasureHint from './MeasureHint.vue'
 
 /**
  * Compute significance category for a point.
@@ -56,7 +58,7 @@ function computeSignificance(
 
 export default defineComponent({
   name: 'PlotlyVolcano',
-  components: { MeasureToolbar },
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<VolcanoPlotComponentArgs>,
@@ -570,7 +572,10 @@ export default defineComponent({
 
         await Plotly.newPlot(
           this.id, this.plotData, this.layout,
-          this.getPlotConfig(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
+          this.getPlotConfig([
+            ...(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
+            ...this.measure.modeBarButtons(),
+          ]),
         )
         this.setupClickHandler()
         this.setupSelectHandlers()
@@ -687,6 +692,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.volcano-plot-area {
+  position: relative;
+}
+
 .volcano-select-bar {
   display: flex;
   flex-wrap: wrap;

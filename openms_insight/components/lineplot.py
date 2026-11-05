@@ -112,16 +112,16 @@ class LinePlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options
-            measure: Show a "Measure" button above the plot (default True;
+            measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two peaks draws a
                 bracket labelled with their x difference ("Δm/z 128.059"). When
                 the x-axis label is m/z, the difference is also matched to
-                amino-acid residue masses at charge 1+ and 2+ ("≈ K/Q",
-                "≈ G (2+)"). Esc cancels a half-finished measurement, clicking a
-                label removes it and "Clear" removes all; they are cleared when
-                other peaks are plotted and are part of the SVG download. With
-                measure mode off, clicks select peaks as before. Render-time
-                only: not part of the cache.
+                amino-acid residue masses at charge 1+ and 2+ ("≈ K/Q", "≈ G
+                (2+)"). Esc cancels a half-finished measurement, clicking a
+                label removes it and "Clear measurements" removes all; they are
+                cleared when other peaks are plotted and are part of the SVG
+                download. With measure mode off, clicks select peaks as before.
+                Render-time only: not part of the cache.
             measure_tolerance: Residue matching tolerance in Da per peak
                 (default 0.02); a difference matches within twice this.
             measure_residues: Extra named masses to match besides the 20

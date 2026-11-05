@@ -1,6 +1,6 @@
 <template>
   <div class="lineplot">
-    <MeasureToolbar v-if="args.measure" :measure="measure" :title="measureTitle" />
+    <MeasureHint v-if="args.measure" :measure="measure" />
     <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
   </div>
 </template>
@@ -14,7 +14,7 @@ import { useSelectionStore } from '@/stores/selection'
 import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
-import MeasureToolbar from './MeasureToolbar.vue'
+import MeasureHint from './MeasureHint.vue'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -34,7 +34,7 @@ const DEFAULT_CONFIG = {
 
 export default defineComponent({
   name: 'PlotlyLineplot',
-  components: { MeasureToolbar },
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<LinePlotComponentArgs>,
@@ -684,7 +684,7 @@ export default defineComponent({
     },
 
     measureTitle(): string {
-      return `Click two peaks to measure their ${this.measureSpec.xQuantity} difference`
+      return `Measure: click two peaks for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
     },
 
     /** Identity of the plotted peaks: other peaks drop the measurements. */
@@ -841,6 +841,7 @@ export default defineComponent({
               }
             },
           },
+          ...this.measure.modeBarButtons(this.measureTitle),
         ]
 
         await Plotly.newPlot(this.id, this.traces, this.layout, {
@@ -852,8 +853,7 @@ export default defineComponent({
 
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
-          // The measure toolbar adds to the plot's height
-          if (this.args.height && !this.args.measure) {
+          if (this.args.height) {
             Streamlit.setFrameHeight(this.args.height)
           } else {
             Streamlit.setFrameHeight()
@@ -1108,6 +1108,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.lineplot {
+  position: relative;
+}
+
 .plot-container {
   position: relative;
   width: 100%;
