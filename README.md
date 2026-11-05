@@ -292,11 +292,15 @@ mirror(state_manager=state_manager, height=600)
 - `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
 - `svg_filename`: File name for the modebar's "Download as SVG" button (default: `title`, then `mirror_plot`)
+- `measure`: Show a "Measure" button above the plot for measuring the m/z difference between two peaks (default `False`)
+- `measure_tolerance`: Per-peak tolerance in Da for matching a measured difference to a residue mass (default `0.02`; a difference matches when it is within `2 * measure_tolerance`, since both peaks carry the error)
+- `measure_residues`: Extra named masses to match besides the 20 standard amino-acid residues, e.g. `{"M(Oxidation)": 147.0354}`
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
 - Tick labels show absolute intensity on both sides — the bottom half is flipped only for layout, not for the displayed values
 - Marker traces are kept in addition to stick shapes so Plotly fires `plotly_click` events; the click handler picks the side via `curveNumber` and routes the row's interactivity column value to the shared selection
+- With `measure=True`, the "Measure" button switches clicks from selecting peaks to measuring: click one peak, then a second peak in the same half. A bracket is drawn at the taller peak's height, labelled with the difference (`Δm/z 128.059`) and every residue it matches at charge 1+ or 2+, closest first (`≈ Q/K`, `≈ G (2+)`; I and L are shown as `I/L`). Several measurements can stay on the plot; Esc cancels a half-finished one, clicking a label removes that measurement, and "Clear" removes all. Measurements are cleared when the plotted spectra change and are part of the SVG download. With measure mode off, clicks select peaks as before
 - `set_top_dynamic_annotations(...)` / `set_bottom_dynamic_annotations(...)` allow another component (e.g. a `SequenceView`) to push fragment-ion annotations into one half without invalidating the cache
 
 ### Heatmap

@@ -366,6 +366,12 @@ export interface MirrorPlotComponentArgs extends BaseComponentArgs {
   title?: string
   /** File name (without extension) for the SVG download. */
   svgFilename?: string
+  /** Show the "Measure" button: click two peaks to measure their m/z difference. */
+  measure?: boolean
+  /** Per-peak tolerance in Da; a difference matches a residue within twice this. */
+  measureTolerance?: number
+  /** Extra named masses matched besides the standard amino-acid residues. */
+  measureResidues?: Record<string, number>
   /** Label shown inside the top half of the figure. */
   titleTop?: string
   /** Label shown inside the bottom half of the figure. */
