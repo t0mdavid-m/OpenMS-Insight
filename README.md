@@ -832,8 +832,13 @@ A component's `image_format` argument (default `None`: follow
 `set_image_format()`) overrides it for that component:
 
 ```python
-LinePlot(cache_id="spectrum", data=peaks, x_column="mz", y_column="intensity",
-         image_format="png")
+LinePlot(
+    cache_id="spectrum",
+    data=peaks,
+    x_column="mz",
+    y_column="intensity",
+    image_format="png",
+)
 ```
 
 | Component | Download button | Notes |
