@@ -1046,6 +1046,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // An error about the input goes once the input changes
+    customSequenceInput() {
+      this.sequenceInputError = ''
+    },
     // The residue menus read the variable-modification library from the store
     'args.variableModificationLibrary': {
       handler(library) {
