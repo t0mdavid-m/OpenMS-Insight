@@ -54,7 +54,7 @@ const DEFAULT_STYLING = {
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
   // Circles of the theoretical isotope envelope (set_envelope)
-  envelopeColor: '#2CA58D',
+  envelopeColor: '#D62728',
   annotationColors: {
     massButton: '#E4572E',
     selectedMassButton: '#F3A712',
