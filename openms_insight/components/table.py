@@ -80,6 +80,7 @@ _VUE_OPTION_KEYS = (
     "numeric_filters",
     "fill_height",
     "row_overview",
+    "row_step",
     "multi_select",
 )
 
@@ -157,6 +158,7 @@ class Table(BaseComponent):
         reset_sort_on: list[str] | None = None,
         fill_height: bool = False,
         row_overview: bool | str = False,
+        row_step: bool = False,
         multi_select: dict[str, str] | None = None,
         search: bool | list[str] = False,
         search_placeholder: str | None = None,
@@ -260,6 +262,11 @@ class Table(BaseComponent):
                 titles the overview "Row details"; a string is the title
                 itself, with ``{field}`` replaced by that column's value in
                 the row, e.g. ``"{accession}, scan {scan}"``.
+            row_step: Add "Previous row" and "Next row" buttons to the toolbar.
+                They select the row before or after the selected one in the
+                order shown (sort, filters and search applied), across pages,
+                as if it had been clicked. Without a selected row they select
+                the first or last row. Needs ``interactivity``.
             fill_height: Without pagination, keep the table at the height it is
                 rendered with instead of shrinking it to its rows, so tables
                 rendered side by side with one height line up.
@@ -311,6 +318,7 @@ class Table(BaseComponent):
             if isinstance(row_overview, str) and row_overview
             else bool(row_overview)
         )
+        self._row_step = bool(row_step)
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -367,6 +375,7 @@ class Table(BaseComponent):
             reset_sort_on=reset_sort_on,
             fill_height=fill_height,
             row_overview=row_overview,
+            row_step=row_step,
             multi_select=multi_select,
             search=search,
             search_placeholder=search_placeholder,
@@ -467,6 +476,7 @@ class Table(BaseComponent):
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
             **({"fill_height": True} if self._fill_height else {}),
             **({"row_overview": self._row_overview} if self._row_overview else {}),
+            **({"row_step": True} if self._row_step else {}),
             **({"multi_select": self._multi_select} if self._multi_select else {}),
             **({"search": self._search} if self._search else {}),
             **(
@@ -509,6 +519,7 @@ class Table(BaseComponent):
         self._numeric_filters = config.get("numeric_filters") or {}
         self._fill_height = config.get("fill_height", False)
         self._row_overview = config.get("row_overview", False)
+        self._row_step = config.get("row_step", False)
         self._multi_select = dict(config.get("multi_select") or {})
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in _VUE_OPTION_KEYS:
@@ -1550,7 +1561,10 @@ class Table(BaseComponent):
 
     def _handle_event(self, event: dict[str, Any]) -> bool:
         """The header check box: select (or unselect) every row passing the
-        table's filters, on all pages."""
+        table's filters, on all pages. The Previous / Next row buttons: select
+        the neighbouring row."""
+        if event.get("type") == "step_row":
+            return self._step_row(event.get("direction"))
         if event.get("type") != "multi_select_all" or not self._multi_select:
             return False
         from ..core.state import get_render_state_manager
@@ -1570,27 +1584,74 @@ class Table(BaseComponent):
                 changed = True
         return changed
 
-    def export_data(self, state: dict[str, Any] | None = None) -> pl.DataFrame:
+    def _step_row(self, direction: Any) -> bool:
+        """Select the row before (direction -1) or after (+1) the selected row,
+        in the order the table shows its rows, as a click on it would.
+
+        Without a selected row, or one the filters hide, the first row (+1) or
+        the last row (-1) is selected. Returns True if a selection changed.
         """
-        Return the table's full data for export.
+        if not self._row_step or not self._interactivity or direction not in (-1, 1):
+            return False
+        from ..core.state import get_render_state_manager
 
-        Unlike the rendered table, this is not limited to the current page or
-        to the columns in ``column_definitions``: every cached column and every
-        row is included, displayed columns first.
+        state_manager = get_render_state_manager()
+        state = state_manager.get_all_selections()
+        columns = list(dict.fromkeys(self._interactivity.values()))
+        rows = self._shown_rows(state)
+        names = rows.collect_schema().names()
+        if any(column not in names for column in columns):
+            return False
+        rows = rows.select(columns).with_row_index("_row_num")
 
-        Args:
-            state: Selection state to apply, as the table would when rendered.
-                Cross-component ``filters`` whose selection is set, and the
-                table's own pagination state (sort and column filters), are
-                honoured. ``None`` exports the unfiltered table in its initial
-                sort order.
+        # The selected row: by the identifier of index_field if there is one
+        # (unique), else by every selected identifier
+        position = None
+        identifiers = [
+            ident
+            for ident, column in self._interactivity.items()
+            if column == self._index_field and state.get(ident) is not None
+        ] or [ident for ident in self._interactivity if state.get(ident) is not None]
+        if identifiers:
+            match = rows
+            for ident in identifiers:
+                match = match.filter(
+                    pl.col(self._interactivity[ident]) == state.get(ident)
+                )
+            found = match.select("_row_num").head(1).collect()
+            if found.height:
+                position = found["_row_num"][0]
 
-        Returns:
-            Polars DataFrame, ready for ``write_csv()`` / ``write_parquet()``.
-            For a CSV that people open in a spreadsheet, pass it through
-            ``csv_safe()`` first, as the in-table download does.
-        """
-        state = state or {}
+        total = rows.select(pl.len()).collect().item()
+        if total == 0:
+            return False
+        if position is None:
+            target = 0 if direction == 1 else total - 1
+        else:
+            target = position + direction
+            if target < 0 or target >= total:
+                return False
+        row = rows.slice(target, 1).collect()
+
+        changed = False
+        values = {}
+        for ident, column in self._interactivity.items():
+            value = row[column][0]
+            if hasattr(value, "item"):
+                value = value.item()
+            values[ident] = value
+        # Side effects first, as for a click on the row
+        if any(state.get(ident) != value for ident, value in values.items()):
+            for ident, value in self._on_select.items():
+                if ident not in self._interactivity:
+                    changed |= state_manager.set_selection(ident, value)
+        for ident, value in values.items():
+            changed |= state_manager.set_selection(ident, value)
+        return changed
+
+    def _shown_rows(self, state: dict[str, Any]) -> pl.LazyFrame:
+        """Every row the table shows for this state, in the order shown:
+        cross-component filters, the table's own filters and search, sorted."""
         data = self._preprocessed_data.get("data")
         if data is None:
             data = self._raw_data
@@ -1612,11 +1673,33 @@ class Table(BaseComponent):
             data, self._effective_column_filters(pagination_state)
         )
         data = self._apply_search(data, self._search_text(pagination_state))
-        data = self._apply_sort(
+        return self._apply_sort(
             data,
             pagination_state.get("sort_column"),
             pagination_state.get("sort_dir", "asc"),
         )
+
+    def export_data(self, state: dict[str, Any] | None = None) -> pl.DataFrame:
+        """
+        Return the table's full data for export.
+
+        Unlike the rendered table, this is not limited to the current page or
+        to the columns in ``column_definitions``: every cached column and every
+        row is included, displayed columns first.
+
+        Args:
+            state: Selection state to apply, as the table would when rendered.
+                Cross-component ``filters`` whose selection is set, and the
+                table's own pagination state (sort and column filters), are
+                honoured. ``None`` exports the unfiltered table in its initial
+                sort order.
+
+        Returns:
+            Polars DataFrame, ready for ``write_csv()`` / ``write_parquet()``.
+            For a CSV that people open in a spreadsheet, pass it through
+            ``csv_safe()`` first, as the in-table download does.
+        """
+        data = self._shown_rows(state or {})
         return self._order_export_columns(data.collect())
 
     def _get_component_args(self) -> dict[str, Any]:
@@ -1675,6 +1758,8 @@ class Table(BaseComponent):
                 args["rowOverviewTitle"] = self._row_overview
         if self._multi_select:
             args["multiSelect"] = self._multi_select
+        if self._row_step and self._interactivity:
+            args["rowStep"] = True
 
         # Add any extra config options
         args.update(self._config)

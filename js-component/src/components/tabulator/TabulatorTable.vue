@@ -50,6 +50,24 @@
               </v-card>
             </v-menu>
           </v-btn>
+          <template v-if="args.rowStep">
+            <v-btn
+              variant="text"
+              size="small"
+              icon="mdi-chevron-up"
+              title="Previous row"
+              aria-label="Previous row"
+              @click="stepRow(-1)"
+            />
+            <v-btn
+              variant="text"
+              size="small"
+              icon="mdi-chevron-down"
+              title="Next row"
+              aria-label="Next row"
+              @click="stepRow(1)"
+            />
+          </template>
           <v-btn
             v-if="args.goToFields && args.goToFields.length > 0"
             variant="text"
@@ -3147,6 +3165,35 @@ export default defineComponent({
       if (!this.tabulator) return
       this.tabulator.destroy()
       this.drawTable()
+    },
+
+    /**
+     * Previous / Next row: select the row before (-1) or after (+1) the
+     * selected one, in the order shown. With server-side pagination the
+     * neighbour may be on another page, so Python picks it.
+     */
+    stepRow(direction: -1 | 1): void {
+      if (this.isServerSidePagination) {
+        this.streamlitDataStore.sendEvent({ type: 'step_row', direction })
+        return
+      }
+      if (!this.tabulator) return
+      const rows = this.tabulator.getRows('active')
+      if (rows.length === 0) return
+      const selected = this.tabulator.getSelectedRows()[0]
+      const position = selected
+        ? rows.findIndex((r) => r.getIndex() === selected.getIndex())
+        : -1
+      let target: number
+      if (position < 0) {
+        target = direction === 1 ? 0 : rows.length - 1
+      } else {
+        target = position + direction
+        if (target < 0 || target >= rows.length) return
+      }
+      const row = rows[target]
+      this.onRowClick(row)
+      row.scrollTo('nearest', false).catch(() => {})
     },
 
     findRowByValue(field: string, value: string): number {

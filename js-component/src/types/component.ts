@@ -108,6 +108,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   fillHeight?: boolean
   rowOverview?: boolean
   rowOverviewTitle?: string
+  /** Previous / Next row buttons in the toolbar */
+  rowStep?: boolean
   /** False hides the column menu */
   columnMenu?: boolean
   /** Show the toolbar search box */
