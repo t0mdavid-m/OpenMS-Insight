@@ -759,8 +759,11 @@ export default defineComponent({
           oldFirstX: oldData?.x_values?.[0],
         })
         if (this.isInitialized) {
-          // Reset zoom when data changes (e.g., switching spectra)
-          this.manualXRange = undefined
+          // Reset zoom when data changes (e.g., switching spectra), unless the
+          // plot keeps the user's x range across spectra (keep_zoom=True)
+          if (!this.args.keepZoom) {
+            this.manualXRange = undefined
+          }
           this.lastAutoZoomedPeakIndex = undefined
           this.renderPlot()
         }

@@ -157,6 +157,7 @@ export interface LinePlotComponentArgs extends BaseComponentArgs, MeasureArgs, I
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
+  keepZoom?: boolean // Keep the zoomed x range when new data is plotted
 }
 
 export interface LinePlotStyling {

@@ -258,6 +258,7 @@ LinePlot(
 - `highlight_column`: Boolean/int column indicating which points to highlight
 - `annotation_column`: Text column for labels on highlighted points
 - `styling`: Color configuration dict
+- `keep_zoom`: Keep the zoomed x range when another spectrum is selected (default `False`: each new spectrum is shown in full; double-click resets the zoom)
 
 ### MirrorPlot
 

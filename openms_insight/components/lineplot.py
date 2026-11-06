@@ -75,6 +75,7 @@ class LinePlot(BaseComponent):
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
         image_format: str | None = None,
+        keep_zoom: bool = False,
         **kwargs,
     ):
         """
@@ -132,6 +133,10 @@ class LinePlot(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            keep_zoom: Keep the zoomed x range when the plot gets new data,
+                e.g. when another spectrum is selected (default False: every
+                new spectrum is shown in full). Double-click still resets the
+                zoom. Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -155,6 +160,11 @@ class LinePlot(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+
+        # Render-time option: keep the x zoom across data changes
+        if not isinstance(keep_zoom, bool):
+            raise ValueError(f"keep_zoom must be True or False, got {keep_zoom!r}")
+        self._keep_zoom = keep_zoom
 
         super().__init__(
             cache_id=cache_id,
@@ -452,6 +462,7 @@ class LinePlot(BaseComponent):
             "yColumn": self._y_column,
             "highlightColumn": self._highlight_column,
             "annotationColumn": self._annotation_column,
+            "keepZoom": self._keep_zoom,
         }
 
         # Add any extra config options
