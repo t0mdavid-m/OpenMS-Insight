@@ -237,7 +237,7 @@ export default defineComponent({
           y0: 0,
           y1: 1,
           fillcolor: color,
-          opacity: 0.15,
+          opacity: 0.25,
           line: { width: 0 },
           layer: 'below',
         },
