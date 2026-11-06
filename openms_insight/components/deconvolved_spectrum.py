@@ -5,6 +5,13 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.measure import (
+    DEFAULT_MEASURE_TOLERANCE,
+    measure_args,
+    validate_measure,
+    validate_measure_residues,
+    validate_measure_tolerance,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -89,6 +96,9 @@ class DeconvolvedSpectrum(BaseComponent):
         config: dict[str, Any] | None = None,
         svg_filename: str = "spectrum",
         drilldown_title: str | None = None,
+        measure: bool = True,
+        measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
+        measure_residues: dict[str, float] | None = None,
         **kwargs,
     ):
         """
@@ -126,6 +136,21 @@ class DeconvolvedSpectrum(BaseComponent):
             config: Label layout overrides: xPosScalingFactor (27.5),
                 xPosScalingThreshold (30).
             svg_filename: File name for the SVG download.
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two masses draws a
+                bracket labelled with their difference ("Δmass 128.095 ≈ K"),
+                matched to amino-acid residue masses as a neutral mass (1+
+                only). Between raw peaks (the 'annotated' view, or a ladder
+                drill-down) the difference is m/z and matched at 1+ and 2+. Esc
+                cancels a half-finished measurement, clicking a label removes it
+                and "Clear measurements" removes all; they are cleared when
+                other data is plotted and are part of the SVG download. With
+                measure mode off, clicks select masses as before. Render-time
+                only: not part of the cache.
+            measure_tolerance: Residue matching tolerance in Da per point
+                (default 0.02); a difference matches within twice this.
+            measure_residues: Extra named masses to match besides the 20
+                standard residues, e.g. ``{"M(Oxidation)": 147.0354}``.
             **kwargs: Additional configuration options.
         """
         if view not in VIEWS:
@@ -146,6 +171,13 @@ class DeconvolvedSpectrum(BaseComponent):
         self._ladder: dict[str, Any] | None = None
         # Theoretical isotope envelope of one mass (set per render, not cached)
         self._envelope: dict[str, Any] | None = None
+        # Isolation window marked in the m/z views (set per render, not cached)
+        self._isolation_window: dict[str, float] | None = None
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+        self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
+        self._measure_residues = validate_measure_residues(measure_residues)
 
         super().__init__(
             cache_id=cache_id,
@@ -207,6 +239,7 @@ class DeconvolvedSpectrum(BaseComponent):
         self._drilldown_title = config.get("drilldown_title")
         self._ladder = None
         self._envelope = None
+        self._isolation_window = None
 
     def _data_columns(self) -> list[str]:
         """Columns this view draws from (filter columns are added separately)."""
@@ -347,6 +380,40 @@ class DeconvolvedSpectrum(BaseComponent):
         self._envelope = envelope
         return self
 
+    def set_isolation_window(
+        self,
+        lower_mz: float | None,
+        upper_mz: float | None = None,
+        target_mz: float | None = None,
+    ) -> "DeconvolvedSpectrum":
+        """
+        Mark an isolation window in the m/z views for the next render.
+
+        The window is shaded from ``lower_mz`` to ``upper_mz``, with a dashed
+        line at ``target_mz`` when given. Use it on a precursor (MS1) spectrum
+        to show the m/z range isolated for a fragmentation spectrum. It is
+        drawn in the m/z views only: ``'annotated'``, and ``'ladder'`` drilled
+        down to a mass.
+
+        Args:
+            lower_mz: Lower edge of the window. None clears the window.
+            upper_mz: Upper edge of the window.
+            target_mz: Isolation target, or None.
+
+        Returns:
+            Self for method chaining.
+        """
+        if lower_mz is None or upper_mz is None or not upper_mz > lower_mz:
+            self._isolation_window = None
+        else:
+            self._isolation_window = {
+                "lower": float(lower_mz),
+                "upper": float(upper_mz),
+            }
+            if target_mz is not None:
+                self._isolation_window["target"] = float(target_mz)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         view = VIEWS[self._view]
         args: dict[str, Any] = {
@@ -368,4 +435,10 @@ class DeconvolvedSpectrum(BaseComponent):
             args["envelope"] = self._envelope
         if self._drilldown_title:
             args["drilldownTitle"] = self._drilldown_title
+        # Only when set, so the args of other callers stay as they were
+        if self._isolation_window:
+            args["isolationWindow"] = self._isolation_window
+        args.update(
+            measure_args(self._measure, self._measure_tolerance, self._measure_residues)
+        )
         return args
