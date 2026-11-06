@@ -674,6 +674,15 @@ class TestProteinSequenceView:
         ]
         # separate from the dialog's fixed-modification picker
         assert args["modificationLibrary"] is None
+        # None: the menu's built-in suggestions
+        assert args["variableModificationSuggestions"] is None
+        view.set_variable_modification_library(
+            [{"id": "Oxidation (M)", "mass": 15.994915, "site": "M"}],
+            suggested={"M": ["Oxidation (M)"]},
+        )
+        assert view._get_component_args()["variableModificationSuggestions"] == {
+            "M": ["Oxidation (M)"]
+        }
         assert view.set_variable_modification_library(None) is view
         assert view._get_component_args()["variableModificationLibrary"] is None
         with pytest.raises(ValueError):

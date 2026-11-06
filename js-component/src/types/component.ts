@@ -520,6 +520,9 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   modifications?: string[] | null
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
+  // Library ids suggested per site (residue letter, 'N-term', 'C-term');
+  // null: the built-in suggestions
+  variableModificationSuggestions?: Record<string, string[]> | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
   /** Fragment ion types (or fragmentation method) and tolerance to start from */

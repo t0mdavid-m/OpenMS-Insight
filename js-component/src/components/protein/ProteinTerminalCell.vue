@@ -11,17 +11,13 @@ v-model="menuOpen" activator="parent" location="end" :open-on-click="false" :clo
       :width="hasLibrary ? '360px' : '200px'">
       <v-list>
         <v-list-item>
-          <v-autocomplete
+          <ModificationPicker
             v-if="hasLibrary"
-            v-model="selectedModification"
-            clearable
-            label="Modification"
-            placeholder="Search by name or mass"
-            density="compact"
-            :items="modificationsForSelect"
-            item-title="title"
-            item-value="value"
-            @update:model-value="updateSelectedModification"
+            :site="proteinTerminal"
+            :options="modificationsForSelect"
+            :suggested="variableModData.suggested"
+            :selected="selectedModification"
+            @pick="updateSelectedModification"
           />
           <v-select
             v-else
@@ -56,9 +52,11 @@ import type { Theme } from 'streamlit-component-lib'
 import type { PropType } from 'vue'
 import { defineComponent } from 'vue'
 import { modificationOptions, type ModificationOption } from '@/components/sequence/modification'
+import ModificationPicker from './ModificationPicker.vue'
 
 export default defineComponent({
   name: 'ProteinTerminalCell',
+  components: { ModificationPicker },
   props: {
     proteinTerminal: {
       type: String as PropType<'N-term' | 'C-term'>,

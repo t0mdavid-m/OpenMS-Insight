@@ -944,9 +944,12 @@ export default defineComponent({
     // The residue menus read the variable-modification library from the store
     'args.variableModificationLibrary': {
       handler(library) {
-        this.variableModData.setLibrary(library)
+        this.variableModData.setLibrary(library, this.args.variableModificationSuggestions)
       },
       immediate: true,
+    },
+    'args.variableModificationSuggestions'(suggested) {
+      this.variableModData.setLibrary(this.args.variableModificationLibrary, suggested)
     },
     // A new spectrum (or entry) arrives: rematch the fragments
     spectrum() {

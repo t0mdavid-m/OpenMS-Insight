@@ -79,17 +79,13 @@
     >
       <v-list>
         <v-list-item>
-          <v-autocomplete
+          <ModificationPicker
             v-if="hasLibrary"
-            v-model="selectedModification"
-            clearable
-            label="Modification"
-            placeholder="Search by name or mass"
-            density="compact"
-            :items="modificationsForSelect"
-            item-title="title"
-            item-value="value"
-            @update:model-value="updateSelectedModification"
+            :site="aminoAcid"
+            :options="modificationsForSelect"
+            :suggested="variableModData.suggested"
+            :selected="selectedModification"
+            @pick="updateSelectedModification"
           />
           <v-select
             v-else
@@ -157,6 +153,7 @@ import type { Theme } from 'streamlit-component-lib'
 import type { PropType } from 'vue'
 import { defineComponent } from 'vue'
 import { modificationOptions, type ModificationOption } from '@/components/sequence/modification'
+import ModificationPicker from './ModificationPicker.vue'
 
 // Provided by ProteinSequenceView. The defaults let the legend's example
 // cells render outside a view.
@@ -168,6 +165,7 @@ interface SequenceViewContext {
 
 export default defineComponent({
   name: 'ProteinAminoAcidCell',
+  components: { ModificationPicker },
   inject: {
     sequenceView: {
       default: (): SequenceViewContext => ({

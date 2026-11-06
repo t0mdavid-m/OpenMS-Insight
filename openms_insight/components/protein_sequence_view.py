@@ -246,6 +246,7 @@ class ProteinSequenceView(BaseComponent):
         modifications_identifier: str | None = None,
         modifications: list[str] | None = None,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
+        variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
         title: str | None = "Sequence View",
         annotation_title: str = "Fragment annotation",
@@ -308,9 +309,16 @@ class ProteinSequenceView(BaseComponent):
                 a residue (right click) offers instead of the built-in six, in
                 the form of ``modification_library`` (``'pyopenms'`` included);
                 each residue and terminus lists the entries of its ``site``.
-                The menu becomes searchable, and a list under the sequence
-                shows the applied modifications with their total mass. None
-                keeps the built-in menu.
+                The menu gets a search field (name or mass) and lists
+                suggested modifications for the residue until something is
+                typed; a list under the sequence shows the applied
+                modifications with their total mass. None keeps the built-in
+                menu.
+            variable_modification_suggestions: Library ids suggested in the
+                menu per site (a residue letter, ``'N-term'`` or
+                ``'C-term'``), e.g. ``{'K': ['Acetyl (K)', 'GG (K)']}``. None
+                uses built-in suggestions of common biological modifications
+                and artefacts; ``{}`` suggests nothing.
             settings: Initial fragment settings, all keys optional:
                 ``tolerance`` (default 10), ``tolerance_unit`` ('ppm' default,
                 or 'Da'), ``ion_types`` (a b c x y z and the variants a• x•
@@ -347,7 +355,9 @@ class ProteinSequenceView(BaseComponent):
         self.set_modification_picker(
             modification_library, modifications_identifier, modifications
         )
-        self.set_variable_modification_library(variable_modification_library)
+        self.set_variable_modification_library(
+            variable_modification_library, variable_modification_suggestions
+        )
         check_fragment_settings(settings)
         self._settings = settings
         self._title = title
@@ -570,17 +580,25 @@ class ProteinSequenceView(BaseComponent):
         return self
 
     def set_variable_modification_library(
-        self, library: list[dict[str, Any]] | str | None
+        self,
+        library: list[dict[str, Any]] | str | None,
+        suggested: dict[str, list[str]] | None = None,
     ) -> "ProteinSequenceView":
         """Offer these variable modifications in the residue menus.
 
         Not cached, so a view loaded from its cache can set it per render. See
-        ``variable_modification_library`` in the constructor.
+        ``variable_modification_library`` and
+        ``variable_modification_suggestions`` in the constructor.
 
         Returns:
             Self for method chaining.
         """
         self._variable_modification_library = _modification_library(library)
+        if suggested is not None:
+            suggested = {
+                str(site): [str(i) for i in ids] for site, ids in suggested.items()
+            }
+        self._variable_modification_suggestions = suggested
         return self
 
     def _get_component_args(self) -> dict[str, Any]:
@@ -595,6 +613,7 @@ class ProteinSequenceView(BaseComponent):
             "modificationsIdentifier": self._modifications_identifier,
             "modifications": self._modifications,
             "variableModificationLibrary": self._variable_modification_library,
+            "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,
             "tag": self._tag,
             "svgFilename": self._svg_filename,
