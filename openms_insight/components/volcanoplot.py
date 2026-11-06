@@ -5,6 +5,11 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.measure import (
+    measure_args,
+    validate_measure,
+)
 from ..core.multi_select import normalize_multi_select
 from ..core.registry import register_component
 from ..preprocessing.scatter import build_scatter_columns
@@ -74,6 +79,8 @@ class VolcanoPlot(BaseComponent):
         multi_select: dict[str, str] | None = None,
         selection_presets: bool = False,
         preset_labels: dict[str, str] | None = None,
+        measure: bool = True,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -118,6 +125,19 @@ class VolcanoPlot(BaseComponent):
             preset_labels: Labels of those buttons, keys "changed", "up",
                 "down" and "clear" (defaults: "All changed", "Up", "Down",
                 "Clear").
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two points draws a
+                line between them labelled with their fold change and p-value
+                differences (signed, second point minus first). Esc cancels a
+                half-finished measurement, clicking a label removes it and
+                "Clear measurements" removes all; they are cleared when other
+                data is plotted and are part of the image download. With measure
+                mode off, clicks select as before. Render-time only: not part
+                of the cache.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         self._log2fc_column = log2fc_column
@@ -142,6 +162,12 @@ class VolcanoPlot(BaseComponent):
 
         # Computed -log10(pvalue) column name
         self._neglog10p_column = "_neglog10_pvalue"
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -356,7 +382,7 @@ class VolcanoPlot(BaseComponent):
 
     def _get_component_args(self) -> dict[str, Any]:
         """Return configuration for Vue component."""
-        return {
+        args: dict[str, Any] = {
             "componentType": self._get_vue_component_name(),
             "log2fcColumn": self._log2fc_column,
             "neglog10pColumn": self._neglog10p_column,
@@ -379,6 +405,9 @@ class VolcanoPlot(BaseComponent):
             **({"selectionPresets": True} if self._selection_presets else {}),
             **({"presetLabels": self._preset_labels} if self._preset_labels else {}),
         }
+        args.update(measure_args(self._measure))
+        args.update(image_format_args(self._image_format))
+        return args
 
     def __call__(
         self,

@@ -6,6 +6,14 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.measure import (
+    DEFAULT_MEASURE_TOLERANCE,
+    measure_args,
+    validate_measure,
+    validate_measure_residues,
+    validate_measure_tolerance,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -65,9 +73,14 @@ class MirrorPlot(BaseComponent):
         x_label: str | None = None,
         y_label: str | None = None,
         svg_filename: str | None = None,
+        # Measuring
+        measure: bool = True,
+        measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
+        measure_residues: dict[str, float] | None = None,
         # Visuals
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -109,14 +122,39 @@ class MirrorPlot(BaseComponent):
             title_bottom: Label shown below the bottom spectrum (above the x-axis).
             x_label: X-axis label (defaults to x_column).
             y_label: Y-axis label (defaults to y_column).
-            svg_filename: File name (without extension) for the "Download as
-                SVG" modebar button. Defaults to the title, then "mirror_plot".
+            svg_filename: File name (without extension) of the image download
+                (the mode bar's "Download as SVG/PNG/..." button); the extension
+                follows the image format. Defaults to the title, then
+                "mirror_plot".
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two peaks of the same
+                half draws a bracket between them labelled with their m/z
+                difference ("Δm/z 128.059") and the amino-acid residues that
+                difference matches ("≈ K/Q"), also at charge 2+ ("≈ G (2+)").
+                Esc cancels a half-finished measurement, clicking a label
+                removes that measurement and "Clear measurements" removes all.
+                Measurements belong to the spectra shown: they are cleared when
+                the plotted data changes, and they are included in the SVG
+                download. Peak clicks select peaks as usual while measure mode
+                is off. The measure options are render-time settings: they are
+                not part of the cache, so changing them never rebuilds it.
+            measure_tolerance: Matching tolerance in Da per peak (default 0.02).
+                Both peaks carry this error, so a difference matches a residue
+                mass when ``|Δm/z - mass| <= 2 * measure_tolerance`` (at 2+:
+                ``|2 * Δm/z - mass| <= 2 * measure_tolerance``).
+            measure_residues: Extra named masses to match, added to the 20
+                standard amino-acid residues (monoisotopic, I and L shown as
+                "I/L"). Example: ``{"M(Oxidation)": 147.0354}``.
             styling: Style configuration dict with keys:
                 - highlightColor: Color for highlighted points (default: '#E4572E')
                 - selectedColor: Color for clicked/selected peak (default: '#F3A712')
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         # Subprocess preprocessing re-instantiates the component via
@@ -142,6 +180,10 @@ class MirrorPlot(BaseComponent):
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
         self._svg_filename = svg_filename
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+        self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
+        self._measure_residues = validate_measure_residues(measure_residues)
         self._styling = styling or {}
         self._plot_config = config or {}
 
@@ -157,6 +199,9 @@ class MirrorPlot(BaseComponent):
             **self._filter_defaults_top,
             **self._filter_defaults_bottom,
         }
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -561,12 +606,16 @@ class MirrorPlot(BaseComponent):
         }
         if self._svg_filename:
             args["svgFilename"] = self._svg_filename
+        args.update(
+            measure_args(self._measure, self._measure_tolerance, self._measure_residues)
+        )
         # Defensive: inject any unrecognised user **kwargs forwarded via super().__init__
         # without overwriting explicitly set args. All current MirrorPlot kwargs are
         # already covered above, so this loop is a no-op for normal usage.
         for key, val in self._config.items():
             if key not in args:
                 args[key] = val
+        args.update(image_format_args(self._image_format))
         return args
 
     def set_top_dynamic_annotations(

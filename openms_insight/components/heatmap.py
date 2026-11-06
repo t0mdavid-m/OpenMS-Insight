@@ -6,6 +6,11 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.cache import atomic_write
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.measure import (
+    measure_args,
+    validate_measure,
+)
 from ..core.multi_select import (
     combine,
     normalize_multi_select,
@@ -114,6 +119,8 @@ class Heatmap(BaseComponent):
         highlight: dict[str, str] | None = None,
         on_select: dict[str, Any] | None = None,
         multi_select: dict[str, str] | None = None,
+        measure: bool = True,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -183,7 +190,8 @@ class Heatmap(BaseComponent):
             downsample_zoomed: If False, a zoomed view shows every point of the
                 first level with at least min_points points in the zoomed range,
                 instead of downsampling them to min_points.
-            svg_filename: File name for the SVG download (default: title).
+            svg_filename: File name (without extension) of the image download
+                (default: title); the extension follows the image format.
             scroll_zoom: If False, the mouse wheel scrolls the page instead of
                 zooming the plot.
             hover_column: Column whose text is shown when hovering a point, above
@@ -205,6 +213,18 @@ class Heatmap(BaseComponent):
                 the points in the drawn region, looked up in the full data (not
                 only the points of the level shown), or None. The selected
                 points are marked, whichever component chose them.
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two points draws a
+                line between them labelled with their x and y differences
+                (signed, second point minus first). Esc cancels a half-finished
+                measurement, clicking a label removes it and "Clear
+                measurements" removes all; they are kept while zooming and are
+                part of the image download. With measure mode off, clicks select
+                as before. Render-time only: not part of the cache.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -243,6 +263,12 @@ class Heatmap(BaseComponent):
         self._boxes: pl.DataFrame | None = None
         self._boxes_config: dict[str, Any] = {}
         self._boxes_key: str | None = None
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -1437,6 +1463,8 @@ class Heatmap(BaseComponent):
         # Add any extra config options
         args.update(self._config)
 
+        args.update(measure_args(self._measure))
+        args.update(image_format_args(self._image_format))
         return args
 
     # ------------------------------------------------------------------

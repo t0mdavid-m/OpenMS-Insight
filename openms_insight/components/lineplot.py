@@ -5,6 +5,14 @@ from typing import TYPE_CHECKING, Any, Optional
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.measure import (
+    DEFAULT_MEASURE_TOLERANCE,
+    measure_args,
+    validate_measure,
+    validate_measure_residues,
+    validate_measure_tolerance,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -63,6 +71,10 @@ class LinePlot(BaseComponent):
         annotation_column: str | None = None,
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
+        measure: bool = True,
+        measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
+        measure_residues: dict[str, float] | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -102,6 +114,24 @@ class LinePlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two peaks draws a
+                bracket labelled with their x difference ("Δm/z 128.059"). When
+                the x-axis label is m/z, the difference is also matched to
+                amino-acid residue masses at charge 1+ and 2+ ("≈ K/Q", "≈ G
+                (2+)"). Esc cancels a half-finished measurement, clicking a
+                label removes it and "Clear measurements" removes all; they are
+                cleared when other peaks are plotted and are part of the SVG
+                download. With measure mode off, clicks select peaks as before.
+                Render-time only: not part of the cache.
+            measure_tolerance: Residue matching tolerance in Da per peak
+                (default 0.02); a difference matches within twice this.
+            measure_residues: Extra named masses to match besides the 20
+                standard residues, e.g. ``{"M(Oxidation)": 147.0354}``.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -117,6 +147,14 @@ class LinePlot(BaseComponent):
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: dict[str, Any] | None = None
         self._dynamic_title: str | None = None
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+        self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
+        self._measure_residues = validate_measure_residues(measure_residues)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -419,6 +457,10 @@ class LinePlot(BaseComponent):
         # Add any extra config options
         args.update(self._config)
 
+        args.update(
+            measure_args(self._measure, self._measure_tolerance, self._measure_residues)
+        )
+        args.update(image_format_args(self._image_format))
         return args
 
     def with_styling(

@@ -6,6 +6,11 @@ import numpy as np
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.measure import (
+    measure_args,
+    validate_measure,
+)
 from ..core.registry import register_component
 
 
@@ -62,6 +67,8 @@ class PCAPlot(BaseComponent):
         y_label: str | None = None,
         group_colors: dict[str, str] | None = None,
         show_ellipses: bool = True,
+        measure: bool = True,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -110,6 +117,19 @@ class PCAPlot(BaseComponent):
                 (e.g. {"Control": "#1f77b4", "Treatment": "#d62728"}).
             show_ellipses: If True (default), draw a 95% confidence ellipse
                 per group (only drawn for groups with >= 3 samples).
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two samples draws a
+                line between them labelled with their differences along both
+                components (signed, second point minus first). Esc cancels a
+                half-finished measurement, clicking a label removes it and
+                "Clear measurements" removes all; they are cleared when other
+                data is plotted and are part of the image download. With measure
+                mode off, clicks select as before. Render-time only: not part
+                of the cache.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if (data is not None or data_path is not None) and metadata is None:
@@ -133,6 +153,12 @@ class PCAPlot(BaseComponent):
         # per-call via __call__() without invalidating the cache.
         self._current_pc_x = pc_x
         self._current_pc_y = pc_y
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -397,6 +423,8 @@ class PCAPlot(BaseComponent):
         }
         if self._title:
             args["title"] = self._title
+        args.update(measure_args(self._measure))
+        args.update(image_format_args(self._image_format))
         return args
 
     def __call__(
