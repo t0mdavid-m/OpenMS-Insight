@@ -67,6 +67,10 @@ const DEFAULT_STYLING = {
 
 // Stick plots draw each peak as x,x,x / floor,y,floor
 const STICK_FLOOR = -10000000
+/** m/z distance between neighbouring isotopes at charge 1 (C13 - C12). */
+const ISOTOPE_SPACING = 1.00235
+/** Envelope circles show once neighbouring isotopes are this many pixels apart. */
+const ENVELOPE_MIN_SPACING_PX = 8
 
 const TOGGLE_ANNOTATIONS_ICON = {
   width: 1792,
@@ -225,19 +229,30 @@ export default defineComponent({
       if (envelope.massIndex !== this.selectedMassIndex) return null
       const n = Math.min(envelope.mzs.length, envelope.intensities.length)
       if (n === 0) return null
+      // Circles only where the zoom puts neighbouring isotopes far enough apart
+      // to tell them apart; zoomed out they would merge into one red smear.
+      const [x0, x1] = this.xRange
+      const pixelsPerMz = this.xAxisPixelLength() / Math.max(x1 - x0, 1e-9)
+      const spacing = this.envelopeIsotopeSpacing(envelope.mzs.slice(0, n), envelope.charges)
+      const x: number[] = []
+      const y: number[] = []
       const hover: string[] = []
       for (let i = 0; i < n; i++) {
+        if (spacing[i] * pixelsPerMz < ENVELOPE_MIN_SPACING_PX) continue
         const charge = envelope.charges?.[i]
         const isotope = envelope.isotopes?.[i]
+        x.push(envelope.mzs[i])
+        y.push(envelope.intensities[i])
         hover.push(
           `Theoretical m/z ${envelope.mzs[i].toFixed(4)}` +
             (charge !== undefined ? `<br>z=${charge}` : '') +
             (isotope !== undefined ? `, isotope ${isotope}` : ''),
         )
       }
+      if (x.length === 0) return null
       return {
-        x: envelope.mzs.slice(0, n),
-        y: envelope.intensities.slice(0, n),
+        x,
+        y,
         mode: 'markers',
         type: 'scatter',
         name: 'Theoretical envelope',
@@ -729,6 +744,33 @@ export default defineComponent({
         groups.push({ charge, center })
       })
       return groups
+    },
+    /** Width in pixels of the x axis: the plot area without the margins. */
+    xAxisPixelLength(): number {
+      const element = document.getElementById(this.id) as
+        | (HTMLElement & { _fullLayout?: { xaxis?: { _length?: number } } })
+        | null
+      const length = element?._fullLayout?.xaxis?._length
+      if (length && length > 0) return length
+      const width = this.plotWidth()
+      return width > 0 ? Math.max(width - 160, 100) : 1000
+    },
+    /** m/z distance from each envelope peak to the next isotope of its charge:
+     * the isotope spacing over the charge, or, without charges, the distance to
+     * the nearest other peak. */
+    envelopeIsotopeSpacing(mzs: number[], charges?: number[]): number[] {
+      if (charges && charges.length >= mzs.length) {
+        return mzs.map((_, i) => (charges[i] > 0 ? ISOTOPE_SPACING / charges[i] : Infinity))
+      }
+      const order = mzs.map((_, i) => i).sort((a, b) => mzs[a] - mzs[b])
+      const spacing = new Array<number>(mzs.length).fill(Infinity)
+      for (let k = 0; k < order.length; k++) {
+        const here = mzs[order[k]]
+        const before = k > 0 ? here - mzs[order[k - 1]] : Infinity
+        const after = k < order.length - 1 ? mzs[order[k + 1]] - here : Infinity
+        spacing[order[k]] = Math.min(before, after)
+      }
+      return spacing
     },
     plotWidth(): number {
       const element = document.getElementById(this.id)

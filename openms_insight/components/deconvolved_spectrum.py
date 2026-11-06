@@ -317,7 +317,10 @@ class DeconvolvedSpectrum(BaseComponent):
         Set the theoretical isotope envelope drawn for the next render.
 
         The m/z views ('annotated', and 'ladder' drilled down to a mass) draw
-        the peaks as open circles while the mass at ``mass_index`` is selected.
+        the peaks as open circles while the mass at ``mass_index`` is selected,
+        and only once the zoom puts neighbouring isotopes of a peak's charge
+        (1.00235 / charge m/z apart, or the nearest other peak without a
+        charge) at least 8 pixels apart.
 
         Args:
             mass_index: Index of the mass in the spectrum's mass list (the value
