@@ -81,6 +81,7 @@ _VUE_OPTION_KEYS = (
     "fill_height",
     "row_overview",
     "multi_select",
+    "hidden_columns",
 )
 
 # Session state key for tracking last rendered selection per table component
@@ -474,6 +475,7 @@ class Table(BaseComponent):
                 else {}
             ),
             **({"column_menu": False} if not self._column_menu else {}),
+            **({"hidden_columns": self._hidden_columns} if self._hidden_columns else {}),
             **({"reset_sort": True} if self._reset_sort else {}),
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
             **({"fill_height": True} if self._fill_height else {}),
@@ -513,6 +515,7 @@ class Table(BaseComponent):
         self._default_row_selects = config.get("default_row_selects", True)
         self._scroll_position = config.get("scroll_position", "center")
         self._column_menu = config.get("column_menu", True)
+        self._hidden_columns = list(config.get("hidden_columns") or [])
         self._reset_sort = config.get("reset_sort", False)
         self._reset_sort_on = config.get("reset_sort_on") or []
         self._search = config.get("search", False)
