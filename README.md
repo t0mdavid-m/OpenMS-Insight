@@ -117,6 +117,18 @@ annotations = Table(
     filters={"identification": "id_idx"},
     filter_defaults={"identification": -1},  # Use -1 when identification is None
 )
+
+# Two filters on one table. ALL shows every row while nothing is selected, so
+# unselecting a mass shift lifts that filter and keeps the protein one. A list
+# column ("shift_ids": [1, 3]) matches when one of its values is selected.
+from openms_insight import ALL
+
+proteoforms = Table(
+    cache_id="proteoforms",
+    data_path="proteoforms.parquet",
+    filters={"protein": "protein_id", "mass_shift": "shift_ids"},
+    filter_defaults={"mass_shift": ALL},
+)
 ```
 
 ---
@@ -295,6 +307,7 @@ mirror(state_manager=state_manager, height=600)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
 - `svg_filename`: File name (without extension) of the image download (default: `title`, then `mirror_plot`); the format is set as in [Image downloads](#image-downloads-image_format)
 - `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
+- `peak_labels`: Your own labels on peaks, on by default (see [Peak labels](#peak-labels-peak_labels))
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
@@ -748,7 +761,7 @@ All components accept these common arguments:
 | `data_path` | `str` | `None` | Path to parquet file (preferred for memory efficiency) |
 | `data` | `pl.LazyFrame` | `None` | Polars LazyFrame (alternative to data_path) |
 | `filters` | `Dict[str, str]` | `None` | Map identifier -> column for filtering |
-| `filter_defaults` | `Dict[str, Any]` | `None` | Default values when selection is None |
+| `filter_defaults` | `Dict[str, Any]` | `None` | Default values when selection is None (`ALL`: every row) |
 | `interactivity` | `Dict[str, str]` | `None` | Map identifier -> column for click actions |
 | `cache_path` | `str` | `"."` | Base directory for cache storage |
 | `regenerate_cache` | `bool` | `False` | Force cache regeneration |
@@ -823,6 +836,22 @@ configuration, so switching the tool on or off never rebuilds a cache.
 `ClusteredHeatmap` (a categorical matrix: there is no distance between two
 samples' columns) and `Plot3D` (a click in 3D does not pick comparable points)
 have no measure tool.
+
+### Peak labels (`peak_labels`)
+
+`LinePlot` and `MirrorPlot` have a **Label peaks** button (a tag) in their Plotly
+mode bar, next to the ruler. It is on by default; `peak_labels=False` removes it.
+In label mode a click on a peak opens a small text box at the peak: type a label,
+Enter keeps it and Esc closes the box. Clicking one of your labels opens it again
+to change the text, and an empty text removes it. The **Remove peak labels**
+button next to the tag removes every label of the spectrum shown. Label mode and
+measure mode take turns: switching one on switches the other off.
+
+Labels are kept per spectrum while the plot is on the page: plotting another
+spectrum shows that spectrum's labels, and going back shows the earlier ones again.
+They are plain Plotly annotations with an arrow to their peak, so the image
+download includes them. Like the measure options, `peak_labels` is a render-time
+setting and never part of the cache configuration.
 
 ### Image downloads (`image_format`)
 
@@ -955,6 +984,14 @@ state_manager = StateManager()
 table(state_manager=state_manager, height=300)
 plot(state_manager=state_manager, height=400)
 ```
+
+### Theme
+
+Components follow the app's Streamlit theme. The light and dark colours are
+used as before. The theme's fonts (`font`, `codeFont`, `headingFont`) are
+loaded inside the components when the app declares them with
+`[[theme.fontFaces]]`. The primary colour is used for the selected table row,
+check boxes and the buttons in the table dialogs.
 
 ## Differential Expression Analysis
 
