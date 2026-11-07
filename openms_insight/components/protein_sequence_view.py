@@ -264,6 +264,7 @@ class ProteinSequenceView(BaseComponent):
         modifications: list[str] | None = None,
         proforma_copy: bool = False,
         proforma_input: bool = False,
+        isotope_errors: int | None = None,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
         variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
@@ -367,6 +368,12 @@ class ProteinSequenceView(BaseComponent):
                 looked up in ``modification_library``), terminal and residue
                 modifications by name (looked up in the libraries) or mass,
                 which become the residues' variable modifications.
+            isotope_errors: Also match fragment masses that are off by up to
+                this many whole isotopes (± n × 1.00235 Da), as deconvolution
+                can place a monoisotopic mass. Shows the setting in the view's
+                menu (starting at this value), an Isotope column in the
+                fragment table, and the precursor's Δ in ppm with its isotope
+                reading. None (default): no setting, exact matches only.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
@@ -426,6 +433,7 @@ class ProteinSequenceView(BaseComponent):
         # Per render, not cached
         self._proforma_copy = bool(proforma_copy)
         self._proforma_input = bool(proforma_input)
+        self.set_isotope_errors(isotope_errors)
         self.set_variable_modification_library(
             variable_modification_library, variable_modification_suggestions
         )
@@ -737,6 +745,23 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_input = bool(enabled)
         return self
 
+    def set_isotope_errors(self, max_errors: int | None = 1) -> "ProteinSequenceView":
+        """Match fragments up to ``max_errors`` isotopes off (None: off).
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``isotope_errors`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        if max_errors is not None:
+            if isinstance(max_errors, bool) or not isinstance(max_errors, int):
+                raise TypeError("isotope_errors must be an int or None")
+            if not 0 <= max_errors <= 5:
+                raise ValueError("isotope_errors must be between 0 and 5")
+        self._isotope_errors = max_errors
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -750,6 +775,7 @@ class ProteinSequenceView(BaseComponent):
             "modifications": self._modifications,
             "proformaCopy": self._proforma_copy,
             "proformaInput": self._proforma_input,
+            "isotopeErrors": self._isotope_errors,
             "variableModificationLibrary": self._variable_modification_library,
             "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,

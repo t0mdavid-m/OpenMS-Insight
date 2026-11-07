@@ -755,6 +755,30 @@ class TestProteinSequenceView:
         assert view._get_component_args()["proformaInput"] is True
         assert "proforma_input" not in view._get_cache_config()
 
+    def test_isotope_errors_args(self, mock_streamlit, temp_cache_dir: Path):
+        view = ProteinSequenceView(
+            cache_id="seq_isotope_errors",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["isotopeErrors"] is None
+        assert view.set_isotope_errors() is view
+        assert view._get_component_args()["isotopeErrors"] == 1
+        assert view.set_isotope_errors(0)._get_component_args()["isotopeErrors"] == 0
+        assert "isotope_errors" not in view._get_cache_config()
+        with pytest.raises(ValueError):
+            view.set_isotope_errors(6)
+        with pytest.raises(TypeError):
+            view.set_isotope_errors(True)
+
     def test_modification_picker_from_pyopenms(
         self, mock_streamlit, temp_cache_dir: Path
     ):
