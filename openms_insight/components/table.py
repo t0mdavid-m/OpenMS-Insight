@@ -475,7 +475,9 @@ class Table(BaseComponent):
                 else {}
             ),
             **({"column_menu": False} if not self._column_menu else {}),
-            **({"hidden_columns": self._hidden_columns} if self._hidden_columns else {}),
+            **(
+                {"hidden_columns": self._hidden_columns} if self._hidden_columns else {}
+            ),
             **({"reset_sort": True} if self._reset_sort else {}),
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
             **({"fill_height": True} if self._fill_height else {}),
