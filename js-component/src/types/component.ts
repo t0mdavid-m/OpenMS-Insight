@@ -617,6 +617,10 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   proformaCopy?: boolean
   /** The change-sequence dialog also reads ProForma */
   proformaInput?: boolean
+  /** Isotope errors tried when matching (shows the setting); null: hidden, exact matches only */
+  isotopeErrors?: number | null
+  /** Offer proton loss/addition only with c/z or radical series selected */
+  methodIonOptions?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');
