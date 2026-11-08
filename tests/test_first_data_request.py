@@ -16,6 +16,8 @@ APP = Path(__file__).parents[1] / "js-component/src/App.vue"
 
 def test_data_request_is_sent_before_the_first_render():
     source = APP.read_text(encoding="utf-8")
-    guard = re.search(r"if \((streamlitDataStore\.renderData === null[^)]*)\) return", source)
+    guard = re.search(
+        r"if \((streamlitDataStore\.renderData === null[^)]*)\) return", source
+    )
     assert guard, "the first-render guard in sendStateToStreamlit was not found"
     assert "!streamlitDataStore.requestData" in guard.group(1)
