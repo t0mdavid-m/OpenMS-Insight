@@ -13,6 +13,8 @@ import pandas as pd
 import polars as pl
 import streamlit as st
 
+from ..core.multi_select import match_selection
+
 # Configure debug logging for hash tracking
 _DEBUG_HASH_TRACKING = os.environ.get("SVC_DEBUG_HASH", "").lower() == "true"
 # Debug logging for page navigation / state sync issues
@@ -636,6 +638,7 @@ def _validate_interactivity_selections(
     # the top and the bottom scan at once, which is never satisfiable, so every
     # selection would be judged missing and cleared the moment it was made.
     group_predicates: list[pl.Expr] = []
+    schema = data.collect_schema()
     for filters, filter_defaults in filter_groups:
         if not filters:
             # An unfiltered view shows every row, so the union admits everything and
@@ -653,11 +656,7 @@ def _validate_interactivity_selections(
                 # Awaiting filter - no data to validate against
                 return False
 
-            # Convert float to int for integer columns (type mismatch handling)
-            if isinstance(selected_value, float) and selected_value.is_integer():
-                selected_value = int(selected_value)
-
-            term = pl.col(column) == selected_value
+            term = match_selection(column, selected_value, schema.get(column))
             predicate = term if predicate is None else (predicate & term)
 
         if predicate is not None:
@@ -897,6 +896,15 @@ def _render_component(
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
     if _SENT_HASH_KEY not in st.session_state:
         st.session_state[_SENT_HASH_KEY] = {}
+
+    # Streamlit forgets the value of a component that a run did not draw, and the
+    # browser drops its view. Drawn again (e.g. a layout that leaves this cell out,
+    # then shows it again), it is a new view without data: what was sent to the
+    # earlier one does not count, and its data requests are numbered from 1 again.
+    if key not in st.session_state:
+        st.session_state[_SENT_HASH_KEY].pop(key, None)
+        st.session_state[_VUE_ECHOED_HASH_KEY].pop(key, None)
+        st.session_state.get(_HANDLED_REQUESTS_KEY, {}).pop(key, None)
 
     # === PHASE 1: Get CACHED data from previous render ===
     cache = _get_component_cache()

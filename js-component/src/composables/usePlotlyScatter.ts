@@ -3,17 +3,20 @@
  *
  * Provides common functionality:
  * - Resize observer for responsive behavior
- * - Plotly config with SVG export
+ * - Plotly config with the image download (format from `imageFormat`)
  * - Click event handling with selection store integration
  * - Theme-aware layout styling
  * - Streamlit frame height updates
  */
 
 import { ref, computed, type Ref, type ComputedRef } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import type Plotly from 'plotly.js-dist-min'
+import { plotly } from '@/plotly/current'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
+import { imageFormatOf } from '@/utils/imageExport'
+import { plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 export interface PlotlyScatterOptions {
   /** Unique ID for the plot container */
@@ -22,14 +25,23 @@ export interface PlotlyScatterOptions {
   interactivity: ComputedRef<Record<string, string>>
   /** Function to get data array for click handling */
   getData: () => Record<string, unknown>[]
-  /** Optional title for SVG export filename */
+  /** Optional title, the download file name without svgFilename */
   title?: ComputedRef<string | undefined>
-  /** Optional SVG export filename (default: the title) */
+  /** Optional download file name without extension (default: the title) */
   svgFilename?: ComputedRef<string | undefined>
+  /** Format of the image download (the `imageFormat` argument; default SVG) */
+  imageFormat?: ComputedRef<unknown>
   /** Whether the mouse wheel zooms the plot (default true; else it scrolls the page) */
   scrollZoom?: ComputedRef<boolean | undefined>
   /** Width threshold for "narrow" mode (default 600) */
   narrowThreshold?: number
+  /** Selections a click sets besides `interactivity` (null clears one) */
+  onSelect?: ComputedRef<Record<string, unknown> | undefined>
+  /**
+   * Sees a clicked point first; returning true consumes the click so it
+   * selects nothing (the measure tool in measure mode).
+   */
+  onPointClick?: (point: Plotly.PlotDatum) => boolean
 }
 
 export interface PlotlyScatterReturn {
@@ -45,7 +57,7 @@ export interface PlotlyScatterReturn {
   setupResizeObserver: () => void
   /** Clean up resize observer - call in beforeUnmount() */
   cleanupResizeObserver: () => void
-  /** Get Plotly config with SVG export and scroll zoom */
+  /** Get Plotly config with the image download and scroll zoom */
   getPlotConfig: (additionalButtons?: Plotly.ModeBarButton[]) => Partial<Plotly.Config>
   /** Set up click handler for interactivity - call after Plotly.newPlot() */
   setupClickHandler: () => void
@@ -56,8 +68,9 @@ export interface PlotlyScatterReturn {
 }
 
 export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterReturn {
-  const { id, interactivity, getData, title, svgFilename, scrollZoom, narrowThreshold = 600 } =
-    options
+  const {
+    id, interactivity, getData, title, svgFilename, imageFormat, scrollZoom, narrowThreshold = 600, onSelect, onPointClick,
+  } = options
 
   const streamlitDataStore = useStreamlitDataStore()
   const selectionStore = useSelectionStore()
@@ -105,19 +118,10 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
 
   function getPlotConfig(additionalButtons?: Plotly.ModeBarButton[]): Partial<Plotly.Config> {
     const buttons: Plotly.ModeBarButton[] = [
-      {
-        title: 'Download as SVG',
-        name: 'toImageSvg',
-        icon: Plotly.Icons.camera,
-        click: (plotlyElement: unknown) => {
-          Plotly.downloadImage(plotlyElement as Plotly.PlotlyHTMLElement, {
-            filename: svgFilename?.value || title?.value || 'plot',
-            height: 400,
-            width: 1200,
-            format: 'svg',
-          })
-        },
-      },
+      plotlyDownloadButton({
+        format: () => imageFormatOf(imageFormat?.value),
+        filename: () => svgFilename?.value || title?.value || 'plot',
+      }),
       ...(additionalButtons || []),
     ]
 
@@ -134,6 +138,9 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
     if (!plotElement) return
 
     plotElement.on('plotly_click', (eventData: Plotly.PlotMouseEvent) => {
+      const clicked = eventData.points?.[0]
+      if (clicked && onPointClick?.(clicked)) return
+
       const interactivityMap = interactivity.value
       if (!interactivityMap || Object.keys(interactivityMap).length === 0) {
         return
@@ -165,6 +172,21 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
         const pointData = data[hasRowIndex ? customIndex : point.pointIndex]
 
         if (pointData) {
+          // Side effects first, as in Table: only when the click changes the
+          // selection, and never for an identifier the click itself sets
+          const sideEffects = onSelect?.value || {}
+          const selectionChanges = Object.entries(interactivityMap).some(
+            ([identifier, column]) =>
+              pointData[column] !== undefined &&
+              selectionStore.$state[identifier] !== pointData[column]
+          )
+          if (selectionChanges) {
+            for (const [identifier, value] of Object.entries(sideEffects)) {
+              if (!(identifier in interactivityMap) && selectionStore.$state[identifier] !== value) {
+                selectionStore.updateSelection(identifier, value)
+              }
+            }
+          }
           // Update selection store for each interactivity mapping
           for (const [identifier, column] of Object.entries(interactivityMap)) {
             const value = pointData[column]

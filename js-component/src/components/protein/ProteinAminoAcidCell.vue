@@ -48,12 +48,24 @@
     <div v-if="showModifications && sequenceObject.modStart && !sequenceObject.modEnd" class="mod-marker mod-start-cont"></div>
     <div v-if="showModifications && !sequenceObject.modStart && sequenceObject.modEnd" class="mod-marker mod-end-cont"></div>
     <div v-if="showModifications && sequenceObject.modCenter" class="mod-marker mod-center-cont"></div>
-    <div v-if="showModifications && (sequenceObject.modEnd||isThisAAmodified)" class="rounded-lg mod-mass">{{ modMass }}
+    <!-- Residues the matched fragments allow a modification on -->
+    <div
+      v-if="showModifications && (sequenceObject.ambStart || sequenceObject.ambCenter || sequenceObject.ambEnd)"
+      class="amb-marker"
+      :class="{ 'amb-start': sequenceObject.ambStart, 'amb-open': !sequenceObject.ambEnd }"
+    ></div>
+    <div v-if="showModifications && (sequenceObject.modEnd||isThisAAmodified)" class="rounded-lg mod-mass" :class="{ 'mod-mass-ambiguous': !!sequenceObject.modNote }">{{ modMass }}{{ sequenceObject.modNote ? '?' : '' }}
       <v-tooltip activator="parent" class="foreground">
         {{ `Modification Mass: ${modMass} Da` }}
         <br />
-        {{ `Possible Modifications: ${sequenceObject.modLabels}` }}
-        <br />
+        <template v-if="sequenceObject.modLabels">
+          {{ `Possible Modifications: ${sequenceObject.modLabels}` }}
+          <br />
+        </template>
+        <template v-if="sequenceObject.modNote">
+          {{ `Ambiguous: ${sequenceObject.modNote}` }}
+          <br />
+        </template>
       </v-tooltip>
     </div>
     <div v-if="showFragments && showModifications && sequenceObject.modEnd && sequenceObject.aIon && !sequenceObject.bIon" class="rounded-lg mod-mass-a">{{ sequenceObject.modMass }}</div>
@@ -75,20 +87,29 @@
       location="end"
       :open-on-click="false"
       :close-on-content-click="false"
-      width="200px"
+      :width="hasLibrary ? '360px' : '200px'"
     >
       <v-list>
         <v-list-item>
+          <ModificationPicker
+            v-if="hasLibrary"
+            :site="aminoAcid"
+            :options="modificationsForSelect"
+            :suggested="variableModData.suggested"
+            :selected="selectedModification"
+            @pick="updateSelectedModification"
+          />
           <v-select
+            v-else
             v-model="selectedModification"
             clearable
             label="Modification"
             density="compact"
             :items="modificationsForSelect"
+            item-title="title"
+            item-value="value"
             @update:model-value="updateSelectedModification"
-            @click:clear="selectedModification = undefined"
-          >
-          </v-select>
+          />
         </v-list-item>
         <v-list-item v-if="customSelected">
           <v-form @submit.prevent>
@@ -131,6 +152,9 @@
       <div v-if="showInternal && internalDepth > 0">
         {{ `Internal fragments covering: ${internalDepth}` }}
       </div>
+      <div v-if="!sequenceObject.modNote && (sequenceObject.ambStart || sequenceObject.ambCenter || sequenceObject.ambEnd)">
+        Possible site of an ambiguous modification
+      </div>
     </v-tooltip>
   </div>
 </template>
@@ -143,11 +167,8 @@ import type { SequenceData } from '@/types/protein-sequence-data'
 import type { Theme } from 'streamlit-component-lib'
 import type { PropType } from 'vue'
 import { defineComponent } from 'vue'
-import {
-  potentialModificationMap,
-  type KnownModification,
-  modificationMassMap,
-} from '@/components/sequence/modification'
+import { modificationOptions, type ModificationOption } from '@/components/sequence/modification'
+import ModificationPicker from './ModificationPicker.vue'
 
 // Provided by ProteinSequenceView. The defaults let the legend's example
 // cells render outside a view.
@@ -159,6 +180,7 @@ interface SequenceViewContext {
 
 export default defineComponent({
   name: 'ProteinAminoAcidCell',
+  components: { ModificationPicker },
   inject: {
     sequenceView: {
       default: (): SequenceViewContext => ({
@@ -229,7 +251,7 @@ export default defineComponent({
   data() {
     return {
       menuOpen: false,
-      selectedModification: undefined as KnownModification | undefined,
+      selectedModification: undefined as string | undefined,
       customSelected: false,
       customModMass: '0' as string,
     }
@@ -308,8 +330,15 @@ export default defineComponent({
       }
       return (length ?? 0) - this.index
     },
-    modificationsForSelect(): string[] {
-      return ['None', 'Custom', ...this.potentialModifications]
+    modificationsForSelect(): ModificationOption[] {
+      return modificationOptions(this.aminoAcid, this.variableModData.library)
+    },
+    hasLibrary(): boolean {
+      return this.variableModData.library !== null
+    },
+    // This residue's entry in the store (0 or undefined: unmodified)
+    storedModificationMass(): number | undefined {
+      return this.variableModData.variableModifications[this.index]
     },
     aminoAcidCellStyles(): Record<string, string> {
       // Get coverage and scale between 0.1 and 1.0
@@ -347,9 +376,6 @@ export default defineComponent({
         'sequence-amino-acid': !this.fixedModification,
         'sequence-amino-acid-highlighted': this.fixedModification,
       }
-    },
-    potentialModifications(): KnownModification[] {
-      return potentialModificationMap[this.aminoAcid] ?? []
     },
     isThisAAmodified(): boolean {
       const variableModifications = this.variableModData.variableModifications ?? {}
@@ -401,13 +427,25 @@ export default defineComponent({
       if (this.customModMass !== '0') {
         return parseFloat(this.customModMass).toLocaleString('en-US', { signDisplay: 'always' })
       }
+      // The residue's variable modification, also after the residues are rebuilt
+      if (this.storedModificationMass) {
+        return parseFloat(this.storedModificationMass.toFixed(2)).toLocaleString('en-US', { signDisplay: 'always' })
+      }
       return this.sequenceObject.modMass
     }
   },
   watch: {
     selectedModification() {
-      if ((this.selectedModification !== undefined) && (modificationMassMap[this.selectedModification] !== undefined)) {
-        this.sequenceObject.modMass = parseFloat(modificationMassMap[this.selectedModification].toFixed(2)).toLocaleString('en-US', { signDisplay: 'always' })
+      if (this.selectedModification !== undefined) {
+        this.sequenceObject.modMass = parseFloat(this.optionMass(this.selectedModification).toFixed(2)).toLocaleString('en-US', { signDisplay: 'always' })
+      }
+    },
+    // Removed elsewhere (the list of applied modifications)
+    storedModificationMass(mass: number | undefined) {
+      if (!mass) {
+        this.selectedModification = undefined
+        this.customSelected = false
+        this.customModMass = '0'
       }
     },
     showTags() {
@@ -436,24 +474,32 @@ export default defineComponent({
         this.$emit('selected', this.index)
       }
     },
-    updateSelectedModification(modification: 'None' | 'Custom' | KnownModification) {
-      if (modification === 'None') {
-        this.selectedModification = undefined
-      } else if (modification === 'Custom') {
+    optionMass(value: string | undefined): number {
+      return this.modificationsForSelect.find((o) => o.value === value)?.mass ?? 0
+    },
+    updateSelectedModification(modification: string | null) {
+      if (modification === 'Custom') {
         this.customSelected = true
         return
-      } else {
-        this.selectedModification = modification as KnownModification
       }
+      this.selectedModification =
+        modification === null || modification === 'None' ? undefined : modification
       this.toggleMenuOpen()
       this.customSelected = false
+      this.customModMass = '0'
       this.variableModData.updateVariableModifications(
         this.index,
-        this.selectedModification ? modificationMassMap[this.selectedModification] : 0
+        this.optionMass(this.selectedModification),
+        this.selectedModification
       )
     },
     updateCustomModification() {
-      this.variableModData.updateVariableModifications(this.index, parseFloat(this.customModMass))
+      this.selectedModification = undefined
+      this.variableModData.updateVariableModifications(
+        this.index,
+        parseFloat(this.customModMass),
+        'Custom'
+      )
       this.toggleMenuOpen()
     },
   },
@@ -743,6 +789,34 @@ export default defineComponent({
 
 .mod-center-cont {
   width: 125%;
+}
+
+/* Dashed line under the residues a modification could sit on */
+.amb-marker {
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  width: 100%;
+  border-bottom: 2px dashed #e4572e;
+  pointer-events: none;
+}
+
+.amb-start {
+  left: 15%;
+  width: 85%;
+}
+
+/* Bridges the gap to the next residue of the window */
+.amb-open {
+  width: calc(100% + 4px);
+}
+
+.amb-start.amb-open {
+  width: calc(85% + 4px);
+}
+
+.mod-mass-ambiguous {
+  outline: 1px dashed #e4572e;
 }
 
 </style>

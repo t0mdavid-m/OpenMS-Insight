@@ -5,7 +5,18 @@ from typing import TYPE_CHECKING, Any, Optional
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.keep_zoom import keep_zoom_args, validate_keep_zoom
+from ..core.measure import (
+    DEFAULT_MEASURE_TOLERANCE,
+    measure_args,
+    validate_measure,
+    validate_measure_residues,
+    validate_measure_tolerance,
+)
+from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
+from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
 if TYPE_CHECKING:
@@ -63,6 +74,13 @@ class LinePlot(BaseComponent):
         annotation_column: str | None = None,
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
+        measure: bool = True,
+        measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
+        measure_residues: dict[str, float] | None = None,
+        peak_labels: bool = True,
+        image_format: str | None = None,
+        keep_zoom: bool = False,
+        zoom_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -102,6 +120,41 @@ class LinePlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two peaks draws a
+                bracket labelled with their x difference ("Δm/z 128.059"). When
+                the x-axis label is m/z, the difference is also matched to
+                amino-acid residue masses at charge 1+ and 2+ ("≈ K/Q", "≈ G
+                (2+)"). Esc cancels a half-finished measurement, clicking a
+                label removes it and "Clear measurements" removes all; they are
+                cleared when other peaks are plotted and are part of the SVG
+                download. With measure mode off, clicks select peaks as before.
+                Render-time only: not part of the cache.
+            measure_tolerance: Residue matching tolerance in Da per peak
+                (default 0.02); a difference matches within twice this.
+            measure_residues: Extra named masses to match besides the 20
+                standard residues, e.g. ``{"M(Oxidation)": 147.0354}``.
+            peak_labels: Show a "Label peaks" button in the mode bar (default
+                True; False hides it). In label mode, clicking a peak opens a
+                text box for your own label (Enter keeps it, Esc closes);
+                clicking a label changes it, and an empty text removes it.
+                Labels are kept per spectrum while the plot is on the page and
+                are included in the image download. Render-time only: not part
+                of the cache.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
+            keep_zoom: Start with the zoom pinned (default False). The pin
+                button in the mode bar keeps the zoomed x range when the plot
+                gets new data, e.g. when another spectrum is selected; unpinned,
+                each new spectrum is shown in full. Double-click still resets
+                the zoom. Render-time only: not part of the cache.
+            zoom_identifier: State identifier the plot keeps its zoom under,
+                ``{"x": [lo, hi], "y": [lo, hi]}`` (default None: the zoom stays
+                in the browser). The plot reports its ranges there after a zoom
+                or pan and zooms to a value set there, e.g. by a saved view.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -117,6 +170,21 @@ class LinePlot(BaseComponent):
         # Dynamic annotations set at render time (not cached)
         self._dynamic_annotations: dict[str, Any] | None = None
         self._dynamic_title: str | None = None
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+        self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
+        self._measure_residues = validate_measure_residues(measure_residues)
+        self._peak_labels = validate_peak_labels(peak_labels)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
+
+        # Render-time option, kept out of the cache config (see core/keep_zoom.py)
+        self._keep_zoom = validate_keep_zoom(keep_zoom)
+
+        # Render-time option, kept out of the cache config (see core/zoom.py)
+        self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
 
         super().__init__(
             cache_id=cache_id,
@@ -419,6 +487,13 @@ class LinePlot(BaseComponent):
         # Add any extra config options
         args.update(self._config)
 
+        args.update(
+            measure_args(self._measure, self._measure_tolerance, self._measure_residues)
+        )
+        args.update(peak_label_args(self._peak_labels))
+        args.update(image_format_args(self._image_format))
+        args.update(zoom_args(self._zoom_identifier))
+        args.update(keep_zoom_args(self._keep_zoom))
         return args
 
     def with_styling(

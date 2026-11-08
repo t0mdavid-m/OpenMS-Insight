@@ -1,19 +1,29 @@
 <template>
-  <div :id="id" class="plot-container"></div>
+  <div class="series-plot">
+    <MeasureHint v-if="args.measure" :measure="measure" />
+    <div :id="id" class="plot-container"></div>
+  </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import Plotly from '@/plotly/basic'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { SeriesPlotComponentArgs } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { axisQuantity, pointsKey } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
+import { imageFormatOf } from '@/utils/imageExport'
+import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlySeries',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<SeriesPlotComponentArgs>,
@@ -24,14 +34,18 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore, uniqueId: `series-plot-${++plotIdCounter}` }
+    const measure = useMeasure(() => !!props.args.measure)
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, zoom, zoomStamp: zoom.stamp, uniqueId: `series-plot-${++plotIdCounter}` }
   },
   data() {
     return {
       drawPending: false,
+      // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
+      nativeZoom: null as ZoomValue | null,
     }
   },
   computed: {
@@ -48,26 +62,29 @@ export default defineComponent({
       return (this.streamlitDataStore.allDataForDrawing?.plotData as Record<string, unknown[]>) || {}
     },
     /** Points grouped by series, in series_names order then order of appearance. */
-    series(): Array<{ key: string; name: string; x: number[]; y: number[]; rows: number[] }> {
+    series(): Array<{ key: string; name: string; x: number[]; y: number[]; rows: number[]; text: string[] }> {
+      const hoverColumn = this.args.hoverColumn
+      const hover = hoverColumn ? (this.columns[hoverColumn] as unknown[]) || [] : []
       const xs = (this.columns[this.args.xColumn] as number[]) || []
       const ys = (this.columns[this.args.yColumn] as number[]) || []
       const seriesColumn = this.args.seriesColumn
       const seriesValues = seriesColumn ? (this.columns[seriesColumn] as unknown[]) || [] : []
       const names = new Map<string, string>((this.args.seriesNames || []).map(([k, v]) => [String(k), v]))
 
-      const groups = new Map<string, { key: string; name: string; x: number[]; y: number[]; rows: number[] }>()
+      const groups = new Map<string, { key: string; name: string; x: number[]; y: number[]; rows: number[]; text: string[] }>()
       for (const key of names.keys()) {
-        groups.set(key, { key, name: names.get(key) as string, x: [], y: [], rows: [] })
+        groups.set(key, { key, name: names.get(key) as string, x: [], y: [], rows: [], text: [] })
       }
       for (let i = 0; i < xs.length; i++) {
         const key = seriesColumn ? String(seriesValues[i]) : ''
         if (!groups.has(key)) {
-          groups.set(key, { key, name: names.get(key) ?? key, x: [], y: [], rows: [] })
+          groups.set(key, { key, name: names.get(key) ?? key, x: [], y: [], rows: [], text: [] })
         }
         const group = groups.get(key)!
         group.x.push(xs[i])
         group.y.push(ys[i])
         group.rows.push(i)
+        if (hoverColumn) group.text.push(String(hover[i] ?? ''))
       }
       return [...groups.values()]
     },
@@ -80,6 +97,10 @@ export default defineComponent({
           mode: this.args.mode || 'lines+markers',
           type: 'scatter',
           name: s.name,
+        }
+        if (this.args.hoverColumn) {
+          trace.text = s.text
+          trace.hovertemplate = '%{text}<br>%{x}, %{y}<extra>%{fullData.name}</extra>'
         }
         const color = colors[s.key]
         if (color) {
@@ -105,9 +126,32 @@ export default defineComponent({
       }
       return out
     },
+    /** Differences along x only: a series has no residue masses to match. */
+    measureSpec(): MeasureSpec {
+      return { kind: 'span', xQuantity: axisQuantity(this.args.xLabel, 'x') }
+    },
+    measureTitle(): string {
+      return `Measure: click two points for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
+    },
+    /** Identity of the plotted points: other data drops the measurements. */
+    measureKey(): string {
+      return pointsKey(this.columns[this.args.xColumn], this.columns[this.args.yColumn])
+    },
+    /** Brackets of the measurements, spaced by the tallest point. */
+    measureOverlay(): MeasureOverlay {
+      const ys = (this.columns[this.args.yColumn] as number[]) || []
+      let yScale = 0
+      for (const y of ys) {
+        if (Number.isFinite(y) && Math.abs(y) > yScale) yScale = Math.abs(y)
+      }
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+        yScale,
+      })
+    },
     layout(): Partial<Plotly.Layout> {
-      return {
-        shapes: this.selectedX.map((x) => ({
+      const selectionShapes = this.selectedX.map((x) => ({
           type: 'line',
           xref: 'x',
           yref: 'paper',
@@ -116,7 +160,10 @@ export default defineComponent({
           y0: 0,
           y1: 1,
           line: { color: '#d62728', width: 1.5, dash: 'dash' },
-        })) as Partial<Plotly.Shape>[],
+        })) as Partial<Plotly.Shape>[]
+      return {
+        shapes: [...selectionShapes, ...this.measureOverlay.shapes],
+        annotations: this.measureOverlay.annotations,
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: this.args.showLegend !== false,
         height: this.args.height || 400,
@@ -127,7 +174,7 @@ export default defineComponent({
         yaxis: {
           title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
           showgrid: true,
-          rangemode: 'nonnegative',
+          rangemode: this.args.yRangeMode || 'nonnegative',
           fixedrange: !!this.args.fixedYRange,
         },
         paper_bgcolor: this.theme?.backgroundColor || 'white',
@@ -141,6 +188,33 @@ export default defineComponent({
     },
   },
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.nativeZoom = incoming
+      const element = document.getElementById(this.id)
+      if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
+        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+      }
+    },
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+      },
+      immediate: true,
+    },
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
+    'measure.revision'() {
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
+    },
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
         this.requestRender()
@@ -156,6 +230,7 @@ export default defineComponent({
     },
   },
   mounted() {
+    this.nativeZoom = this.zoom.incoming() ?? null
     this.requestRender()
   },
   methods: {
@@ -172,22 +247,15 @@ export default defineComponent({
     async renderPlot(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
-      await Plotly.newPlot(element, this.traces, this.layout, {
+      await Plotly.newPlot(element, this.traces, withZoom(this.layout, this.nativeZoom), {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: Plotly.Icons.camera,
-            click: (plotElement: HTMLElement) => {
-              Plotly.downloadImage(plotElement, {
-                filename: this.args.svgFilename || this.args.title || 'plot',
-                height: this.args.height || 400,
-                width: 1200,
-                format: 'svg',
-              })
-            },
-          },
+          plotlyDownloadButton({
+            format: () => imageFormatOf(this.args.imageFormat),
+            filename: () => this.args.svgFilename || this.args.title || 'plot',
+            height: this.args.height || 400,
+          }),
+          ...this.measure.modeBarButtons(this.measureTitle),
         ],
         responsive: true,
       })
@@ -195,9 +263,20 @@ export default defineComponent({
         on: (event: string, handler: (data: { points: Array<{ curveNumber: number; pointIndex: number }> }) => void) => void
       }
       plotElement.on('plotly_click', (eventData) => this.onClick(eventData))
+      this.zoom.bindNative(element as unknown as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
+      this.measure.bindLabelClicks(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },
     onClick(eventData: { points: Array<{ curveNumber: number; pointIndex: number }> }): void {
+      // In measure mode a click picks a point to measure, not a selection
+      if (this.measure.active) {
+        const point = eventData.points?.[0]
+        const s = point ? this.series[point.curveNumber] : undefined
+        if (point && s && point.pointIndex < s.x.length) {
+          this.measure.pick({ x: s.x[point.pointIndex], y: s.y[point.pointIndex] }, this.measureSpec)
+        }
+        return
+      }
       const interactivity = this.args.interactivity || {}
       if (Object.keys(interactivity).length === 0 || !eventData.points?.length) return
       const point = eventData.points[0]
@@ -216,6 +295,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.series-plot {
+  position: relative;
+}
+
 .plot-container {
   width: 100%;
 }

@@ -1,6 +1,7 @@
 <template>
   <div class="plot-wrapper" :style="cssCustomProperties">
     <div :id="id" class="plot-container"></div>
+    <MeasureHint v-if="args.measure" :measure="measure" />
     <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
       ↩
     </button>
@@ -16,13 +17,32 @@
  *  - annotated: raw peaks, signal peaks of the selected mass highlighted, z=N labels
  *  - ladder: masses with a sequence tag ladder; clicking a ladder mass drills
  *    down to its raw peaks ('ladder-annotated'), the back button returns
+ *
+ * With fragmentMatchesIdentifier, the fragment ions a ProteinSequenceView
+ * matched are coloured and labelled in every mode (see utils/fragmentIons).
  */
 import { defineComponent, type PropType } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import Plotly from '@/plotly/basic'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
-import type { DeconvolvedSpectrumComponentArgs } from '@/types/component'
+import type { DeconvolvedSpectrumComponentArgs, FragmentMatches } from '@/types/component'
+import {
+  fragmentMarks,
+  matchesSpectrum,
+  visibleLabels,
+  type FragmentKind,
+  type FragmentLabel,
+  type FragmentMarks,
+} from '@/utils/fragmentIons'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { usePinZoom } from '@/composables/usePinZoom'
+import { useZoomState } from '@/composables/useZoomState'
+import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
+import { readableTextOn } from '@/utils/appTheme'
+import { imageFormatOf } from '@/utils/imageExport'
+import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 type Mode = 'deconvolved' | 'annotated' | 'ladder' | 'ladder-annotated'
 
@@ -53,6 +73,13 @@ const DEFAULT_STYLING = {
   selectedColor: '#F3A712',
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
+  // Circles of the theoretical isotope envelope (set_envelope)
+  envelopeColor: '#D62728',
+  isolationWindowColor: '#7F7F7F',
+  // Fragment ions of the sequence view: N-terminal, C-terminal, internal
+  nTermColor: '#1F5FBF',
+  cTermColor: '#B5179E',
+  internalColor: '#2E8B57',
   annotationColors: {
     massButton: '#E4572E',
     selectedMassButton: '#F3A712',
@@ -66,26 +93,92 @@ const DEFAULT_STYLING = {
 // Stick plots draw each peak as x,x,x / floor,y,floor
 const STICK_FLOOR = -10000000
 
+/** A text label drawn by a scatter trace: unlike an annotation, it is clipped to the plot area. */
+interface PlotLabel {
+  x: number
+  y: number
+  text: string
+  color: string
+  family?: string
+  hover?: string
+}
+
+/** One trace with the labels, cut off at the axes like the boxes behind them. */
+function labelTrace(labels: PlotLabel[]): Plotly.Data | null {
+  if (labels.length === 0) return null
+  const hover = labels.some((label) => label.hover !== undefined)
+  return {
+    x: labels.map((label) => label.x),
+    y: labels.map((label) => label.y),
+    text: labels.map((label) => label.text),
+    mode: 'text',
+    type: 'scatter',
+    cliponaxis: true,
+    textposition: 'middle center',
+    textfont: {
+      size: 15,
+      color: labels.map((label) => label.color),
+      family: labels.map((label) => label.family ?? 'sans-serif'),
+    },
+    hoverinfo: hover ? 'text' : 'skip',
+    hovertext: hover ? labels.map((label) => label.hover ?? '') : undefined,
+    showlegend: false,
+  } as unknown as Plotly.Data
+}
+
+/**
+ * The part of a ladder arrow segment (tail to head) inside the x range, or null
+ * when none of it is. A head cut off at the axis loses its arrowhead.
+ */
+export function clipArrow(
+  tail: number,
+  head: number,
+  range: number[],
+): { tail: number; head: number; headVisible: boolean } | null {
+  if (range.length !== 2 || !(range[0] < range[1])) return { tail, head, headVisible: true }
+  const [x0, x1] = range
+  if (Math.max(tail, head) <= x0 || Math.min(tail, head) >= x1) return null
+  const clamp = (x: number) => Math.min(Math.max(x, x0), x1)
+  const clippedTail = clamp(tail)
+  const clippedHead = clamp(head)
+  if (clippedTail === clippedHead) return null
+  return { tail: clippedTail, head: clippedHead, headVisible: clippedHead === head }
+}
+/** m/z distance between neighbouring isotopes at charge 1 (C13 - C12). */
+const ISOTOPE_SPACING = 1.00235
+/** Envelope circles show once neighbouring isotopes are this many pixels apart. */
+const ENVELOPE_MIN_SPACING_PX = 8
+
 const TOGGLE_ANNOTATIONS_ICON = {
   width: 1792,
   height: 1792,
   path: 'M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z',
+}
+/** Fragment-ion labels closer than this (pixels) to a more intense one are left out. */
+const FRAGMENT_LABEL_SPACING_PX = 14
+const FRAGMENT_KINDS: FragmentKind[] = ['N', 'C', 'I']
+const FRAGMENT_KIND_NAMES: Record<FragmentKind, string> = {
+  N: 'N-terminal fragment ions',
+  C: 'C-terminal fragment ions',
+  I: 'Internal fragment ions',
+}
+// Square brackets: the ends of a sequence
+const TOGGLE_FRAGMENTS_ICON = {
+  width: 1000,
+  height: 1000,
+  path: 'M150 100h300v100H250v600h200v100H150z M550 100h300v800H550V800h200V200H550z',
 }
 const TOGGLE_PEAKS_ICON = {
   width: 1792,
   height: 1792,
   path: 'M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z',
 }
-const SVG_ICON = {
-  width: 1792,
-  height: 1792,
-  path: 'M1152 1376v-160q0-14-9-23t-23-9h-96v-512q0-14-9-23t-23-9h-320q-14 0-23 9t-9 23v160q0 14 9 23t23 9h96v320h-96q-14 0-23 9t-9 23v160q0 14 9 23t23 9h320q14 0 23-9t9-23zm-128-896v-160q0-14-9-23t-23-9h-192q-14 0-23 9t-9 23v160q0 14 9 23t23 9h192q14 0 23-9t9-23zm640 416q0 209-103 385.5t-279.5 279.5-385.5 103-385.5-103-279.5-279.5-103-385.5 103-385.5 279.5-279.5 385.5-103 385.5 103 279.5 279.5 103 385.5z',
-}
 
 let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlyDeconvolvedSpectrum',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<DeconvolvedSpectrumComponentArgs>,
@@ -96,10 +189,13 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
+    const measure = useMeasure(() => !!props.args.measure)
+    const pinZoom = usePinZoom(() => !!props.args.keepZoom)
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, zoomStamp: zoom.stamp, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -108,6 +204,8 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       annotationsVisible: true,
       deconvolvedPeaksHighlightMode: false,
+      // The fragment ions of the sequence view are marked (toolbar toggle)
+      fragmentIonsVisible: true,
       // Drilled down from the ladder view into the raw peaks of a mass
       drilledDown: false,
     }
@@ -201,6 +299,42 @@ export default defineComponent({
       return this.xColumnValues.length > 0 && this.yColumnValues.length > 0
     },
 
+    /** The fragment ions the sequence view matched on this spectrum, or null */
+    fragmentMatches(): FragmentMatches | null {
+      const id = this.args.fragmentMatchesIdentifier
+      if (!id) return null
+      const matches = this.selectionStore.$state[id] as FragmentMatches | null | undefined
+      const keyColumn = this.args.spectrumKeyColumn
+      const key = keyColumn ? this.row[keyColumn] : undefined
+      return matchesSpectrum(matches, key) ? (matches as FragmentMatches) : null
+    },
+    fragmentMatchesJson(): string {
+      return JSON.stringify(this.fragmentMatches)
+    },
+    hasFragmentMatches(): boolean {
+      return (this.fragmentMatches?.fragments.length ?? 0) > 0
+    },
+    /** Masses and raw peaks the fragment ions explain */
+    fragmentMarks(): FragmentMarks | null {
+      const matches = this.fragmentMatches
+      if (!matches || matches.fragments.length === 0) return null
+      const intensities = this.row[this.args.massIntensityColumn]
+      const peakIntensities = this.args.peakIntensityColumn ? this.row[this.args.peakIntensityColumn] : undefined
+      return fragmentMarks(
+        matches,
+        this.MassValues,
+        Array.isArray(intensities) ? (intensities as number[]) : [],
+        this.MZValues,
+        Array.isArray(peakIntensities) ? (peakIntensities as number[]) : [],
+        this.mzSignals,
+      )
+    },
+    /** Kind of fragment ion per drawn mass or peak, while they are shown */
+    fragmentKindPos(): (FragmentKind | undefined)[] {
+      const marks = this.fragmentMarks
+      if (!marks || !this.fragmentIonsVisible || !this.annotationsVisible) return []
+      return this.isMzMode ? marks.peakKinds : marks.massKinds
+    },
     selectedMassIndex(): number | undefined {
       if (!this.args.massIdentifier) return undefined
       const value = this.selectionStore.$state[this.args.massIdentifier]
@@ -211,6 +345,114 @@ export default defineComponent({
     },
     ladderJson(): string {
       return JSON.stringify(this.args.ladder ?? null)
+    },
+    envelopeJson(): string {
+      return JSON.stringify(this.args.envelope ?? null)
+    },
+    /** Theoretical isotope envelope of the selected mass as open circles on
+     * its raw peaks; drawn only while the mass it was computed for is selected. */
+    envelopeTrace(): Plotly.Data | null {
+      const envelope = this.args.envelope
+      if (!envelope || !this.isMzMode || !this.annotationsVisible) return null
+      if (envelope.massIndex !== this.selectedMassIndex) return null
+      const n = Math.min(envelope.mzs.length, envelope.intensities.length)
+      if (n === 0) return null
+      // Circles only where the zoom puts neighbouring isotopes far enough apart
+      // to tell them apart; zoomed out they would merge into one red smear.
+      const [x0, x1] = this.xRange
+      const pixelsPerMz = this.xAxisPixelLength() / Math.max(x1 - x0, 1e-9)
+      const spacing = this.envelopeIsotopeSpacing(envelope.mzs.slice(0, n), envelope.charges)
+      const x: number[] = []
+      const y: number[] = []
+      const hover: string[] = []
+      for (let i = 0; i < n; i++) {
+        if (spacing[i] * pixelsPerMz < ENVELOPE_MIN_SPACING_PX) continue
+        const charge = envelope.charges?.[i]
+        const isotope = envelope.isotopes?.[i]
+        x.push(envelope.mzs[i])
+        y.push(envelope.intensities[i])
+        hover.push(
+          `Theoretical m/z ${envelope.mzs[i].toFixed(4)}` +
+            (charge !== undefined ? `<br>z=${charge}` : '') +
+            (isotope !== undefined ? `, isotope ${isotope}` : ''),
+        )
+      }
+      if (x.length === 0) return null
+      return {
+        x,
+        y,
+        mode: 'markers',
+        type: 'scatter',
+        name: 'Theoretical envelope',
+        marker: {
+          symbol: 'circle-open',
+          size: 9,
+          color: this.styling.envelopeColor,
+          line: { width: 1.5, color: this.styling.envelopeColor },
+        },
+        hoverinfo: 'text',
+        hovertext: hover,
+      } as Plotly.Data
+    },
+    isolationWindowJson(): string {
+      return JSON.stringify(this.args.isolationWindow ?? null)
+    },
+    /** The isolation window, in the m/z views only */
+    isolationWindow(): { lower: number; upper: number; target?: number } | null {
+      const window = this.args.isolationWindow
+      if (!window || !this.isMzMode) return null
+      if (!Number.isFinite(window.lower) || !Number.isFinite(window.upper)) return null
+      return window
+    },
+    isolationWindowShapes(): Partial<Plotly.Shape>[] {
+      const window = this.isolationWindow
+      if (!window) return []
+      const color = this.styling.isolationWindowColor
+      const shapes: Partial<Plotly.Shape>[] = [
+        {
+          type: 'rect',
+          xref: 'x',
+          yref: 'paper',
+          x0: window.lower,
+          x1: window.upper,
+          y0: 0,
+          y1: 1,
+          fillcolor: color,
+          opacity: 0.25,
+          line: { width: 0 },
+          layer: 'below',
+        },
+      ]
+      if (window.target !== undefined && Number.isFinite(window.target)) {
+        shapes.push({
+          type: 'line',
+          xref: 'x',
+          yref: 'paper',
+          x0: window.target,
+          x1: window.target,
+          y0: 0,
+          y1: 1,
+          line: { color, width: 1, dash: 'dash' },
+          layer: 'below',
+        })
+      }
+      return shapes
+    },
+    isolationWindowAnnotations(): Partial<Plotly.Annotations>[] {
+      const window = this.isolationWindow
+      if (!window) return []
+      return [
+        {
+          x: (window.lower + window.upper) / 2,
+          y: 1,
+          xref: 'x',
+          yref: 'paper',
+          yanchor: 'bottom',
+          text: `Isolation window ${window.lower.toFixed(2)}–${window.upper.toFixed(2)}`,
+          showarrow: false,
+          font: { size: 11, color: this.styling.isolationWindowColor },
+        },
+      ]
     },
     ladderKey(): unknown {
       return this.args.ladder ? this.args.ladder.key ?? JSON.stringify(this.args.ladder.masses) : null
@@ -292,19 +534,30 @@ export default defineComponent({
         highlighted_y: [] as number[],
         selected_x: [] as number[],
         selected_y: [] as number[],
+        N_x: [] as number[],
+        N_y: [] as number[],
+        C_x: [] as number[],
+        C_y: [] as number[],
+        I_x: [] as number[],
+        I_y: [] as number[],
       }
       const mask = this.isMzMode ? this.highlightedMzPos : this.highlightedMassPos
       const reversedSelectedAA = this.reversedSelectedAA
+      const fragmentKinds = this.fragmentKindPos
       for (let i = 0; i < this.xValues.length; i++) {
         const peak = Math.floor(i / 3)
         const posHighlight = mask[peak]
         if (posHighlight === undefined) continue
+        const fragmentKind = fragmentKinds[peak]
         if (posHighlight && (reversedSelectedAA === peak || reversedSelectedAA === peak - 1)) {
           result.selected_x.push(this.xValues[i])
           result.selected_y.push(this.yValues[i])
         } else if (posHighlight) {
           result.highlighted_x.push(this.xValues[i])
           result.highlighted_y.push(this.yValues[i])
+        } else if (fragmentKind !== undefined) {
+          result[`${fragmentKind}_x`].push(this.xValues[i])
+          result[`${fragmentKind}_y`].push(this.yValues[i])
         } else {
           result.unhighlighted_x.push(this.xValues[i])
           result.unhighlighted_y.push(this.yValues[i])
@@ -333,8 +586,12 @@ export default defineComponent({
         : highlighted.map((a) => a.mass).filter((m) => !isNaN(m))
       if (values.length === 0) return [0, 1]
 
-      // Raw peaks of the highlighted masses: all of them
-      if (this.isMzMode) return [Math.min(...values) * 0.98, Math.max(...values) * 1.02]
+      // Raw peaks of the highlighted masses: all of them, and the isolation window
+      if (this.isMzMode) {
+        const window = this.isolationWindow
+        if (window) values.push(window.lower, window.upper)
+        return [Math.min(...values) * 0.98, Math.max(...values) * 1.02]
+      }
 
       // Masses: centre on them, then narrow until their labels stop overlapping
       const xcenter = values.reduce((sum, mass) => sum + mass, 0) / values.length
@@ -366,6 +623,7 @@ export default defineComponent({
         const groups = this.chargeGroups(highlighted[0])
         if (groups.length === 0) return empty
         const visibleChargeBoxes = this.annotationBoxData.filter((box) => box.type === 'charge' && box.visible)
+        const chargeLabels: PlotLabel[] = []
         groups.forEach(({ charge, center }, chargeIndex) => {
           if (!visibleChargeBoxes.some((box) => box.index === chargeIndex)) return
           buttonShapes.push({
@@ -376,17 +634,18 @@ export default defineComponent({
             y1: ypos_high,
             fillcolor: this.styling.annotationColors.massButton,
             line: { width: 0 },
+            // Below the label traces, which draw the text
+            layer: 'between' as 'below',
           })
-          buttonAnnotations.push({
+          chargeLabels.push({
             x: center,
             y: ypos,
-            xref: 'x',
-            yref: 'y',
             text: 'z=' + charge,
-            showarrow: false,
-            font: { size: 15 },
+            color: readableTextOn(this.styling.annotationColors.massButton),
           })
         })
+        const chargeTrace = labelTrace(chargeLabels)
+        if (chargeTrace) buttonTraces.push(chargeTrace)
         return { shapes: buttonShapes, annotations: buttonAnnotations, traces: buttonTraces }
       }
 
@@ -395,6 +654,8 @@ export default defineComponent({
       const reversedSelectedAA = this.reversedSelectedAA
       const visibleMassBoxes = this.annotationBoxData.filter((box) => box.type === 'mass' && box.visible)
       const scaling = highlighted.length === 1 ? 2 : 1
+      const massLabels: PlotLabel[] = []
+      const residueLabels: PlotLabel[] = []
 
       for (let i = 0; i < highlighted.length; i++) {
         const mass = highlighted[i].mass
@@ -424,16 +685,9 @@ export default defineComponent({
           y1: ypos_high,
           fillcolor,
           line: { width: 0 },
+          layer: 'between' as 'below',
         })
-        buttonAnnotations.push({
-          x: mass,
-          y: ypos,
-          xref: 'x',
-          yref: 'y',
-          text: mass.toFixed(2),
-          showarrow: false,
-          font: { size: 15, family },
-        })
+        massLabels.push({ x: mass, y: ypos, text: mass.toFixed(2), color: readableTextOn(fillcolor), family })
       }
 
       const yPosArrow = ypos * 0.5
@@ -478,46 +732,41 @@ export default defineComponent({
           xEnd -= diff
           xMidEnd += diff * 0.1
         }
-        arrowAnnotations.push({
-          ax: xMidStart,
-          ay: yPosArrow,
-          xref: 'x',
-          yref: 'y',
-          x: xStart,
-          y: yPosArrow,
-          axref: 'x',
-          ayref: 'y',
-          showarrow: true,
-          arrowhead: 0,
-          arrowsize: 1,
-          arrowwidth: 2,
-          arrowcolor: fillcolor,
+        // Annotations are not clipped to the plot: draw only the part of
+        // each segment inside the x range
+        const segments = [
+          clipArrow(xMidStart, xStart, this.xRange),
+          clipArrow(xMidEnd, xEnd, this.xRange),
+        ]
+        segments.forEach((segment, s) => {
+          if (!segment) return
+          arrowAnnotations.push({
+            ax: segment.tail,
+            ay: yPosArrow,
+            xref: 'x',
+            yref: 'y',
+            x: segment.head,
+            y: yPosArrow,
+            axref: 'x',
+            ayref: 'y',
+            showarrow: true,
+            arrowhead: s === 1 && segment.headVisible ? 2 : 0,
+            arrowsize: 1,
+            arrowwidth: 2,
+            arrowcolor: fillcolor,
+          })
         })
-        arrowAnnotations.push({
-          ax: xMidEnd,
-          ay: yPosArrow,
-          xref: 'x',
-          yref: 'y',
-          x: xEnd,
-          y: yPosArrow,
-          axref: 'x',
-          ayref: 'y',
-          showarrow: true,
-          arrowhead: 2,
-          arrowsize: 1,
-          arrowwidth: 2,
-          arrowcolor: fillcolor,
-        })
-        arrowAnnotations.push({
+        residueLabels.push({
           x: xMid,
           y: yPosAA,
-          xref: 'x',
-          yref: 'y',
           text: AA,
-          hovertext: 'Δ=' + delta.toFixed(2) + ' Da',
-          showarrow: false,
-          font: { size: 15, color: fillcolor, family },
+          color: fillcolor,
+          family,
+          hover: 'Δ=' + delta.toFixed(2) + ' Da',
         })
+      }
+      for (const trace of [labelTrace(massLabels), labelTrace(residueLabels)]) {
+        if (trace) buttonTraces.push(trace)
       }
       return {
         shapes: buttonShapes,
@@ -547,6 +796,7 @@ export default defineComponent({
           type: 'scatter',
           marker: { color: this.styling.unhighlightedColor },
         } as Plotly.Data,
+        ...this.fragmentTraces,
         {
           x: this.plotData.highlighted_x,
           y: this.plotData.highlighted_y,
@@ -562,8 +812,94 @@ export default defineComponent({
           marker: { color: this.styling.selectedColor },
         } as Plotly.Data,
       ]
+      if (this.envelopeTrace) traces.push(this.envelopeTrace)
       if (this.annotationsVisible) traces.push(...this.annotationData.traces)
       return traces
+    },
+    fragmentColors(): Record<FragmentKind, string> {
+      return {
+        N: this.styling.nTermColor,
+        C: this.styling.cTermColor,
+        I: this.styling.internalColor,
+      }
+    },
+    /** Sticks of the fragment ions, one trace per kind, with the ion names on hover */
+    fragmentTraces(): Plotly.Data[] {
+      const marks = this.fragmentMarks
+      if (!marks || this.fragmentKindPos.length === 0) return []
+      const traces: Plotly.Data[] = []
+      for (const kind of FRAGMENT_KINDS) {
+        const x = this.plotData[`${kind}_x`]
+        const y = this.plotData[`${kind}_y`]
+        if (x.length === 0) continue
+        traces.push({
+          x,
+          y,
+          mode: 'lines',
+          type: 'scatter',
+          name: FRAGMENT_KIND_NAMES[kind],
+          line: { color: this.fragmentColors[kind], width: 1.5 },
+          hoverinfo: 'skip',
+        } as Plotly.Data)
+      }
+      // Hover: the names of the ions at each marked mass or peak
+      const hover = this.isMzMode ? marks.peakHover : marks.massHover
+      const xs = this.xColumnValues
+      const ys = this.yColumnValues
+      const hx: number[] = []
+      const hy: number[] = []
+      const ht: string[] = []
+      const kinds = this.fragmentKindPos
+      hover.forEach((text, i) => {
+        if (text === undefined || kinds[i] === undefined) return
+        hx.push(xs[i])
+        hy.push(ys[i])
+        ht.push(`${text}<br>${this.isMzMode ? 'm/z' : 'Mass'} ${xs[i]?.toFixed(4)}`)
+      })
+      if (hx.length > 0) {
+        traces.push({
+          x: hx,
+          y: hy,
+          mode: 'markers',
+          type: 'scatter',
+          marker: { size: 8, opacity: 0 },
+          hoverinfo: 'text',
+          hovertext: ht,
+          showlegend: false,
+        } as Plotly.Data)
+      }
+      return traces
+    },
+    /** Ion names above their peaks, as many as fit */
+    fragmentLabelAnnotations(): Partial<Plotly.Annotations>[] {
+      const marks = this.fragmentMarks
+      if (!marks || this.fragmentKindPos.length === 0) return []
+      const labels: FragmentLabel[] = this.isMzMode ? marks.peakLabels : marks.massLabels
+      const [x0, x1] = this.xRange
+      const pixelsPerX = this.xAxisPixelLength() / Math.max(x1 - x0, 1e-9)
+      // The selected mass carries its own label
+      const selected = this.selectedMassIndex
+      const skip =
+        !this.isMzMode && selected !== undefined && selected < this.MassValues.length
+          ? this.MassValues[selected]
+          : undefined
+      return visibleLabels(
+        labels.filter((label) => label.x !== skip),
+        this.xRange,
+        pixelsPerX,
+        FRAGMENT_LABEL_SPACING_PX,
+      ).map((label) => ({
+        x: label.x,
+        y: label.y,
+        xref: 'x',
+        yref: 'y',
+        yanchor: 'bottom',
+        yshift: 2,
+        textangle: '-90',
+        text: label.text,
+        showarrow: false,
+        font: { size: 11, color: this.fragmentColors[label.kind] },
+      }))
     },
     layout(): Partial<Plotly.Layout> {
       return {
@@ -595,9 +931,48 @@ export default defineComponent({
           color: this.theme?.textColor,
           family: this.theme?.font,
         },
-        shapes: this.annotationData.shapes,
-        annotations: this.annotationData.annotations,
+        shapes: [
+          ...this.isolationWindowShapes,
+          ...this.annotationData.shapes,
+          ...this.measureOverlay.shapes,
+        ],
+        annotations: [
+          ...this.isolationWindowAnnotations,
+          ...this.fragmentLabelAnnotations,
+          ...this.annotationData.annotations,
+          ...this.measureOverlay.annotations,
+        ],
       }
+    },
+    /**
+     * Differences between masses are neutral: matched to residue masses as
+     * they are (1+). Between raw peaks they are m/z: matched at 1+ and 2+.
+     */
+    measureSpec(): MeasureSpec {
+      return {
+        kind: 'span',
+        xQuantity: this.isMzMode ? 'm/z' : 'mass',
+        charges: this.isMzMode ? MEASURE_CHARGES : [1],
+        tolerance: this.args.measureTolerance,
+        residues: this.args.measureResidues,
+      }
+    },
+    measureTitle(): string {
+      return this.isMzMode
+        ? 'Measure: click two peaks for their m/z difference (Esc cancels)'
+        : 'Measure: click two masses for their difference (Esc cancels)'
+    },
+    /** Identity of the plotted masses or peaks: others drop the measurements. */
+    measureKey(): string {
+      return `${this.isMzMode ? 'mz' : 'mass'}|${pointsKey(this.xColumnValues, this.yColumnValues)}`
+    },
+    /** Brackets of the measurements, spaced by the tallest visible peak. */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+        yScale: this.yRange[1] / 1.8,
+      })
     },
     cssCustomProperties(): Record<string, string> {
       return {
@@ -607,23 +982,69 @@ export default defineComponent({
     },
   },
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      if (this.applyIncomingZoom()) this.requestGraph()
+    },
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+      },
+      immediate: true,
+    },
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
+    'measure.revision'() {
+      if (!this.isDataReady) return
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
+    },
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
-        // A new spectrum: forget the zoom of the previous one
-        this.manual = false
-        this.manualXRange = undefined
+        // A new spectrum: forget the zoom of the previous one, unless pinned
+        // or a zoom came with it (a saved view opened)
+        if (!this.applyIncomingZoom() && !this.pinZoom.pinned) {
+          if (this.manual) this.zoom.report(null)
+          this.manual = false
+          this.manualXRange = undefined
+        }
         this.requestGraph()
       },
       deep: true,
     },
     ladderKey(newKey: unknown, oldKey: unknown) {
       if (newKey !== oldKey) {
+        // A pinned zoom outlives the reset of the drill-down state
+        const { manual, manualXRange } = this
         this.resetManualState()
+        if (this.pinZoom.pinned) {
+          this.manual = manual
+          this.manualXRange = manualXRange
+        }
+        this.applyIncomingZoom()
         this.requestGraph()
       }
     },
     // By value: the arguments arrive as a new object on every rerun
     ladderJson() {
+      this.requestGraph()
+    },
+    envelopeJson() {
+      this.requestGraph()
+    },
+    isolationWindowJson() {
+      this.requestGraph()
+    },
+    // By value: the selection store gets a new object on every rerun
+    fragmentMatchesJson() {
+      this.requestGraph()
+    },
+    fragmentIonsVisible() {
       this.requestGraph()
     },
     selectedMassIndex() {
@@ -641,9 +1062,18 @@ export default defineComponent({
     },
   },
   mounted() {
+    this.applyIncomingZoom()
     this.requestGraph()
   },
   methods: {
+    /** Show a zoom set from outside; false if none came. */
+    applyIncomingZoom(): boolean {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return false
+      this.manual = !!incoming?.x
+      this.manualXRange = incoming?.x
+      return true
+    },
     /** Draw once per tick: one update often changes several watched values
      * (the data and the selection), and each drawing costs a full Plotly render. */
     requestGraph(): void {
@@ -686,6 +1116,33 @@ export default defineComponent({
         groups.push({ charge, center })
       })
       return groups
+    },
+    /** Width in pixels of the x axis: the plot area without the margins. */
+    xAxisPixelLength(): number {
+      const element = document.getElementById(this.id) as
+        | (HTMLElement & { _fullLayout?: { xaxis?: { _length?: number } } })
+        | null
+      const length = element?._fullLayout?.xaxis?._length
+      if (length && length > 0) return length
+      const width = this.plotWidth()
+      return width > 0 ? Math.max(width - 160, 100) : 1000
+    },
+    /** m/z distance from each envelope peak to the next isotope of its charge:
+     * the isotope spacing over the charge, or, without charges, the distance to
+     * the nearest other peak. */
+    envelopeIsotopeSpacing(mzs: number[], charges?: number[]): number[] {
+      if (charges && charges.length >= mzs.length) {
+        return mzs.map((_, i) => (charges[i] > 0 ? ISOTOPE_SPACING / charges[i] : Infinity))
+      }
+      const order = mzs.map((_, i) => i).sort((a, b) => mzs[a] - mzs[b])
+      const spacing = new Array<number>(mzs.length).fill(Infinity)
+      for (let k = 0; k < order.length; k++) {
+        const here = mzs[order[k]]
+        const before = k > 0 ? here - mzs[order[k - 1]] : Infinity
+        const after = k < order.length - 1 ? mzs[order[k + 1]] - here : Infinity
+        spacing[order[k]] = Math.min(before, after)
+      }
+      return spacing
     },
     plotWidth(): number {
       const element = document.getElementById(this.id)
@@ -827,6 +1284,19 @@ export default defineComponent({
       this.requestGraph()
     },
     onPlotClick(eventData: { points?: Array<{ x: number }> }): void {
+      // In measure mode a click picks the nearest mass or peak, not a selection
+      if (this.measure.active) {
+        const x = eventData.points?.[0]?.x
+        const xs = this.xColumnValues
+        const ys = this.yColumnValues
+        if (typeof x !== 'number' || xs.length === 0) return
+        let nearest = 0
+        for (let i = 1; i < xs.length; i++) {
+          if (Math.abs(xs[i] - x) < Math.abs(xs[nearest] - x)) nearest = i
+        }
+        this.measure.pick({ x: xs[nearest], y: ys[nearest] }, this.measureSpec)
+        return
+      }
       if (!eventData.points || eventData.points.length === 0 || !this.args.massIdentifier) return
       const x = eventData.points[0].x
       for (let i = 0; i < this.MassValues.length; i++) {
@@ -849,12 +1319,14 @@ export default defineComponent({
         if (newXRange[0] < 0) newXRange[0] = 0
         this.manual = true
         this.manualXRange = newXRange
+        this.zoom.report({ x: newXRange as [number, number] })
         this.requestGraph()
       } else if (eventData['xaxis.autorange'] === true) {
         const xValues = this.xValues
         if (xValues.length === 0) return
         this.manual = true
         this.manualXRange = [Math.min(...xValues), Math.max(...xValues)]
+        this.zoom.report(null)
         this.requestGraph()
       }
     },
@@ -883,6 +1355,16 @@ export default defineComponent({
           },
         },
       ]
+      if (this.hasFragmentMatches) {
+        modeBarButtons.push({
+          title: this.fragmentIonsVisible ? 'Hide Fragment Ions' : 'Show Fragment Ions',
+          name: 'toggleFragmentIons',
+          icon: TOGGLE_FRAGMENTS_ICON,
+          click: () => {
+            this.fragmentIonsVisible = !this.fragmentIonsVisible
+          },
+        })
+      }
       if (this.isMzMode) {
         modeBarButtons.push({
           title: this.deconvolvedPeaksHighlightMode ? 'Hide Deconvolved Peaks' : 'Show Deconvolved Peaks',
@@ -893,22 +1375,15 @@ export default defineComponent({
           },
         })
       }
-      modeBarButtons.push({
-        title: 'Download as SVG',
-        name: 'toImageSvg',
-        icon: SVG_ICON,
-        click: () => {
-          const plotElement = document.getElementById(this.id)
-          if (plotElement) {
-            Plotly.downloadImage(plotElement, {
-              filename: this.args.svgFilename || 'spectrum',
-              height: 400,
-              width: 1200,
-              format: 'svg',
-            })
-          }
-        },
-      })
+      modeBarButtons.push(
+        plotlyDownloadButton({
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || 'spectrum',
+          icon: SPECTRUM_DOWNLOAD_ICON,
+        }) as unknown as Record<string, unknown>,
+      )
+      modeBarButtons.push(...(this.measure.modeBarButtons(this.measureTitle) as unknown as Array<Record<string, unknown>>))
+      modeBarButtons.push(...(this.pinZoom.modeBarButtons() as unknown as Array<Record<string, unknown>>))
       const plot = (await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: modeBarButtons as unknown as Plotly.ModeBarButton[],
@@ -916,6 +1391,8 @@ export default defineComponent({
       })) as unknown as { on: (event: string, handler: (data: never) => void) => void }
       plot.on('plotly_relayout', (eventData: Record<string, unknown>) => this.onRelayout(eventData))
       plot.on('plotly_click', (eventData: { points?: Array<{ x: number }> }) => this.onPlotClick(eventData))
+      this.measure.bindLabelClicks(element)
+      this.pinZoom.bind(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },
     async renderEmpty(): Promise<void> {

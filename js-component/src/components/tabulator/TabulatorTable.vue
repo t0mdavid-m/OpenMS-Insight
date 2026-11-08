@@ -76,6 +76,15 @@
         </div>
         <div class="table-toolbar-title">
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
+          <v-btn
+            v-if="multiSelectEnabled"
+            variant="text"
+            size="x-small"
+            icon="mdi-checkbox-multiple-marked-outline"
+            :class="['multi-select-toggle', { active: checkboxesShown }]"
+            :title="checkboxesShown ? 'Hide the check boxes' : 'Tick rows to select several'"
+            @click="toggleCheckboxes"
+          />
         </div>
         <div class="table-toolbar-toggles">
           <v-checkbox
@@ -179,13 +188,13 @@
       </div>
     </div>
 
-    <div :id="id" :class="tableClasses"></div>
+    <div :id="id" :class="tableClasses" @keydown.capture="onTableKeydown"></div>
   </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
-import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 'tabulator-tables'
+import { TabulatorFull as Tabulator, type CellComponent, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -197,6 +206,7 @@ import type {
   NumericFilterConfig,
 } from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
+import { combineSelection } from '@/composables/useMultiSelect'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -222,6 +232,27 @@ function formatNumber(value: number): string {
 
 // How long typing in the search box waits before the table is searched
 const SEARCH_DELAY_MS = 400
+// A row reached with the keyboard is highlighted at once, and selected (sent to
+// Python, so linked components follow) once no key has been pressed for this
+// long: holding a key down reruns the app once, not once per row passed
+const KEY_SELECT_DELAY_MS = 200
+// A page asked for by the keyboard that has not arrived after this long is
+// given up, so the keys work again
+const KEY_PAGE_TIMEOUT_MS = 5000
+// How often a page asked for by the keyboard is looked for: Tabulator may
+// still be busy with the previous page and drop the request, which is then
+// made again
+const KEY_PAGE_CHECK_MS = 750
+
+type KeyMove = 'up' | 'down' | 'pageUp' | 'pageDown' | 'home' | 'end'
+const KEY_MOVES: Record<string, KeyMove> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  PageUp: 'pageUp',
+  PageDown: 'pageDown',
+  Home: 'home',
+  End: 'end',
+}
 
 export default defineComponent({
   name: 'TabulatorTable',
@@ -307,9 +338,43 @@ export default defineComponent({
       requestedSortDir: 'asc' as 'asc' | 'desc',
       // Track the counter value when AJAX request was made (for stale response detection)
       pendingRequestCounter: null as number | null,
+      // multi_select: last check box toggled (for Shift ranges), and a check box
+      // click, which must not also select the row
+      lastCheckedPosition: null as number | null,
+      checkboxClicked: false as boolean,
+      // The check box column is shown once the user asks for it
+      checkboxesShown: false as boolean,
+      // Keyboard navigation: the row highlighted with the keys and not yet
+      // selected (its index field value), and the timer that selects it
+      keyboardRowId: null as unknown,
+      // The last row the keys moved to: kept in view when its page is drawn again
+      keyboardShownId: null as unknown,
+      keySelectTimer: null as ReturnType<typeof setTimeout> | null,
+      // Position (over all pages) of the row the keys moved to while its page
+      // is being fetched, the page asked for and when
+      keyNavTarget: null as number | null,
+      keyNavRequestedPage: null as number | null,
+      keyNavRequestedAt: 0,
+      keyNavCheckTimer: null as ReturnType<typeof setTimeout> | null,
     }
   },
   computed: {
+    // Buttons and chips in the table's dialogs take the app's primary colour
+    accentColor(): string {
+      return this.streamlitDataStore.theme?.primaryColor || '#1976d2'
+    },
+    accentHover(): string {
+      return `color-mix(in srgb, ${this.accentColor} 82%, black)`
+    },
+    multiSelectEnabled(): boolean {
+      return Object.keys(this.args.multiSelect || {}).length > 0
+    },
+    // Changes whenever a multi_select set changes
+    multiSelectionKey(): string {
+      return JSON.stringify(
+        Object.keys(this.args.multiSelect || {}).map((identifier) => this.selectionStore.$state[identifier] ?? null),
+      )
+    },
     selectionScrollPosition(): 'top' | 'center' | 'bottom' | 'nearest' {
       return this.args.scrollPosition || 'center'
     },
@@ -411,12 +476,17 @@ export default defineComponent({
       const indexField = this.args.tableIndexField || 'id'
       const interactivity = this.args.interactivity || {}
       const interactivityColumns = Object.values(interactivity) as string[]
+      // The column a tick adds to a multi-selection: kept even when it is
+      // not shown, or ticking a row would add nothing
+      const multiSelectColumns = Object.values(this.args.multiSelect || {}) as string[]
 
-      // Include all columns needed: visible columns, index field, and interactivity columns
+      // Include all columns needed: visible columns, index field, and the
+      // columns of interactivity and multi_select
       const allColumns = [
         ...(this.args.columnDefinitions || []).map((col) => col.field),
         indexField,
         ...interactivityColumns,
+        ...multiSelectColumns,
       ]
       // Deduplicate columns
       const columns = [...new Set(allColumns)]
@@ -487,6 +557,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // The checked rows changed (here or in another component)
+    multiSelectionKey() {
+      this.refreshCheckboxes()
+    },
     // Save the CSV once per request. The payload stays in the data store after
     // later merges, so only the id this table asked for is honoured.
     downloadPayload(payload) {
@@ -748,6 +822,8 @@ export default defineComponent({
   },
   beforeUnmount() {
     if (this.searchTimer) clearTimeout(this.searchTimer)
+    if (this.keySelectTimer) clearTimeout(this.keySelectTimer)
+    if (this.keyNavCheckTimer) clearTimeout(this.keyNavCheckTimer)
     this.cleanupTeleport()
     this.rootResizeObserver?.disconnect()
   },
@@ -960,7 +1036,7 @@ export default defineComponent({
           title: '',
           hozAlign: 'right',
         },
-        columns: (this.args.columnDefinitions || []).map((col) => {
+        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
@@ -983,7 +1059,7 @@ export default defineComponent({
             }
           }
           return colDef as ColumnDefinition
-        }),
+        })],
         initialSort: this.args.initialSort,
       }
 
@@ -1012,10 +1088,17 @@ export default defineComponent({
       } else {
         // For non-paginated tables, set data directly
         tabulatorOptions.data = this.preparedTableData
-        // The table is as tall as its rows, up to the height it was given
-        delete tabulatorOptions.height
-        tabulatorOptions.minHeight = 50
-        tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        if (this.args.fillHeight) {
+          // Always the height it was given, so tables side by side line up
+          tabulatorOptions.height = Math.max(tableMaxHeight, 50)
+          tabulatorOptions.minHeight = Math.max(tableMaxHeight, 50)
+          tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        } else {
+          // The table is as tall as its rows, up to the height it was given
+          delete tabulatorOptions.height
+          tabulatorOptions.minHeight = 50
+          tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        }
         // Only use virtual DOM if pagination is disabled and dataset is large
         const useVirtualDom = this.preparedTableData.length > 100
         tabulatorOptions.renderVertical = useVirtualDom ? 'virtual' : 'basic'
@@ -1086,6 +1169,10 @@ export default defineComponent({
       // Only sync if no row is currently selected to avoid infinite loops
       // (selecting a row triggers render, which would trigger sync again).
       this.tabulator.on('renderComplete', () => {
+        this.refreshCheckboxes()
+        // A page the keys asked for has arrived
+        this.applyKeyNavTarget()
+        this.keepKeyboardRowInView()
         const selectedRows = this.tabulator?.getSelectedRows() || []
         if (selectedRows.length === 0 && !this.skipNextSync) {
           this.syncSelectionFromStore()
@@ -1451,6 +1538,11 @@ export default defineComponent({
       if (this.skipNextSync) {
         return
       }
+      // The keys moved the highlight and the selection follows shortly: keep
+      // the highlighted row rather than going back to the selected one
+      if (this.keepKeyboardRow()) {
+        return
+      }
 
       // Sync table selection with selection store
       if (!this.tabulator) return
@@ -1577,6 +1669,9 @@ export default defineComponent({
     },
 
     selectDefaultRow(): void {
+      if (this.keepKeyboardRow()) {
+        return
+      }
       // Skip auto-selection during initial load for server-side pagination.
       // Wait for paginationState watcher to confirm data is ready.
       if (this.isServerSidePagination && !this.initialLoadComplete) {
@@ -1718,6 +1813,13 @@ export default defineComponent({
     },
 
     onRowClick(row: any): void {
+      // A click on a check box (multi_select) checks the row, nothing more
+      if (this.checkboxClicked) {
+        this.checkboxClicked = false
+        return
+      }
+      // A click wins over a row the keys moved to and not yet selected
+      this.cancelKeyboardSelection()
       // Get the row data directly from Tabulator's row object
       const rowData = row.getData()
       const rowIndex = row.getIndex()
@@ -1764,6 +1866,15 @@ export default defineComponent({
         row.scrollTo(this.args.scrollPosition, false).catch(() => {})
       }
 
+      this.commitRowSelection(rowData, rowIndex)
+    },
+
+    /**
+     * Select a row (already highlighted) as a click does: set the selections
+     * of ``interactivity`` and ``on_select`` to it.
+     */
+    commitRowSelection(rowData: Record<string, unknown> | undefined, rowIndex: unknown): void {
+      const interactivity = this.args.interactivity || {}
       this.$emit('rowSelected', rowIndex)
 
       // Set flag to skip the redundant syncSelectionFromStore call that will be
@@ -1798,6 +1909,234 @@ export default defineComponent({
       this.$nextTick(() => {
         this.skipNextSync = false
       })
+    },
+
+    /**
+     * Arrow keys, Page Up/Down, Home and End step through the rows while the
+     * rows have focus (a row was clicked, or the table tabbed to). Keys typed
+     * in a field (search box, check box, editor) and keys with a modifier are
+     * left alone. Handled in the capture phase so Tabulator's own Page Up/Down,
+     * Home and End scrolling does not run as well.
+     */
+    onTableKeydown(event: KeyboardEvent): void {
+      if (this.args.keyboardNavigation === false || !this.tabulator) return
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      const move = KEY_MOVES[event.key]
+      if (!move) return
+      const holder = (this.tabulator as any).rowManager?.element as HTMLElement | undefined
+      const target = event.target as HTMLElement | null
+      if (!holder || !target || !holder.contains(target)) return
+      if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
+      event.preventDefault()
+      event.stopPropagation()
+      this.stepSelection(move)
+    },
+
+    /** Rows that fit in the visible part of the table (Page Up/Down step). */
+    visibleRowCount(rows: any[]): number {
+      const holder = (this.tabulator as any)?.rowManager?.element as HTMLElement | undefined
+      const sample = (this.tabulator?.getSelectedRows()[0] || rows[0]) as any
+      const rowHeight = sample?.getElement?.()?.offsetHeight || 0
+      if (!holder || rowHeight <= 0) return 10
+      return Math.max(1, Math.floor(holder.clientHeight / rowHeight))
+    },
+
+    /**
+     * Move the highlight one step. Positions count over every row passing the
+     * filters, so with server-side pagination a step past the end of the page
+     * goes on to the next page (fetched from Python) and Home/End reach the
+     * first and last page.
+     */
+    stepSelection(move: KeyMove): void {
+      if (!this.tabulator) return
+      const rows = this.tabulator.getRows('active') as any[]
+      const server = this.isServerSidePagination
+      const state = this.paginationState
+      const pageSize = server ? state?.page_size || this.args.pageSize || 100 : Math.max(rows.length, 1)
+      const offset = server ? ((state?.page || 1) - 1) * pageSize : 0
+      const total = server ? (state?.total_rows ?? rows.length) : rows.length
+      if (total <= 0) return
+
+      // While a page is on its way, keep counting from the position asked for
+      let current: number | null = this.keyNavTarget
+      if (current === null) {
+        // By index: the row objects Tabulator hands out are not always the same
+        const selected = this.tabulator.getSelectedRows()[0] as any
+        const selectedId = selected ? selected.getIndex() : undefined
+        const local = selected ? rows.findIndex((row) => row.getIndex() === selectedId) : -1
+        current = local >= 0 ? offset + local : null
+      }
+      const pageStep = this.visibleRowCount(rows)
+      let target: number
+      if (move === 'home') target = 0
+      else if (move === 'end') target = total - 1
+      // Nothing highlighted yet: start at the first row on screen
+      else if (current === null) target = offset
+      else if (move === 'down') target = current + 1
+      else if (move === 'up') target = current - 1
+      else if (move === 'pageDown') target = current + pageStep
+      else target = current - pageStep
+      target = Math.max(0, Math.min(total - 1, target))
+      this.moveKeyboardSelectionTo(target, rows, offset, pageSize)
+    },
+
+    /** Highlight the row at ``target`` (over all pages), fetching its page if need be. */
+    moveKeyboardSelectionTo(target: number, rows: any[], offset: number, pageSize: number): void {
+      const pageInFlight =
+        this.keyNavRequestedPage !== null && Date.now() - this.keyNavRequestedAt < KEY_PAGE_TIMEOUT_MS
+      if (pageInFlight) {
+        // Decided when the page arrives
+        this.keyNavTarget = target
+        return
+      }
+      this.keyNavRequestedPage = null
+      if (target >= offset && target < offset + rows.length) {
+        this.keyNavTarget = null
+        this.highlightKeyboardRow(rows[target - offset])
+        return
+      }
+      if (!this.isServerSidePagination || !this.tabulator) return
+      // On another page: ask Python for it and select the row once it is here.
+      // The row selected so far stays selected until then.
+      this.cancelKeyboardSelection()
+      const page = Math.floor(target / pageSize) + 1
+      this.keyNavTarget = target
+      this.keyNavRequestedPage = page
+      this.keyNavRequestedAt = Date.now()
+      ;(this.tabulator as any).setPage(page).catch(() => {})
+      this.scheduleKeyNavCheck()
+    },
+
+    /** Look for the page the keys asked for until it is here, asking again if it went astray. */
+    scheduleKeyNavCheck(): void {
+      if (this.keyNavCheckTimer) clearTimeout(this.keyNavCheckTimer)
+      this.keyNavCheckTimer = setTimeout(() => {
+        this.keyNavCheckTimer = null
+        const page = this.keyNavRequestedPage
+        if (page === null || !this.tabulator) return
+        if (Date.now() - this.keyNavRequestedAt >= KEY_PAGE_TIMEOUT_MS) {
+          this.keyNavRequestedPage = null
+          this.keyNavTarget = null
+          return
+        }
+        this.applyKeyNavTarget()
+        if (this.keyNavRequestedPage === null) return
+        if (this.paginationState?.page !== page) {
+          if (!this.pendingDataRequest) {
+            ;(this.tabulator as any).setPage(page).catch(() => {})
+          } else if (this.args.paginationIdentifier) {
+            // The request reached Python while it was busy and went unanswered:
+            // send it again, for the request Tabulator is waiting on
+            this.selectionStore.updateSelection(this.args.paginationIdentifier, {
+              page,
+              page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+              sort_column: this.requestedSortColumn || undefined,
+              sort_dir: this.requestedSortDir,
+              column_filters: this.currentColumnFilters,
+              ...this.viewFiltersPatch,
+            })
+            this.pendingRequestCounter = this.selectionStore.$state.pagination_counter || 0
+          }
+        }
+        this.scheduleKeyNavCheck()
+      }, KEY_PAGE_CHECK_MS)
+    },
+
+    /** A page the keys asked for arrived: highlight the row they moved to. */
+    applyKeyNavTarget(): void {
+      if (this.keyNavRequestedPage === null || this.keyNavTarget === null || !this.tabulator) return
+      const state = this.paginationState
+      if (!state || state.page !== this.keyNavRequestedPage) return
+      const rows = this.tabulator.getRows('active') as any[]
+      const data = this.preparedTableData
+      const indexField = this.args.tableIndexField || 'id'
+      // Tabulator holds the rows Python sent for that page
+      if (
+        rows.length === 0 ||
+        rows.length !== data.length ||
+        rows[0].getData()[indexField] !== data[0][indexField]
+      ) {
+        return
+      }
+      const target = this.keyNavTarget
+      const pageSize = state.page_size || this.args.pageSize || 100
+      this.keyNavRequestedPage = null
+      this.keyNavTarget = null
+      this.moveKeyboardSelectionTo(target, rows, (state.page - 1) * pageSize, pageSize)
+    },
+
+    /** Highlight a row now and select it once the keys rest. */
+    highlightKeyboardRow(row: any): void {
+      if (!row || !this.tabulator) return
+      this.unhighlightedSelection = null
+      if (!row.isSelected()) {
+        this.tabulator.deselectRow()
+        row.select()
+      }
+      row.scrollTo('nearest', false).catch(() => {})
+      this.keyboardRowId = row.getIndex()
+      this.keyboardShownId = this.keyboardRowId
+      if (this.keySelectTimer) clearTimeout(this.keySelectTimer)
+      this.keySelectTimer = setTimeout(() => this.commitKeyboardRow(), KEY_SELECT_DELAY_MS)
+    },
+
+    /** The keys rested: select the highlighted row as a click would. */
+    commitKeyboardRow(): void {
+      this.keySelectTimer = null
+      const id = this.keyboardRowId
+      this.keyboardRowId = null
+      if (id === null || id === undefined || !this.tabulator) return
+      const row = this.tabulator.getRow(id as string | number) as any
+      if (!row) return
+      if (!row.isSelected()) {
+        this.tabulator.deselectRow()
+        row.select()
+      }
+      this.commitRowSelection(row.getData(), row.getIndex())
+    },
+
+    /** Forget a row the keys moved to and have not selected yet. */
+    cancelKeyboardSelection(): void {
+      if (this.keySelectTimer) clearTimeout(this.keySelectTimer)
+      this.keySelectTimer = null
+      this.keyboardRowId = null
+      this.keyboardShownId = null
+      this.keyNavTarget = null
+      this.keyNavRequestedPage = null
+    },
+
+    /**
+     * Loading a page again (as Tabulator does after a page change) scrolls it
+     * back to the top: bring the row the keys moved to back into view.
+     */
+    keepKeyboardRowInView(): void {
+      if (this.keyboardShownId === null || !this.tabulator) return
+      const selected = this.tabulator.getSelectedRows()[0] as any
+      if (!selected || selected.getIndex() !== this.keyboardShownId) {
+        this.keyboardShownId = null
+        return
+      }
+      selected.scrollTo('nearest', false).catch(() => {})
+    },
+
+    /**
+     * While the keys are moving the highlight (its selection pending, or its
+     * page on the way), the table keeps that highlight: true tells the caller
+     * not to put the selection's own row back. Rows Tabulator loaded again
+     * are highlighted again.
+     */
+    keepKeyboardRow(): boolean {
+      if (this.keyNavRequestedPage !== null && Date.now() - this.keyNavRequestedAt < KEY_PAGE_TIMEOUT_MS) {
+        return true
+      }
+      if (this.keySelectTimer === null || this.keyboardRowId === null || !this.tabulator) return false
+      const row = this.tabulator.getRow(this.keyboardRowId as string | number) as any
+      if (row && !row.isSelected()) {
+        this.tabulator.deselectRow()
+        row.select()
+      }
+      if (row) row.scrollTo('nearest', false).catch(() => {})
+      return true
     },
 
     /**
@@ -2251,6 +2590,248 @@ export default defineComponent({
       this.applyFilters()
     },
 
+    // multi_select: a check box per row, and one in the header for all rows
+    multiSelectColumns(): ColumnDefinition[] {
+      if (!this.multiSelectEnabled) return []
+      return [{
+        title: '',
+        field: '__multi_select',
+        visible: this.checkboxesShown,
+        headerSort: false,
+        resizable: false,
+        width: 36,
+        minWidth: 36,
+        hozAlign: 'center',
+        headerHozAlign: 'center',
+        download: false,
+        responsive: 0,
+        headerTooltip: false,
+        tooltip: 'Add to the selection (Shift: a range)',
+        formatter: (cell: CellComponent) => this.checkboxHtml(this.isRowChecked(cell.getRow().getData() as Record<string, unknown>)),
+        titleFormatter: () => `<span class="multi-select-header" title="Select every row (all pages, filters applied)">${this.checkboxHtml(false)}</span>`,
+        headerClick: () => {
+          this.toggleAllRows()
+        },
+        cellClick: (event: UIEvent, cell: CellComponent) => {
+          this.checkboxClicked = true
+          // rowClick fires after cellClick; reset the flag if it does not
+          setTimeout(() => { this.checkboxClicked = false }, 0)
+          this.toggleRow(cell, (event as MouseEvent).shiftKey)
+        },
+      } as unknown as ColumnDefinition]
+    },
+
+    toggleCheckboxes(): void {
+      this.checkboxesShown = !this.checkboxesShown
+      const column = this.tabulator?.getColumn('__multi_select')
+      if (column) {
+        if (this.checkboxesShown) column.show()
+        else column.hide()
+      }
+      this.refreshCheckboxes()
+    },
+
+    checkboxHtml(checked: boolean | 'some'): string {
+      const state = checked === 'some' ? ' some' : checked ? ' checked' : ''
+      const mark = checked === 'some' ? 'mdi-minus' : 'mdi-check'
+      return `<span class="multi-select-box${state}" role="checkbox" aria-checked="${checked === 'some' ? 'mixed' : !!checked}"><i class="mdi ${mark}"></i></span>`
+    },
+
+    isRowChecked(row: Record<string, unknown>): boolean {
+      for (const [identifier, column] of Object.entries(this.args.multiSelect || {})) {
+        const set = this.selectionStore.$state[identifier]
+        if (Array.isArray(set) && row[column] !== undefined && set.includes(row[column])) return true
+      }
+      return false
+    },
+
+    applyCheckedRows(rows: Record<string, unknown>[], mode: 'add' | 'remove'): void {
+      for (const [identifier, column] of Object.entries(this.args.multiSelect || {})) {
+        const current = this.selectionStore.$state[identifier] ?? null
+        const next = combineSelection(current, rows.map((r) => r[column]), mode)
+        if (JSON.stringify(current) !== JSON.stringify(next)) {
+          this.selectionStore.updateSelection(identifier, next)
+        }
+      }
+    },
+
+    toggleRow(cell: CellComponent, shift: boolean): void {
+      const row = cell.getRow()
+      const data = row.getData() as Record<string, unknown>
+      const mode = this.isRowChecked(data) ? 'remove' : 'add'
+      const active = this.tabulator ? this.tabulator.getRows('active') : []
+      const position = active.findIndex((r) => r.getIndex() === row.getIndex())
+      let rows = [data]
+      if (shift && this.lastCheckedPosition !== null && position >= 0) {
+        const from = Math.min(this.lastCheckedPosition, position)
+        const to = Math.max(this.lastCheckedPosition, position)
+        rows = active.slice(from, to + 1).map((r) => r.getData() as Record<string, unknown>)
+      }
+      if (position >= 0) this.lastCheckedPosition = position
+      this.applyCheckedRows(rows, mode)
+    },
+
+    /** Header box: every row passing the filters, or none of them. */
+    toggleAllRows(): void {
+      if (!this.tabulator) return
+      const active = this.tabulator.getRows('active').map((r) => r.getData() as Record<string, unknown>)
+      const allChecked = active.length > 0 && active.every((row) => this.isRowChecked(row))
+      const mode = allChecked ? 'remove' : 'add'
+      if (this.isServerSidePagination) {
+        // Only one page is here: Python selects the rows of every page
+        this.streamlitDataStore.sendEvent({ type: 'multi_select_all', mode })
+      } else {
+        this.applyCheckedRows(active, mode)
+      }
+    },
+
+    /** Redraw the check boxes after the checked rows changed. */
+    refreshCheckboxes(): void {
+      if (!this.tabulator || !this.isTableBuilt || !this.multiSelectEnabled) return
+      const rows = this.tabulator.getRows('active')
+      let checked = 0
+      for (const row of rows) {
+        const data = row.getData() as Record<string, unknown>
+        const isChecked = this.isRowChecked(data)
+        if (isChecked) checked += 1
+        // Selected rows are marked whether or not the check boxes are shown
+        row.getElement().classList.toggle('multi-selected', isChecked)
+        const cell = (row as unknown as { getCell: (f: string) => { getElement: () => HTMLElement } | false }).getCell('__multi_select')
+        if (cell) {
+          const element = cell.getElement()
+          const html = this.checkboxHtml(isChecked)
+          if (element.innerHTML !== html) element.innerHTML = html
+        }
+      }
+      const header = document.querySelector(`#${this.id} .multi-select-header`)
+      if (header) {
+        const state = checked === 0 ? false : checked === rows.length ? true : 'some'
+        header.innerHTML = this.checkboxHtml(state)
+      }
+    },
+
+    // Row overview: a button per row that shows every column of that row
+    rowOverviewColumns(): ColumnDefinition[] {
+      if (!this.args.rowOverview) return []
+      return [{
+        title: '',
+        field: '__row_overview',
+        headerSort: false,
+        resizable: false,
+        width: 36,
+        minWidth: 36,
+        hozAlign: 'center',
+        download: false,
+        // Never folded away by the collapsed layout
+        responsive: 0,
+        headerTooltip: false,
+        tooltip: 'Show the whole row',
+        formatter: () => '<i class="mdi mdi-text-box-search-outline row-overview-button" aria-label="Show the whole row"></i>',
+        cellClick: (_event: UIEvent, cell: CellComponent) => {
+          this.openRowOverview(cell.getRow().getData() as Record<string, unknown>)
+        },
+      } as unknown as ColumnDefinition]
+    },
+
+    rowOverviewValue(col: Record<string, any>, value: unknown): string {
+      const placeholders = (col.formatterParams && col.formatterParams.placeholders) || {}
+      if (value !== null && value !== undefined && String(value) in placeholders) {
+        return String(placeholders[String(value)])
+      }
+      if (value === null || value === undefined || value === '') return '-'
+      if (typeof value === 'number') {
+        if (Number.isNaN(value)) return '-'
+        const precision = col.formatterParams && col.formatterParams.precision
+        if (typeof precision === 'number' && !Number.isInteger(value)) return value.toFixed(precision)
+        return Number.isInteger(value) ? String(value) : String(Math.round(value * 1e4) / 1e4)
+      }
+      if (typeof value === 'boolean') return value ? 'yes' : 'no'
+      if (Array.isArray(value)) return value.map((v) => (v === null ? '-' : String(v))).join(', ')
+      return String(value)
+    },
+
+    // Title of the overview: rowOverviewTitle with {field} replaced by the row's values
+    rowOverviewTitle(row: Record<string, unknown>): string {
+      const template = this.args.rowOverviewTitle
+      if (!template) return 'Row details'
+      const columns = (this.args.columnDefinitions || []) as Record<string, any>[]
+      return template.replace(/\{([^{}]+)\}/g, (_match: string, field: string) => {
+        const col = columns.find((c) => c.field === field) || {}
+        return this.rowOverviewValue(col, row[field])
+      })
+    },
+
+    openRowOverview(row: Record<string, unknown>): void {
+      if (!this.parentDocument) this.initializeTeleport()
+      if (!this.parentDocument || this.teleportBackdrop) return
+      const doc = this.parentDocument
+      const dark = this.streamlitDataStore.theme?.base === 'dark'
+      const colors = dark
+        ? { bg: '#262730', fg: '#fafafa', muted: '#a3a8b8', line: '#3d3f4b' }
+        : { bg: '#ffffff', fg: '#31333f', muted: '#6b6f80', line: '#e6e7eb' }
+
+      this.createTeleportBackdrop()
+      this.createTeleportContainer()
+      const container = this.teleportContainer as HTMLElement
+      container.style.background = colors.bg
+      container.style.color = colors.fg
+      container.style.width = '640px'
+
+      const header = doc.createElement('div')
+      header.style.cssText = `display: flex; justify-content: space-between; align-items: center;
+        padding: 14px 20px; border-bottom: 1px solid ${colors.line};`
+      const title = doc.createElement('span')
+      title.textContent = this.rowOverviewTitle(row)
+      title.style.cssText = 'font-size: 18px; font-weight: 600;'
+      const close = doc.createElement('button')
+      close.textContent = '×'
+      close.setAttribute('aria-label', 'Close')
+      close.style.cssText = `background: none; border: none; font-size: 24px; cursor: pointer;
+        color: ${colors.muted}; padding: 0 6px;`
+      header.append(title, close)
+
+      const body = doc.createElement('div')
+      body.style.cssText = 'overflow: auto; padding: 8px 20px 16px;'
+      const table = doc.createElement('table')
+      table.style.cssText = 'width: 100%; border-collapse: collapse; font-size: 14px;'
+      for (const col of (this.args.columnDefinitions || []) as Record<string, any>[]) {
+        if (!col.field) continue
+        const tr = doc.createElement('tr')
+        tr.style.borderBottom = `1px solid ${colors.line}`
+        const name = doc.createElement('th')
+        name.textContent = String(col.title || col.field)
+        name.style.cssText = `text-align: left; font-weight: 500; color: ${colors.muted};
+          padding: 6px 16px 6px 0; vertical-align: top; white-space: nowrap;`
+        const value = doc.createElement('td')
+        value.textContent = this.rowOverviewValue(col, row[col.field])
+        value.style.cssText = 'padding: 6px 0; word-break: break-word;'
+        tr.append(name, value)
+        table.appendChild(tr)
+      }
+      body.appendChild(table)
+      container.append(header, body)
+
+      // Close on the button, a click outside or Escape; each way removes the
+      // Escape listeners so they cannot close a later dialog. Escape is heard
+      // on the page and in this component's frame, which keeps the focus
+      // after the row button is clicked.
+      const docs = doc === document ? [doc] : [doc, document]
+      const unlisten = () => docs.forEach((d) => d.removeEventListener('keydown', onKey))
+      const closeOverview = () => {
+        unlisten()
+        this.closeTeleportDialog()
+      }
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') closeOverview()
+      }
+      close.addEventListener('click', closeOverview)
+      const backdrop = this.teleportBackdrop as HTMLElement | null
+      backdrop?.addEventListener('click', (event: MouseEvent) => {
+        if (event.target === backdrop) unlisten()
+      })
+      docs.forEach((d) => d.addEventListener('keydown', onKey))
+    },
+
     // Teleport functionality for filter dialog
     canUseTeleport(): boolean {
       try {
@@ -2391,7 +2972,7 @@ export default defineComponent({
       const closeFooterBtn = this.parentDocument.createElement('button')
       closeFooterBtn.textContent = 'Close'
       closeFooterBtn.style.cssText = `
-        background: #1976d2;
+        background: ${this.accentColor};
         color: white;
         border: none;
         padding: 8px 16px;
@@ -2401,10 +2982,10 @@ export default defineComponent({
       `
       closeFooterBtn.addEventListener('click', () => this.closeTeleportDialog())
       closeFooterBtn.addEventListener('mouseenter', () => {
-        closeFooterBtn.style.backgroundColor = '#1565c0'
+        closeFooterBtn.style.backgroundColor = this.accentHover
       })
       closeFooterBtn.addEventListener('mouseleave', () => {
-        closeFooterBtn.style.backgroundColor = '#1976d2'
+        closeFooterBtn.style.backgroundColor = this.accentColor
       })
 
       footer.appendChild(closeFooterBtn)
@@ -2449,7 +3030,7 @@ export default defineComponent({
           transition: all 0.2s;
           ${
             isSelected
-              ? 'background: #1976d2; color: white; border: 1px solid #1976d2;'
+              ? `background: ${this.accentColor}; color: white; border: 1px solid ${this.accentColor};`
               : 'background: white; color: #333; border: 1px solid #e0e0e0;'
           }
         `
@@ -2510,8 +3091,8 @@ export default defineComponent({
       btn.textContent = text
       btn.style.cssText = `
         background: white;
-        color: #1976d2;
-        border: 1px solid #1976d2;
+        color: ${this.accentColor};
+        border: 1px solid ${this.accentColor};
         padding: 6px 12px;
         border-radius: 4px;
         cursor: pointer;
@@ -2751,8 +3332,8 @@ export default defineComponent({
         const open = numeric.min === null && numeric.max === null
         for (const { button, value } of buttons) {
           const active = value === null ? open : numeric.op === config?.op && bound === value
-          button.style.background = active ? '#1976d2' : 'white'
-          button.style.color = active ? 'white' : '#1976d2'
+          button.style.background = active ? this.accentColor : 'white'
+          button.style.color = active ? 'white' : this.accentColor
         }
       }
       if (config) {
@@ -2772,7 +3353,7 @@ export default defineComponent({
           button.textContent = choice.text
           button.title = choice.tip
           button.style.cssText =
-            'border: 1px solid #1976d2; border-radius: 14px; padding: 2px 10px; font-size: 13px; cursor: pointer;'
+            `border: 1px solid ${this.accentColor}; border-radius: 14px; padding: 2px 10px; font-size: 13px; cursor: pointer;`
           button.addEventListener('click', () => {
             opSelect.value = config.op
             numeric.op = config.op
@@ -2964,7 +3545,10 @@ export default defineComponent({
 
 .table-toolbar-title {
   min-width: 0;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
 }
 
 .table-toolbar-title h4 {
@@ -3092,7 +3676,70 @@ export default defineComponent({
   margin-right: 8px;
 }
 
+.tabulator,
+.table-toolbar {
+  --ms-accent: #1e88e5;
+  --ms-accent-soft: rgba(30, 136, 229, 0.16);
+}
+.multi-select-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid currentColor;
+  border-radius: 5px;
+  opacity: 0.45;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color 0.12s, border-color 0.12s, opacity 0.12s, transform 0.12s;
+}
+.multi-select-box .mdi {
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  transform: scale(0);
+  transition: transform 0.12s;
+}
+.tabulator-cell:hover .multi-select-box,
+.multi-select-header:hover .multi-select-box {
+  opacity: 0.8;
+  border-color: var(--ms-accent);
+}
+.multi-select-box.checked,
+.multi-select-box.some {
+  opacity: 1;
+  background: var(--ms-accent);
+  border-color: var(--ms-accent);
+  box-shadow: 0 0 0 3px var(--ms-accent-soft);
+}
+.multi-select-box.checked .mdi,
+.multi-select-box.some .mdi {
+  transform: scale(1);
+}
+.tabulator-row.multi-selected {
+  box-shadow: inset 3px 0 0 var(--ms-accent);
+  background-image: linear-gradient(90deg, var(--ms-accent-soft), transparent 60%);
+}
+.multi-select-toggle {
+  border-radius: 8px !important;
+  transition: background-color 0.15s, color 0.15s;
+}
+.multi-select-toggle.active {
+  color: var(--ms-accent) !important;
+  background: var(--ms-accent-soft);
+}
+
 /* Dark mode pagination styling */
+.row-overview-button {
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 0.7;
+}
+.row-overview-button:hover {
+  opacity: 1;
+}
+
 .table-dark .tabulator-footer {
   background-color: #1e1e1e;
   border-color: #444;

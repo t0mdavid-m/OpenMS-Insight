@@ -3,11 +3,13 @@
 import hashlib
 import json
 import math
+from functools import lru_cache
 from typing import Any
 
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.registry import register_component
 from ..preprocessing.filtering import _make_cache_key
 
@@ -31,7 +33,65 @@ SEQUENCE_COLUMNS: tuple[str, ...] = (
     "modifications",
     "annotated_fragments",
     "annotation_summary",
+    "edited",
 )
+
+
+# Ion series the views match: the base series (whose masses the data carries)
+# and their radical / hydrogen-shifted variants, with accepted spellings
+ION_TYPES: tuple[str, ...] = ("a", "b", "c", "x", "y", "z")
+ION_VARIANTS: dict[str, str] = {
+    "a•": "a•",
+    "a+1": "a•",
+    "a.": "a•",
+    "x•": "x•",
+    "x+1": "x•",
+    "x.": "x•",
+    "y-1": "y-1",
+    "y−1": "y-1",
+    "z•": "z•",
+    "z+1": "z•",
+    "z.": "z•",
+    "z-dot": "z•",
+    "zp1": "z•",
+}
+# Fragmentation methods and the ion series they select (as in ProSight Lite)
+FRAGMENTATION_METHODS: dict[str, tuple[str, ...]] = {
+    "CID/HCD": ("b", "y"),
+    "ETD/ECD": ("c", "z•"),
+    "EThcD": ("b", "c", "y", "z•"),
+    "UVPD": ("a", "a•", "b", "c", "x", "x•", "y", "y-1", "z"),
+}
+_METHOD_ALIASES = {"cid/hcd", "cid", "hcd", "etd/ecd", "etd", "ecd", "ethcd", "uvpd"}
+
+
+def check_fragment_settings(settings: dict[str, Any] | None) -> None:
+    """Raise ValueError for a fragment setting the views cannot apply.
+
+    Checks the keys ``tolerance_unit`` ('ppm' or 'Da') and ``fragmentation``
+    (a key of ``FRAGMENTATION_METHODS``, or 'CID', 'HCD', 'ETD', 'ECD'; case
+    and spaces ignored). ``tolerance`` and ``ion_types`` are passed on as
+    before: the view ignores ion series it does not know (see ``ION_TYPES``
+    and ``ION_VARIANTS`` for the ones it draws).
+    """
+    if not isinstance(settings, dict):
+        return
+    unit = settings.get("tolerance_unit")
+    if unit is not None and (
+        not isinstance(unit, str) or unit.lower() not in ("ppm", "da")
+    ):
+        raise ValueError(
+            f"settings['tolerance_unit'] must be 'ppm' or 'Da', not {unit!r}"
+        )
+    method = settings.get("fragmentation")
+    if method is not None and (
+        not isinstance(method, str)
+        or method.replace(" ", "").lower() not in _METHOD_ALIASES
+    ):
+        raise ValueError(
+            f"Unknown fragmentation method {method!r}; "
+            f"use one of {list(FRAGMENTATION_METHODS)}"
+        )
 
 
 def _json_safe(value: Any) -> Any:
@@ -43,6 +103,77 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     return value
+
+
+def _pyopenms_text(value: Any) -> str:
+    """pyOpenMS returns some names as bytes (latin-1 for the "®" in TMT names)."""
+    if not isinstance(value, bytes):
+        return str(value)
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("latin-1")
+
+
+@lru_cache(maxsize=1)
+def _pyopenms_modifications() -> tuple:
+    try:
+        from pyopenms import ModificationsDB, ResidueModification
+    except ImportError as e:  # pragma: no cover - depends on the environment
+        raise ImportError(
+            "modification_library='pyopenms' needs pyopenms (pip install pyopenms)"
+        ) from e
+    term = ResidueModification.TermSpecificity
+    db = ModificationsDB()
+    entries: dict[str, dict[str, Any]] = {}
+    for i in range(db.getNumberOfModifications()):
+        mod = db.getModification(i)
+        full_id = _pyopenms_text(mod.getFullId())
+        if full_id in entries:
+            continue
+        specificity = mod.getTermSpecificity()
+        if specificity in (term.N_TERM, term.PROTEIN_N_TERM):
+            site = "N-term"
+        elif specificity in (term.C_TERM, term.PROTEIN_C_TERM):
+            site = "C-term"
+        else:
+            site = _pyopenms_text(mod.getOrigin())
+        entries[full_id] = {
+            "id": full_id,
+            "mass": float(mod.getDiffMonoMass()),
+            "site": site,
+        }
+    return tuple(sorted(entries.values(), key=lambda e: (e["id"].lower(), e["site"])))
+
+
+def _modification_library(
+    library: list[dict[str, Any]] | str | None,
+) -> list[dict[str, Any]] | None:
+    """A modification library as the component args carry it."""
+    if isinstance(library, str):
+        if library != "pyopenms":
+            raise ValueError(
+                f"a modification library must be a list, 'pyopenms' or None, not {library!r}"
+            )
+        library = _pyopenms_modifications()
+    if library is None:
+        return None
+    return [
+        {"id": str(m["id"]), "mass": float(m["mass"]), "site": m.get("site")}
+        for m in library
+    ]
+
+
+def pyopenms_modification_library() -> list[dict[str, Any]]:
+    """Every modification in pyOpenMS ``ModificationsDB`` (Unimod and more), as
+    the dicts ``modification_library`` takes: ``id`` (the full id, e.g.
+    ``'Carbamidomethyl (C)'``, which ``AASequence.fromString`` and
+    ``ModificationsDB.getModification`` accept), ``mass`` (monoisotopic mass
+    shift) and ``site`` (a residue, ``'N-term'`` or ``'C-term'``).
+
+    Raises ImportError without pyopenms.
+    """
+    return [dict(e) for e in _pyopenms_modifications()]
 
 
 @register_component("protein_sequence_view")
@@ -68,7 +199,8 @@ class ProteinSequenceView(BaseComponent):
       ``modifications`` (list of {start, end, mass_diff, labels}),
       ``fixed_modifications`` (residues carrying a fixed modification),
       ``annotated_fragments`` and ``annotation_summary`` (fragments annotated
-      by an external tool, see ``AnnotatedFragment`` in the Vue types).
+      by an external tool, see ``AnnotatedFragment`` in the Vue types),
+      ``edited`` (True for an entry the user edited, see ``edit_identifier``).
     - Spectrum columns: ``mass_column`` (list of deconvolved masses) and
       ``precursor_mass_column``.
 
@@ -78,7 +210,20 @@ class ProteinSequenceView(BaseComponent):
 
     Without annotated fragments, fragments are matched here against the
     spectrum's masses within the tolerance (ppm), honouring variable
-    modifications the user sets on residues (right click).
+    modifications the user sets on residues (right click). For each such
+    modification the view works out from the matched fragments which residues
+    it can sit on: fragments that match only with its mass shift place it
+    inside them, fragments that match only without it place it outside. When
+    several residues remain (or the shift fits several modifications of the
+    library at those residues), the view marks the residues with a dashed
+    line and lists the alternatives in the tooltip and the list of applied
+    modifications; it also notes a modification the fragments place on other
+    residues.
+
+    With ``edit_identifier``, an identification can be edited: a pencil
+    button asks the app to start from the search result, after which the
+    residue menus, the "change sequence" dialog and a reset button write
+    edits (see ``edit_identifier``).
 
     Example:
         view = ProteinSequenceView(
@@ -109,17 +254,29 @@ class ProteinSequenceView(BaseComponent):
         sequence: dict[str, Any] | None = None,
         mass_column: str | None = "masses",
         precursor_mass_column: str | None = "precursor_mass",
+        fragmentation_column: str | None = None,
+        spectrum_key_column: str | None = None,
         mass_identifier: str | None = None,
         aa_identifier: str | None = None,
         sequence_identifier: str | None = None,
+        modification_library: list[dict[str, Any]] | str | None = None,
+        modifications_identifier: str | None = None,
+        modifications: list[str] | None = None,
+        proforma_copy: bool = False,
+        proforma_input: bool = False,
+        variable_modification_library: list[dict[str, Any]] | str | None = None,
+        variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
         title: str | None = "Sequence View",
         annotation_title: str = "Fragment annotation",
         svg_filename: str = "sequence",
         accent_color: str | None = None,
         fragment_identifier: str | None = None,
+        edit_identifier: str | None = None,
+        fragment_matches_identifier: str | None = None,
         entry_title: str = "Identification",
         observed_mass_label: str = "Observed mass",
+        image_format: str | None = None,
         float_precision: str = "float64",
         **kwargs,
     ):
@@ -143,6 +300,17 @@ class ProteinSequenceView(BaseComponent):
                 None: no spectrum (fragments only from annotated_fragments).
             precursor_mass_column: Column with the precursor mass, shown against
                 the theoretical mass when no observed mass is given.
+            spectrum_key_column: Column identifying the spectrum of a row (e.g.
+                its scan index), sent with the matched fragments (see
+                ``fragment_matches_identifier``) so a spectrum view marks them
+                only on that spectrum.
+            fragmentation_column: Column with the fragmentation method of the
+                spectrum (a ``fragmentation`` value of ``settings``, e.g.
+                'ETD' or 'HCD'; None or unknown keeps the current ion series).
+                When the selected spectrum's method changes, the view selects
+                that method's ion series and shows the method in the mass
+                summary; not with annotated fragments, which were annotated
+                for the search's ion types.
             mass_identifier: Identifier holding the selected mass, as an index
                 into the masses of the spectrum (e.g. a mass table's selection).
                 Selecting a fragment selects its mass and vice versa.
@@ -151,37 +319,129 @@ class ProteinSequenceView(BaseComponent):
             sequence_identifier: Identifier the "change sequence" dialog writes a
                 new sequence to. None hides the button. The app reads it and
                 rebuilds the view for the new sequence.
-            settings: Initial fragment settings: {'tolerance': ppm,
-                'ion_types': ['b', 'y', ...]}.
+            modification_library: Fixed modifications offered in the "change
+                sequence" dialog, as dicts with ``id`` (e.g.
+                ``'Carbamidomethyl (C)'``) and ``mass`` (the mass shift); a
+                ``site`` key is shown when given. ``'pyopenms'`` offers every
+                modification in pyOpenMS ``ModificationsDB`` (see
+                ``pyopenms_modification_library``; needs pyopenms). None shows
+                no picker.
+            modifications_identifier: Identifier the dialog writes the ids of
+                the picked modifications to (a list), before it writes the
+                sequence. Needs ``modification_library``.
+            modifications: Ids preselected in the picker, e.g. the fixed
+                modifications the current sequence carries.
+            variable_modification_library: Variable modifications the menu of
+                a residue (right click) offers instead of the built-in six, in
+                the form of ``modification_library`` (``'pyopenms'`` included);
+                each residue and terminus lists the entries of its ``site``.
+                The menu gets a search field (name or mass) and lists
+                suggested modifications for the residue until something is
+                typed; a list under the sequence shows the applied
+                modifications with their total mass. None keeps the built-in
+                menu.
+            variable_modification_suggestions: Library ids suggested in the
+                menu per site (a residue letter, ``'N-term'`` or
+                ``'C-term'``), e.g. ``{'K': ['Acetyl (K)', 'GG (K)']}``. None
+                uses built-in suggestions of common biological modifications
+                and artefacts; ``{}`` suggests nothing.
+            settings: Initial fragment settings, all keys optional:
+                ``tolerance`` (default 10), ``tolerance_unit`` ('ppm' default,
+                or 'Da'), ``ion_types`` (a b c x y z and the variants a• x•
+                y-1 z•, also written a+1 x+1 z+1; default b and y) and
+                ``fragmentation`` ('CID/HCD', 'ETD/ECD', 'EThcD' or 'UVPD',
+                selecting that method's ion series when ``ion_types`` is not
+                given). The user can change all of them in the view. See
+                ``check_fragment_settings``.
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.
-            svg_filename: File name for the SVG download.
+            svg_filename: File name (without extension) of the image download;
+                the extension follows the image format.
             accent_color: Colour of the dialog buttons (default: the theme's
                 primary colour).
+            proforma_copy: Show a "Copy as ProForma" button that copies the
+                shown proteoform in ProForma 2.0 notation, with its fixed,
+                localized and user-set modifications.
+            proforma_input: The "Change sequence" dialog also reads ProForma
+                2.0: global fixed modifications (``<[Carbamidomethyl]@C>``,
+                looked up in ``modification_library``), terminal and residue
+                modifications by name (looked up in the libraries) or mass,
+                which become the residues' variable modifications.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
                 ``ProteinStructureView``.
+            edit_identifier: Identifier edits of an identification are
+                written to, each a dict with ``action`` and a fresh ``nonce``
+                (apply each nonce once). None (default): identifications are
+                not editable. ``'edit'``: the user wants to edit the shown
+                identification; the app then gives the entry with
+                ``edited=True``, fragment masses of the unmodified sequence,
+                no annotated fragments, and the search's modifications each
+                on one residue (``start == end``). The view sets those on
+                the residues, matches fragments here, and adds them to the
+                theoretical mass. ``'update'``: the edited entry, with
+                ``sequence`` (string), ``start_position``, ``end_position``
+                and ``modifications`` (list of {start, end, mass_diff,
+                labels}; -1 the N-terminus, the sequence length the
+                C-terminus). ``'reset'``: back to the search result.
+                Render-time only: not part of the cache.
+            fragment_matches_identifier: Identifier the matched fragment
+                ions are written to whenever they change (another entry or
+                spectrum, an edited sequence or modification, the ion types,
+                the tolerance), so spectra can mark them: a dict with
+                ``spectrum`` (the value of ``spectrum_key_column``, or None),
+                ``tolerance`` ({'value', 'unit'}) and ``fragments``, one dict
+                per matched ion with ``name`` (e.g. 'b12'), ``ion`` (its ion
+                type, e.g. 'b' or 'z+1'), ``kind`` ('N', 'C' or 'I'),
+                ``mass`` (the observed mass), ``massIndex`` (its index in the
+                spectrum's mass list, or None) and, for annotated fragments,
+                ``charge`` and ``mz``. None while no spectrum is matched. Pass
+                the same identifier to ``DeconvolvedSpectrum``. Render-time
+                only: not part of the cache.
             entry_title: Heading of the mass summary of an entry with an
                 observed mass.
             observed_mass_label: Label of the entry's observed mass in that
                 summary.
             float_precision: Masses are compared at ppm level, so they are kept
                 as Float64 by default.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         self._sequence = _json_safe(sequence) if sequence is not None else None
         self._mass_column = mass_column
         self._precursor_mass_column = precursor_mass_column
+        self._fragmentation_column = fragmentation_column
+        self._spectrum_key_column = spectrum_key_column
         self._mass_identifier = mass_identifier
         self._aa_identifier = aa_identifier
         self._sequence_identifier = sequence_identifier
+        # Per render, not cached: the picker of the "change sequence" dialog
+        self.set_modification_picker(
+            modification_library, modifications_identifier, modifications
+        )
+        # Per render, not cached
+        self._proforma_copy = bool(proforma_copy)
+        self._proforma_input = bool(proforma_input)
+        self.set_variable_modification_library(
+            variable_modification_library, variable_modification_suggestions
+        )
+        check_fragment_settings(settings)
         self._settings = settings
         self._title = title
         self._annotation_title = annotation_title
         self._svg_filename = svg_filename
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
         self._accent_color = accent_color
         self._fragment_identifier = fragment_identifier
+        # Render-time option, kept out of the cache config
+        self._edit_identifier = edit_identifier
+        # Render-time option, kept out of the cache config
+        self._fragment_matches_identifier = fragment_matches_identifier
         self._entry_title = entry_title
         self._observed_mass_label = observed_mass_label
         # Sequence tag marked on the sequence (set per render, not cached)
@@ -200,6 +460,8 @@ class ProteinSequenceView(BaseComponent):
             sequence=self._sequence,
             mass_column=mass_column,
             precursor_mass_column=precursor_mass_column,
+            fragmentation_column=fragmentation_column,
+            spectrum_key_column=spectrum_key_column,
             mass_identifier=mass_identifier,
             aa_identifier=aa_identifier,
             sequence_identifier=sequence_identifier,
@@ -227,6 +489,10 @@ class ProteinSequenceView(BaseComponent):
             "annotation_title": self._annotation_title,
             "svg_filename": self._svg_filename,
         }
+        if self._fragmentation_column is not None:
+            config["fragmentation_column"] = self._fragmentation_column
+        if self._spectrum_key_column is not None:
+            config["spectrum_key_column"] = self._spectrum_key_column
         if self._accent_color is not None:
             config["accent_color"] = self._accent_color
         if self._fragment_identifier is not None:
@@ -241,6 +507,8 @@ class ProteinSequenceView(BaseComponent):
         self._sequence = config.get("sequence")
         self._mass_column = config.get("mass_column")
         self._precursor_mass_column = config.get("precursor_mass_column")
+        self._fragmentation_column = config.get("fragmentation_column")
+        self._spectrum_key_column = config.get("spectrum_key_column")
         self._mass_identifier = config.get("mass_identifier")
         self._aa_identifier = config.get("aa_identifier")
         self._sequence_identifier = config.get("sequence_identifier")
@@ -256,7 +524,14 @@ class ProteinSequenceView(BaseComponent):
 
     def _spectrum_columns(self) -> list[str]:
         return [
-            c for c in (self._mass_column, self._precursor_mass_column) if c is not None
+            c
+            for c in (
+                self._mass_column,
+                self._precursor_mass_column,
+                self._fragmentation_column,
+                self._spectrum_key_column,
+            )
+            if c is not None
         ]
 
     def _validate_mappings(self) -> None:
@@ -339,6 +614,12 @@ class ProteinSequenceView(BaseComponent):
                         else None,
                     }
                 )
+                if self._fragmentation_column is not None:
+                    spectrum_data["fragmentation"] = row.get(self._fragmentation_column)
+                if self._spectrum_key_column is not None:
+                    spectrum_data["key"] = _json_safe(
+                        row.get(self._spectrum_key_column)
+                    )
         payload = {"sequenceData": sequence_data, "spectrumData": spectrum_data}
         data_hash = hashlib.md5(
             json.dumps(payload, sort_keys=True, default=str).encode()
@@ -364,6 +645,98 @@ class ProteinSequenceView(BaseComponent):
             self._tag = {"startPos": int(start), "endPos": int(end)}
         return self
 
+    def set_modification_picker(
+        self,
+        library: list[dict[str, Any]] | str | None,
+        identifier: str | None = None,
+        selected: list[str] | None = None,
+    ) -> "ProteinSequenceView":
+        """Offer fixed modifications in the "change sequence" dialog.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``modification_library``, ``modifications_identifier`` and
+        ``modifications`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._modification_library = _modification_library(library)
+        self._modifications_identifier = identifier
+        self._modifications = list(selected) if selected is not None else []
+        return self
+
+    def set_variable_modification_library(
+        self,
+        library: list[dict[str, Any]] | str | None,
+        suggested: dict[str, list[str]] | None = None,
+    ) -> "ProteinSequenceView":
+        """Offer these variable modifications in the residue menus.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``variable_modification_library`` and
+        ``variable_modification_suggestions`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._variable_modification_library = _modification_library(library)
+        if suggested is not None:
+            suggested = {
+                str(site): [str(i) for i in ids] for site, ids in suggested.items()
+            }
+        self._variable_modification_suggestions = suggested
+        return self
+
+    def set_edit_identifier(self, identifier: str | None) -> "ProteinSequenceView":
+        """Make identifications editable, writing edits to ``identifier``.
+
+        Not cached, so a view loaded from its cache can set it per render.
+        See ``edit_identifier`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._edit_identifier = identifier
+        return self
+
+    def set_fragment_matches_identifier(
+        self, identifier: str | None
+    ) -> "ProteinSequenceView":
+        """Write the matched fragment ions to ``identifier`` for spectra to mark.
+
+        Not cached, so a view loaded from its cache can set it per render.
+        See ``fragment_matches_identifier`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._fragment_matches_identifier = identifier
+        return self
+
+    def set_proforma_copy(self, enabled: bool = True) -> "ProteinSequenceView":
+        """Show or hide the "Copy as ProForma" button.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``proforma_copy`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._proforma_copy = bool(enabled)
+        return self
+
+    def set_proforma_input(self, enabled: bool = True) -> "ProteinSequenceView":
+        """Let the "Change sequence" dialog read ProForma.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``proforma_input`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._proforma_input = bool(enabled)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -372,11 +745,21 @@ class ProteinSequenceView(BaseComponent):
             "massIdentifier": self._mass_identifier,
             "aaIdentifier": self._aa_identifier,
             "sequenceIdentifier": self._sequence_identifier,
+            "modificationLibrary": self._modification_library,
+            "modificationsIdentifier": self._modifications_identifier,
+            "modifications": self._modifications,
+            "proformaCopy": self._proforma_copy,
+            "proformaInput": self._proforma_input,
+            "variableModificationLibrary": self._variable_modification_library,
+            "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,
             "tag": self._tag,
             "svgFilename": self._svg_filename,
+            **image_format_args(self._image_format),
             "accentColor": self._accent_color,
             "fragmentIdentifier": self._fragment_identifier,
+            "editIdentifier": self._edit_identifier,
+            "fragmentMatchesIdentifier": self._fragment_matches_identifier,
             "entryTitle": self._entry_title,
             "observedMassLabel": self._observed_mass_label,
         }

@@ -1,14 +1,28 @@
 <template>
-  <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  <div ref="root" class="lineplot">
+    <MeasureHint v-if="args.measure" :measure="measure" />
+    <MeasureHint v-if="args.peakLabels" :measure="labels" />
+    <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
+    <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import Plotly from '@/plotly/basic'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { LinePlotComponentArgs, PlotData } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { usePinZoom } from '@/composables/usePinZoom'
+import { useZoomState } from '@/composables/useZoomState'
+import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
+import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
+import PeakLabelEditor from './PeakLabelEditor.vue'
+import { imageFormatOf } from '@/utils/imageExport'
+import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -26,8 +40,26 @@ const DEFAULT_CONFIG = {
   minAnnotationWidth: 40,
 }
 
+/**
+ * Min and max of the finite values, without spreading the array into
+ * Math.min/Math.max (which overflows the call stack on profile spectra with
+ * a few hundred thousand points). Returns [0, 1] when there are none.
+ */
+function finiteExtent(values: ArrayLike<number>): [number, number] {
+  let min = Infinity
+  let max = -Infinity
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i]
+    if (!Number.isFinite(v)) continue
+    if (v < min) min = v
+    if (v > max) max = v
+  }
+  return min <= max ? [min, max] : [0, 1]
+}
+
 export default defineComponent({
   name: 'PlotlyLineplot',
+  components: { MeasureHint, PeakLabelEditor },
   props: {
     args: {
       type: Object as PropType<LinePlotComponentArgs>,
@@ -38,10 +70,14 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore }
+    const measure = useMeasure(() => !!props.args.measure)
+    const labels = usePeakLabels(() => !!props.args.peakLabels)
+    const pinZoom = usePinZoom(() => !!props.args.keepZoom)
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom }
   },
   data() {
     return {
@@ -49,6 +85,7 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
+      labelEditorPosition: null as { left: number; top: number } | null,
     }
   },
   computed: {
@@ -244,9 +281,7 @@ export default defineComponent({
 
       if (!this.isDataReady || !this.plotData) return [0, 1]
 
-      const xValues = this.plotData.x_values
-      const minX = Math.min(...xValues)
-      const maxX = Math.max(...xValues)
+      const [minX, maxX] = finiteExtent(this.plotData.x_values)
       const padding = (maxX - minX) * 0.02
 
       return [minX - padding, maxX + padding]
@@ -655,9 +690,49 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
-        shapes: this.annotationShapes,
-        annotations: this.peakAnnotations,
+        shapes: [...this.annotationShapes, ...this.measureOverlay.shapes],
+        annotations: [
+          ...this.peakAnnotations,
+          ...this.measureOverlay.annotations,
+          ...this.labels.overlay({
+            color: this.theme?.textColor || '#262730',
+            background: this.theme?.backgroundColor || 'white',
+          }),
+        ],
       }
+    },
+
+    /**
+     * Differences along x. On an m/z axis they are matched to residue masses
+     * at 1+ and 2+; on any other axis only the difference is shown.
+     */
+    measureSpec(): MeasureSpec {
+      const isMz = isMzLabel(this.args.xLabel)
+      return {
+        kind: 'span',
+        xQuantity: isMz ? 'm/z' : axisQuantity(this.args.xLabel, 'x'),
+        charges: isMz ? MEASURE_CHARGES : [],
+        tolerance: this.args.measureTolerance,
+        residues: this.args.measureResidues,
+      }
+    },
+
+    measureTitle(): string {
+      return `Measure: click two peaks for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
+    },
+
+    /** Identity of the plotted peaks: other peaks drop the measurements. */
+    measureKey(): string {
+      return pointsKey(this.plotData?.x_values, this.plotData?.y_values)
+    },
+
+    /** Brackets of the measurements, spaced by the tallest visible peak. */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+        yScale: this.yRange[1] / 1.8,
+      })
     },
 
     cssCustomProperties(): Record<string, string> {
@@ -670,6 +745,34 @@ export default defineComponent({
   },
 
   watch: {
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+        this.labels.setDataKey(key)
+      },
+      immediate: true,
+    },
+
+    // Measurements added or removed. A full draw, as for a selection: a
+    // relayout would let Plotly autosize the figure to its container
+    'measure.revision'() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // Labels added, changed or removed, or the text box opened or closed
+    async 'labels.revision'() {
+      if (this.isInitialized && this.isDataReady) await this.renderPlot()
+      this.placeLabelEditor()
+    },
+
+    // One click tool at a time
+    'measure.mode'(on: boolean) {
+      if (on) this.labels.stop()
+    },
+    'labels.mode'(on: boolean) {
+      if (on && this.measure.mode) this.measure.toggle()
+    },
+
     isDataReady: {
       handler(newVal: boolean) {
         if (newVal && this.isInitialized) {
@@ -688,8 +791,16 @@ export default defineComponent({
           oldFirstX: oldData?.x_values?.[0],
         })
         if (this.isInitialized) {
-          // Reset zoom when data changes (e.g., switching spectra)
-          this.manualXRange = undefined
+          // Reset zoom when data changes (e.g., switching spectra), unless the
+          // zoom is pinned (mode bar button; keep_zoom=True pins it initially)
+          const incoming = this.zoom.incoming()
+          if (incoming !== undefined) {
+            // A zoom set with this data (a saved view opened)
+            this.manualXRange = incoming?.x
+          } else if (!this.pinZoom.pinned) {
+            if (this.manualXRange) this.zoom.report(null)
+            this.manualXRange = undefined
+          }
           this.lastAutoZoomedPeakIndex = undefined
           this.renderPlot()
         }
@@ -712,6 +823,11 @@ export default defineComponent({
     'selectionStore.$state': {
       handler(newState) {
         console.log('[LinePlot] selection changed', newState)
+        const incoming = this.zoom.incoming()
+        if (incoming !== undefined) {
+          this.manualXRange = incoming?.x
+          this.lastAutoZoomedPeakIndex = undefined
+        }
         if (this.isDataReady && this.isInitialized) {
           this.autoZoomToSelectedAnnotation()
           this.renderPlot()
@@ -723,6 +839,9 @@ export default defineComponent({
 
   mounted() {
     this.isInitialized = true
+    // A zoom already in the state (a saved view)
+    const zoom = this.zoom.incoming()
+    if (zoom) this.manualXRange = zoom.x
     // Use nextTick to ensure DOM is fully ready
     this.$nextTick(() => {
       if (this.isDataReady) {
@@ -767,29 +886,21 @@ export default defineComponent({
         }
 
         const modeBarButtons = [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: {
-              width: 1792,
-              height: 1792,
-              path: 'M1152 1376v-160q0-14-9-23t-23-9h-96v-512q0-14-9-23t-23-9h-320q-14 0-23 9t-9 23v160q0 14 9 23t23 9h96v320h-96q-14 0-23 9t-9 23v160q0 14 9 23t23 9h320q14 0 23-9t9-23zm-128-896v-160q0-14-9-23t-23-9h-192q-14 0-23 9t-9 23v160q0 14 9 23t23 9h192q14 0 23-9t9-23zm640 416q0 209-103 385.5t-279.5 279.5-385.5 103-385.5-103-279.5-279.5-103-385.5 103-385.5 279.5-279.5 385.5-103 385.5 103 279.5 279.5 103 385.5z',
-            },
-            click: () => {
-              const element = document.getElementById(this.id)
-              if (element) {
-                Plotly.downloadImage(element, {
-                  filename: this.args.title || 'plot',
-                  height: 400,
-                  width: 1200,
-                  format: 'svg',
-                })
-              }
-            },
-          },
+          plotlyDownloadButton({
+            format: () => imageFormatOf(this.args.imageFormat),
+            filename: () => this.args.title || 'plot',
+            icon: SPECTRUM_DOWNLOAD_ICON,
+          }),
+          ...this.measure.modeBarButtons(this.measureTitle),
+          ...this.labels.modeBarButtons(),
+          ...this.pinZoom.modeBarButtons(),
         ]
 
-        await Plotly.newPlot(this.id, this.traces, this.layout, {
+        // Plotly.react updates the existing plot in place. On a zoom only the
+        // layout changes (the traces are cached computed values), so the trace
+        // SVG is not rebuilt, and the event listeners stay attached.
+        const needsListeners = !(element as any)._insightListeners
+        await Plotly.react(this.id, this.traces, this.layout, {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
           modeBarButtonsToAdd: modeBarButtons,
           scrollZoom: true,
@@ -807,7 +918,9 @@ export default defineComponent({
 
         // Add event listeners
         const plotElement = document.getElementById(this.id) as any
-        if (plotElement) {
+        this.pinZoom.bind(plotElement)
+        if (plotElement && needsListeners) {
+          plotElement._insightListeners = true
           plotElement.on('plotly_click', (eventData: any) => {
             this.onPlotClick(eventData)
           })
@@ -815,6 +928,10 @@ export default defineComponent({
           plotElement.on('plotly_relayout', (eventData: any) => {
             this.onRelayout(eventData)
           })
+
+          this.measure.bindLabelClicks(plotElement)
+          // In label mode a click on one of your labels opens it for changing
+          this.labels.bindLabelClicks(plotElement)
         }
       } catch (error) {
         console.error('PlotlyLineplot: Error rendering plot:', error)
@@ -830,11 +947,13 @@ export default defineComponent({
           newXRange[0] = 0
         }
         this.manualXRange = newXRange
+        this.zoom.report({ x: newXRange as [number, number] })
         // Reset auto-zoom tracking when user manually zooms
         this.lastAutoZoomedPeakIndex = undefined
         this.renderPlot()
       } else if (eventData['xaxis.autorange'] === true) {
         // Reset to auto range
+        this.zoom.report(null)
         this.manualXRange = undefined
         this.lastAutoZoomedPeakIndex = undefined
         this.renderPlot()
@@ -916,14 +1035,14 @@ export default defineComponent({
       } else {
         // No annotated neighbors - zoom to show 20% of total data range
         const xValues = this.plotData.x_values
-        const dataRange = Math.max(...xValues) - Math.min(...xValues)
+        const [dataMin, dataMax] = finiteExtent(xValues)
+        const dataRange = dataMax - dataMin
         rangeWidth = dataRange * 0.2
       }
 
       // Center on selected peak, clamped to data bounds
       const xValues = this.plotData.x_values
-      const minX = Math.min(...xValues)
-      const maxX = Math.max(...xValues)
+      const [minX, maxX] = finiteExtent(xValues)
 
       let newLeft = selectedPeak.x - rangeWidth / 2
       let newRight = selectedPeak.x + rangeWidth / 2
@@ -941,7 +1060,56 @@ export default defineComponent({
       return [newLeft, newRight]
     },
 
+    /** Index of the peak nearest to x. */
+    nearestPeakIndex(x: number): number | undefined {
+      const xValues = this.plotData?.x_values
+      if (!xValues || xValues.length === 0) return undefined
+      let nearestIndex = 0
+      let nearestDistance = Infinity
+      for (let i = 0; i < xValues.length; i++) {
+        const distance = Math.abs(xValues[i] - x)
+        if (distance < nearestDistance) {
+          nearestDistance = distance
+          nearestIndex = i
+        }
+      }
+      return nearestIndex
+    },
+
+    /** Put the label text box over the peak being labelled. */
+    placeLabelEditor(): void {
+      const draft = this.labels.draft
+      this.labelEditorPosition = draft
+        ? plotPointPosition(
+            document.getElementById(this.id),
+            this.$refs.root as HTMLElement | null,
+            draft.x,
+            draft.y,
+          )
+        : null
+    },
+
     onPlotClick(eventData: any): void {
+      // In label mode a click opens the text box for the nearest peak's label
+      if (this.labels.active) {
+        const point = eventData?.points?.[0]
+        const index = point ? this.nearestPeakIndex(point.x) : undefined
+        if (index !== undefined && this.plotData) {
+          this.labels.pick({ x: this.plotData.x_values[index], y: this.plotData.y_values[index] })
+        }
+        return
+      }
+
+      // In measure mode a click picks a peak to measure, not a selection
+      if (this.measure.active) {
+        const point = eventData?.points?.[0]
+        const index = point ? this.nearestPeakIndex(point.x) : undefined
+        if (index !== undefined && this.plotData) {
+          this.measure.pick({ x: this.plotData.x_values[index], y: this.plotData.y_values[index] }, this.measureSpec)
+        }
+        return
+      }
+
       // Only handle clicks if interactivity is configured
       if (!this.interactivity || Object.keys(this.interactivity).length === 0) {
         return
@@ -1016,6 +1184,9 @@ export default defineComponent({
         await Plotly.newPlot(this.id, this.getFallbackData(), fallbackLayout, {
           staticPlot: true,
         })
+        // newPlot drops the event listeners; the next renderPlot adds them again.
+        const element = document.getElementById(this.id) as any
+        if (element) element._insightListeners = false
       } catch (error) {
         console.error('PlotlyLineplot: Failed to render fallback:', error)
       }
@@ -1025,6 +1196,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.lineplot {
+  position: relative;
+}
+
 .plot-container {
   position: relative;
   width: 100%;

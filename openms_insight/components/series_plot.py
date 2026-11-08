@@ -5,7 +5,13 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.measure import (
+    measure_args,
+    validate_measure,
+)
 from ..core.registry import register_component
+from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
 
@@ -62,6 +68,11 @@ class SeriesPlot(BaseComponent):
         fixed_y_range: bool = False,
         svg_filename: str | None = None,
         font: dict[str, str] | None = None,
+        y_range_mode: str = "nonnegative",
+        hover_column: str | None = None,
+        measure: bool = True,
+        image_format: str | None = None,
+        zoom_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -91,11 +102,39 @@ class SeriesPlot(BaseComponent):
             y_label: Y-axis label (default: y_column).
             show_legend: Show the legend.
             fixed_y_range: Disable zooming along the y axis.
-            svg_filename: File name for the SVG download (default: title).
+            svg_filename: File name (without extension) of the image download
+                (default: title); the extension follows the image format.
             font: Plotly font of the plot, e.g. {'family': 'Arial', 'color':
                 'black'} (default: the Streamlit theme's font and text colour).
+            y_range_mode: Plotly rangemode of the y axis: 'nonnegative' (from
+                zero, for intensities and densities), 'tozero' or 'normal' (for
+                signed values such as mass errors).
+            hover_column: Column whose text is shown when hovering a point
+                (e.g. a fragment name), above its x and y values.
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two points draws a
+                bracket labelled with their x difference ("ΔRT 12.400"). Esc
+                cancels a half-finished measurement, clicking a label removes
+                it and "Clear measurements" removes all; they are cleared when
+                other data is plotted and are part of the image download. With
+                measure mode off, clicks select as before. Render-time only:
+                not part of the cache.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
+            zoom_identifier: State identifier the plot keeps its zoom under,
+                ``{"x": [lo, hi], "y": [lo, hi]}`` (default None: the zoom stays
+                in the browser). The plot reports its ranges there after a zoom
+                or pan and zooms to a value set there, e.g. by a saved view.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
+        if y_range_mode not in ("nonnegative", "tozero", "normal"):
+            raise ValueError(
+                "y_range_mode must be 'nonnegative', 'tozero' or 'normal', "
+                f"got {y_range_mode!r}"
+            )
         if mode not in ("lines", "markers", "lines+markers"):
             raise ValueError(
                 f"mode must be 'lines', 'markers' or 'lines+markers', got {mode!r}"
@@ -113,6 +152,17 @@ class SeriesPlot(BaseComponent):
         self._fixed_y_range = fixed_y_range
         self._svg_filename = svg_filename
         self._font = dict(font) if font else None
+        self._y_range_mode = y_range_mode
+        self._hover_column = hover_column
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
+
+        # Render-time option, kept out of the cache config (see core/zoom.py)
+        self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
 
         super().__init__(
             cache_id=cache_id,
@@ -136,6 +186,8 @@ class SeriesPlot(BaseComponent):
             fixed_y_range=fixed_y_range,
             svg_filename=svg_filename,
             font=font,
+            y_range_mode=y_range_mode,
+            hover_column=hover_column,
             **kwargs,
         )
 
@@ -155,6 +207,12 @@ class SeriesPlot(BaseComponent):
             "svg_filename": self._svg_filename,
             # Only when set, so caches built without it keep their hash
             **({"font": self._font} if self._font else {}),
+            **(
+                {"y_range_mode": self._y_range_mode}
+                if self._y_range_mode != "nonnegative"
+                else {}
+            ),
+            **({"hover_column": self._hover_column} if self._hover_column else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -171,6 +229,8 @@ class SeriesPlot(BaseComponent):
         self._fixed_y_range = config.get("fixed_y_range", False)
         self._svg_filename = config.get("svg_filename")
         self._font = config.get("font")
+        self._y_range_mode = config.get("y_range_mode", "nonnegative")
+        self._hover_column = config.get("hover_column")
 
     def _validate_mappings(self) -> None:
         super()._validate_mappings()
@@ -179,6 +239,7 @@ class SeriesPlot(BaseComponent):
             ("x_column", self._x_column),
             ("y_column", self._y_column),
             ("series_column", self._series_column),
+            ("hover_column", self._hover_column),
         ):
             if column is not None and column not in columns:
                 raise ValueError(
@@ -199,6 +260,7 @@ class SeriesPlot(BaseComponent):
         columns = [self._x_column, self._y_column]
         for column in [
             self._series_column,
+            self._hover_column,
             *(self._interactivity or {}).values(),
             *(self._filters or {}).values(),
         ]:
@@ -233,6 +295,8 @@ class SeriesPlot(BaseComponent):
             "yLabel": self._y_label,
             "showLegend": self._show_legend,
             "fixedYRange": self._fixed_y_range,
+            "yRangeMode": self._y_range_mode,
+            "hoverColumn": self._hover_column,
             "interactivity": self._interactivity or {},
         }
         if self._title:
@@ -241,4 +305,7 @@ class SeriesPlot(BaseComponent):
             args["svgFilename"] = self._svg_filename
         if self._font:
             args["font"] = self._font
+        args.update(measure_args(self._measure))
+        args.update(image_format_args(self._image_format))
+        args.update(zoom_args(self._zoom_identifier))
         return args

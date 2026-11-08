@@ -117,6 +117,18 @@ annotations = Table(
     filters={"identification": "id_idx"},
     filter_defaults={"identification": -1},  # Use -1 when identification is None
 )
+
+# Two filters on one table. ALL shows every row while nothing is selected, so
+# unselecting a mass shift lifts that filter and keeps the protein one. A list
+# column ("shift_ids": [1, 3]) matches when one of its values is selected.
+from openms_insight import ALL
+
+proteoforms = Table(
+    cache_id="proteoforms",
+    data_path="proteoforms.parquet",
+    filters={"protein": "protein_id", "mass_shift": "shift_ids"},
+    filter_defaults={"mass_shift": ALL},
+)
 ```
 
 ---
@@ -163,6 +175,7 @@ Table(
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
 - `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
 - `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+- `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
 
 **Filters.** The filter button opens a dialog with a filter per column: values to
 keep, a text pattern, or for numbers "at least", "at most" or a range. Every
@@ -257,6 +270,7 @@ LinePlot(
 - `highlight_column`: Boolean/int column indicating which points to highlight
 - `annotation_column`: Text column for labels on highlighted points
 - `styling`: Color configuration dict
+- `keep_zoom`: Start with the zoom pinned (default `False`). The pin button in the mode bar toggles it: pinned, the zoomed x range stays when another spectrum is selected; unpinned, each new spectrum is shown in full. Double-click resets the zoom either way. `MirrorPlot` and `DeconvolvedSpectrum` have the same button and argument
 
 ### MirrorPlot
 
@@ -291,12 +305,15 @@ mirror(state_manager=state_manager, height=600)
 - `highlight_column`, `annotation_column`: Shared schema for highlights and label text
 - `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
-- `svg_filename`: File name for the modebar's "Download as SVG" button (default: `title`, then `mirror_plot`)
+- `svg_filename`: File name (without extension) of the image download (default: `title`, then `mirror_plot`); the format is set as in [Image downloads](#image-downloads-image_format)
+- `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
+- `peak_labels`: Your own labels on peaks, on by default (see [Peak labels](#peak-labels-peak_labels))
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
 - Tick labels show absolute intensity on both sides — the bottom half is flipped only for layout, not for the displayed values
 - Marker traces are kept in addition to stick shapes so Plotly fires `plotly_click` events; the click handler picks the side via `curveNumber` and routes the row's interactivity column value to the shared selection
+- In measure mode the two peaks of a measurement must be in the same half; a click in the other half starts a new measurement there
 - `set_top_dynamic_annotations(...)` / `set_bottom_dynamic_annotations(...)` allow another component (e.g. a `SequenceView`) to push fragment-ion annotations into one half without invalidating the cache
 
 ### Heatmap
@@ -330,6 +347,25 @@ Heatmap(
 - `log_scale`: Use log10 color mapping (default: True). Set to False for linear.
 - `low_values_on_top`: Prioritize low values during downsampling and display them on top (default: False). Use for scores where lower = better (e.g., e-values, PEP, q-values).
 - `intensity_label`: Custom colorbar label (default: 'Intensity')
+- `hover_column`: Column whose text is shown when hovering a point, above its intensity
+- `on_select`: Selections a click sets besides `interactivity`, as Table's `on_select` (None clears one)
+- `highlight`: Mapping of identifier names to column names. The points whose column value is the identifier's selected value are ringed, whichever component selected it (looked up in the full data, so a point the current level dropped is still marked)
+
+**Marking a selection made elsewhere:**
+```python
+Heatmap(
+    cache_id="identifications",
+    data=hits,  # one row per identified spectrum
+    x_column="rt",
+    y_column="mass",
+    intensity_column="score",
+    log_scale=False,
+    intensity_label="Score",
+    hover_column="name",
+    interactivity={"hit": "hit_id"},  # a click selects the hit ...
+    highlight={"hit": "hit_id"},  # ... and the selected hit is ringed,
+)  # also when a table selected it
+```
 
 **Linear scale example:**
 ```python
@@ -424,8 +460,7 @@ ClusteredHeatmap(
     linkage_method="average",
     linkage_metric="euclidean",
     title="Protein Abundance",
-    colorscale="RdBu",
-    reversescale=True,
+    intensity_label="Z-score",
     group_colors={"Control": "#1f77b4", "Treatment": "#d62728"},
 )(state_manager=state_manager, height=600)
 ```
@@ -435,7 +470,8 @@ ClusteredHeatmap(
 - `metadata`: Optional `sample_id` -> `group` table. When given, a group color bar is drawn above the heatmap
 - `row_cluster` / `col_cluster`: Cluster that axis and draw its dendrogram (left for rows, top for columns). Skipped automatically when the axis has fewer than 2 entries
 - `linkage_method` / `linkage_metric`: Passed through to `scipy.cluster.hierarchy.linkage`
-- `colorscale`, `reversescale`, `intensity_label`: Cell color mapping and colorbar label
+- `colorscale`, `reversescale`, `intensity_label`: Cell color mapping and colorbar label. Without a `colorscale`, cells use a diverging scale centred on 0 (blue, the page colour, orange) that follows the app's light or dark theme, which suits z-scores
+- Layout: the heatmap fills the component's width. Row labels sit right of the heatmap; when the rows are too close to label them all, every n-th one is labelled (the heading of the label column says which) and long labels are cut. Hovering a cell shows its full row label, sample, group and value
 - `group_colors`: Map group value -> color for the annotation bar. Groups without an explicit color get one from a default palette
 
 **No `filters` or `interactivity`.** Unlike the other components, `ClusteredHeatmap`
@@ -617,6 +653,8 @@ spectrum(key="spectrum", state_manager=state_manager)
 - `annotated`: the raw peaks, with the signal peaks of the selected mass highlighted and each charge state labelled `z=N`.
 - `ladder`: the masses with a sequence tag drawn as a ladder, set per render with `set_ladder(masses, sequence)`. Clicking a ladder mass shows its raw peaks.
 
+**Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. A mode bar button hides or shows them.
+
 ### SeriesPlot
 
 Line and marker plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`).
@@ -676,6 +714,12 @@ ProteinSequenceView(
 
 The expected columns are listed in `ProteinSequenceView.SEQUENCE_COLUMNS` and the class docstring. Pass `sequence=` (a dict with those columns) for one fixed sequence. `entry_title` and `observed_mass_label` name the entry in the header.
 
+Every modification the view applies (one set in a residue menu, or one of an edited identification) is localized from the matched fragments: a fragment that matches only with the mass shift places it inside the fragment, one that matches only without it places it outside. When several residues remain, or the shift fits several library modifications at those residues, the view marks the residues with a dashed line and the modification with a `?`, and says why in its tooltip and in the list of modifications.
+
+`edit_identifier=` (or `set_edit_identifier()` per render) lets the user edit an identification: a pencil button starts from the search result, the residue menus and the "change sequence" dialog then change the sequence and its modifications, and a reset button goes back. Each change is written to that identifier as a dict with `action` (`edit`, `update` or `reset`) and a fresh `nonce`; the app keeps the edit and renders the view again with the edited entry (`edited=True`, fragment masses of the unmodified sequence, its modifications localized on single residues).
+
+`fragment_matches_identifier=` (or `set_fragment_matches_identifier()`) publishes the matched fragments (name, ion type, kind, mass, index of the matched mass and, for annotated fragments, charge and m/z) with the tolerance, for a `DeconvolvedSpectrum` to mark. Give `spectrum_key_column=` (the spectrum's id column, e.g. `scan_idx`) so a spectrum showing another scan ignores them.
+
 ### ProteinStructureView
 
 3D structure of a protein (PDB or mmCIF, drawn with 3Dmol.js), coloured by the fragment evidence of a sequence entry. It takes the same data as `ProteinSequenceView`, aligns the sequence to the structure's chains, and shares residue and fragment selection with a sequence view. Residues outside the entry's start..end positions are not shown.
@@ -717,11 +761,160 @@ All components accept these common arguments:
 | `data_path` | `str` | `None` | Path to parquet file (preferred for memory efficiency) |
 | `data` | `pl.LazyFrame` | `None` | Polars LazyFrame (alternative to data_path) |
 | `filters` | `Dict[str, str]` | `None` | Map identifier -> column for filtering |
-| `filter_defaults` | `Dict[str, Any]` | `None` | Default values when selection is None |
+| `filter_defaults` | `Dict[str, Any]` | `None` | Default values when selection is None (`ALL`: every row) |
 | `interactivity` | `Dict[str, str]` | `None` | Map identifier -> column for click actions |
 | `cache_path` | `str` | `"."` | Base directory for cache storage |
 | `regenerate_cache` | `bool` | `False` | Force cache regeneration |
 | `height` | `int` | `400` | Component height in pixels (render-time parameter) |
+
+### Selecting several entries (`multi_select`)
+
+`Table`, `VolcanoPlot`, `Heatmap` and `ClusteredHeatmap` take
+`multi_select={identifier: column}`. The user then picks several rows or points at
+once, and the identifier holds the sorted distinct values of `column` over them
+(None when nothing is picked). Components with the same identifier show and change
+the same set, so any page can read it with `state_manager.get_selection(identifier)`.
+
+A multi-selection is a selection level like any other. In `filters` it keeps the rows
+whose column is in the set, so `Table(..., filters={"proteins": "accession"})` lists the
+picked proteins, and the same works for masses, scans or any other column.
+
+| Component | How the user selects |
+|-----------|----------------------|
+| `Table` | A check mark button in the toolbar shows a check box per row (hidden until then); Shift-click ticks a range; the header box ticks every row passing the filters (on a paginated table, in Python over all pages). Selected rows are marked by a bar on the left whether or not the boxes are shown |
+| `VolcanoPlot` | Box or lasso select in Plotly's mode bar (Shift adds). With `selection_presets=True`, buttons above the plot select **All changed**, **Up** or **Down** at the plot's cut-offs; `preset_labels={"up": ..., "down": ..., "changed": ..., "clear": ...}` renames them |
+| `Heatmap` | Box or lasso select in Plotly's mode bar (Shift adds); the region is resolved in Python on the full data, not the downsampled level shown; every point of the picked entries is marked |
+| `ClusteredHeatmap` | Box or lasso select over rows (the column must be `id_col`); selected rows are outlined |
+
+Each plot's mode bar gets a **Clear selection** button (the eraser).
+
+```python
+volcano = VolcanoPlot(
+    ...,
+    label_column="name",
+    multi_select={"proteins": "accession"},
+    selection_presets=True,
+    preset_labels={"up": "Higher in treated", "down": "Lower in treated"},
+)
+table = Table(..., multi_select={"proteins": "accession"})
+picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
+picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
+```
+
+### Measuring (`measure`)
+
+Every 2D plot has a **Measure** button (a ruler) in its Plotly mode bar: `LinePlot`,
+`MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum`, `Heatmap`, `VolcanoPlot` and
+`PCAPlot`. It is on by default; `measure=False` removes it. Pressing it switches
+clicks from selecting to measuring: click a point, then a second one. While measuring
+the ruler is highlighted and a short note sits over the plot's top-left corner; the
+plot keeps its height.
+
+| Component | What a measurement shows |
+|-----------|--------------------------|
+| `LinePlot` | A bracket above the two peaks labelled with the x difference: `Δm/z 128.059` when the x-axis label is m/z, otherwise `Δ<x label>`. On an m/z axis the difference is matched to residue masses at 1+ and 2+ (`≈ Q/K`, `≈ G (2+)`) |
+| `MirrorPlot` | As `LinePlot` on an m/z axis; both peaks must be in the same half |
+| `DeconvolvedSpectrum` | Between masses: `Δmass 128.095 ≈ K`, matched as a neutral mass (1+ only). Between raw peaks (`'annotated'`, a ladder drill-down): `Δm/z`, matched at 1+ and 2+ |
+| `SeriesPlot` | A bracket labelled with the x difference only (`ΔRT 12.400`) |
+| `Heatmap`, `VolcanoPlot`, `PCAPlot` | A line between the two points labelled with the x and y differences, from the first point to the second (`Δlog2 Fold Change +2.150`, `Δ-log10(p-value) −1.300`), using the axis labels |
+
+Residues are the 20 standard amino acids, monoisotopic, I and L shown as `I/L`,
+closest first. `measure_tolerance` (default `0.02` Da per point; a difference
+matches within twice that, since both points carry the error) and
+`measure_residues` (extra named masses, e.g. `{"M(Oxidation)": 147.0354}`) tune
+the matching on `LinePlot`, `MirrorPlot` and `DeconvolvedSpectrum`.
+
+Several measurements can stay on a plot. Esc cancels a half-finished one,
+clicking a label removes that measurement and the **Clear measurements** button (×)
+next to the ruler removes all. They are
+plain Plotly shapes and annotations, so the image download includes them. They are
+cleared when other data is plotted (a `Heatmap` keeps them while zooming). With
+measure mode off, clicks select as they always did.
+
+The measure options are render-time settings: they are not part of the cache
+configuration, so switching the tool on or off never rebuilds a cache.
+`ClusteredHeatmap` (a categorical matrix: there is no distance between two
+samples' columns) and `Plot3D` (a click in 3D does not pick comparable points)
+have no measure tool.
+
+### Peak labels (`peak_labels`)
+
+`LinePlot` and `MirrorPlot` have a **Label peaks** button (a tag) in their Plotly
+mode bar, next to the ruler. It is on by default; `peak_labels=False` removes it.
+In label mode a click on a peak opens a small text box at the peak: type a label,
+Enter keeps it and Esc closes the box. Clicking one of your labels opens it again
+to change the text, and an empty text removes it. The **Remove peak labels**
+button next to the tag removes every label of the spectrum shown. Label mode and
+measure mode take turns: switching one on switches the other off.
+
+Labels are kept per spectrum while the plot is on the page: plotting another
+spectrum shows that spectrum's labels, and going back shows the earlier ones again.
+They are plain Plotly annotations with an arrow to their peak, so the image
+download includes them. Like the measure options, `peak_labels` is a render-time
+setting and never part of the cache configuration.
+
+### Keeping the zoom in the state (`zoom_identifier`)
+
+`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot` and `Heatmap` take a `zoom_identifier`. The plot then reports its axis ranges to the `StateManager` under that identifier after a zoom or pan, and zooms to a value set there from Python. The value is plain JSON, so a page can store it (in a saved view, say) and set it before the plot is ever drawn:
+
+```python
+state = StateManager("viewer")
+state.set_selection("zoom@spectrum", {"x": [400.0, 900.0]})        # m/z 400 to 900
+state.set_selection("zoom@peak_map", {"x": [10.0, 20.0], "y": [450.0, 800.0]})
+
+LinePlot(cache_id="spectrum", ..., zoom_identifier="zoom@spectrum")(state_manager=state)
+```
+
+- `x` and `y` are `[low, high]`. A missing axis shows its full extent, and `None` is the full view.
+- The spectrum plots keep only the x range; their y axis follows the visible peaks.
+- Without `zoom_identifier` (the default) the zoom stays in the browser, as before. Only `Heatmap` always reports its zoom (default identifier `heatmap_zoom`), because the zoom picks the resolution of its data; it reads `{"x", "y"}` as well as its own `{"xRange", "yRange"}`.
+- Each report reruns the script once, debounced to 0.4 s after the last zoom or pan, like any change of the state. Give an identifier only to plots whose zoom should be kept.
+- Render-time only: it is not part of the cache.
+
+### Image downloads (`image_format`)
+
+Every component that offers an image download saves in one format: SVG by
+default, or PNG, JPEG or WebP. Pick it once for all components, for example
+from a settings widget on every page run:
+
+```python
+import openms_insight
+
+openms_insight.set_image_format(st.session_state.get("image-format", "svg"))
+openms_insight.get_image_format()  # 'svg', 'png', 'jpeg' or 'webp'
+```
+
+A component's `image_format` argument (default `None`: follow
+`set_image_format()`) overrides it for that component:
+
+```python
+LinePlot(
+    cache_id="spectrum",
+    data=peaks,
+    x_column="mz",
+    y_column="intensity",
+    image_format="png",
+)
+```
+
+| Component | Download button | Notes |
+|-----------|-----------------|-------|
+| `LinePlot`, `MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum` | Plotly mode bar | |
+| `Heatmap`, `VolcanoPlot`, `PCAPlot`, `ClusteredHeatmap` | Plotly mode bar | |
+| `Plot3D` | Plotly mode bar | WebGL scene: Plotly embeds it as a picture, also in SVG. `export_format="png"` (older API) still means PNG unless `image_format` is given |
+| `SequenceView`, `ProteinSequenceView` | Download button above the sequence | Saved from the page (dom-to-image) |
+| `ProteinStructureView` | Camera button | WebGL scene with no vector form: `"svg"` saves a PNG |
+
+The mode bar button reads "Download as SVG" (or PNG, JPEG, WebP). SVG keeps the
+size the plots always had; PNG, JPEG and WebP are drawn at twice the size the
+view has on screen. A browser that cannot write WebP from a page (Safari) saves
+PNG instead. The file name comes from `svg_filename` where a component has it
+(otherwise its title); the extension follows the format.
+
+Inside a Streamlit session `set_image_format()` is kept per session, so users
+of one app can pick different formats; outside a session it is process wide.
+The format is a render-time setting, not part of the cache configuration:
+changing it never rebuilds a cache.
 
 ## Memory-Efficient Preprocessing
 
@@ -813,6 +1006,14 @@ state_manager = StateManager()
 table(state_manager=state_manager, height=300)
 plot(state_manager=state_manager, height=400)
 ```
+
+### Theme
+
+Components follow the app's Streamlit theme. The light and dark colours are
+used as before. The theme's fonts (`font`, `codeFont`, `headingFont`) are
+loaded inside the components when the app declares them with
+`[[theme.fontFaces]]`. The primary colour is used for the selected table row,
+check boxes and the buttons in the table dialogs.
 
 ## Differential Expression Analysis
 
@@ -950,7 +1151,37 @@ if status == "success":
 ```
 
 `status` is `"success"`, `"insufficient_proteins"` (fewer than 3 proteins pass the
-cutoffs) or `"empty_data"`. This function needs the `analysis` extra:
+cutoffs) or `"empty_data"`.
+
+For a set the user picked (see `multi_select`), `go_enrichment` takes the
+foreground and background directly, and the annotations from
+`fetch_go_annotations`, so an app can cache them per protein:
+
+```python
+from openms_insight.analysis.enrichment import fetch_go_annotations, go_enrichment
+
+annotations = fetch_go_annotations(background)  # query, BP_terms, CC_terms, MF_terms
+result = go_enrichment(annotations, foreground=picked, background=background)
+result["categories"]["BP"]  # GO_Term, Count, Background, GeneRatio, BgRatio,
+# FoldEnrichment, p_value, -log10(p), p_adj, Proteins
+```
+
+When the user tests many selections of the same proteins (a lasso on a plot,
+check boxes in a table), build the term index once and test each selection from
+it. The index is a Polars frame (accession, category, term) that an app can
+store, for example as parquet next to its results, so a selection only counts its
+proteins and runs the tests:
+
+```python
+from openms_insight.analysis.enrichment import go_enrichment_from_index, go_term_index
+
+index = go_term_index(annotations, background)  # once, e.g. after the workflow
+result = go_enrichment_from_index(index, foreground=picked, background=background)
+```
+
+`go_enrichment` returns the same result; it builds the index itself.
+
+These functions need the `analysis` extra:
 
 ```bash
 pip install "openms-insight[analysis]"

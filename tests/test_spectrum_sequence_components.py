@@ -227,6 +227,48 @@ class TestSeriesPlot:
         ]
         data = plot._prepare_vue_data({})
         assert len(data["plotData"]) == 6
+        # Defaults: y axis from zero, no hover text
+        assert args["yRangeMode"] == "nonnegative"
+        assert args["hoverColumn"] is None
+
+    def test_signed_y_axis_and_hover_column(self, mock_streamlit, temp_cache_dir):
+        errors = pl.LazyFrame(
+            {
+                "mass": [500.0, 900.0, 1200.0],
+                "ppm": [-3.5, 1.0, 4.2],
+                "ion": ["b", "y", "y"],
+                "fragment": ["b5", "y8", "y11"],
+            }
+        )
+        plot = SeriesPlot(
+            cache_id="errors",
+            data=errors,
+            x_column="mass",
+            y_column="ppm",
+            series_column="ion",
+            mode="markers",
+            y_range_mode="normal",
+            hover_column="fragment",
+            cache_path=str(temp_cache_dir),
+        )
+        args = plot._get_component_args()
+        assert args["yRangeMode"] == "normal"
+        assert args["hoverColumn"] == "fragment"
+        data = plot._prepare_vue_data({})["plotData"]
+        assert list(data["fragment"]) == ["b5", "y8", "y11"]
+        # Restored from its cache with the same configuration
+        cached = SeriesPlot(cache_id="errors", cache_path=str(temp_cache_dir))
+        assert cached._get_component_args()["yRangeMode"] == "normal"
+        assert cached._get_component_args()["hoverColumn"] == "fragment"
+
+    def test_rejects_unknown_y_range_mode(self, mock_streamlit, temp_cache_dir):
+        with pytest.raises(ValueError, match="y_range_mode"):
+            SeriesPlot(
+                cache_id="bad",
+                data=pl.LazyFrame({"x": [1.0], "y": [1.0]}),
+                y_range_mode="symmetric",
+                cache_path=str(temp_cache_dir),
+            )
 
 
 class TestPlot3D:
@@ -289,6 +331,114 @@ class TestPlot3D:
             )
 
 
+class TestPlot3DHighlight:
+    @pytest.fixture
+    def run_peaks(self) -> pl.LazyFrame:
+        """Peaks of three MS1 spectra of a run."""
+        return pl.LazyFrame(
+            {
+                "scan_idx": [0, 0, 1, 1, 2],
+                "mz": [500.0, 600.0, 500.5, 700.0, 800.0],
+                "rt": [10.0, 10.0, 20.0, 20.0, 30.0],
+                "intensity": [5.0, 3.0, 4.0, 2.0, 1.0],
+            }
+        )
+
+    def _plot(self, data, cache_dir, cache_id="run_map"):
+        return Plot3D(
+            cache_id=cache_id,
+            data=data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            highlight={"survey": "scan_idx"},
+            highlight_name="Precursor spectrum",
+            highlight_color="#ff7501",
+            cache_path=str(cache_dir),
+        )
+
+    def test_selected_points_are_drawn_apart(
+        self, mock_streamlit, temp_cache_dir, run_peaks
+    ):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        result = plot._prepare_vue_data({"survey": 1})
+        assert sorted(result["plotData"]["mz"]) == [500.0, 600.0, 800.0]
+        assert result["highlightData"] == {
+            "x": [500.5, 700.0],
+            "y": [20.0, 20.0],
+            "z": [4.0, 2.0],
+        }
+
+    def test_nothing_highlighted_without_selection(
+        self, mock_streamlit, temp_cache_dir, run_peaks
+    ):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        result = plot._prepare_vue_data({})
+        assert len(result["plotData"]) == 5
+        assert result["highlightData"] == {"x": [], "y": [], "z": []}
+
+    def test_selection_changes_hash(self, mock_streamlit, temp_cache_dir, run_peaks):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        hashes = {plot._prepare_vue_data({"survey": s})["_hash"] for s in (0, 1, None)}
+        assert len(hashes) == 3
+
+    def test_identifier_is_a_state_dependency(
+        self, mock_streamlit, temp_cache_dir, run_peaks
+    ):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        assert plot.get_state_dependencies() == ["survey"]
+
+    def test_args_and_cache_restore(self, mock_streamlit, temp_cache_dir, run_peaks):
+        self._plot(run_peaks, temp_cache_dir)
+        restored = Plot3D(cache_id="run_map", cache_path=str(temp_cache_dir))
+        args = restored._get_component_args()
+        assert args["highlight"] == {"survey": "scan_idx"}
+        assert args["highlightName"] == "Precursor spectrum"
+        assert args["highlightColor"] == "#ff7501"
+        assert restored._prepare_vue_data({"survey": 2})["highlightData"]["x"] == [
+            800.0
+        ]
+
+    def test_without_highlight_args_unchanged(
+        self, mock_streamlit, temp_cache_dir, sample_plot3d_data
+    ):
+        plot = TestPlot3D()._plot(sample_plot3d_data, temp_cache_dir)
+        assert "highlight" not in plot._get_component_args()
+        assert "highlightData" not in plot._prepare_vue_data({"scan": 0})
+
+    def test_aspect_ratio(self, mock_streamlit, temp_cache_dir, run_peaks):
+        ratio = {"x": 2.0, "y": 1.0, "z": 0.6}
+        Plot3D(
+            cache_id="wide",
+            data=run_peaks,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            aspect_ratio=ratio,
+            camera_center={"x": 0, "y": 0, "z": -0.2},
+            cache_path=str(temp_cache_dir),
+        )
+        restored = Plot3D(cache_id="wide", cache_path=str(temp_cache_dir))
+        args = restored._get_component_args()
+        assert args["aspectRatio"] == ratio
+        assert args["cameraCenter"] == {"x": 0, "y": 0, "z": -0.2}
+        plain = self._plot(run_peaks, temp_cache_dir, cache_id="plain")
+        assert "aspectRatio" not in plain._get_component_args()
+        assert "cameraCenter" not in plain._get_component_args()
+
+    def test_unknown_highlight_column(self, mock_streamlit, temp_cache_dir, run_peaks):
+        with pytest.raises(ValueError, match="highlight"):
+            Plot3D(
+                cache_id="bad",
+                data=run_peaks,
+                x_column="mz",
+                y_column="rt",
+                z_column="intensity",
+                highlight={"survey": "missing"},
+                cache_path=str(temp_cache_dir),
+            )
+
+
 class TestDeconvolvedSpectrum:
     def test_one_spectrum_per_scan(
         self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra
@@ -313,6 +463,32 @@ class TestDeconvolvedSpectrum:
         assert args["title"] == "Annotated Spectrum"
         assert args["massIdentifier"] == "mass"
         assert args["ladder"] is None
+        assert "fragmentMatchesIdentifier" not in args
+        assert "spectrumKeyColumn" not in args
+
+    def test_fragment_matches_identifier(
+        self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra
+    ):
+        spectrum = DeconvolvedSpectrum(
+            cache_id="anno_matches",
+            data=sample_deconvolved_spectra,
+            filters={"scan": "scan_idx"},
+            view="annotated",
+            fragment_matches_identifier="matches",
+            cache_path=str(temp_cache_dir),
+        )
+        args = spectrum._get_component_args()
+        assert args["fragmentMatchesIdentifier"] == "matches"
+        # Matches apply to the spectrum named by the first filter's column
+        assert args["spectrumKeyColumn"] == "scan_idx"
+        # Render-time option: not part of the cache
+        assert "fragment_matches_identifier" not in spectrum._get_cache_config()
+        restored = DeconvolvedSpectrum(
+            cache_id="anno_matches", cache_path=str(temp_cache_dir)
+        )
+        assert "fragmentMatchesIdentifier" not in restored._get_component_args()
+        assert restored.set_fragment_matches_identifier("matches") is restored
+        assert restored._get_component_args()["spectrumKeyColumn"] == "scan_idx"
 
     def test_ladder(self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra):
         spectrum = DeconvolvedSpectrum(
@@ -331,6 +507,73 @@ class TestDeconvolvedSpectrum:
         }
         spectrum.set_ladder(None)
         assert spectrum._get_component_args()["ladder"] is None
+
+    def test_set_envelope(
+        self, mock_streamlit, sample_deconvolved_spectra, temp_cache_dir
+    ):
+        spectrum = DeconvolvedSpectrum(
+            cache_id="envelope",
+            data=sample_deconvolved_spectra,
+            filters={"scan": "scan_idx"},
+            view="annotated",
+            cache_path=str(temp_cache_dir),
+        )
+        assert "envelope" not in spectrum._get_component_args()
+        spectrum.set_envelope(
+            2,
+            [
+                {"mz": 501.0, "intensity": 10, "charge": 2, "isotope": 0},
+                {"mz": 501.5, "intensity": 8.5, "charge": 2, "isotope": 1},
+            ],
+        )
+        assert spectrum._get_component_args()["envelope"] == {
+            "massIndex": 2,
+            "mzs": [501.0, 501.5],
+            "intensities": [10.0, 8.5],
+            "charges": [2, 2],
+            "isotopes": [0, 1],
+        }
+        # Charges and isotopes are optional
+        spectrum.set_envelope(0, [{"mz": 1.5, "intensity": 3}])
+        assert spectrum._get_component_args()["envelope"] == {
+            "massIndex": 0,
+            "mzs": [1.5],
+            "intensities": [3.0],
+        }
+        spectrum.set_envelope(None, [{"mz": 1.5, "intensity": 3}])
+        assert "envelope" not in spectrum._get_component_args()
+        spectrum.set_envelope(1, [])
+        assert "envelope" not in spectrum._get_component_args()
+
+    def test_isolation_window(
+        self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra
+    ):
+        spectrum = DeconvolvedSpectrum(
+            cache_id="window",
+            data=sample_deconvolved_spectra,
+            filters={"scan": "scan_idx"},
+            view="annotated",
+            cache_path=str(temp_cache_dir),
+        )
+        assert "isolationWindow" not in spectrum._get_component_args()
+
+        spectrum.set_isolation_window(1300.0, 1305.0, target_mz=1302.5)
+        assert spectrum._get_component_args()["isolationWindow"] == {
+            "lower": 1300.0,
+            "upper": 1305.0,
+            "target": 1302.5,
+        }
+        spectrum.set_isolation_window(1300, 1305)
+        assert spectrum._get_component_args()["isolationWindow"] == {
+            "lower": 1300.0,
+            "upper": 1305.0,
+        }
+        # Cleared by None or an empty window
+        spectrum.set_isolation_window(1305.0, 1300.0)
+        assert "isolationWindow" not in spectrum._get_component_args()
+        spectrum.set_isolation_window(1300.0, 1305.0)
+        spectrum.set_isolation_window(None)
+        assert "isolationWindow" not in spectrum._get_component_args()
 
     def test_deconvolved_view_needs_no_peaks(self, mock_streamlit, temp_cache_dir):
         data = pl.LazyFrame(
@@ -527,6 +770,266 @@ class TestProteinSequenceView:
         )
         masses = view._prepare_vue_data({"protein": 0})["spectrumData"]["masses"]
         assert math.isclose(masses[0], 12345.678901, abs_tol=1e-9)
+
+    def test_modification_picker_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        default = ProteinSequenceView(
+            cache_id="seq_mods_off",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+        )
+        args = default._get_component_args()
+        assert args["modificationLibrary"] is None
+        assert args["modificationsIdentifier"] is None
+        assert args["modifications"] == []
+
+        view = ProteinSequenceView(
+            cache_id="seq_mods_on",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+            modification_library=[
+                {"id": "Carbamidomethyl (C)", "mass": 57.021464, "site": "C"},
+                {"id": "Acetyl (Protein N-term)", "mass": 42.010565},
+            ],
+            modifications_identifier="fixed_mods",
+            modifications=("Carbamidomethyl (C)",),
+        )
+        args = view._get_component_args()
+        assert args["modificationLibrary"] == [
+            {"id": "Carbamidomethyl (C)", "mass": 57.021464, "site": "C"},
+            {"id": "Acetyl (Protein N-term)", "mass": 42.010565, "site": None},
+        ]
+        assert args["modificationsIdentifier"] == "fixed_mods"
+        assert args["modifications"] == ["Carbamidomethyl (C)"]
+
+    def test_proforma_copy_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_proforma",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["proformaCopy"] is False
+        assert view.set_proforma_copy() is view
+        assert view._get_component_args()["proformaCopy"] is True
+
+        # Not part of the cache: a view loaded from it starts from its own arg
+        cached = ProteinSequenceView(
+            cache_id="seq_proforma",
+            cache_path=str(temp_cache_dir),
+            proforma_copy=True,
+        )
+        assert cached._get_component_args()["proformaCopy"] is True
+        assert (
+            cached.set_proforma_copy(False)._get_component_args()["proformaCopy"]
+            is False
+        )
+
+    def test_proforma_input_args(self, mock_streamlit, temp_cache_dir: Path):
+        view = ProteinSequenceView(
+            cache_id="seq_proforma_input",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["proformaInput"] is False
+        assert view.set_proforma_input() is view
+        assert view._get_component_args()["proformaInput"] is True
+        assert "proforma_input" not in view._get_cache_config()
+
+    def test_modification_picker_from_pyopenms(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        pytest.importorskip("pyopenms")
+        from openms_insight import pyopenms_modification_library
+
+        library = pyopenms_modification_library()
+        by_id = {m["id"]: m for m in library}
+        assert len(library) > 1000 and len(by_id) == len(library)
+        assert by_id["Carbamidomethyl (C)"]["site"] == "C"
+        assert by_id["Carbamidomethyl (C)"]["mass"] == pytest.approx(
+            57.021464, abs=1e-5
+        )
+        assert by_id["Acetyl (Protein N-term)"]["site"] == "N-term"
+        assert by_id["Amidated (C-term)"]["site"] == "C-term"
+
+        view = ProteinSequenceView(
+            cache_id="seq_mods_pyopenms",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+            modification_library="pyopenms",
+            modifications_identifier="fixed_mods",
+        )
+        assert view._get_component_args()["modificationLibrary"] == library
+        with pytest.raises(ValueError):
+            view.set_modification_picker("unimod")
+        assert view._get_component_args()["variableModificationLibrary"] is None
+
+    def test_variable_modification_library_args(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        view = ProteinSequenceView(
+            cache_id="seq_varmods",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["M"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            variable_modification_library=[
+                {"id": "Oxidation (M)", "mass": 15.994915, "site": "M"},
+            ],
+        )
+        args = view._get_component_args()
+        assert args["variableModificationLibrary"] == [
+            {"id": "Oxidation (M)", "mass": 15.994915, "site": "M"}
+        ]
+        # separate from the dialog's fixed-modification picker
+        assert args["modificationLibrary"] is None
+        # None: the menu's built-in suggestions
+        assert args["variableModificationSuggestions"] is None
+        view.set_variable_modification_library(
+            [{"id": "Oxidation (M)", "mass": 15.994915, "site": "M"}],
+            suggested={"M": ["Oxidation (M)"]},
+        )
+        assert view._get_component_args()["variableModificationSuggestions"] == {
+            "M": ["Oxidation (M)"]
+        }
+        assert view.set_variable_modification_library(None) is view
+        assert view._get_component_args()["variableModificationLibrary"] is None
+        with pytest.raises(ValueError):
+            view.set_variable_modification_library("unimod")
+        # Not part of the cache: the same data cache serves both
+        assert "modification_library" not in view._get_cache_config()
+
+    def test_edit_identifier(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [list("MK")],
+                "observed_mass": [300.0],
+                "edited": [True],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_edit",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        # Not editable by default
+        assert view._get_component_args()["editIdentifier"] is None
+        # The edited flag reaches the view with the entry
+        assert view._prepare_vue_data({"protein": 0})["sequenceData"]["edited"] is True
+
+        editable = ProteinSequenceView(
+            cache_id="seq_edit",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            edit_identifier="edit",
+        )
+        assert editable._get_component_args()["editIdentifier"] == "edit"
+        # Render-time option: the same cache serves both
+        assert "edit_identifier" not in editable._get_cache_config()
+        assert editable._get_cache_config() == view._get_cache_config()
+        restored = ProteinSequenceView(
+            cache_id="seq_edit",
+            cache_path=str(temp_cache_dir),
+            edit_identifier="edit",
+        )
+        assert restored._get_component_args()["editIdentifier"] == "edit"
+        assert restored.set_edit_identifier(None) is restored
+        assert restored._get_component_args()["editIdentifier"] is None
+
+    def test_fragment_matches(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0, 1],
+                "scan_idx": [7, 9],
+                "sequence": [list("MK"), list("GA")],
+                "masses": [[1000.0], [500.0]],
+                "precursor_mass": [1000.0, 500.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_matches",
+            data=data,
+            filters={"protein": "hit_index"},
+            mass_column="masses",
+            precursor_mass_column="precursor_mass",
+            cache_path=str(temp_cache_dir),
+        )
+        # Nothing is published and no key is sent by default
+        assert view._get_component_args()["fragmentMatchesIdentifier"] is None
+        assert "key" not in view._prepare_vue_data({"protein": 1})["spectrumData"]
+
+        keyed = ProteinSequenceView(
+            cache_id="seq_matches_keyed",
+            data=data,
+            filters={"protein": "hit_index"},
+            mass_column="masses",
+            precursor_mass_column="precursor_mass",
+            spectrum_key_column="scan_idx",
+            fragment_matches_identifier="matches",
+            cache_path=str(temp_cache_dir),
+        )
+        assert keyed._get_component_args()["fragmentMatchesIdentifier"] == "matches"
+        # The spectrum key names the spectrum the matches were made on
+        assert keyed._prepare_vue_data({"protein": 1})["spectrumData"]["key"] == 9
+        # The key column shapes the cache, the identifier does not
+        assert keyed._get_cache_config()["spectrum_key_column"] == "scan_idx"
+        assert "fragment_matches_identifier" not in keyed._get_cache_config()
+        assert "spectrum_key_column" not in view._get_cache_config()
+
+        restored = ProteinSequenceView(
+            cache_id="seq_matches_keyed", cache_path=str(temp_cache_dir)
+        )
+        assert restored._prepare_vue_data({"protein": 0})["spectrumData"]["key"] == 7
+        assert restored._get_component_args()["fragmentMatchesIdentifier"] is None
+        assert restored.set_fragment_matches_identifier("matches") is restored
+        assert restored._get_component_args()["fragmentMatchesIdentifier"] == "matches"
 
 
 def test_table_navigation_uses_render_state_manager():
@@ -911,3 +1414,152 @@ class TestProteinStructureView:
         assert args["emptyMessage"] == "Pick a protein."
         assert args["viewerHeight"] == 300
         assert args["fragmentIdentifier"] == "fragment"
+
+
+class TestFragmentSettings:
+    """Fragmentation methods, ion variants and Da tolerance (ProSight Lite parity)."""
+
+    def test_new_keys_pass_through(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        settings = {
+            "tolerance": 0.02,
+            "tolerance_unit": "Da",
+            "fragmentation": "ETD",
+            "ion_types": ["c", "z•", "z+1"],
+        }
+        view = ProteinSequenceView(
+            cache_id="seq_settings",
+            data=sample_protein_sequence_data,
+            filters={"protein": "hit_index"},
+            settings=settings,
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["settings"] == settings
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"tolerance_unit": "mmu"},
+            {"tolerance_unit": 1},
+            {"fragmentation": "HCD/ETD"},
+            {"fragmentation": ["ETD"]},
+        ],
+    )
+    def test_invalid_settings_raise(self, settings):
+        from openms_insight.components.protein_sequence_view import (
+            check_fragment_settings,
+        )
+
+        with pytest.raises(ValueError):
+            check_fragment_settings(settings)
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            None,
+            {},
+            {"tolerance": 10, "ion_types": ["b", "y"]},
+            {"tolerance_unit": "ppm"},
+            {"tolerance_unit": "da"},
+            {"fragmentation": "CID / HCD"},
+            {"fragmentation": "uvpd"},
+            {"fragmentation": "EThcD", "extra": 1},
+            # Passed on unchecked, as before
+            {"tolerance": "10", "ion_types": ["b", "zp2"]},
+        ],
+    )
+    def test_valid_settings(self, settings):
+        from openms_insight.components.protein_sequence_view import (
+            check_fragment_settings,
+        )
+
+        check_fragment_settings(settings)
+
+    def test_method_ion_series_are_known(self):
+        from openms_insight.components.protein_sequence_view import (
+            FRAGMENTATION_METHODS,
+            ION_TYPES,
+            ION_VARIANTS,
+        )
+
+        for ions in FRAGMENTATION_METHODS.values():
+            for ion in ions:
+                assert ion in ION_TYPES or ion in ION_VARIANTS
+        assert len(FRAGMENTATION_METHODS["UVPD"]) == 9
+
+    def test_frontend_tables_match(self):
+        """The Vue side's method and variant tables say the same as Python's."""
+        from pathlib import Path
+
+        from openms_insight.components.protein_sequence_view import (
+            FRAGMENTATION_METHODS,
+            ION_VARIANTS,
+        )
+
+        source = (
+            Path(__file__).parents[1]
+            / "js-component/src/components/protein/fragment-ions.ts"
+        ).read_text(encoding="utf-8")
+        for method, ions in FRAGMENTATION_METHODS.items():
+            label = method.replace("/", " / ")
+            listed = ", ".join(f"'{i}'" for i in ions)
+            assert f"{{ name: '{label}', ions: [{listed}] }}" in source, method
+        for variant in set(ION_VARIANTS.values()):
+            assert f"name: '{variant}'" in source, variant
+
+
+class TestSpectrumFragmentation:
+    """Per-spectrum fragmentation method (fragmentation_column)."""
+
+    def _view(self, cache_dir, data, **kwargs):
+        return ProteinSequenceView(
+            cache_id="seq_frag",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(cache_dir),
+            **kwargs,
+        )
+
+    def test_payload_carries_method(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        data = sample_protein_sequence_data.with_columns(
+            pl.Series("activation", ["ETD", None])
+        )
+        view = self._view(temp_cache_dir, data, fragmentation_column="activation")
+        etd = view._prepare_vue_data({"protein": 0})["spectrumData"]
+        assert etd["fragmentation"] == "ETD"
+        unknown = view._prepare_vue_data({"protein": 1})["spectrumData"]
+        assert unknown["fragmentation"] is None
+
+    def test_without_column_payload_unchanged(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        view = self._view(temp_cache_dir, sample_protein_sequence_data)
+        spectrum = view._prepare_vue_data({"protein": 0})["spectrumData"]
+        assert set(spectrum) == {"masses", "precursorMass"}
+        assert "fragmentation_column" not in view._get_cache_config()
+
+    def test_column_survives_cache_reload(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        data = sample_protein_sequence_data.with_columns(
+            pl.Series("activation", ["HCD", "ETD"])
+        )
+        self._view(temp_cache_dir, data, fragmentation_column="activation")
+        reloaded = ProteinSequenceView(
+            cache_id="seq_frag", cache_path=str(temp_cache_dir)
+        )
+        spectrum = reloaded._prepare_vue_data({"protein": 1})["spectrumData"]
+        assert spectrum["fragmentation"] == "ETD"
+
+    def test_missing_column_raises(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        with pytest.raises(ValueError):
+            self._view(
+                temp_cache_dir,
+                sample_protein_sequence_data,
+                fragmentation_column="activation",
+            )

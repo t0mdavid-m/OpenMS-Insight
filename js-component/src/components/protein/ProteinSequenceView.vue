@@ -1,7 +1,14 @@
 <template>
-  <!-- At least as wide as the residue grid: a narrow frame scrolls sideways
-       instead of squeezing the header and the fragment table -->
-  <div class="sequence-view-row">
+  <!-- The header wraps whole label and value pairs, the residue grid puts
+       fewer residues in a row, and the fragment table scrolls inside itself:
+       the view fits a narrow frame instead of scrolling it sideways -->
+  <!-- The Change sequence dialog is drawn inside this frame, which fits the
+       view: while it is open, the view is at least as tall as the dialog and
+       the fixed-modification list below its field -->
+  <div
+    class="sequence-view-row"
+    :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT}px` } : undefined"
+  >
   <div class="sequence-view-column">
   <div v-if="args.title" class="d-flex justify-center">
     <h4>{{ args.title }}</h4>
@@ -10,26 +17,35 @@
   <v-sheet class="pa-4 rounded-lg" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
     <div class="sequence-and-scale">
     <div :id="sequencePartId" class="sequence-part">
-      <div class="d-flex justify-space-evenly">
-        <template v-if="massData.length != 0">
-          <h3>{{massTitle}}</h3>
-          <v-divider :vertical="true"></v-divider>
-          <template v-for="(item, p_index) in massData" :key="p_index">
-            {{ item }}
-            <v-divider :vertical="true"></v-divider>
-          </template>
-        </template>
+      <!-- Label and value pairs wrap as whole pairs, never inside one -->
+      <div v-if="massData.length != 0" class="summary-line">
+        <h3 class="summary-title">{{ massTitle }}</h3>
+        <span v-for="(item, p_index) in massData" :key="p_index" class="summary-pair">
+          <span class="summary-label">{{ item.label }}</span>
+          <span class="summary-value">{{ item.value }}</span>
+        </span>
+        <v-chip v-if="isEdited" size="small" color="warning" variant="tonal" class="summary-pair">
+          Edited
+          <v-tooltip activator="parent" location="bottom">
+            Sequence and modifications differ from the search result
+          </v-tooltip>
+        </v-chip>
       </div>
-      <div v-if="annotationSummaryItems.length > 0" class="d-flex flex-wrap justify-space-evenly text-body-2 mt-1">
-        <span class="font-weight-bold">{{ args.annotationTitle ?? 'Fragment annotation' }}</span>
-        <template v-for="(item, s_index) in annotationSummaryItems" :key="`s${s_index}`">
-          <v-divider :vertical="true"></v-divider>
-          <span>{{ item }}</span>
-        </template>
+      <div v-if="annotationSummaryItems.length > 0" class="summary-line summary-line-secondary text-body-2 mt-1">
+        <span class="summary-title font-weight-bold">{{ args.annotationTitle ?? 'Fragment annotation' }}</span>
+        <span v-for="(item, s_index) in annotationSummaryItems" :key="`s${s_index}`" class="summary-pair">
+          <span class="summary-label">{{ item.label }}</span>
+          <span class="summary-value">{{ item.value }}</span>
+        </span>
       </div>
       <div class="d-flex justify-end px-4 mb-4">
         <div>
-          <SvgScreenshot :element-id="sequencePartId" :filename="args.svgFilename" :color="accentColor" />
+          <ImageScreenshot
+            :element-id="sequencePartId"
+            :filename="args.svgFilename"
+            :format="args.imageFormat"
+            :color="accentColor"
+          />
           <SequenceViewInformation :color="accentColor" />
           <v-btn
             variant="text"
@@ -44,6 +60,19 @@
             </v-tooltip>
           </v-btn>
           <v-btn
+            v-if="args.proformaCopy"
+            variant="text"
+            icon="mdi-code-brackets"
+            size="large"
+            :disabled="sequence.length === 0"
+            @click="copyProForma"
+          >
+            <v-icon>mdi-code-brackets</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Copy as ProForma
+            </v-tooltip>
+          </v-btn>
+          <v-btn
             v-if="shouldShowSequenceChangeButton"
             variant="text"
             icon="mdi-dna"
@@ -53,6 +82,30 @@
             <v-icon>mdi-dna</v-icon>
             <v-tooltip activator="parent" location="bottom">
               Change sequence
+            </v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="canStartEdit"
+            variant="text"
+            icon="mdi-pencil"
+            size="large"
+            @click="startEdit"
+          >
+            <v-icon>mdi-pencil</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Edit sequence and modifications
+            </v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="isEdited"
+            variant="text"
+            icon="mdi-restore"
+            size="large"
+            @click="resetEdit"
+          >
+            <v-icon>mdi-restore</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Reset to the search result
             </v-tooltip>
           </v-btn>
           <v-btn
@@ -73,6 +126,9 @@
               <v-list>
                 <v-list-item>
                   <v-list-item-title># amino acids per row</v-list-item-title>
+                  <v-list-item-subtitle v-if="perRow < rowWidth">
+                    {{ perRow }} fit at this width
+                  </v-list-item-subtitle>
                   <v-slider
                     v-model="rowWidth"
                     :ticks="tickLabels"
@@ -109,6 +165,16 @@
                   </div>
                 </v-list-item>
                 <v-list-item>
+                  <v-list-item-title>Fragmentation method</v-list-item-title>
+                  <v-select
+                    v-model="fragmentationMethod"
+                    :items="fragmentationMethodItems"
+                    density="compact"
+                    hide-details
+                    :disabled="!showFragments"
+                  ></v-select>
+                </v-list-item>
+                <v-list-item>
                   <v-list-item-title>Fragment ion types</v-list-item-title>
                   <div class="d-flex justify-space-evenly">
                     <v-checkbox
@@ -120,6 +186,18 @@
                       :label="category.text"
                       :disabled="!showFragments"
                       @click="toggleIonTypeSelected(ionIndex)"
+                    >
+                    </v-checkbox>
+                  </div>
+                  <div v-if="!usesAnnotator" class="d-flex justify-space-evenly">
+                    <v-checkbox
+                      v-for="variant in ionTypeVariants"
+                      :key="variant.text"
+                      v-model="variant.selected"
+                      hide-details
+                      density="comfortable"
+                      :label="variant.text"
+                      :disabled="!showFragments"
                     >
                     </v-checkbox>
                   </div>
@@ -138,14 +216,31 @@
                 </v-list-item>
                 <v-list-item>
                   <v-list-item-title>Fragment mass tolerance</v-list-item-title>
-                  <v-text-field
-                    v-model="fragmentMassTolerance"
-                    type="number"
-                    hide-details="auto"
-                    label="mass tolerance in ppm"
-                    :disabled="!showFragments"
-                    @change="updateMassTolerance"
-                  ></v-text-field>
+                  <div class="d-flex align-center ga-2">
+                    <v-text-field
+                      style="min-width: 0"
+                      v-model="fragmentMassTolerance"
+                      type="number"
+                      :step="toleranceUnit === 'Da' ? 0.01 : 1"
+                      min="0"
+                      hide-details="auto"
+                      :label="`mass tolerance in ${toleranceUnit}`"
+                      :disabled="!showFragments"
+                      @change="updateMassTolerance"
+                    ></v-text-field>
+                    <v-btn-toggle
+                      v-model="toleranceUnit"
+                      mandatory
+                      class="flex-shrink-0"
+                      density="compact"
+                      variant="outlined"
+                      divided
+                      :disabled="!showFragments"
+                    >
+                      <v-btn value="ppm" size="small" class="text-none">ppm</v-btn>
+                      <v-btn value="Da" size="small" class="text-none">Da</v-btn>
+                    </v-btn-toggle>
+                  </div>
                   <!-- TODO: add "required" -->
                 </v-list-item>
               </v-list>
@@ -184,11 +279,11 @@
           </v-row>
         </v-card>
       </div>
-      <div class="pb-4 px-2" :class="gridClasses" style="width: 100%; max-width: 100%">
+      <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
           <div
-            v-if="(showTruncations && (aa_index !== 0) && (aa_index % rowWidth === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % rowWidth === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
-            class="d-flex justify-center align-center"
+            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % perRow === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            class="row-number row-number-start"
           >
           {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
           </div>
@@ -210,8 +305,8 @@
             @selected="aminoAcidSelected"
           />
           <div
-            v-if="(showTruncations && (aa_index % rowWidth === rowWidth - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % rowWidth === rowWidth - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
-            class="d-flex justify-center align-center"
+            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            class="row-number row-number-end"
           >
             {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
           </div>
@@ -236,6 +331,29 @@
         :theme="theme"
         @select="onInternalFragmentSelected"
       />
+      <!-- Variable modifications set on residues, with the library only -->
+      <div
+        v-if="(variableModData.library !== null || isEdited || hasLocalizationNotes) && appliedVariableModifications.length > 0"
+        class="d-flex flex-wrap align-center px-2 pb-2 variable-modification-list"
+      >
+        <span class="text-body-2 mr-2">{{ isEdited ? 'Modifications:' : 'Variable modifications:' }}</span>
+        <v-chip
+          v-for="mod in appliedVariableModifications"
+          :key="mod.index"
+          size="small"
+          class="mr-1 mb-1"
+          :color="mod.note ? 'warning' : undefined"
+          :prepend-icon="mod.note ? 'mdi-help-circle-outline' : undefined"
+          closable
+          @click:close="variableModData.updateVariableModifications(mod.index, 0)"
+        >
+          {{ mod.text }}
+          <v-tooltip v-if="mod.note" activator="parent" location="bottom">
+            Ambiguous: {{ mod.note }}
+          </v-tooltip>
+        </v-chip>
+        <span class="text-body-2 ml-1">{{ variableModificationTotal }}</span>
+      </div>
     </div>
     <div v-if="(maxCoverage > 0) && showTags" class="scale-container" title="Sequence Tag Coverage">
       <div class="scale-text"> {{ maxCoverage + "x" }}</div>
@@ -243,7 +361,7 @@
       <div class="scale-text">1x</div>
     </div>
   </div>
-    <div>
+    <div class="fit-width">
       <template v-if="(fragmentTableTitle !== '') && showFragments">
         <FragmentTable
           :key="usesAnnotator ? 'annotator' : 'matched'"
@@ -284,7 +402,7 @@
   </v-snackbar>
 
   <!-- Sequence Input Dialog -->
-  <v-dialog v-model="sequenceDialog" max-width="600" persistent>
+  <v-dialog v-model="sequenceDialog" max-width="600" persistent scrollable>
     <v-card>
       <v-card-title class="text-h6">
         Enter Custom Sequence
@@ -293,20 +411,36 @@
         <!-- The example shows only while typing, under the raised label -->
         <v-textarea
           v-model="customSequenceInput"
-          label="Protein Sequence"
-          :placeholder="sequenceInputFocused ? 'Enter amino acid sequence (e.g., MKFLVNVALVF...)' : undefined"
+          :label="args.proformaInput ? 'Protein sequence or ProForma' : 'Protein Sequence'"
+          :placeholder="sequenceInputFocused ? (args.proformaInput ? 'e.g. MKFLVNVALVF... or <[Carbamidomethyl]@C>[Acetyl]-MK[Acetyl]S[+79.9663]...' : 'Enter amino acid sequence (e.g., MKFLVNVALVF...)') : undefined"
           @update:focused="sequenceInputFocused = $event"
           :error-messages="sequenceInputError"
-          rows="6"
+          :rows="modificationItems.length > 0 ? 3 : 6"
           auto-grow
           counter
-          hint="Enter single-letter amino acid codes only"
+          :hint="args.proformaInput ? 'Single-letter codes, or ProForma with fixed, terminal and residue modifications' : 'Enter single-letter amino acid codes only'"
           persistent-hint
         >
           <template #prepend-inner>
             <v-icon>mdi-dna</v-icon>
           </template>
         </v-textarea>
+        <v-autocomplete
+          v-if="modificationItems.length > 0"
+          v-model="customModifications"
+          :items="modificationItems"
+          item-title="title"
+          item-value="value"
+          label="Fixed modifications"
+          placeholder="Search by name or mass, e.g. Carbamidomethyl or 57.02"
+          hint="Each goes on every residue of its kind, or on the terminus"
+          persistent-hint
+          multiple
+          chips
+          closable-chips
+          clearable
+          class="mt-4"
+        ></v-autocomplete>
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
@@ -334,13 +468,14 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { useModificationStore } from '@/stores/variable-modification'
-import type { ProteinSequenceViewComponentArgs } from '@/types/component'
+import type { FragmentMatches, MatchedFragmentIon, ProteinSequenceViewComponentArgs } from '@/types/component'
 import type {
   AnnotatedFragment,
   AnnotationSummary,
   FragmentSettings,
   ModificationData,
   FragmentSelection,
+  IdentificationEdit,
   MatchedSpectrum,
   SequenceTag,
   SequenceData,
@@ -350,12 +485,54 @@ import type { ColumnDefinition } from 'tabulator-tables'
 import FragmentTable from './FragmentTable.vue'
 import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
-import SvgScreenshot from './SvgScreenshot.vue'
+import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
-import { extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
+import { builtInLibrary, extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
+import {
+  describeLocalization,
+  localizeModifications,
+  type ModificationLocalization,
+} from './modification-localization'
+import {
+  findLibraryId,
+  fixedFromId,
+  formatMass,
+  parseProForma,
+  ProFormaError,
+  toProForma,
+  type ProFormaModification,
+} from './proforma'
+import {
+  CUSTOM_METHOD,
+  FRAGMENTATION_METHODS,
+  ION_VARIANTS,
+  canonicalIonName,
+  ionSeries,
+  isPrefixIon,
+  isSuffixIon,
+  methodForIons,
+  methodIons,
+  toleranceDa,
+  toleranceUnit,
+  type IonSeries,
+  type ToleranceUnit,
+} from './fragment-ions'
 
 // Fixed decimals for long numbers in the fragment tables
+// Height (px) the Change sequence dialog needs: title, the sequence field,
+// the fixed-modification picker with its open list, and the buttons
+const SEQUENCE_DIALOG_HEIGHT = 640
+
+// One label and value of the summary lines above the sequence
+type SummaryItem = { label: string; value: string }
+
+// Residues per row the view falls back to, in steps of 5, when the chosen
+// number does not fit: a residue cell stays at least this many font sizes wide
+const MIN_CELL_FONT_SIZES = 2
+const MIN_CELL_PX = 20
+const MIN_ROW_WIDTH = 10
+
 const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => unknown }) => {
   const value = cell.getValue()
   if (value === null || value === undefined) return ''
@@ -364,6 +541,17 @@ const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => un
 
 let viewIdCounter = 0
 
+// Same residues and masses (labels aside), for localized modifications
+function sameModifications(a: ModificationData[], b: ModificationData[]): boolean {
+  const key = (list: ModificationData[]) =>
+    list
+      .filter((m) => m.start === m.end && m.mass_diff)
+      .map((m) => `${m.start}:${m.mass_diff.toFixed(6)}`)
+      .sort()
+      .join('|')
+  return key(a) === key(b)
+}
+
 export default defineComponent({
   name: 'ProteinSequenceView',
   components: {
@@ -371,7 +559,7 @@ export default defineComponent({
     FragmentTable,
     AminoAcidCell,
     ProteinTerminalCell,
-    SvgScreenshot,
+    ImageScreenshot,
     InternalFragmentTrack,
   },
   props: {
@@ -412,7 +600,9 @@ export default defineComponent({
     return {
       rowWidth: 35 as number,
       fontSize: 12 as number,
-      massData: [] as string[],
+      massData: [] as SummaryItem[],
+      gridWidth: 0 as number,
+      gridResizeObserver: undefined as ResizeObserver | undefined,
       massTitle: "" as string,
       ionTypes: [
         { text: 'a', selected: false },
@@ -427,7 +617,13 @@ export default defineComponent({
         'ammonium loss': false,
         'proton loss/addition': false,
       } as Record<ExtraFragmentType, boolean>,
+      // Radical / hydrogen-shifted series (ETD/ECD, UVPD): offsets of a base series
+      ionTypeVariants: ION_VARIANTS.map((variant) => ({ text: variant.name, selected: false })) as {
+        text: string
+        selected: boolean
+      }[],
       fragmentMassTolerance: 10 as number,
+      toleranceUnit: 'ppm' as ToleranceUnit,
       visibilityOptions: [
         { text: 'Fragments', selected: true },
         { text: 'Modifications', selected: true },
@@ -520,12 +716,40 @@ export default defineComponent({
       regexHighlightedIndices: new Set<number>(),
       // Sequence change dialog properties
       sequenceDialog: false as boolean,
+      SEQUENCE_DIALOG_HEIGHT,
+      // Modification ids picked in the change-sequence dialog
+      customModifications: [] as string[],
+      // Where the matched fragments place each modification set on a residue
+      localizations: [] as ModificationLocalization[],
       customSequenceInput: '' as string,
       sequenceInputError: '' as string,
       sequenceInputFocused: false,
     }
   },
   computed: {
+    fragmentationMethodItems(): string[] {
+      return [...FRAGMENTATION_METHODS.map((m) => m.name), CUSTOM_METHOD]
+    },
+    // The method whose ion series are the selected ones ('Custom' otherwise);
+    // picking a method selects its series
+    fragmentationMethod: {
+      get(): string {
+        return methodForIons(this.selectedIonSeries.map((series) => series.name))
+      },
+      set(method: string) {
+        const ions = methodIons(method)
+        if (ions === undefined) return
+        this.selectIons(ions)
+      },
+    },
+    // Selected ion series: the base types and, without an annotation, the variants
+    selectedIonSeries(): IonSeries[] {
+      const names = this.ionTypes.filter((t) => t.selected).map((t) => t.text)
+      if (!this.usesAnnotator) {
+        this.ionTypeVariants.filter((t) => t.selected).forEach((t) => names.push(t.text))
+      }
+      return names.map((name) => ionSeries(name)).filter((series): series is IonSeries => series !== undefined)
+    },
     accentColor(): string {
       return this.args.accentColor ?? 'primary'
     },
@@ -537,6 +761,9 @@ export default defineComponent({
     },
     spectrum(): MatchedSpectrum | undefined {
       return (this.streamlitDataStore.allDataForDrawing.spectrumData as MatchedSpectrum | null) ?? undefined
+    },
+    spectrumFragmentation(): string | undefined {
+      return this.spectrum?.fragmentation ?? undefined
     },
     settings(): FragmentSettings | undefined {
       return this.args.settings ?? undefined
@@ -616,17 +843,17 @@ export default defineComponent({
     annotationSummary(): AnnotationSummary | undefined {
       return this.entry?.annotation_summary ?? undefined
     },
-    annotationSummaryItems(): string[] {
+    annotationSummaryItems(): SummaryItem[] {
       const s = this.annotationSummary
       if (s === undefined || !this.showFragments) return []
-      const items: string[] = []
-      if (s.score !== null) items.push(`Score : ${s.score.toFixed(2)}`)
-      if (s.coverage !== null) items.push(`Bond coverage : ${s.coverage.toFixed(1)}%`)
-      if (s.coverage_with_internal !== null) items.push(`With internal : ${s.coverage_with_internal.toFixed(1)}%`)
+      const items: SummaryItem[] = []
+      if (s.score !== null) items.push({ label: 'Score', value: s.score.toFixed(2) })
+      if (s.coverage !== null) items.push({ label: 'Bond coverage', value: `${s.coverage.toFixed(1)}%` })
+      if (s.coverage_with_internal !== null) items.push({ label: 'With internal', value: `${s.coverage_with_internal.toFixed(1)}%` })
       if (s.internal_matched !== null && s.internal_hypotheses !== null) {
-        items.push(`Internal pieces : ${s.internal_matched} / ${s.internal_hypotheses}`)
+        items.push({ label: 'Internal pieces', value: `${s.internal_matched} / ${s.internal_hypotheses}` })
       }
-      if (s.calibration_ppm !== null) items.push(`Calibration : ${s.calibration_ppm.toFixed(2)} ppm`)
+      if (s.calibration_ppm !== null) items.push({ label: 'Calibration', value: `${s.calibration_ppm.toFixed(2)} ppm` })
       return items
     },
     hasInternalFragments(): boolean {
@@ -678,10 +905,26 @@ export default defineComponent({
         16: '16',
       }
     },
-    gridClasses(): Record<string, boolean> {
+    // Residues per row: the chosen number, or fewer where its cells would be
+    // too small to read at this width
+    perRow(): number {
+      if (this.gridWidth <= 0) return this.rowWidth
+      const minCell = Math.max(MIN_CELL_PX, this.fontSize * MIN_CELL_FONT_SIZES)
+      // Two row-number columns of up to four digits, the gaps and the padding
+      const numbers = 2 * (4 * 0.65 * this.fontSize + 8)
+      for (let n = this.rowWidth; n > MIN_ROW_WIDTH; n -= 5) {
+        if ((this.gridWidth - numbers - 16) / n - 4 >= minCell) return n
+      }
+      return MIN_ROW_WIDTH
+    },
+    // Row numbers get columns of their own, as wide as the widest number,
+    // so they never run into the first or last residue of a row
+    gridStyles(): Record<string, string> {
       return {
-        'sequence-grid': true,
-        [`grid-width-${this.rowWidth}`]: true,
+        width: '100%',
+        maxWidth: '100%',
+        gridTemplateColumns: `max-content repeat(${this.perRow}, minmax(0, 1fr)) max-content`,
+        '--row-number-font-size': `${this.fontSize}px`,
       }
     },
     proteinTerminalCellStyles(): Record<string, string> {
@@ -702,10 +945,22 @@ export default defineComponent({
       return (explained_cleavage / (this.sequence_end - this.sequence_start)) * 100
     },
     disableVariableModifications(): boolean {
-      if (this.showIdentification) {
+      // An identification's modifications are its search's, until it is edited
+      if (this.showIdentification && !this.isEdited) {
         return true
       }
       return false
+    },
+    // The entry was edited in this view (the app returns it with edited: true)
+    isEdited(): boolean {
+      return this.showIdentification && !!this.args.editIdentifier && this.entry?.edited === true
+    },
+    canStartEdit(): boolean {
+      return this.showIdentification && !!this.args.editIdentifier && !this.isEdited
+        && this.sequence.length > 0
+    },
+    hasLocalizationNotes(): boolean {
+      return this.localizations.some((l) => describeLocalization(l, this.sequence) !== '')
     },
     showIdentification(): boolean {
       if (this.entryObservedMass !== undefined) {
@@ -744,21 +999,96 @@ export default defineComponent({
       return false
     },
     // Sequence change button computed properties
+    // Applied variable modifications, in sequence order: site, name, mass
+    appliedVariableModifications(): { index: number; text: string; note: string }[] {
+      const masses = this.variableModData.variableModifications ?? {}
+      const labels = this.variableModData.variableModLabels ?? {}
+      return Object.entries(masses)
+        .map(([key, mass]) => ({ index: Number(key), mass }))
+        .filter((m) => m.mass !== undefined && m.mass !== 0 && !Number.isNaN(m.mass))
+        .sort((a, b) => a.index - b.index)
+        .map(({ index, mass }) => {
+          let site: string
+          if (index < 0) site = 'N-term'
+          else if (index >= this.sequence.length) site = 'C-term'
+          else site = `${this.sequence[index]}${index + 1}`
+          const name = labels[index] ?? ''
+          const shift = mass.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 4 })
+          const loc = this.localizations.find((l) => l.index === index)
+          const note = loc && (loc.ambiguous || loc.misplaced || loc.conflict) ? describeLocalization(loc, this.sequence) : ''
+          return { index, text: `${site} ${name ? name + ' ' : ''}${shift} Da`, note }
+        })
+    },
+    variableModificationTotal(): string {
+      const total = Object.values(this.variableModData.variableModifications ?? {})
+        .filter((m) => m && !Number.isNaN(m))
+        .reduce((a, b) => a + b, 0)
+      return `Total ${total.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 4 })} Da`
+    },
+    modificationItems(): { title: string; value: string }[] {
+      return (this.args.modificationLibrary ?? []).map((m) => {
+        const sign = m.mass >= 0 ? '+' : ''
+        return { title: `${m.id}  ${sign}${m.mass.toFixed(4)} Da`, value: m.id }
+      })
+    },
     shouldShowSequenceChangeButton(): boolean {
-      return !this.showIdentification && !!this.args.sequenceIdentifier
+      return (!this.showIdentification && !!this.args.sequenceIdentifier) || this.isEdited
+    },
+    // The edited identification's modifications as the store holds them
+    storeModifications(): ModificationData[] {
+      const masses = this.variableModData.variableModifications ?? {}
+      const labels = this.variableModData.variableModLabels ?? {}
+      return Object.entries(masses)
+        .map(([key, mass]) => ({ index: Number(key), mass }))
+        .filter((m) => m.mass && !Number.isNaN(m.mass))
+        .sort((a, b) => a.index - b.index)
+        .map(({ index, mass }) => ({ start: index, end: index, mass_diff: mass, labels: labels[index] ?? '' }))
     },
   },
   watch: {
+    // An error about the input goes once the input changes
+    customSequenceInput() {
+      this.sequenceInputError = ''
+    },
+    // The residue menus read the variable-modification library from the store
+    'args.variableModificationLibrary': {
+      handler(library) {
+        this.variableModData.setLibrary(library, this.args.variableModificationSuggestions)
+      },
+      immediate: true,
+    },
+    'args.variableModificationSuggestions'(suggested) {
+      this.variableModData.setLibrary(this.args.variableModificationLibrary, suggested)
+    },
     // A new spectrum (or entry) arrives: rematch the fragments
     spectrum() {
       this.recomputeFragments()
+    },
+    // The selected spectrum's fragmentation method (fragmentation_column):
+    // a spectrum acquired with another method selects that method's series
+    spectrumFragmentation() {
+      this.applySpectrumFragmentation()
     },
     // A new entry (another identification, or a user-given sequence): clears the
     // stale residue selection and re-reads the settings.
     entryKey() {
       this.setSelectedAA(undefined)
+      this.syncStoreFromEntry()
       this.recomputeFragments()
       this.updateSettings()
+    },
+    // A modification set or removed on an edited identification: the app
+    // keeps the edit, so it outlasts a rerun and a reload
+    'variableModData.variableMod'() {
+      if (!this.isEdited) return
+      if (sameModifications(this.storeModifications, this.entry?.modifications ?? [])) return
+      this.writeEdit({
+        action: 'update',
+        sequence: this.sequence.join(''),
+        start_position: this.sequence_start_reported,
+        end_position: this.sequence_end_reported,
+        modifications: this.storeModifications,
+      })
     },
     // Selected sequence tag; cleared when the app resets it on a new entry.
     // By value: the arguments arrive as a new object on every rerun
@@ -768,6 +1098,16 @@ export default defineComponent({
     // Re-match fragments on a tolerance change (local state, no round-trip).
     fragmentMassTolerance() {
       this.recomputeFragments()
+    },
+    toleranceUnit() {
+      this.recomputeFragments()
+    },
+    // Radical / hydrogen-shifted series toggles. deep required (nested .selected).
+    ionTypeVariants: {
+      handler() {
+        this.recomputeFragments()
+      },
+      deep: true,
     },
     // Rows selected from the sequence (residue click, internal track, mass table)
     selectedFragTableRowIndex(rowIndex?: number) {
@@ -812,15 +1152,24 @@ export default defineComponent({
   },
   mounted() {
     this.setSelectedAA(undefined)
+    this.syncStoreFromEntry()
     this.updateSettings()
     this.recomputeFragments()
     // The view grows and shrinks with the sequence and the fragment table:
     // keep the frame fitted to it
     this.resizeObserver = new ResizeObserver(() => Streamlit.setFrameHeight())
     this.resizeObserver.observe(document.body)
+    const grid = this.$refs.sequenceGrid as HTMLElement | undefined
+    if (grid) {
+      this.gridResizeObserver = new ResizeObserver((entries) => {
+        this.gridWidth = entries[0]?.contentRect.width ?? grid.clientWidth
+      })
+      this.gridResizeObserver.observe(grid)
+    }
   },
   beforeUnmount() {
     this.resizeObserver?.disconnect()
+    this.gridResizeObserver?.disconnect()
   },
   methods: {
     // Full recompute of the sequence view: precursor info, per-residue objects,
@@ -837,18 +1186,50 @@ export default defineComponent({
       return (this.entry?.[`fragment_masses_${iontype}` as keyof SequenceData] as number[][] | undefined) ?? []
     },
     updateMassTolerance(event: Event) {
-      this.fragmentMassTolerance = Number.parseInt((event.target as any).value as string)
+      const value = Number.parseFloat((event.target as any).value as string)
+      if (Number.isFinite(value) && value >= 0) {
+        this.fragmentMassTolerance = value
+      }
+    },
+    // Select exactly these ion series (base types and variants)
+    selectIons(names: string[]) {
+      const selected = new Set(names.map(canonicalIonName))
+      if (this.usesAnnotator) {
+        // Annotated fragments are drawn by their base type (z+1, z+2 as z)
+        names.forEach((name) => {
+          const base = ionSeries(name)?.base ?? name.charAt(0)
+          selected.add(base)
+        })
+      }
+      this.ionTypes.forEach((item) => {
+        item.selected = selected.has(item.text)
+      })
+      this.ionTypeVariants.forEach((item) => {
+        item.selected = selected.has(item.text)
+      })
     },
     updateSettings() {
       const settings = this.settings
       if (settings?.ion_types !== undefined && settings.ion_types !== null) {
-        this.ionTypes.forEach((item) => {
-          item.selected = settings.ion_types.includes(item.text)
-        })
+        this.selectIons(settings.ion_types)
+      } else {
+        const ions = methodIons(settings?.fragmentation)
+        if (ions !== undefined) this.selectIons(ions)
       }
       if (settings?.tolerance !== undefined && settings.tolerance !== null) {
         this.fragmentMassTolerance = settings.tolerance
       }
+      if (settings?.tolerance_unit !== undefined && settings.tolerance_unit !== null) {
+        this.toleranceUnit = toleranceUnit(settings.tolerance_unit)
+      }
+      this.applySpectrumFragmentation()
+    },
+    // Select the ion series of the spectrum's own fragmentation method. Not with
+    // annotated fragments: those were annotated for the search's ion types.
+    applySpectrumFragmentation() {
+      if (this.usesAnnotator) return
+      const ions = methodIons(this.spectrumFragmentation)
+      if (ions !== undefined) this.selectIons(ions)
     },
     toggleIonTypeSelected(index: number) {
       this.ionTypes[index].selected = !this.ionTypes[index].selected
@@ -864,17 +1245,28 @@ export default defineComponent({
         this.massTitle = this.args.entryTitle ?? 'Identification'
         let observed_mass = '-'
         let delta_mass = '-'
+        // An edited entry's mass is that of its unmodified sequence: add the
+        // modifications set in the view
+        let theoretical = this.theoreticalMass
+        if (this.isEdited) {
+          Object.values(this.variableModifications).forEach((m) => {
+            if (m && !Number.isNaN(m)) theoretical += m
+          })
+        }
         if (this.entryObservedMass > 0) {
           observed_mass = this.entryObservedMass.toFixed(2)
-          delta_mass = Math.abs(this.theoreticalMass - this.entryObservedMass).toFixed(2)
+          delta_mass = Math.abs(theoretical - this.entryObservedMass).toFixed(2)
         }
 
 
         this.massData = [
-          `Theoretical protein mass : ${this.theoreticalMass.toFixed(2)}`,
-          `${this.args.observedMassLabel ?? 'Observed mass'} : ${observed_mass}`,
-          `Δ Mass (Da) : ${delta_mass}`,
+          { label: this.isEdited ? 'Theoretical mass' : 'Theoretical protein mass', value: theoretical.toFixed(2) },
+          { label: this.args.observedMassLabel ?? 'Observed mass', value: observed_mass },
+          { label: 'Δ Mass (Da)', value: delta_mass },
         ]
+        if (this.spectrumFragmentation) {
+          this.massData.push({ label: 'Fragmentation', value: this.spectrumFragmentation })
+        }
 
         // Ensures this is only executed once
         if (!this.visibilityOptions.some(option => option.text === 'Tags')) {
@@ -910,10 +1302,13 @@ export default defineComponent({
       const deltaMassDa = Math.abs(theoreticalMass - observedMass)
       this.massTitle = 'Precursor'
       this.massData = [
-        `Theoretical mass : ${theoreticalMass.toFixed(2)}`,
-        `Observed mass : ${observedMass.toFixed(2)}`,
-        `Δ Mass (Da) : ${deltaMassDa.toFixed(2)}`,
+        { label: 'Theoretical mass', value: theoreticalMass.toFixed(2) },
+        { label: 'Observed mass', value: observedMass.toFixed(2) },
+        { label: 'Δ Mass (Da)', value: deltaMassDa.toFixed(2) },
       ]
+      if (this.spectrumFragmentation) {
+        this.massData.push({ label: 'Fragmentation', value: this.spectrumFragmentation })
+      }
     },
     prepareFragmentTable(): void {
       this.selectedFragment = undefined
@@ -927,11 +1322,13 @@ export default defineComponent({
 
       if (this.sequence.length <= 0) {
         this.fragmentTableTitle = '' // if no sequence is selected, nothing to show
+        this.publishFragmentMatches(null)
         return
       }
 
       if (this.spectrum === undefined) {
         this.fragmentTableTitle = '' // if no scan is selected, nothing to show
+        this.publishFragmentMatches(null)
         return
       }
 
@@ -940,6 +1337,7 @@ export default defineComponent({
       // through Vue's reactive proxies there cost about a second per spectrum
       const observed_masses: number[] = toRaw(this.spectrum.masses ?? [])
       const tolerance = this.fragmentMassTolerance
+      const unit = this.toleranceUnit
       const extraFragments = Object.entries(extraFragmentTypeObject)
         .filter(
           ([extraFragmentType]) =>
@@ -951,16 +1349,19 @@ export default defineComponent({
 
       // calculate matching masses
       let matching_fragments: Record<string, unknown>[] = []
+      const matchedIons: MatchedFragmentIon[] = []
       const sequence_size = this.sequence_end
       
-      this.ionTypes
-        .filter((iontype) => iontype.selected)
-        .forEach((iontype) => {
-          
+      this.selectedIonSeries
+        .forEach((series) => {
+          // The base series' flags and masses; a variant shifts the masses
+          const iontype = { text: series.base }
+          const isVariant = series.name !== series.base
+
           // Dont match fragments of an identification whose end is undetermined
-          if ((iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c') && (this.sequence_start_reported < 0))
+          if (isPrefixIon(iontype.text) && (this.sequence_start_reported < 0))
             return
-          if ((iontype.text === 'x' || iontype.text === 'y' || iontype.text === 'z') && (this.sequence_end_reported < 0))
+          if (isSuffixIon(iontype.text) && (this.sequence_end_reported < 0))
             return
 
           const theoretical_frags = this.getFragmentMasses(iontype.text)
@@ -985,7 +1386,7 @@ export default defineComponent({
               if (iontype.text === 'x' || iontype.text === 'y' || iontype.text === 'z')
                 // if this is suffix, add modification mass string from the theoretical index (reverse)
                 Object.entries(this.variableModifications).forEach(([varIndex, varMass]) => {
-                  if (sequence_size - parseInt(varIndex) <= aaIndex) {
+                  if (parseInt(varIndex) >= sequence_size - theoIndex) {
                     theoretical_mass += varMass
                   }
                 })
@@ -997,17 +1398,17 @@ export default defineComponent({
             ) {
               extraFragments.forEach(({ typeName, typeMass }) => {
                 // Mass difference = (observed-theoretical)/theoretical*1e6
-                const thisTypeMass = theoretical_mass + typeMass
+                const thisTypeMass = theoretical_mass + series.offset + typeMass
                 const massDiffDa = observed_masses[obsIndex] - thisTypeMass
                 const massDiffPpm = (massDiffDa / thisTypeMass) * 1e6
-                if (Math.abs(massDiffPpm) > tolerance) {
+                if (Math.abs(massDiffDa) > toleranceDa(thisTypeMass, tolerance, unit)) {
                   // if mass difference is larger than tolerance, ignore
                   return
                 }
 
                 const matched = {
-                  Name: `${iontype.text}${theoIndex + 1}`,
-                  IonType: `${iontype.text}${typeName}`,
+                  Name: `${series.name}${theoIndex + 1}`,
+                  IonType: `${series.name}${typeName}`,
                   IonNumber: theoIndex + 1,
                   TheoreticalMass: thisTypeMass.toFixed(3),
                   ObservedMass: observed_masses[obsIndex], // should not have "toFixed" to be used as comparison factor
@@ -1015,6 +1416,13 @@ export default defineComponent({
                   MassDiffPpm: massDiffPpm.toFixed(3),
                 }
                 matching_fragments.push(matched)
+                matchedIons.push({
+                  name: matched.Name,
+                  ion: matched.IonType,
+                  kind: isPrefixIon(iontype.text) ? 'N' : 'C',
+                  mass: observed_masses[obsIndex],
+                  massIndex: obsIndex,
+                })
                 // setting the fragment mark for fragment map
                 let aa_index = aaIndex
                 if (iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c')
@@ -1023,8 +1431,8 @@ export default defineComponent({
                   this.sequenceObjects[sequence_size - theoIndex][`${iontype.text}Ion`] = true
                   aa_index = sequence_size - theoIndex
                 }
-                if (typeName) {
-                  this.sequenceObjects[aaIndex]['extraTypes'].push(`${iontype.text}${typeName}`)
+                if (typeName || isVariant) {
+                  this.sequenceObjects[aa_index]['extraTypes'].push(`${series.name}${typeName}`)
                 }
               })
             }
@@ -1034,12 +1442,14 @@ export default defineComponent({
       this.residueCleavagePercentage = this.calculateCleavagePercentage
       this.fragmentTableData = matching_fragments
       this.fragmentTableTitle = `Matching fragments (# ${matching_fragments.length})`
+      this.publishFragmentMatches(matchedIons)
     },
     // Externally annotated fragment ions: the envelopes accepted on the raw
     // spectrum, no matching against the deconvolved masses here.
     prepareAnnotatedFragmentTable(): void {
       if (this.sequence.length <= 0) {
         this.fragmentTableTitle = ''
+        this.publishFragmentMatches(null)
         return
       }
       const selectedTypes = new Set(
@@ -1088,6 +1498,17 @@ export default defineComponent({
         })
       })
       this.fragmentTableSource = source
+      this.publishFragmentMatches(
+        source.map((fragment) => ({
+          name: fragment.name,
+          ion: fragment.ion_type,
+          kind: fragment.kind,
+          mass: fragment.observed_mass,
+          massIndex: this.massIndexOf(fragment.observed_mass),
+          charge: fragment.charge,
+          mz: fragment.mz,
+        }))
+      )
       this.residueCleavagePercentage = this.calculateCleavagePercentage
       this.fragmentTableData = rows
       this.fragmentTableTitle = this.hasInternalFragments
@@ -1115,7 +1536,7 @@ export default defineComponent({
     // them to the mass table within the fragment tolerance
     massLinkTolerance(mass: number): number {
       if (this.usesAnnotator) {
-        return mass * this.fragmentMassTolerance * 1e-6
+        return toleranceDa(mass, this.fragmentMassTolerance, this.toleranceUnit)
       }
       return 0.001 // 0.001 Da tolerance for floating point precision
     },
@@ -1221,6 +1642,34 @@ export default defineComponent({
         return { name: row.Name as string, kind: 'N', start: this.sequence_start, end: this.sequence_start + n - 1 }
       }
       return { name: row.Name as string, kind: 'C', start: this.sequence_end - n + 1, end: this.sequence_end }
+    },
+    // Index of the spectrum's mass nearest `mass` within the link tolerance, or null
+    massIndexOf(mass: number): number | null {
+      const masses: number[] = toRaw(this.spectrum?.masses ?? [])
+      const tolerance = this.massLinkTolerance(mass)
+      let best: number | null = null
+      for (let i = 0; i < masses.length; i++) {
+        const diff = Math.abs(masses[i] - mass)
+        if (diff <= tolerance && (best === null || diff < Math.abs(masses[best] - mass))) best = i
+      }
+      return best
+    },
+    // The matched ions, for spectra to mark (fragmentMatchesIdentifier); null
+    // while no spectrum is matched
+    publishFragmentMatches(fragments: MatchedFragmentIon[] | null) {
+      const id = this.args.fragmentMatchesIdentifier
+      if (!id) return
+      const next: FragmentMatches | null =
+        fragments === null
+          ? null
+          : {
+              spectrum: this.spectrum?.key ?? null,
+              tolerance: { value: this.fragmentMassTolerance, unit: this.toleranceUnit },
+              fragments,
+            }
+      // Skip no-op writes: each write is a round trip to Python
+      if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
+      this.selectionStore.updateSelection(id, next)
     },
     publishSelectedFragment(rowIndex?: number) {
       const id = this.args.fragmentIdentifier
@@ -1355,7 +1804,9 @@ export default defineComponent({
       })
     },
     prepareAmbigiousModifications() {
-      this.modifications.forEach((modification) => {
+      // An edited entry's modifications are in the store, drawn per residue
+      const fromData = this.isEdited ? [] : this.modifications
+      fromData.forEach((modification) => {
         const start = modification.start
         const end = modification.end
         const mass = modification.mass_diff.toFixed(2)
@@ -1375,6 +1826,88 @@ export default defineComponent({
           }
         }
       })
+      this.prepareModificationLocalization()
+    },
+    // Where the matched fragments place each modification set on a residue:
+    // a window of several possible residues (or several modifications of the
+    // same mass) is marked on the sequence and in the list of modifications
+    prepareModificationLocalization(): void {
+      this.localizations = []
+      if (this.usesAnnotator || this.spectrum === undefined || this.sequence.length === 0) return
+      if (this.variableModData.isEmpty) return
+      if (this.sequenceObjects.length !== this.sequence.length) return
+      const extraMasses = Object.entries(extraFragmentTypeObject)
+        .filter(([type]) => this.ionTypesExtra[type as ExtraFragmentType] || type === 'default')
+        .flatMap(([, list]) => list.map((e) => e.typeMass))
+      const series = this.selectedIonSeries.filter((s) => {
+        if (isPrefixIon(s.base) && this.sequence_start_reported < 0) return false
+        if (isSuffixIon(s.base) && this.sequence_end_reported < 0) return false
+        return true
+      })
+      const reference = this.spectrum.precursorMass || this.entryObservedMass || this.theoreticalMass
+      const localizations = localizeModifications({
+        sequence: this.sequence,
+        start: this.sequence_start,
+        end: this.sequence_end,
+        fragmentMasses: (base) => this.getFragmentMasses(base),
+        series,
+        extraMasses,
+        observedMasses: toRaw(this.spectrum.masses ?? []),
+        tolerance: this.fragmentMassTolerance,
+        unit: this.toleranceUnit,
+        modifications: toRaw(this.variableModifications),
+        library: this.variableModData.library ?? builtInLibrary(),
+        referenceMass: reference ?? 0,
+      })
+      for (const loc of localizations) {
+        const note = describeLocalization(loc, this.sequence)
+        const object = this.sequenceObjects[loc.index]
+        if (object && (loc.ambiguous || loc.misplaced || loc.conflict) && note) {
+          object.modNote = note
+        }
+        // The window the fragments allow, when it holds more than one candidate
+        if (loc.conflict || loc.evidence === 0) continue
+        if (!(loc.candidates.length > 1 || loc.misplaced)) continue
+        for (let i = loc.lo; i <= loc.hi; i++) {
+          const o = this.sequenceObjects[i]
+          if (!o) continue
+          o.ambStart = o.ambStart || i === loc.lo
+          o.ambEnd = o.ambEnd || i === loc.hi
+          o.ambCenter = o.ambCenter || (i !== loc.lo && i !== loc.hi)
+        }
+      }
+      this.localizations = localizations
+    },
+    // In an editable identification, the store holds the shown entry's
+    // modifications: the search's are only in the fragment masses
+    syncStoreFromEntry(): void {
+      if (!this.args.editIdentifier) return
+      if (this.isEdited) {
+        const masses: Record<number, number> = {}
+        const labels: Record<number, string> = {}
+        for (const m of this.modifications) {
+          if (m.start !== m.end || !m.mass_diff) continue
+          masses[m.start] = m.mass_diff
+          if (m.labels) labels[m.start] = m.labels
+        }
+        if (!sameModifications(this.storeModifications, this.modifications)) {
+          this.variableModData.setAll(masses, labels)
+        }
+      } else if (this.showIdentification && !this.variableModData.isEmpty) {
+        this.variableModData.clear()
+      }
+    },
+    writeEdit(edit: Omit<IdentificationEdit, 'nonce'>): void {
+      const id = this.args.editIdentifier
+      if (!id) return
+      // A new nonce each time: the app applies every edit once
+      this.selectionStore.updateSelection(id, { ...edit, nonce: Date.now() })
+    },
+    startEdit(): void {
+      this.writeEdit({ action: 'edit' })
+    },
+    resetEdit(): void {
+      this.writeEdit({ action: 'reset' })
     },
     setSelectedAA(position?: number): void {
       const id = this.args.aaIdentifier
@@ -1401,6 +1934,42 @@ export default defineComponent({
         this.copySnackbar = true
       } catch (error) {
         this.copySnackbarText = 'Failed to copy sequence to clipboard'
+        this.copySnackbar = true
+        console.error('Copy failed:', error)
+      }
+    },
+    proForma(): string {
+      // An edited identification carries its modifications in the residue
+      // menus' store (below) only
+      const searched = this.isEdited ? [] : this.modifications
+      const modifications: ProFormaModification[] = searched.map((m) => ({
+        start: m.start,
+        end: m.end,
+        mass: m.mass_diff,
+      }))
+      for (const [index, mass] of Object.entries(this.variableModifications)) {
+        if (mass) modifications.push({ start: Number(index), end: Number(index), mass })
+      }
+      return toProForma({
+        sequence: this.sequence,
+        start: this.sequence_start,
+        end: this.sequence_end,
+        fixed: (this.args.modifications ?? []).map(fixedFromId),
+        modifications,
+      })
+    },
+    async copyProForma(): Promise<void> {
+      try {
+        const text = this.proForma()
+        if (!text) return
+        if (!navigator.clipboard) {
+          throw new Error('Clipboard API not available')
+        }
+        await navigator.clipboard.writeText(text)
+        this.copySnackbarText = 'ProForma copied to clipboard!'
+        this.copySnackbar = true
+      } catch (error) {
+        this.copySnackbarText = 'Failed to copy ProForma to clipboard'
         this.copySnackbar = true
         console.error('Copy failed:', error)
       }
@@ -1444,16 +2013,149 @@ export default defineComponent({
     },
     // Sequence change dialog methods
     openSequenceDialog(): void {
-      this.customSequenceInput = ''
+      // An edited identification starts from its own residues
+      this.customSequenceInput = this.isEdited
+        ? this.sequence.slice(this.sequence_start, this.sequence_end + 1).join('')
+        : ''
+      this.customModifications = [...(this.args.modifications ?? [])]
       this.sequenceInputError = ''
       this.sequenceDialog = true
+    },
+    // The edited residues become the whole sequence; a modification stays on
+    // its residue while that residue is unchanged
+    submitEditedSequence(residues: string): void {
+      if (residues.length === 0) return
+      const offset = this.sequence_start
+      const old = this.sequence
+      const modifications: ModificationData[] = []
+      for (const m of this.storeModifications) {
+        let index = m.start
+        if (index < 0) index = -1
+        else if (index >= old.length) index = residues.length
+        else {
+          index -= offset
+          if (index < 0 || index >= residues.length || residues[index] !== old[m.start]) continue
+        }
+        modifications.push({ ...m, start: index, end: index })
+      }
+      this.writeEdit({
+        action: 'update',
+        sequence: residues,
+        start_position: 0,
+        end_position: residues.length - 1,
+        modifications,
+      })
     },
     closeSequenceDialog(): void {
       this.sequenceDialog = false
       this.customSequenceInput = ''
       this.sequenceInputError = ''
     },
+    // A ProForma input as the view's sequence, fixed modification ids and
+    // per-residue masses; throws ProFormaError with a message for the dialog
+    readProForma(text: string): {
+      sequence: string
+      fixedIds: string[]
+      masses: Record<number, number>
+      labels: Record<number, string>
+    } {
+      const parsed = parseProForma(text)
+      const residues = parsed.sequence
+      const fixedLibrary = this.args.modificationLibrary ?? []
+      const variableLibrary = this.args.variableModificationLibrary ?? []
+      const fixedIds: string[] = []
+      for (const f of parsed.fixed) {
+        const residue = f.site === 'N-term' ? residues[0] : f.site === 'C-term' ? residues[residues.length - 1] : undefined
+        const id = findLibraryId(f.name, f.site, fixedLibrary.map((m) => m.id), residue)
+        if (!id || !this.args.modificationsIdentifier) {
+          throw new ProFormaError(`Unknown fixed modification ${f.name} on ${f.site}`)
+        }
+        if (!fixedIds.includes(id)) fixedIds.push(id)
+      }
+      const masses: Record<number, number> = {}
+      const labels: Record<number, string> = {}
+      for (const m of parsed.modifications) {
+        const site = m.index < 0 ? 'N-term' : m.index >= residues.length ? 'C-term' : residues[m.index]
+        const where = m.index < 0 ? 'the N-terminus' : m.index >= residues.length ? 'the C-terminus' : `${site}${m.index + 1}`
+        let mass = m.mass
+        let label = m.name
+        if (m.name) {
+          const residue = m.index < 0 ? residues[0] : residues[residues.length - 1]
+          for (const library of [variableLibrary, fixedLibrary]) {
+            const id = findLibraryId(m.name, site, library.map((e) => e.id), residue)
+            const entry = id ? library.find((e) => e.id === id) : undefined
+            if (entry) {
+              mass ??= entry.mass
+              label = entry.id
+              break
+            }
+          }
+        }
+        if (mass === undefined) {
+          throw new ProFormaError(`Unknown modification ${m.name} on ${where}: give its mass, e.g. [+42.0106]`)
+        }
+        masses[m.index] = (masses[m.index] ?? 0) + mass
+        const text = label ?? formatMass(mass)
+        labels[m.index] = labels[m.index] ? `${labels[m.index]} + ${text}` : text
+      }
+      return { sequence: residues, fixedIds, masses, labels }
+    },
     submitCustomSequence(): void {
+      const input = this.customSequenceInput
+      if (this.args.proformaInput && /[[\]<>(){}?-]/.test(input)) {
+        let read
+        try {
+          read = this.readProForma(input)
+        } catch (error) {
+          this.sequenceInputError = error instanceof Error ? error.message : String(error)
+          return
+        }
+        if (this.isEdited) {
+          if (read.fixedIds.length > 0) {
+            this.sequenceInputError = 'Fixed modifications cannot be set on an identification'
+            return
+          }
+          this.writeEdit({
+            action: 'update',
+            sequence: read.sequence,
+            start_position: 0,
+            end_position: read.sequence.length - 1,
+            modifications: Object.entries(read.masses).map(([index, mass]) => ({
+              start: Number(index),
+              end: Number(index),
+              mass_diff: mass,
+              labels: read.labels[Number(index)] ?? '',
+            })),
+          })
+        } else {
+          if (read.fixedIds.length > 0 && this.args.modificationsIdentifier) {
+            this.customModifications = [...new Set([...this.customModifications, ...read.fixedIds])]
+            this.selectionStore.updateSelection(this.args.modificationsIdentifier, [...this.customModifications])
+          }
+          if (this.args.sequenceIdentifier) {
+            this.selectionStore.updateSelection(this.args.sequenceIdentifier, read.sequence)
+          }
+          this.variableModData.setAll(read.masses, read.labels)
+        }
+        this.sequenceDialog = false
+        this.customSequenceInput = ''
+        this.sequenceInputError = ''
+        return
+      }
+      if (this.isEdited) {
+        this.submitEditedSequence(this.customSequenceInput.toUpperCase().replace(/\s+/g, ''))
+        this.sequenceDialog = false
+        this.customSequenceInput = ''
+        this.sequenceInputError = ''
+        return
+      }
+      // The picked modifications first, so the rebuild for the sequence uses them
+      if (this.args.modificationsIdentifier && this.modificationItems.length > 0) {
+        this.selectionStore.updateSelection(
+          this.args.modificationsIdentifier,
+          [...this.customModifications]
+        )
+      }
       // Python rebuilds the view for the new sequence
       if (this.args.sequenceIdentifier) {
         this.selectionStore.updateSelection(
@@ -1509,27 +2211,65 @@ export default defineComponent({
   }
 }
 
-/* Columns may shrink below their content (minmax(0, 1fr)): with plain 1fr a
-   row number wider than its column widened the grid past its container, so
-   the last column ran under the coverage scale */
-.grid-width-20 {
-  grid-template-columns: repeat(22, minmax(0, 1fr));
+/* Residue columns may shrink below their content (minmax(0, 1fr)): with
+   plain 1fr a long residue label widened the grid past its container, so the
+   last column ran under the coverage scale */
+.sequence-grid > .row-number {
+  aspect-ratio: auto;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  font-size: var(--row-number-font-size, 12px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: var(--v-medium-emphasis-opacity);
 }
 
-.grid-width-25 {
-  grid-template-columns: repeat(27, minmax(0, 1fr));
+.row-number-start {
+  justify-content: flex-end;
 }
 
-.grid-width-30 {
-  grid-template-columns: repeat(32, minmax(0, 1fr));
+.row-number-end {
+  justify-content: flex-start;
 }
 
-.grid-width-35 {
-  grid-template-columns: repeat(37, minmax(0, 1fr));
+/* Label and value pairs above the sequence: whole pairs wrap to the next
+   line, a label never splits from its value */
+.summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  column-gap: 24px;
+  row-gap: 2px;
 }
 
-.grid-width-40 {
-  grid-template-columns: repeat(42, minmax(0, 1fr));
+.summary-title {
+  margin-right: 4px;
+}
+
+/* Drawn at the width it is given: the table's columns (and the internal
+   fragment track's SVG) keep the width of their last layout, so without
+   this a frame that narrowed would stay as wide as before */
+.fit-width,
+.sequence-part :deep(.internal-track) {
+  contain: inline-size;
+}
+
+.summary-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.summary-label {
+  opacity: var(--v-medium-emphasis-opacity);
+}
+
+.summary-value {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .sequence-and-scale {

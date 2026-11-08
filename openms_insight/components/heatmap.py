@@ -1,13 +1,26 @@
 """Heatmap component using Plotly scattergl."""
 
+import math
 from typing import Any
 
 import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.cache import atomic_write
+from ..core.image_format import image_format_args, validate_image_format
+from ..core.measure import (
+    measure_args,
+    validate_measure,
+)
+from ..core.multi_select import (
+    combine,
+    normalize_multi_select,
+    selected_set,
+    values_in_region,
+)
 from ..core.registry import register_component
 from ..core.storage import scan_parquet
+from ..core.zoom import normalize_zoom
 from ..preprocessing.compression import (
     compute_compression_levels,
     compute_optimal_bins,
@@ -105,6 +118,12 @@ class Heatmap(BaseComponent):
         downsample_zoomed: bool = True,
         svg_filename: str | None = None,
         scroll_zoom: bool = True,
+        hover_column: str | None = None,
+        highlight: dict[str, str] | None = None,
+        on_select: dict[str, Any] | None = None,
+        multi_select: dict[str, str] | None = None,
+        measure: bool = True,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -174,9 +193,41 @@ class Heatmap(BaseComponent):
             downsample_zoomed: If False, a zoomed view shows every point of the
                 first level with at least min_points points in the zoomed range,
                 instead of downsampling them to min_points.
-            svg_filename: File name for the SVG download (default: title).
+            svg_filename: File name (without extension) of the image download
+                (default: title); the extension follows the image format.
             scroll_zoom: If False, the mouse wheel scrolls the page instead of
                 zooming the plot.
+            hover_column: Column whose text is shown when hovering a point, above
+                its intensity (e.g. the name of what the point stands for).
+            highlight: Mapping of identifier names to column names. The points
+                whose column value equals the identifier's selected value are
+                ringed, whether the selection came from this plot or from another
+                component (e.g. ``{'protein': 'protein_id'}`` marks the selected
+                protein's points). The points are looked up in the full data, so
+                they are marked even where the shown level dropped them.
+            on_select: Selections to set whenever a click changes the selection,
+                in addition to those in ``interactivity``. A value of None clears
+                the identifier, e.g. ``{'peak': None}`` clears a dependent
+                selection (as Table's ``on_select``).
+            multi_select: Mapping of identifier names to column names for
+                selecting several points at once with a box or lasso drag
+                (Shift adds to the selection, Alt removes from it). The
+                identifier holds the sorted distinct values of the column over
+                the points in the drawn region, looked up in the full data (not
+                only the points of the level shown), or None. The selected
+                points are marked, whichever component chose them.
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two points draws a
+                line between them labelled with their x and y differences
+                (signed, second point minus first). Esc cancels a half-finished
+                measurement, clicking a label removes it and "Clear
+                measurements" removes all; they are kept while zooming and are
+                part of the image download. With measure mode off, clicks select
+                as before. Render-time only: not part of the cache.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -208,9 +259,19 @@ class Heatmap(BaseComponent):
         self._intensity_label = intensity_label
         self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
+        self._hover_column = hover_column
+        self._highlight = dict(highlight or {})
+        self._on_select = dict(on_select or {})
+        self._multi_select = normalize_multi_select(multi_select)
         self._boxes: pl.DataFrame | None = None
         self._boxes_config: dict[str, Any] = {}
         self._boxes_key: str | None = None
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -242,8 +303,13 @@ class Heatmap(BaseComponent):
             downsample_zoomed=downsample_zoomed,
             svg_filename=svg_filename,
             scroll_zoom=scroll_zoom,
+            hover_column=hover_column,
+            highlight=highlight,
+            on_select=on_select,
+            multi_select=multi_select,
             **kwargs,
         )
+        self._config.pop("multi_select", None)
 
     def _get_cache_config(self) -> dict[str, Any]:
         """
@@ -284,6 +350,10 @@ class Heatmap(BaseComponent):
             # so a component loaded from its cache keeps them
             **({"svg_filename": self._svg_filename} if self._svg_filename else {}),
             **({"scroll_zoom": False} if not self._scroll_zoom else {}),
+            **({"hover_column": self._hover_column} if self._hover_column else {}),
+            **({"highlight": self._highlight} if self._highlight else {}),
+            **({"on_select": self._on_select} if self._on_select else {}),
+            **({"multi_select": self._multi_select} if self._multi_select else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -312,6 +382,11 @@ class Heatmap(BaseComponent):
         self._downsample_zoomed = config.get("downsample_zoomed", True)
         self._svg_filename = config.get("svg_filename")
         self._scroll_zoom = config.get("scroll_zoom", True)
+        self._hover_column = config.get("hover_column")
+        self._highlight = dict(config.get("highlight") or {})
+        self._on_select = dict(config.get("on_select") or {})
+        self._multi_select = dict(config.get("multi_select") or {})
+        self._config.pop("multi_select", None)
         # category_colors is not stored in cache (render-time styling)
 
     def get_state_dependencies(self) -> list:
@@ -326,6 +401,9 @@ class Heatmap(BaseComponent):
         """
         deps = list(self._filters.keys()) if self._filters else []
         deps.append(self._zoom_identifier)
+        for identifier in [*self._highlight, *self._multi_select]:
+            if identifier not in deps:
+                deps.append(identifier)
         return deps
 
     def _preprocess(self) -> None:
@@ -916,7 +994,8 @@ class Heatmap(BaseComponent):
                     continue
 
                 selected_value = state.get(filter_id)
-                if selected_value is None:
+                # A multi-selection has no per-value levels of its own
+                if selected_value is None or isinstance(selected_value, list):
                     continue
 
                 # Convert float to int if needed (JS numbers come as floats)
@@ -944,11 +1023,38 @@ class Heatmap(BaseComponent):
 
     def _is_no_zoom(self, zoom: dict[str, Any] | None) -> bool:
         """Check if zoom state represents no zoom (full view)."""
-        if zoom is None:
-            return True
-        x_range = zoom.get("xRange", [-1, -1])
-        y_range = zoom.get("yRange", [-1, -1])
-        return x_range[0] < 0 and x_range[1] < 0 and y_range[0] < 0 and y_range[1] < 0
+        return normalize_zoom(zoom) is None
+
+    def _zoom_bounds(
+        self, zoom: dict[str, Any], levels: list
+    ) -> tuple[float, float, float, float]:
+        """``x0, x1, y0, y1`` of a zoom; an axis it leaves out spans the data.
+
+        The zoom is ``{"x", "y"}`` or ``{"xRange", "yRange"}`` (see core/zoom.py).
+        """
+        normalized = normalize_zoom(zoom) or {}
+        bounds = []
+        for axis, column in (("x", self._x_column), ("y", self._y_column)):
+            r = normalized.get(axis)
+            if r is None:
+                r = self._full_extent(column, levels)
+            bounds.extend(r)
+        return bounds[0], bounds[1], bounds[2], bounds[3]
+
+    def _full_extent(self, column: str, levels: list) -> list[float]:
+        """The range of ``column`` over the smallest level (all its points)."""
+        if not levels:
+            return [-math.inf, math.inf]
+        level = levels[0]
+        if isinstance(level, pl.DataFrame):
+            level = level.lazy()
+        row = level.select(
+            pl.col(column).min().alias("lo"), pl.col(column).max().alias("hi")
+        ).collect()
+        lo, hi = row["lo"][0], row["hi"][0]
+        if lo is None or hi is None:
+            return [-math.inf, math.inf]
+        return [float(lo), float(hi)]
 
     def _select_level_for_zoom(
         self,
@@ -976,8 +1082,7 @@ class Heatmap(BaseComponent):
         """
         import sys
 
-        x0, x1 = zoom["xRange"]
-        y0, y1 = zoom["yRange"]
+        x0, x1, y0, y1 = self._zoom_bounds(zoom, levels)
 
         # Add raw data as final level if available
         all_levels = list(levels)
@@ -1109,6 +1214,8 @@ class Heatmap(BaseComponent):
             for col in self._filters.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        if self._hover_column and self._hover_column not in columns_to_select:
+            columns_to_select.append(self._hover_column)
 
         # Get levels based on current state (may use per-filter levels)
         levels, filtered_raw = self._get_levels_for_state(state)
@@ -1200,13 +1307,138 @@ class Heatmap(BaseComponent):
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 
-        return self._add_boxes(
-            {
-                "heatmapData": df_pandas,
-                "_hash": data_hash,
-            },
-            zoom,
+        result = {
+            "heatmapData": df_pandas,
+            "_hash": data_hash,
+        }
+        if self._highlight:
+            highlighted = self._highlighted_points(state, levels)
+            result["highlightPoints"] = {
+                "x": highlighted[self._x_column].to_list(),
+                "y": highlighted[self._y_column].to_list(),
+            }
+            # The points data may be unchanged while the marked points move
+            result["_hash"] = f"{data_hash}:{compute_dataframe_hash(highlighted)}"
+        if self._multi_select:
+            members = self._multi_selected_points(state, levels)
+            result["multiSelectPoints"] = {
+                "x": members[self._x_column].to_list(),
+                "y": members[self._y_column].to_list(),
+            }
+            result["_hash"] = f"{result['_hash']}:{compute_dataframe_hash(members)}"
+        return self._add_boxes(result, zoom)
+
+    # Most points marked as selected; a larger set is marked in part
+    MAX_MULTI_SELECT_MARKS = 20000
+
+    def _full_filtered(
+        self, state: dict[str, Any], levels: list
+    ) -> pl.LazyFrame | None:
+        """The full-resolution data, with the filters applied."""
+        if not levels:
+            return None
+        full = levels[-1]
+        if isinstance(full, pl.DataFrame):
+            full = full.lazy()
+        schema = full.collect_schema().names()
+        for identifier, column in (self._filters or {}).items():
+            value = state.get(identifier, (self._filter_defaults or {}).get(identifier))
+            if value is not None and column in schema:
+                full = full.filter(pl.col(column) == value)
+        return full
+
+    def _multi_selected_points(
+        self, state: dict[str, Any], levels: list
+    ) -> pl.DataFrame:
+        """x and y of the points whose `multi_select` column value is in the
+        selected set, from the full-resolution data."""
+        columns = [self._x_column, self._y_column]
+        empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
+        full = self._full_filtered(state, levels)
+        if full is None:
+            return empty
+        schema = full.collect_schema().names()
+        conditions = [
+            pl.col(column).is_in(selected_set(state, identifier))
+            for identifier, column in self._multi_select.items()
+            if selected_set(state, identifier) and column in schema
+        ]
+        if not conditions:
+            return empty
+        condition = conditions[0]
+        for other in conditions[1:]:
+            condition = condition | other
+        return (
+            full.filter(condition)
+            .select(columns)
+            .head(self.MAX_MULTI_SELECT_MARKS)
+            .collect()
         )
+
+    def _handle_event(self, event: dict[str, Any]) -> bool:
+        """A box or lasso drawn on the plot selects the points in it."""
+        if event.get("type") != "multi_select" or not self._multi_select:
+            return False
+        from ..core.state import get_render_state_manager
+
+        state_manager = get_render_state_manager()
+        state = state_manager.get_all_selections()
+        mode = event.get("mode", "replace")
+        if mode not in ("replace", "add", "remove"):
+            mode = "replace"
+        region = event.get("region")
+        if event.get("clear") or not isinstance(region, dict):
+            picked: dict[str, list[Any] | None] = dict.fromkeys(self._multi_select)
+        else:
+            levels, _ = self._get_levels_for_state(state)
+            full = self._full_filtered(state, levels)
+            picked = {}
+            for identifier, column in self._multi_select.items():
+                picked[identifier] = (
+                    None
+                    if full is None
+                    else values_in_region(
+                        full, self._x_column, self._y_column, column, region
+                    )
+                )
+        changed = False
+        for identifier, values in picked.items():
+            new = (
+                None
+                if event.get("clear")
+                else combine(state.get(identifier), values, mode)
+            )
+            if state_manager.set_selection(identifier, new):
+                changed = True
+        return changed
+
+    def _highlighted_points(self, state: dict[str, Any], levels: list) -> pl.DataFrame:
+        """x and y of the points matching the selected value of each
+        `highlight` identifier, from the full-resolution data."""
+        columns = [self._x_column, self._y_column]
+        empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
+        conditions = [
+            pl.col(column) == state[identifier]
+            for identifier, column in self._highlight.items()
+            if state.get(identifier) is not None
+        ]
+        if not conditions or not levels:
+            return empty
+        full = levels[-1]
+        if isinstance(full, pl.DataFrame):
+            full = full.lazy()
+        schema = full.collect_schema().names()
+        if any(column not in schema for column in self._highlight.values()):
+            return empty
+        condition = conditions[0]
+        for other in conditions[1:]:
+            condition = condition | other
+        # Filters still apply: a point another component filtered out stays hidden
+        for identifier, column in (self._filters or {}).items():
+            value = state.get(identifier, (self._filter_defaults or {}).get(identifier))
+            if value is not None and column in schema:
+                condition = condition & (pl.col(column) == value)
+        return full.filter(condition).select(columns).collect()
 
     def _get_component_args(self) -> dict[str, Any]:
         """
@@ -1234,6 +1466,14 @@ class Heatmap(BaseComponent):
             args["svgFilename"] = self._svg_filename
         if not self._scroll_zoom:
             args["scrollZoom"] = False
+        if self._hover_column:
+            args["hoverColumn"] = self._hover_column
+        if self._highlight:
+            args["highlight"] = self._highlight
+        if self._on_select:
+            args["onSelect"] = self._on_select
+        if self._multi_select:
+            args["multiSelect"] = self._multi_select
 
         # Add category column configuration for categorical coloring mode
         if self._category_column:
@@ -1252,6 +1492,8 @@ class Heatmap(BaseComponent):
         # Add any extra config options
         args.update(self._config)
 
+        args.update(measure_args(self._measure))
+        args.update(image_format_args(self._image_format))
         return args
 
     # ------------------------------------------------------------------
@@ -1333,9 +1575,10 @@ class Heatmap(BaseComponent):
         if self._boxes is None:
             return result
         boxes = self._boxes
-        if not self._is_no_zoom(zoom):
-            x_lo, x_hi = sorted(zoom.get("xRange", [-1, -1]))
-            y_lo, y_hi = sorted(zoom.get("yRange", [-1, -1]))
+        normalized = normalize_zoom(zoom)
+        if normalized is not None:
+            x_lo, x_hi = normalized.get("x", [-math.inf, math.inf])
+            y_lo, y_hi = normalized.get("y", [-math.inf, math.inf])
             boxes = boxes.filter(
                 (pl.col("x1") >= x_lo)
                 & (pl.col("x0") <= x_hi)

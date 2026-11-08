@@ -1,16 +1,27 @@
 <template>
-  <div :id="id" class="heatmap-container"></div>
+  <div class="heatmap-plot">
+    <MeasureHint v-if="args.measure" :measure="measure" />
+    <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
+         box or lasso selection ends) measures this element -->
+    <div :id="id" class="heatmap-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+  </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, computed, type PropType } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { axisQuantity } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
+import { normalizeZoom } from '@/composables/useZoomState'
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -24,27 +35,47 @@ export default defineComponent({
   setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
 
+    // Measuring: two points, labelled with their x and y differences
+    const measure = useMeasure(() => !!props.args.measure)
+    const measureSpec = computed<MeasureSpec>(() => ({
+      kind: 'points',
+      xQuantity: axisQuantity(props.args.xLabel, props.args.xColumn || 'x'),
+      yQuantity: axisQuantity(props.args.yLabel, props.args.yColumn || 'y'),
+    }))
+
     // Use shared Plotly scatter composable
     const plotlyScatter = usePlotlyScatter({
       id: computed(() => `heatmap-${props.index}`),
+      onPointClick: (point) => measure.pick({ x: Number(point.x), y: Number(point.y) }, measureSpec.value),
       interactivity: computed(() => props.args.interactivity || {}),
       getData: () => {
         const data = streamlitDataStore.allDataForDrawing?.heatmapData
         return (data as HeatmapData[]) || []
       },
       title: computed(() => props.args.title),
+      imageFormat: computed(() => props.args.imageFormat),
       svgFilename: computed(() => props.args.svgFilename as string | undefined),
       scrollZoom: computed(() => props.args.scrollZoom as boolean | undefined),
+      onSelect: computed(() => props.args.onSelect),
     })
+
+    const multi = useMultiSelect(computed(() => props.args.multiSelect))
 
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      measure,
+      multiSelectEnabled: multi.enabled,
+      selectedCount: multi.selectedCount,
+      clearMultiSelect: multi.clear,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
+      dragmode: 'zoom' as string,
+      removingOutline: false,
+      selectModifier: 'replace' as 'replace' | 'add' | 'remove',
       zoomRange: undefined as { xRange: number[]; yRange: number[] } | undefined,
       colorbarVisible: true,
       userOverrideColorbar: false,
@@ -145,6 +176,82 @@ export default defineComponent({
     },
 
     /**
+     * Hover text of each point: its intensity, below the hover column's text
+     * when one is set.
+     */
+    hoverTexts(): string[] {
+      const hoverCol = this.args.hoverColumn
+      if (!hoverCol) {
+        return this.intensityValues.map((v) => v.toExponential(2))
+      }
+      const label = this.colorbarLabel
+      return this.heatmapData.map((row, i) => {
+        const v = this.intensityValues[i]
+        const value =
+          typeof v !== 'number' || !Number.isFinite(v)
+            ? '-'
+            : this.isLogScale
+              ? v.toExponential(2)
+              : String(Number(v.toPrecision(4)))
+        const text = row[hoverCol]
+        const head = text === null || text === undefined || text === '' ? '' : `${text}<br>`
+        return `${head}${label}: ${value}`
+      })
+    },
+
+    /**
+     * Points of the selected value(s) of the `highlight` identifiers, sent by Python.
+     */
+    highlightPoints(): { x: number[]; y: number[] } {
+      const points = this.streamlitDataStore.allDataForDrawing?.highlightPoints as
+        | { x?: number[]; y?: number[] }
+        | undefined
+      return { x: points?.x ?? [], y: points?.y ?? [] }
+    },
+
+    /** Points of the selected set (multi_select), sent by Python. */
+    multiSelectPoints(): { x: number[]; y: number[] } {
+      const points = this.streamlitDataStore.allDataForDrawing?.multiSelectPoints as
+        | { x?: number[]; y?: number[] }
+        | undefined
+      return { x: points?.x ?? [], y: points?.y ?? [] }
+    },
+
+    /** The selected set, accent dots with a glow over the points. */
+    /** Points outside the selection fade while something is selected. */
+    baseOpacity(): number {
+      return this.multiSelectEnabled && this.multiSelectPoints.x.length > 0 ? 0.35 : 1
+    },
+
+    multiSelectTraces(): Plotly.Data[] {
+      if (!this.multiSelectEnabled) return []
+      return selectionOverlay(this.multiSelectPoints.x, this.multiSelectPoints.y, 7)
+    },
+
+    /**
+     * Ring around the highlighted points, drawn over every other trace. It takes
+     * no hover or click, so a click always lands on the point beneath it.
+     */
+    highlightTrace(): Plotly.Data | null {
+      if (!this.args.highlight || this.highlightPoints.x.length === 0) return null
+      return {
+        type: 'scattergl',
+        name: 'selected',
+        x: this.highlightPoints.x,
+        y: this.highlightPoints.y,
+        mode: 'markers',
+        marker: {
+          symbol: 'circle-open',
+          size: 16,
+          color: this.theme?.textColor || 'black',
+          line: { width: 2.5, color: this.theme?.textColor || 'black' },
+        },
+        hoverinfo: 'skip',
+        showlegend: false,
+      } as Plotly.Data
+    },
+
+    /**
      * Get the colorbar label.
      */
     colorbarLabel(): string {
@@ -210,6 +317,12 @@ export default defineComponent({
         const idx = this.uniqueCategories.indexOf(category)
         return defaults[idx % defaults.length]
       }
+    },
+
+    /** The zoom in the shared state, normalized, as JSON (see useZoomState). */
+    storedZoom(): string {
+      const zoomIdentifier = this.args.zoomIdentifier || 'heatmap_zoom'
+      return JSON.stringify(normalizeZoom(this.selectionStore.$state[zoomIdentifier]))
     },
 
     /**
@@ -313,9 +426,11 @@ export default defineComponent({
         return this.getFallbackData()
       }
 
+      const ring = this.highlightTrace
+      const overlays = [...this.multiSelectTraces, ring].filter((t): t is Plotly.Data => t !== null)
       // Categorical mode: create separate traces per category
       if (this.isCategoricalMode) {
-        return this.withBoxes(this.buildCategoricalTraces())
+        return this.withBoxes([...this.buildCategoricalTraces(), ...overlays])
       }
 
       // Continuous mode: single trace with colorscale
@@ -331,7 +446,7 @@ export default defineComponent({
         colorbarConfig.tickmode = 'array'
       }
 
-      return this.withBoxes([
+      const points: Plotly.Data[] = [
         {
           type: 'scattergl',
           name: 'points',
@@ -345,11 +460,13 @@ export default defineComponent({
             reversescale: this.args.reversescale ?? false,
             showscale: this.effectiveColorbarVisible,
             colorbar: colorbarConfig,
+            opacity: this.baseOpacity,
           },
-          hovertext: this.intensityValues.map((v) => v.toExponential(2)),
+          hovertext: this.hoverTexts,
           hoverinfo: 'x+y+text',
         },
-      ])
+      ]
+      return this.withBoxes([...points, ...overlays])
     },
 
     /** Thick outline around the selected box. */
@@ -368,6 +485,17 @@ export default defineComponent({
           y1: b.y1,
           line: { color: this.args.boxes?.color || '#2ca02c', width: 3 },
         })) as Partial<Plotly.Shape>[]
+    },
+
+    /**
+     * Lines of the measurements. They are kept while zooming, which sends
+     * other points of the same data.
+     */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+      })
     },
 
     /**
@@ -396,7 +524,10 @@ export default defineComponent({
             }
           : undefined,
         height: this.args.height || 400,
-        shapes: this.selectedBoxShapes,
+        dragmode: this.dragmode as Plotly.Layout['dragmode'],
+        ...SELECTION_LAYOUT,
+        shapes: [...this.selectedBoxShapes, ...this.measureOverlay.shapes],
+        annotations: this.measureOverlay.annotations,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           range: this.xRange,
@@ -416,6 +547,17 @@ export default defineComponent({
   },
 
   watch: {
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
+    'measure.revision'() {
+      if (!this.plotInitialized) return
+      void Plotly.relayout(this.id, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
+    },
+
     isDataReady: {
       handler(newVal: boolean) {
         if (newVal && this.isInitialized) {
@@ -448,11 +590,25 @@ export default defineComponent({
     zoomRange: {
       handler() {
         if (this.zoomRange === undefined) return
+        // Already the stored zoom (set from Python): nothing to report
+        if (JSON.stringify(normalizeZoom(this.zoomRange)) === this.storedZoom) return
         // Update selection store with zoom range
         const zoomIdentifier = this.args.zoomIdentifier || 'heatmap_zoom'
         this.selectionStore.updateSelection(zoomIdentifier, this.zoomRange)
       },
       deep: true,
+    },
+
+    // A zoom set from Python (a saved view opened): show it
+    storedZoom: {
+      handler(stored: string) {
+        if (JSON.stringify(normalizeZoom(this.zoomRange)) === stored) return
+        const zoom = JSON.parse(stored) as { x?: number[]; y?: number[] } | null
+        if (!zoom && this.zoomRange === undefined) return
+        this.zoomRange = { xRange: zoom?.x ?? [-1, -1], yRange: zoom?.y ?? [-1, -1] }
+        if (this.isInitialized && this.plotInitialized) this.renderPlot()
+      },
+      immediate: true,
     },
   },
 
@@ -527,7 +683,8 @@ export default defineComponent({
         // Extract x, y, and hovertext for this category
         const x = indices.map((i) => this.xValues[i])
         const y = indices.map((i) => this.yValues[i])
-        const hovertext = indices.map((i) => this.intensityValues[i].toExponential(2))
+        const texts = this.hoverTexts
+        const hovertext = indices.map((i) => texts[i])
 
         traces.push({
           type: 'scattergl',
@@ -538,6 +695,7 @@ export default defineComponent({
           marker: {
             color: getColor(category),
             size: 6,
+            opacity: this.baseOpacity,
           },
           hovertext,
           hoverinfo: 'x+y+text',
@@ -564,6 +722,7 @@ export default defineComponent({
           console.debug('[PlotlyHeatmap] renderPlot: using Plotly.newPlot() (first render)')
           await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
           this.setupPlotEventHandlers()
+          this.measure.bindLabelClicks(element)
           this.plotInitialized = true
         } else {
           // Subsequent renders: use react for efficient updates
@@ -602,7 +761,10 @@ export default defineComponent({
           this.toggleColorbar()
         },
       }
-      return this.getPlotConfig([colorbarToggleButton])
+      const buttons = [colorbarToggleButton]
+      if (this.multiSelectEnabled) buttons.push(clearSelectionButton(() => this.clearMultiSelect()))
+      buttons.push(...this.measure.modeBarButtons())
+      return this.getPlotConfig(buttons)
     },
 
     setupPlotEventHandlers() {
@@ -647,10 +809,57 @@ export default defineComponent({
 
       // A click on a point inside a box also selects the box
       plotElement.on('plotly_click', (eventData: Plotly.PlotMouseEvent) => {
+        // In measure mode the click measured (see setup)
+        if (this.measure.active) return
         const point = eventData.points?.[0]
         if (point && typeof point.x === 'number' && typeof point.y === 'number') {
           this.selectBoxAt(point.x, point.y)
         }
+      })
+      this.setupMultiSelectHandlers(plotElement)
+    },
+
+    /**
+     * A box or lasso drawn in select mode is sent to Python, which selects the
+     * points in it from the full data (the plot shows only a level of it).
+     */
+    setupMultiSelectHandlers(plotElement: Plotly.PlotlyHTMLElement) {
+      if (!this.multiSelectEnabled) return
+      plotElement.addEventListener('mousedown', (e: MouseEvent) => {
+        this.selectModifier = e.shiftKey ? 'add' : 'replace'
+      }, true)
+      plotElement.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        const mode = (eventData as Record<string, unknown>).dragmode
+        if (typeof mode === 'string') this.dragmode = mode
+      })
+      plotElement.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
+        if (!eventData) return
+        // Plotly reports the removed outline as an empty selection
+        if (this.removingOutline) return
+        const event = eventData as unknown as {
+          range?: { x?: number[]; y?: number[] }
+          lassoPoints?: { x?: number[]; y?: number[] }
+        }
+        let region: Record<string, unknown> | null = null
+        if (event.lassoPoints?.x && event.lassoPoints?.y) {
+          region = { type: 'lasso', x: event.lassoPoints.x, y: event.lassoPoints.y }
+        } else if (event.range?.x && event.range?.y) {
+          region = { type: 'box', x: event.range.x, y: event.range.y }
+        }
+        if (!region) return
+        this.streamlitDataStore.sendEvent({ type: 'multi_select', region, mode: this.selectModifier })
+        // Python marks the selection; Plotly's own outline would only show the last region.
+        // Removing it may fire plotly_deselect, which must not clear the selection just sent.
+        this.removingOutline = true
+        Promise.resolve(
+          Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+        ).finally(() => {
+          this.removingOutline = false
+        })
+      })
+      plotElement.on('plotly_deselect', () => {
+        if (this.removingOutline) return
+        this.clearMultiSelect()
       })
     },
 
@@ -824,6 +1033,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.heatmap-plot {
+  position: relative;
+}
+
 .heatmap-container {
   position: relative;
   width: 100%;

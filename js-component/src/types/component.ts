@@ -3,12 +3,51 @@
  */
 
 import type { ColumnDefinition, Options as TabulatorOptions } from 'tabulator-tables'
+import type { FragmentSettings } from './protein-sequence-data'
 
 /**
  * Base component arguments shared by all components.
  */
 export interface BaseComponentArgs {
   componentType: string
+  /**
+   * Selecting several entries at once: identifier -> column. The identifier
+   * holds the sorted distinct values of the column over the selected entries.
+   */
+  multiSelect?: Record<string, string>
+  /**
+   * State identifier the plot keeps its zoom under, {"x": [lo, hi], "y": [lo, hi]}
+   * (see composables/useZoomState.ts). Without it the zoom stays in the browser.
+   */
+  zoomIdentifier?: string
+}
+
+/**
+ * The measure tool of the 2D plots (see composables/useMeasure.ts).
+ */
+export interface MeasureArgs {
+  /** Show the "Measure" button: click two points to measure their distance. */
+  measure?: boolean
+  /** Per-point tolerance in Da; a difference matches a residue within twice this. */
+  measureTolerance?: number
+  /** Extra named masses matched besides the standard amino-acid residues. */
+  measureResidues?: Record<string, number>
+}
+
+/**
+ * Your own peak labels on the spectrum views (see composables/usePeakLabels.ts).
+ */
+export interface PeakLabelArgs {
+  /** Show the "Label peaks" button: click a peak to add a text label. */
+  peakLabels?: boolean
+}
+
+/**
+ * The image download of a view (see utils/imageExport.ts).
+ */
+export interface ImageExportArgs {
+  /** Format of the download: set_image_format() or the component's image_format. */
+  imageFormat?: 'svg' | 'png' | 'jpeg' | 'webp'
 }
 
 /**
@@ -98,8 +137,14 @@ export interface TableComponentArgs extends BaseComponentArgs {
   resetSort?: boolean
   /** Identifiers whose selection change sorts by initialSort again */
   resetSortOn?: string[]
+  /** Without pagination, stay at the given height instead of shrinking to the rows */
+  fillHeight?: boolean
+  rowOverview?: boolean
+  rowOverviewTitle?: string
   /** False hides the column menu */
   columnMenu?: boolean
+  /** False turns off stepping through the rows with the arrow keys */
+  keyboardNavigation?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */
@@ -112,7 +157,11 @@ export interface TableComponentArgs extends BaseComponentArgs {
 /**
  * Line plot component arguments.
  */
-export interface LinePlotComponentArgs extends BaseComponentArgs {
+export interface LinePlotComponentArgs
+  extends BaseComponentArgs,
+    MeasureArgs,
+    PeakLabelArgs,
+    ImageExportArgs {
   componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
   title: string
   xLabel?: string
@@ -125,6 +174,7 @@ export interface LinePlotComponentArgs extends BaseComponentArgs {
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
+  keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
 }
 
 export interface LinePlotStyling {
@@ -153,7 +203,7 @@ export interface LinePlotConfig {
 /**
  * Heatmap component arguments.
  */
-export interface HeatmapComponentArgs extends BaseComponentArgs {
+export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyHeatmap'
   title?: string
   svgFilename?: string
@@ -177,6 +227,12 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   logScale?: boolean
   /** Custom label for the colorbar (default: "Intensity") */
   intensityLabel?: string
+  /** Column whose text is shown above the intensity when hovering a point */
+  hoverColumn?: string
+  /** Identifier → column; the points of each identifier's selected value are ringed */
+  highlight?: Record<string, string>
+  /** Selections a click sets besides `interactivity` (null clears one) */
+  onSelect?: Record<string, unknown>
   /** Rectangles drawn over the points, set by Heatmap.set_boxes() */
   boxes?: {
     /** Identifier the id of a clicked box is written to */
@@ -200,7 +256,7 @@ export interface HeatmapBox {
 /**
  * PCA plot component arguments.
  */
-export interface PCAPlotComponentArgs extends BaseComponentArgs {
+export interface PCAPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyPca'
   /** Column name for the x-axis principal component (e.g. "PC1") */
   xColumn: string
@@ -231,7 +287,7 @@ export type PCAData = Record<string, unknown>
 /**
  * SequenceView component arguments.
  */
-export interface SequenceViewComponentArgs extends BaseComponentArgs {
+export interface SequenceViewComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'SequenceView'
   title?: string
   height?: number
@@ -246,7 +302,7 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
 /**
  * VolcanoPlot component arguments.
  */
-export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
+export interface VolcanoPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyVolcano'
   /** Column name for log2 fold change (x-axis) */
   log2fcColumn: string
@@ -276,6 +332,9 @@ export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
   /** Max number of labels to show on significant points */
   maxLabels?: number
   interactivity?: InteractivityMapping
+  /** Labels of the selection buttons: changed, up, down, clear */
+  selectionPresets?: boolean
+  presetLabels?: Record<string, string>
   height?: number
 }
 
@@ -301,7 +360,7 @@ export interface DendrogramData {
 /**
  * ClusteredHeatmap component arguments.
  */
-export interface ClusteredHeatmapComponentArgs extends BaseComponentArgs {
+export interface ClusteredHeatmapComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'PlotlyClusteredHeatmap'
   idCol: string
   /** Row labels (e.g. protein names), in clustered/rendered order. */
@@ -342,10 +401,14 @@ export type VolcanoData = Record<string, unknown>
 /**
  * MirrorPlot component arguments.
  */
-export interface MirrorPlotComponentArgs extends BaseComponentArgs {
+export interface MirrorPlotComponentArgs
+  extends BaseComponentArgs,
+    MeasureArgs,
+    PeakLabelArgs,
+    ImageExportArgs {
   componentType: 'PlotlyMirrorPlot'
   title?: string
-  /** File name (without extension) for the SVG download. */
+  /** File name (without extension) of the image download. */
   svgFilename?: string
   /** Label shown inside the top half of the figure. */
   titleTop?: string
@@ -361,6 +424,8 @@ export interface MirrorPlotComponentArgs extends BaseComponentArgs {
   styling?: MirrorPlotStyling
   config?: Record<string, unknown>
   height?: number
+  /** Start with the zoom pinned (the pin button in the mode bar toggles it). */
+  keepZoom?: boolean
 }
 
 export interface MirrorPlotStyling {
@@ -373,7 +438,7 @@ export interface MirrorPlotStyling {
 /**
  * Series plot component arguments.
  */
-export interface SeriesPlotComponentArgs extends BaseComponentArgs {
+export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlySeries'
   font?: { family?: string; color?: string; size?: number }
   xColumn: string
@@ -388,6 +453,10 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs {
   yLabel?: string
   showLegend?: boolean
   fixedYRange?: boolean
+  /** Plotly rangemode of the y axis (default 'nonnegative') */
+  yRangeMode?: 'nonnegative' | 'tozero' | 'normal'
+  /** Column whose text is shown on hover */
+  hoverColumn?: string | null
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
@@ -396,11 +465,10 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs {
 /**
  * 3D plot component arguments.
  */
-export interface Plot3DComponentArgs extends BaseComponentArgs {
+export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'Plotly3D'
   titleBold?: boolean
   border?: boolean
-  exportFormat?: 'svg' | 'png'
   xColumn: string
   yColumn: string
   zColumn: string
@@ -412,6 +480,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
   seriesColors?: Record<string, string>
   color: string
   traceColumn?: string | null
+  /** identifier -> column; points of the selected value are drawn apart */
+  highlight?: Record<string, string>
+  highlightName?: string
+  highlightColor?: string
   title: string
   /** [identifier, title] pairs: first identifier with a selection sets the title */
   selectionTitles?: Array<[string, string]>
@@ -420,6 +492,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
   zLabel: string
   yDtick?: number | null
   cameraEye?: { x: number; y: number; z: number } | null
+  /** Relative axis lengths of the 3D box */
+  aspectRatio?: { x: number; y: number; z: number } | null
+  /** Point the camera looks at */
+  cameraCenter?: { x: number; y: number; z: number } | null
   showLegend?: boolean
   svgFilename?: string
   height?: number
@@ -428,7 +504,8 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
 /**
  * Deconvolved spectrum component arguments.
  */
-export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
+export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
+  keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   componentType: 'PlotlyDeconvolvedSpectrum'
   view: 'deconvolved' | 'annotated' | 'ladder'
   title: string
@@ -446,25 +523,64 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
     selectedColor?: string
     unhighlightedColor?: string
     highlightHiddenColor?: string
+    isolationWindowColor?: string
     annotationColors?: Record<string, string>
   }
   config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
   svgFilename?: string
   /** Sequence tag drawn in the ladder view */
   ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  /** Theoretical isotope envelope of one mass, drawn on its raw peaks */
+  envelope?: {
+    massIndex: number
+    mzs: number[]
+    intensities: number[]
+    charges?: number[]
+    isotopes?: number[]
+  } | null
+  /** Isolation window shaded in the m/z views */
+  isolationWindow?: { lower: number; upper: number; target?: number } | null
+  /** Identifier a ProteinSequenceView writes its matched fragment ions to */
+  fragmentMatchesIdentifier?: string | null
+  /** Data column whose value tells this spectrum apart (FragmentMatches.spectrum) */
+  spectrumKeyColumn?: string | null
   height?: number
+}
+
+/** A fragment ion matched by a ProteinSequenceView, for spectra to mark. */
+export interface MatchedFragmentIon {
+  /** e.g. 'b12' */
+  name: string
+  /** Ion type, e.g. 'b' or 'z+1' */
+  ion: string
+  kind: 'N' | 'C' | 'I'
+  /** Observed (deconvolved) mass */
+  mass: number
+  /** Index of the mass in the spectrum's mass list, or null */
+  massIndex: number | null
+  /** Annotated fragments: the charge and m/z of their envelope */
+  charge?: number
+  mz?: number
+}
+
+/** What a ProteinSequenceView writes to fragmentMatchesIdentifier. */
+export interface FragmentMatches {
+  /** The spectrum the fragments were matched on (spectrum_key_column), or null */
+  spectrum: unknown
+  tolerance: { value: number; unit: string }
+  fragments: MatchedFragmentIon[]
 }
 
 /**
  * ProteinStructureView component arguments.
  */
-export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
+export interface ProteinStructureViewComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'ProteinStructureView'
   title?: string
   /** Identifier holding the selected residue (0-based position in the sequence) */
   aaIdentifier?: string | null
-  /** Fragment ion types and tolerance (ppm) to match with */
-  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Fragment ion types (or fragmentation method) and tolerance to match with */
+  settings?: FragmentSettings | null
   /** Identifier holding the fragment selected in a sequence view */
   fragmentIdentifier?: string | null
   /** Shown while no entry is selected */
@@ -478,7 +594,7 @@ export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
 /**
  * ProteinSequenceView component arguments.
  */
-export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
+export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'ProteinSequenceView'
   title?: string
   /** Label of the annotation summary line */
@@ -489,10 +605,29 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   aaIdentifier?: string | null
   /** Identifier the change-sequence dialog writes the new sequence to */
   sequenceIdentifier?: string | null
+  // Fixed modifications offered in the change-sequence dialog
+  modificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
+  // Identifier the dialog writes the picked modification ids to
+  modificationsIdentifier?: string | null
+  // Ids preselected in the picker
+  modifications?: string[] | null
+  /** Show the "Copy as ProForma" button */
+  proformaCopy?: boolean
+  /** The change-sequence dialog also reads ProForma */
+  proformaInput?: boolean
+  // Variable modifications the residue menus offer (instead of the built-in list)
+  variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
+  // Library ids suggested per site (residue letter, 'N-term', 'C-term');
+  // null: the built-in suggestions
+  variableModificationSuggestions?: Record<string, string[]> | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
-  /** Fragment ion types and tolerance (ppm) to start from */
-  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Identifier the matched fragment ions are written to (FragmentMatches) */
+  fragmentMatchesIdentifier?: string | null
+  /** Identifier edits of an identification are written to (null: not editable) */
+  editIdentifier?: string | null
+  /** Fragment ion types (or fragmentation method) and tolerance to start from */
+  settings?: FragmentSettings | null
   /** Sequence tag to mark (0-based residues) */
   tag?: { startPos: number; endPos: number } | null
   svgFilename?: string

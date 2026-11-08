@@ -21,10 +21,13 @@
 
 <script lang="ts">
 import { defineAsyncComponent, defineComponent, watch, toRaw, type Component } from 'vue'
+import { useTheme } from 'vuetify'
 import { stateValues, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
+import { downloadTitle, imageFormatOf } from './utils/imageExport'
+import { applyAppTheme } from './utils/appTheme'
 // Each view is its own chunk, so a page with several views does not load and
 // run Plotly in every table's frame
 const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
@@ -62,6 +65,20 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
 
+    // Checkboxes, switches and buttons take the app's primary colour
+    const vuetifyTheme = useTheme()
+    watch(
+      () => streamlitDataStore.theme?.primaryColor,
+      (primary) => {
+        if (!primary) return
+        for (const name of ['light', 'dark']) {
+          const t = vuetifyTheme.themes.value[name]
+          if (t) t.colors.primary = primary
+        }
+      },
+      { immediate: true },
+    )
+
     // Watch selection store counter and send state back to Python
     // We watch counter (a primitive) instead of deep-watching the entire state.
     // This avoids creating a spread object on every reactivity check.
@@ -78,6 +95,9 @@ export default defineComponent({
     const DEBOUNCE_MS = 100 // 100ms debounce window
 
     const sendStateToStreamlit = () => {
+      // Before its first render the view holds nothing Python does not know,
+      // and each value sent would cost the page a rerun
+      if (streamlitDataStore.renderData === null) return
       const currentCounter = selectionStore.$state.counter
       const currentHash = streamlitDataStore.hash || null
       const currentAnnotations = streamlitDataStore.annotations
@@ -286,6 +306,21 @@ export default defineComponent({
       }
     },
   },
+  watch: {
+    /**
+     * A view that is not drawn again when only the image format changes keeps
+     * the tooltip of its download button; the button itself reads the format
+     * when clicked (see utils/imageExport.ts).
+     */
+    'componentArgs.imageFormat'(format: unknown) {
+      this.$nextTick(() => {
+        const title = downloadTitle(imageFormatOf(format))
+        document.querySelectorAll('.modebar-btn[data-title^="Download as"]').forEach((button) => {
+          button.setAttribute('data-title', title)
+        })
+      })
+    },
+  },
   created() {
     Streamlit.setComponentReady()
     // Set initial frame height - will be updated when data arrives
@@ -311,7 +346,10 @@ export default defineComponent({
   // and via the watch on allDataForDrawing.height
   methods: {
     async updateStreamlitData(event: Event): Promise<void> {
-      this.streamlitDataStore.updateRenderData((event as CustomEvent<RenderData>).detail)
+      const detail = (event as CustomEvent<RenderData>).detail
+      // The app's fonts and primary colour, so the frame matches the page around it
+      applyAppTheme(detail.theme)
+      this.streamlitDataStore.updateRenderData(detail)
     },
   },
 })
@@ -320,7 +358,28 @@ export default defineComponent({
 <style>
 body {
   margin: 0;
-  font-family: 'Source Sans Pro', sans-serif;
+}
+
+/* The app's text font (set from the theme by applyThemeFonts), also for
+   Vuetify's typography classes, which name Roboto */
+html,
+html body,
+html body :is(.text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6, .text-subtitle-1, .text-subtitle-2,
+  .text-body-1, .text-body-2, .text-button, .text-caption, .text-overline) {
+  font-family: var(--insight-font, 'Source Sans Pro', sans-serif);
+}
+
+/* The selected table row in the app's primary colour, over the row's own background */
+html[data-insight-themed] .tabulator-row.tabulator-selected {
+  background-color: color-mix(in srgb, var(--insight-primary) 24%, transparent);
+}
+html[data-insight-themed] .tabulator-row.tabulator-selected:hover {
+  background-color: color-mix(in srgb, var(--insight-primary) 36%, transparent);
+}
+
+/* Numbers in tables and on axes line up, whatever numerals the font draws by default */
+html {
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .tabulator-tooltip {

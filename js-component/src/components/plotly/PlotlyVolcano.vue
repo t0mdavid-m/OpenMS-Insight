@@ -1,13 +1,43 @@
 <template>
-  <div :id="id" class="volcano-container"></div>
+  <div class="volcano-plot">
+    <div v-if="multiSelectEnabled && args.selectionPresets" class="volcano-select-bar">
+      <span class="volcano-select-label">Select</span>
+      <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
+        {{ presetLabel('changed') }} ({{ presetCounts.changed }})
+      </button>
+      <button type="button" class="volcano-select-button" :disabled="!presetCounts.up" @click="selectPreset('up')">
+        <span class="volcano-swatch" :style="{ background: args.upColor || '#E74C3C' }"></span>
+        {{ presetLabel('up') }} ({{ presetCounts.up }})
+      </button>
+      <button type="button" class="volcano-select-button" :disabled="!presetCounts.down" @click="selectPreset('down')">
+        <span class="volcano-swatch" :style="{ background: args.downColor || '#3498DB' }"></span>
+        {{ presetLabel('down') }} ({{ presetCounts.down }})
+      </button>
+      <button type="button" class="volcano-select-button" :disabled="!selectedCount" @click="clearSelection">
+        {{ presetLabel('clear') }}
+      </button>
+      <span v-if="selectedCount" class="volcano-select-hint">{{ selectedCount }} selected</span>
+    </div>
+    <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
+         box or lasso selection ends) measures this element -->
+    <div class="volcano-plot-area">
+      <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+      <MeasureHint v-if="args.measure" :measure="measure" />
+    </div>
+  </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, computed, type PropType } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { axisQuantity, pointsKey } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
+import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 /**
  * Compute significance category for a point.
@@ -29,6 +59,7 @@ function computeSignificance(
 
 export default defineComponent({
   name: 'PlotlyVolcano',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<VolcanoPlotComponentArgs>,
@@ -42,25 +73,55 @@ export default defineComponent({
   setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
 
+    // Measuring: two points, labelled with their fold change and p-value differences
+    const measure = useMeasure(() => !!props.args.measure)
+    const measureSpec = computed<MeasureSpec>(() => ({
+      kind: 'points',
+      xQuantity: axisQuantity(props.args.xLabel, 'log2 Fold Change'),
+      yQuantity: axisQuantity(props.args.yLabel, '-log10(p-value)'),
+    }))
+
     // Use shared Plotly scatter composable
     const plotlyScatter = usePlotlyScatter({
       id: computed(() => `volcano-${props.index}`),
+      onPointClick: (point) => measure.pick({ x: Number(point.x), y: Number(point.y) }, measureSpec.value),
       interactivity: computed(() => props.args.interactivity || {}),
       getData: () => {
         const data = streamlitDataStore.allDataForDrawing?.volcanoData
         return (data as VolcanoData[]) || []
       },
       title: computed(() => props.args.title),
+      imageFormat: computed(() => props.args.imageFormat),
     })
+
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    const multi = useMultiSelect(computed(() => props.args.multiSelect))
 
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      measure,
+      multiSelectEnabled: multi.enabled,
+      selectedCount: multi.selectedCount,
+      multiSelectionKey: multi.selectionKey,
+      isRowSelected: multi.isRowSelected,
+      applySelectedRows: multi.applyRows,
+      clearSelection: multi.clear,
+      zoom,
+      zoomStamp: zoom.stamp,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
+      // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
+      nativeZoom: null as ZoomValue | null,
+      // Box or lasso select when several points can be selected, else zoom;
+      // kept across re-renders when the user switches in the mode bar
+      dragmode: (this.args.multiSelect && Object.keys(this.args.multiSelect).length > 0
+        ? 'select'
+        : 'zoom') as string,
+      shiftHeld: false as boolean,
     }
   },
   computed: {
@@ -151,6 +212,24 @@ export default defineComponent({
       return { up, down, ns }
     },
 
+    /** Number of points each selection button selects. */
+    presetCounts(): { changed: number; up: number; down: number } {
+      const { up, down } = this.categorizedData
+      return { changed: up.x.length + down.x.length, up: up.x.length, down: down.x.length }
+    },
+
+    /** Row indices of the selected points (empty when nothing is selected). */
+    selectedRowIndices(): Set<number> {
+      const selected = new Set<number>()
+      if (!this.multiSelectEnabled) return selected
+      // Depend on the selection itself, not only on the data
+      void this.multiSelectionKey
+      this.volcanoData.forEach((row, idx) => {
+        if (this.isRowSelected(row as Record<string, unknown>)) selected.add(idx)
+      })
+      return selected
+    },
+
     /**
      * Build Plotly data traces.
      */
@@ -179,6 +258,7 @@ export default defineComponent({
           text: ns.text,
           hoverinfo: 'text',
           customdata: ns.indices,
+          ...this.selectionStyle(ns.indices),
         })
       }
 
@@ -197,6 +277,7 @@ export default defineComponent({
           text: down.text,
           hoverinfo: 'text',
           customdata: down.indices,
+          ...this.selectionStyle(down.indices),
         })
       }
 
@@ -215,7 +296,22 @@ export default defineComponent({
           text: up.text,
           hoverinfo: 'text',
           customdata: up.indices,
+          ...this.selectionStyle(up.indices),
         })
+      }
+
+      if (this.multiSelectEnabled && this.selectedRowIndices.size > 0) {
+        const x: number[] = []
+        const y: number[] = []
+        for (const group of [ns, down, up]) {
+          group.indices.forEach((rowIndex, i) => {
+            if (this.selectedRowIndices.has(rowIndex)) {
+              x.push(group.x[i])
+              y.push(group.y[i])
+            }
+          })
+        }
+        traces.push(...selectionOverlay(x, y, 8))
       }
 
       return traces
@@ -340,6 +436,24 @@ export default defineComponent({
       }))
     },
 
+    /** Identity of the plotted points: other data drops the measurements. */
+    measureKey(): string {
+      const x = this.args.log2fcColumn
+      const y = this.args.neglog10pColumn
+      return pointsKey(
+        this.volcanoData.map((row) => row[x]),
+        this.volcanoData.map((row) => row[y]),
+      )
+    },
+
+    /** Lines of the measurements. */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+      })
+    },
+
     /**
      * Build Plotly layout.
      */
@@ -356,6 +470,8 @@ export default defineComponent({
           x: 1,
         },
         height: this.args.height || 400,
+        dragmode: this.dragmode as Plotly.Layout['dragmode'],
+        ...SELECTION_LAYOUT,
         xaxis: {
           title: { text: this.args.xLabel || 'log2 Fold Change' },
           zeroline: true,
@@ -366,8 +482,8 @@ export default defineComponent({
           title: { text: this.args.yLabel || '-log10(p-value)' },
           rangemode: 'tozero',
         },
-        shapes: this.thresholdShapes,
-        annotations: this.pointAnnotations,
+        shapes: [...this.thresholdShapes, ...this.measureOverlay.shapes],
+        annotations: [...this.pointAnnotations, ...this.measureOverlay.annotations],
         margin: {
           l: 60,
           r: 20,
@@ -379,6 +495,36 @@ export default defineComponent({
   },
 
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.nativeZoom = incoming
+      const element = document.getElementById(this.id)
+      if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
+        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+      }
+    },
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+      },
+      immediate: true,
+    },
+
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
+    'measure.revision'() {
+      if (!this.isInitialized || !this.isDataReady) return
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
+    },
+
     isDataReady: {
       handler(newVal: boolean) {
         if (newVal && this.isInitialized) {
@@ -409,10 +555,18 @@ export default defineComponent({
         this.renderPlot()
       }
     },
+
+    // The selected set changed (here or in another component)
+    multiSelectionKey() {
+      if (this.isInitialized && this.isDataReady) {
+        this.renderPlot()
+      }
+    },
   },
 
   mounted() {
     this.isInitialized = true
+    this.nativeZoom = this.zoom.incoming() ?? null
     this.$nextTick(() => {
       if (this.isDataReady) {
         this.renderPlot()
@@ -434,8 +588,17 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig())
+        await Plotly.newPlot(
+          this.id, this.plotData, withZoom(this.layout, this.nativeZoom),
+          this.getPlotConfig([
+            ...(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
+            ...this.measure.modeBarButtons(),
+          ]),
+        )
         this.setupClickHandler()
+        this.setupSelectHandlers()
+        this.zoom.bindNative(element as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
+        this.measure.bindLabelClicks(element)
 
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
@@ -445,6 +608,72 @@ export default defineComponent({
         console.error('PlotlyVolcano: Error rendering plot:', error)
         this.renderFallback()
       }
+    },
+
+    /** Plotly's selection styling for a trace whose points are rows `indices`. */
+    selectionStyle(indices: number[]): Record<string, unknown> {
+      const selected = this.selectedRowIndices
+      if (!this.multiSelectEnabled || selected.size === 0) return {}
+      const points: number[] = []
+      indices.forEach((rowIndex, pointIndex) => {
+        if (selected.has(rowIndex)) points.push(pointIndex)
+      })
+      return {
+        selectedpoints: points,
+        selected: { marker: { opacity: 1 } },
+        unselected: { marker: { opacity: 0.15 } },
+      }
+    },
+
+    presetLabel(name: string): string {
+      const defaults: Record<string, string> = {
+        changed: 'All changed', up: 'Up', down: 'Down', clear: 'Clear',
+      }
+      return this.args.presetLabels?.[name] || defaults[name] || name
+    },
+
+    /** Select every significant (changed), up- or down-regulated point. */
+    selectPreset(preset: 'changed' | 'up' | 'down'): void {
+      const { up, down } = this.categorizedData
+      const indices = preset === 'up' ? up.indices : preset === 'down' ? down.indices : [...up.indices, ...down.indices]
+      const rows = indices.map((i) => this.volcanoData[i] as Record<string, unknown>)
+      this.applySelectedRows(rows, 'replace')
+    },
+
+    setupSelectHandlers(): void {
+      if (!this.multiSelectEnabled) return
+      const element = document.getElementById(this.id) as Plotly.PlotlyHTMLElement | null
+      if (!element) return
+      // Whether Shift was held while dragging: then the points are added
+      if (!element.dataset.shiftListener) {
+        element.dataset.shiftListener = '1'
+        element.addEventListener('mousedown', (e: MouseEvent) => {
+          this.shiftHeld = e.shiftKey
+        }, true)
+      }
+      element.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        const mode = (eventData as Record<string, unknown>).dragmode
+        if (typeof mode === 'string') this.dragmode = mode
+      })
+      element.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
+        // A click without dragging also ends in plotly_selected, without points
+        if (!eventData || !eventData.points) return
+        const rows: Record<string, unknown>[] = []
+        for (const point of eventData.points) {
+          const rowIndex = (point as unknown as { customdata?: unknown }).customdata
+          if (typeof rowIndex === 'number' && this.volcanoData[rowIndex]) {
+            rows.push(this.volcanoData[rowIndex] as Record<string, unknown>)
+          }
+        }
+        if (rows.length === 0 && !this.shiftHeld) {
+          this.clearSelection()
+          return
+        }
+        this.applySelectedRows(rows, this.shiftHeld ? 'add' : 'replace')
+      })
+      element.on('plotly_deselect', () => {
+        this.clearSelection()
+      })
     },
 
     getFallbackData(): Plotly.Data[] {
@@ -482,6 +711,51 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.volcano-plot-area {
+  position: relative;
+}
+
+.volcano-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 2px;
+  font-size: 13px;
+}
+.volcano-select-label {
+  font-weight: 600;
+  opacity: 0.8;
+}
+.volcano-select-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.volcano-select-button:hover:not(:disabled) {
+  border-color: rgba(128, 128, 128, 0.9);
+  background: rgba(128, 128, 128, 0.12);
+}
+.volcano-select-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.volcano-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.volcano-select-hint {
+  opacity: 0.65;
+  font-size: 12px;
+}
 .volcano-container {
   position: relative;
   width: 100%;

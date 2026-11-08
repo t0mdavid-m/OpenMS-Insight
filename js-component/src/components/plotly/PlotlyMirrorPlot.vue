@@ -1,14 +1,28 @@
 <template>
-  <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  <div ref="root" class="mirror-plot" :style="cssCustomProperties">
+    <MeasureHint v-if="args.measure" :measure="measure" />
+    <MeasureHint v-if="args.peakLabels" :measure="labels" />
+    <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
+    <div :id="id" class="plot-container"></div>
+  </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
-import Plotly from 'plotly.js-dist-min'
-import { type Theme } from 'streamlit-component-lib'
+import Plotly from '@/plotly/gl2d'
+import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { MirrorPlotComponentArgs } from '@/types/component'
+import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { usePinZoom } from '@/composables/usePinZoom'
+import { useZoomState } from '@/composables/useZoomState'
+import MeasureHint from './MeasureHint.vue'
+import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
+import PeakLabelEditor from './PeakLabelEditor.vue'
+import { imageFormatOf } from '@/utils/imageExport'
+import { plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
 const DEFAULT_STYLING = {
@@ -46,6 +60,7 @@ interface AnnotationBox {
 
 export default defineComponent({
   name: 'PlotlyMirrorPlot',
+  components: { MeasureHint, PeakLabelEditor },
   props: {
     args: {
       type: Object as PropType<MirrorPlotComponentArgs>,
@@ -56,16 +71,21 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore }
+    const measure = useMeasure(() => !!props.args.measure)
+    const labels = usePeakLabels(() => !!props.args.peakLabels)
+    const pinZoom = usePinZoom(() => !!props.args.keepZoom)
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp }
   },
   data() {
     return {
       isInitialized: false as boolean,
       manualXRange: undefined as number[] | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
+      labelEditorPosition: null as { left: number; top: number } | null,
     }
   },
   computed: {
@@ -80,6 +100,26 @@ export default defineComponent({
     },
     cssCustomProperties(): Record<string, string> {
       return {}
+    },
+    measureColor(): string {
+      return this.theme?.textColor || '#262730'
+    },
+    /** Differences along m/z, matched to residues at 1+ and 2+. */
+    measureSpec(): MeasureSpec {
+      return {
+        kind: 'span',
+        xQuantity: 'm/z',
+        charges: MEASURE_CHARGES,
+        tolerance: this.args.measureTolerance,
+        residues: this.args.measureResidues,
+      }
+    },
+    /**
+     * Identity of the plotted spectra, so a rerun that sends the same peaks
+     * keeps the measurements.
+     */
+    spectrumKey(): string {
+      return `${pointsKey(this.topData?.x, this.topData?.y)}|${pointsKey(this.bottomData?.x, this.bottomData?.y)}`
     },
     /**
      * Get plot config from Python (sent with data, may have dynamic column names).
@@ -167,21 +207,49 @@ export default defineComponent({
     },
   },
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.manualXRange = incoming?.x
+      this.render()
+    },
     topData: {
       handler() {
         // Data changed (e.g., new spectrum selected) — reset zoom so the new
-        // data is shown at full extent. Matches PlotlyLineplot's plotData watcher.
-        this.manualXRange = undefined
+        // data is shown at full extent, unless the zoom is pinned. Matches
+        // PlotlyLineplot's plotData watcher.
+        this.measure.setDataKey(this.spectrumKey)
+        this.labels.setDataKey(this.spectrumKey)
+        this.resetZoomForData()
         this.render()
       },
       deep: true,
     },
     bottomData: {
       handler() {
-        this.manualXRange = undefined
+        this.measure.setDataKey(this.spectrumKey)
+        this.labels.setDataKey(this.spectrumKey)
+        this.resetZoomForData()
         this.render()
       },
       deep: true,
+    },
+    // Measurements added or removed
+    'measure.revision'() {
+      this.recolor()
+    },
+    // Labels added, changed or removed, or the text box opened or closed
+    'labels.revision'() {
+      this.recolor()
+      this.placeLabelEditor()
+    },
+    // One click tool at a time
+    'measure.mode'(on: boolean) {
+      if (on) this.labels.stop()
+    },
+    'labels.mode'(on: boolean) {
+      if (on && this.measure.mode) this.measure.toggle()
     },
     'selectionStore.$state': {
       handler() {
@@ -192,6 +260,10 @@ export default defineComponent({
     },
   },
   mounted() {
+    const zoom = this.zoom.incoming()
+    if (zoom) this.manualXRange = zoom.x
+    this.measure.setDataKey(this.spectrumKey)
+    this.labels.setDataKey(this.spectrumKey)
     this.render()
   },
   methods: {
@@ -404,7 +476,8 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataTop, 'top'),
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
-      const shapes = [...stickShapes, ...labelShapes]
+      const measureOverlay = this.buildMeasureOverlay()
+      const shapes = [...stickShapes, ...labelShapes, ...measureOverlay.shapes]
 
       // Marker traces give us click events (the shapes alone don't)
       const traces: Partial<Plotly.PlotData>[] = [
@@ -429,7 +502,12 @@ export default defineComponent({
       ]
 
       const tickValues = [-yMax, -yMax / 2, 0, yMax / 2, yMax]
-      const tickText = tickValues.map((v) => Math.abs(v).toFixed(0))
+      // Whole numbers for intensities; relative abundances (below 100) keep
+      // up to three significant digits instead of rounding 0.5 to "1"
+      const tickText = tickValues.map((v) => {
+        const value = Math.abs(v)
+        return value >= 100 ? value.toFixed(0) : String(Number(value.toPrecision(3)))
+      })
 
       const titleAnnotations: Partial<Plotly.Annotations>[] = [
         ...(this.args.titleTop
@@ -466,6 +544,8 @@ export default defineComponent({
         ...titleAnnotations,
         ...this.buildPeakAnnotations(this.annotationBoxDataTop, 'top'),
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
+        ...measureOverlay.annotations,
+        ...this.buildLabelOverlay(),
       ]
 
       const layout: Partial<Plotly.Layout> = {
@@ -517,22 +597,21 @@ export default defineComponent({
         responsive: true,
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: Plotly.Icons.camera,
-            click: (plotElement: HTMLElement) => {
-              Plotly.downloadImage(plotElement, {
-                filename: this.args.svgFilename || this.args.title || 'mirror_plot',
-                height: this.args.height || 400,
-                width: 1200,
-                format: 'svg',
-              })
-            },
-          },
+          plotlyDownloadButton({
+            format: () => imageFormatOf(this.args.imageFormat),
+            filename: () => this.args.svgFilename || this.args.title || 'mirror_plot',
+            height: this.args.height || 400,
+          }),
+          ...this.measure.modeBarButtons('Measure: click two peaks of the same spectrum (Esc cancels)'),
+          ...this.labels.modeBarButtons(),
+          ...this.pinZoom.modeBarButtons(),
         ],
       })
+      this.pinZoom.bind(element)
       this.isInitialized = true
+      // The frame follows the plot's height. Without this a mirror plot first
+      // drawn in a zero-height frame (e.g. below the fold) stayed invisible.
+      this.$nextTick(() => Streamlit.setFrameHeight())
 
       // Wire click handler for interactivity
       const plotEl = element as Plotly.PlotlyHTMLElement
@@ -544,6 +623,32 @@ export default defineComponent({
         const sourceData = traceIdx === 0 ? this.topData : this.bottomData
         if (!sourceData) return
 
+        // In label mode a click opens the text box for the peak's label
+        if (this.labels.active) {
+          const pointIndex = pt.pointIndex ?? pt.pointNumber
+          if (typeof pointIndex === 'number' && pointIndex >= 0 && pointIndex < sourceData.x.length) {
+            const side = traceIdx === 0 ? 'top' : 'bottom'
+            const y = sourceData.y[pointIndex]
+            this.labels.pick({ x: sourceData.x[pointIndex], y: side === 'top' ? y : -y, group: side })
+          }
+          return
+        }
+
+        // In measure mode a click picks a peak to measure, not a selection
+        if (this.measure.active) {
+          const pointIndex = pt.pointIndex ?? pt.pointNumber
+          if (typeof pointIndex === 'number' && pointIndex >= 0 && pointIndex < sourceData.x.length) {
+            // A measurement stays in one half; the lower half is drawn negated
+            const side = traceIdx === 0 ? 'top' : 'bottom'
+            const y = sourceData.y[pointIndex]
+            this.measure.pick(
+              { x: sourceData.x[pointIndex], y: side === 'top' ? y : -y, group: side },
+              this.measureSpec,
+            )
+          }
+          return
+        }
+
         const interactivity = this.args.interactivity
         if (!interactivity) return
 
@@ -554,6 +659,12 @@ export default defineComponent({
           }
         }
       })
+
+      // A click on a measurement's label removes that measurement
+      this.measure.bindLabelClicks(plotEl)
+      // In label mode a click on one of your labels opens it for changing
+      this.labels.bindLabelClicks(plotEl)
+      this.placeLabelEditor()
 
       // Wire relayout handler so x-zoom/pan triggers a re-render with
       // recomputed y-axis range and re-evaluated label visibility.
@@ -582,10 +693,26 @@ export default defineComponent({
           newXRange[0] = 0
         }
         this.manualXRange = newXRange
+        this.zoom.report({ x: newXRange as [number, number] })
         this.render()
       } else if (eventData['xaxis.autorange'] === true) {
         this.manualXRange = undefined
+        this.zoom.report(null)
         this.render()
+      }
+    },
+
+    /**
+     * New data is shown at full extent, unless the zoom is pinned or a zoom
+     * came with it (a saved view opened).
+     */
+    resetZoomForData(): void {
+      const incoming = this.zoom.incoming()
+      if (incoming !== undefined) {
+        this.manualXRange = incoming?.x
+      } else if (!this.pinZoom.pinned) {
+        if (this.manualXRange) this.zoom.report(null)
+        this.manualXRange = undefined
       }
     },
 
@@ -676,7 +803,8 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataTop, 'top'),
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
-      const shapes = [...stickShapes, ...labelShapes]
+      const measureOverlay = this.buildMeasureOverlay()
+      const shapes = [...stickShapes, ...labelShapes, ...measureOverlay.shapes]
 
       const titleAnnotations: Partial<Plotly.Annotations>[] = [
         ...(this.args.titleTop
@@ -712,17 +840,54 @@ export default defineComponent({
         ...titleAnnotations,
         ...this.buildPeakAnnotations(this.annotationBoxDataTop, 'top'),
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
+        ...measureOverlay.annotations,
+        ...this.buildLabelOverlay(),
       ]
 
       void Plotly.relayout(this.id, { shapes, annotations })
+    },
+
+    /** Your peak labels, as annotations (see usePeakLabels). */
+    buildLabelOverlay(): Partial<Plotly.Annotations>[] {
+      return this.labels.overlay({
+        color: this.measureColor,
+        background: this.theme?.backgroundColor || 'white',
+        ySign: (group) => (group === 'bottom' ? -1 : 1),
+      })
+    },
+
+    /** Put the label text box over the peak being labelled. */
+    placeLabelEditor(): void {
+      const draft = this.labels.draft
+      this.labelEditorPosition = draft
+        ? plotPointPosition(
+            document.getElementById(this.id),
+            this.$refs.root as HTMLElement | null,
+            draft.x,
+            draft.y,
+          )
+        : null
+    },
+
+    /** Brackets of the measurements, as shapes and annotations (see useMeasure). */
+    buildMeasureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.measureColor,
+        background: this.theme?.backgroundColor || 'white',
+        yScale: this.yMaxData,
+        ySign: (group) => (group === 'bottom' ? -1 : 1),
+      })
     },
   },
 })
 </script>
 
 <style scoped>
+.mirror-plot {
+  position: relative;
+}
+
 .plot-container {
   width: 100%;
-  height: 100%;
 }
 </style>
