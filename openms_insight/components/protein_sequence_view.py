@@ -370,10 +370,12 @@ class ProteinSequenceView(BaseComponent):
                 which become the residues' variable modifications.
             isotope_errors: Also match fragment masses that are off by up to
                 this many whole isotopes (± n × 1.00235 Da), as deconvolution
-                can place a monoisotopic mass. Shows the setting in the view's
-                menu (starting at this value), an Isotope column in the
-                fragment table, and the precursor's Δ in ppm with its isotope
-                reading. None (default): no setting, exact matches only.
+                can place a monoisotopic mass. Shows a "Match isotope errors"
+                switch in the view's menu, on for n > 0 (off for 0), with the
+                number of isotopes starting at n; while it is on, the fragment
+                table has an Isotope column. The precursor's Δ in ppm and its
+                isotope reading are shown either way. None (default): no
+                setting, exact matches only.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
