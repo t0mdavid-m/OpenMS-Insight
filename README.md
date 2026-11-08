@@ -272,6 +272,8 @@ LinePlot(
 - `styling`: Color configuration dict
 - `keep_zoom`: Start with the zoom pinned (default `False`). The pin button in the mode bar toggles it: pinned, the zoomed x range stays when another spectrum is selected; unpinned, each new spectrum is shown in full. Double-click resets the zoom either way. `MirrorPlot` and `DeconvolvedSpectrum` have the same button and argument
 
+Hovering shows the peak nearest the mouse along x, anywhere in the plot's height: a dot on the peak top and a box with its x and y (and its annotation, if any). Within two pixels of the mouse the most intense peak wins, so a dense profile spectrum reports the peak that is drawn.
+
 ### MirrorPlot
 
 Two stick-style spectra rendered against a shared x-axis with the bottom half flipped, used for comparing paired spectra (experimental vs. theoretical, sample vs. reference, MS1 vs. MS2 fragments). Each half is filtered independently, while clicks on either half feed into one shared selection.
