@@ -3,6 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -17,11 +18,14 @@ import type { MirrorPlotComponentArgs } from '@/types/component'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
+import { useZoomState } from '@/composables/useZoomState'
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import { imageFormatOf } from '@/utils/imageExport'
-import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
 const DEFAULT_STYLING = {
@@ -59,7 +63,7 @@ interface AnnotationBox {
 
 export default defineComponent({
   name: 'PlotlyMirrorPlot',
-  components: { MeasureHint, PeakLabelEditor },
+  components: { MeasureHint, PeakLabelEditor, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<MirrorPlotComponentArgs>,
@@ -76,7 +80,8 @@ export default defineComponent({
     const measure = useMeasure(() => !!props.args.measure)
     const labels = usePeakLabels(() => !!props.args.peakLabels)
     const pinZoom = usePinZoom(() => !!props.args.keepZoom)
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom }
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp }
   },
   data() {
     return {
@@ -87,6 +92,25 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    plotHeight(): number {
+      return (this.args.height || 400) - TOOLBAR_HEIGHT
+    },
+
+    toolbarTools(): PlotTool[] {
+      return [
+        ...this.measure.tools('click two peaks of the same spectrum (Esc cancels)'),
+        ...this.labels.tools(),
+        ...this.pinZoom.tools(),
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || this.args.title || 'mirror_plot',
+          height: this.args.height || 400,
+        }),
+      ]
+    },
+
     id(): string {
       return `mirror-plot-${this.index}`
     },
@@ -205,6 +229,13 @@ export default defineComponent({
     },
   },
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.manualXRange = incoming?.x
+      this.render()
+    },
     topData: {
       handler() {
         // Data changed (e.g., new spectrum selected) — reset zoom so the new
@@ -212,7 +243,7 @@ export default defineComponent({
         // PlotlyLineplot's plotData watcher.
         this.measure.setDataKey(this.spectrumKey)
         this.labels.setDataKey(this.spectrumKey)
-        if (!this.pinZoom.pinned) this.manualXRange = undefined
+        this.resetZoomForData()
         this.render()
       },
       deep: true,
@@ -221,7 +252,7 @@ export default defineComponent({
       handler() {
         this.measure.setDataKey(this.spectrumKey)
         this.labels.setDataKey(this.spectrumKey)
-        if (!this.pinZoom.pinned) this.manualXRange = undefined
+        this.resetZoomForData()
         this.render()
       },
       deep: true,
@@ -251,6 +282,8 @@ export default defineComponent({
     },
   },
   mounted() {
+    const zoom = this.zoom.incoming()
+    if (zoom) this.manualXRange = zoom.x
     this.measure.setDataKey(this.spectrumKey)
     this.labels.setDataKey(this.spectrumKey)
     this.render()
@@ -540,7 +573,7 @@ export default defineComponent({
       const layout: Partial<Plotly.Layout> = {
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: false,
-        height: this.args.height || 400,
+        height: this.plotHeight,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           showgrid: false,
@@ -585,16 +618,7 @@ export default defineComponent({
       await Plotly.newPlot(element, traces, layout, {
         responsive: true,
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: [
-          plotlyDownloadButton({
-            format: () => imageFormatOf(this.args.imageFormat),
-            filename: () => this.args.svgFilename || this.args.title || 'mirror_plot',
-            height: this.args.height || 400,
-          }),
-          ...this.measure.modeBarButtons('Measure: click two peaks of the same spectrum (Esc cancels)'),
-          ...this.labels.modeBarButtons(),
-          ...this.pinZoom.modeBarButtons(),
-        ],
+        displaylogo: false,
       })
       this.pinZoom.bind(element)
       this.isInitialized = true
@@ -682,10 +706,26 @@ export default defineComponent({
           newXRange[0] = 0
         }
         this.manualXRange = newXRange
+        this.zoom.report({ x: newXRange as [number, number] })
         this.render()
       } else if (eventData['xaxis.autorange'] === true) {
         this.manualXRange = undefined
+        this.zoom.report(null)
         this.render()
+      }
+    },
+
+    /**
+     * New data is shown at full extent, unless the zoom is pinned or a zoom
+     * came with it (a saved view opened).
+     */
+    resetZoomForData(): void {
+      const incoming = this.zoom.incoming()
+      if (incoming !== undefined) {
+        this.manualXRange = incoming?.x
+      } else if (!this.pinZoom.pinned) {
+        if (this.manualXRange) this.zoom.report(null)
+        this.manualXRange = undefined
       }
     },
 

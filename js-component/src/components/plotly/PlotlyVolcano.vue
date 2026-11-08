@@ -21,7 +21,8 @@
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div class="volcano-plot-area">
-      <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+      <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+      <div :id="id" class="volcano-container" :style="{ minHeight: `${plotHeight}px` }"></div>
       <MeasureHint v-if="args.measure" :measure="measure" />
     </div>
   </div>
@@ -32,11 +33,14 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionTool, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
+import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 /**
  * Compute significance category for a point.
@@ -58,7 +62,7 @@ function computeSignificance(
 
 export default defineComponent({
   name: 'PlotlyVolcano',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<VolcanoPlotComponentArgs>,
@@ -93,6 +97,7 @@ export default defineComponent({
       imageFormat: computed(() => props.args.imageFormat),
     })
 
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
     const multi = useMultiSelect(computed(() => props.args.multiSelect))
 
     return {
@@ -105,11 +110,15 @@ export default defineComponent({
       isRowSelected: multi.isRowSelected,
       applySelectedRows: multi.applyRows,
       clearSelection: multi.clear,
+      zoom,
+      zoomStamp: zoom.stamp,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
+      // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
+      nativeZoom: null as ZoomValue | null,
       // Box or lasso select when several points can be selected, else zoom;
       // kept across re-renders when the user switches in the mode bar
       dragmode: (this.args.multiSelect && Object.keys(this.args.multiSelect).length > 0
@@ -119,6 +128,19 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    plotHeight(): number {
+      return (this.args.height || 400) - TOOLBAR_HEIGHT
+    },
+
+    toolbarTools(): PlotTool[] {
+      return [
+        ...(this.multiSelectEnabled ? [clearSelectionTool(() => this.clearSelection(), this.selectedCount)] : []),
+        ...this.measure.tools(),
+        this.downloadTool(),
+      ]
+    },
+
     id(): string {
       return `volcano-${this.index}`
     },
@@ -463,7 +485,7 @@ export default defineComponent({
           xanchor: 'right',
           x: 1,
         },
-        height: this.args.height || 400,
+        height: this.plotHeight,
         dragmode: this.dragmode as Plotly.Layout['dragmode'],
         ...SELECTION_LAYOUT,
         xaxis: {
@@ -489,6 +511,16 @@ export default defineComponent({
   },
 
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.nativeZoom = incoming
+      const element = document.getElementById(this.id)
+      if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
+        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+      }
+    },
     measureKey: {
       handler(key: string) {
         this.measure.setDataKey(key)
@@ -550,6 +582,7 @@ export default defineComponent({
 
   mounted() {
     this.isInitialized = true
+    this.nativeZoom = this.zoom.incoming() ?? null
     this.$nextTick(() => {
       if (this.isDataReady) {
         this.renderPlot()
@@ -572,14 +605,12 @@ export default defineComponent({
         }
 
         await Plotly.newPlot(
-          this.id, this.plotData, this.layout,
-          this.getPlotConfig([
-            ...(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
-            ...this.measure.modeBarButtons(),
-          ]),
+          this.id, this.plotData, withZoom(this.layout, this.nativeZoom),
+          this.getPlotConfig(),
         )
         this.setupClickHandler()
         this.setupSelectHandlers()
+        this.zoom.bindNative(element as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
         this.measure.bindLabelClicks(element)
 
         // Update Streamlit iframe height after plot is rendered

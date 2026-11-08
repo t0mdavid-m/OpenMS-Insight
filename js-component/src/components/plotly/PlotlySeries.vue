@@ -1,6 +1,7 @@
 <template>
   <div class="series-plot">
     <MeasureHint v-if="args.measure" :measure="measure" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -16,13 +17,16 @@ import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { imageFormatOf } from '@/utils/imageExport'
-import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
+import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlySeries',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<SeriesPlotComponentArgs>,
@@ -37,14 +41,28 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
-    return { streamlitDataStore, selectionStore, measure, uniqueId: `series-plot-${++plotIdCounter}` }
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, zoom, zoomStamp: zoom.stamp, uniqueId: `series-plot-${++plotIdCounter}` }
   },
   data() {
     return {
       drawPending: false,
+      // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
+      nativeZoom: null as ZoomValue | null,
     }
   },
   computed: {
+    toolbarTools(): PlotTool[] {
+      return [
+        ...this.measure.tools(this.measureTitle),
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || this.args.title || 'plot',
+          height: this.args.height || 400,
+        }),
+      ]
+    },
     argsKey(): string {
       return JSON.stringify(this.args)
     },
@@ -127,7 +145,7 @@ export default defineComponent({
       return { kind: 'span', xQuantity: axisQuantity(this.args.xLabel, 'x') }
     },
     measureTitle(): string {
-      return `Measure: click two points for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
+      return `click two points for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
     },
     /** Identity of the plotted points: other data drops the measurements. */
     measureKey(): string {
@@ -162,7 +180,7 @@ export default defineComponent({
         annotations: this.measureOverlay.annotations,
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: this.args.showLegend !== false,
-        height: this.args.height || 400,
+        height: (this.args.height || 400) - TOOLBAR_HEIGHT,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           showgrid: false,
@@ -184,6 +202,16 @@ export default defineComponent({
     },
   },
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.nativeZoom = incoming
+      const element = document.getElementById(this.id)
+      if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
+        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+      }
+    },
     measureKey: {
       handler(key: string) {
         this.measure.setDataKey(key)
@@ -216,6 +244,7 @@ export default defineComponent({
     },
   },
   mounted() {
+    this.nativeZoom = this.zoom.incoming() ?? null
     this.requestRender()
   },
   methods: {
@@ -232,22 +261,16 @@ export default defineComponent({
     async renderPlot(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
-      await Plotly.newPlot(element, this.traces, this.layout, {
+      await Plotly.newPlot(element, this.traces, withZoom(this.layout, this.nativeZoom), {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: [
-          plotlyDownloadButton({
-            format: () => imageFormatOf(this.args.imageFormat),
-            filename: () => this.args.svgFilename || this.args.title || 'plot',
-            height: this.args.height || 400,
-          }),
-          ...this.measure.modeBarButtons(this.measureTitle),
-        ],
+        displaylogo: false,
         responsive: true,
       })
       const plotElement = element as unknown as {
         on: (event: string, handler: (data: { points: Array<{ curveNumber: number; pointIndex: number }> }) => void) => void
       }
       plotElement.on('plotly_click', (eventData) => this.onClick(eventData))
+      this.zoom.bindNative(element as unknown as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
       this.measure.bindLabelClicks(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },

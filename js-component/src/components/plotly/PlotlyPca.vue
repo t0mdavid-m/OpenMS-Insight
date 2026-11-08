@@ -1,6 +1,7 @@
 <template>
   <div class="pca-plot">
     <MeasureHint v-if="args.measure" :measure="measure" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="pca-container"></div>
   </div>
 </template>
@@ -14,6 +15,9 @@ import type { PCAPlotComponentArgs, PCAData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
+import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 /** Default qualitative palette, shared with PlotlyHeatmap's categorical mode. */
 const DEFAULT_GROUP_COLORS = [
@@ -92,7 +96,7 @@ function computeEllipse(xs: number[], ys: number[], nPoints = 60): { x: number[]
 
 export default defineComponent({
   name: 'PlotlyPca',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<PCAPlotComponentArgs>,
@@ -104,6 +108,7 @@ export default defineComponent({
     },
   },
   setup(props) {
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
     const streamlitDataStore = useStreamlitDataStore()
 
     // Use shared Plotly scatter composable (resize, theme, image download).
@@ -123,14 +128,22 @@ export default defineComponent({
       streamlitDataStore,
       ...plotlyScatter,
       measure: useMeasure(() => !!props.args.measure),
+      zoom,
+      zoomStamp: zoom.stamp,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
+      // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
+      nativeZoom: null as ZoomValue | null,
     }
   },
   computed: {
+    toolbarTools(): PlotTool[] {
+      return [...this.measure.tools(), this.downloadTool()]
+    },
+
     id(): string {
       return `pca-${this.index}`
     },
@@ -353,7 +366,7 @@ export default defineComponent({
           xanchor: 'right',
           x: 1,
         },
-        height: this.args.height || 400,
+        height: (this.args.height || 400) - TOOLBAR_HEIGHT,
         xaxis: {
           title: { text: this.args.xLabel || this.args.xColumn },
           zeroline: true,
@@ -381,6 +394,16 @@ export default defineComponent({
   },
 
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.nativeZoom = incoming
+      const element = document.getElementById(this.id)
+      if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
+        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+      }
+    },
     measureKey: {
       handler(key: string) {
         this.measure.setDataKey(key)
@@ -422,6 +445,7 @@ export default defineComponent({
 
   mounted() {
     this.isInitialized = true
+    this.nativeZoom = this.zoom.incoming() ?? null
     this.$nextTick(() => {
       if (this.isDataReady) {
         this.renderPlot()
@@ -443,8 +467,12 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig(this.measure.modeBarButtons()))
+        await Plotly.newPlot(
+          this.id, this.plotData, withZoom(this.layout, this.nativeZoom),
+          this.getPlotConfig(),
+        )
         this.setupPcaClickHandler()
+        this.zoom.bindNative(element as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
         this.measure.bindLabelClicks(element)
 
         // Update Streamlit iframe height after plot is rendered

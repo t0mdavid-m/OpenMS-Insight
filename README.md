@@ -270,7 +270,10 @@ LinePlot(
 - `highlight_column`: Boolean/int column indicating which points to highlight
 - `annotation_column`: Text column for labels on highlighted points
 - `styling`: Color configuration dict
-- `keep_zoom`: Start with the zoom pinned (default `False`). The pin button in the mode bar toggles it: pinned, the zoomed x range stays when another spectrum is selected; unpinned, each new spectrum is shown in full. Double-click resets the zoom either way. `MirrorPlot` and `DeconvolvedSpectrum` have the same button and argument
+- `keep_zoom`: Start with the zoom pinned (default `False`). The pin button in the plot toolbar toggles it: pinned, the zoomed x range stays when another spectrum is selected; unpinned, each new spectrum is shown in full. Double-click resets the zoom either way. `MirrorPlot` and `DeconvolvedSpectrum` have the same button and argument
+- `top_peak_labels`, `show_top_peak_labels`: The **Label top peaks** button (a number sign) in the plot toolbar shows the m/z of the most intense peaks in view, 10 by default (`top_peak_labels=0` removes the button). The labels are placed again on every zoom or pan, most intense first, leaving out any that would overlap, so zooming in labels more peaks. `show_top_peak_labels=True` starts with them shown. Peaks carrying one of your own labels keep only that label. Render-time only, like `keep_zoom`
+
+Hovering shows the peak nearest the mouse along x, anywhere in the plot's height: a dot on the peak top and a box with its x and y (and its annotation, if any). Within two pixels of the mouse the most intense peak wins, so a dense profile spectrum reports the peak that is drawn.
 
 ### MirrorPlot
 
@@ -487,7 +490,7 @@ naming the number of affected rows. Impute first (see
 
 **Mouse-wheel zoom is disabled** here. The layout anchors the heatmap, both
 dendrograms and the group bar to manually positioned axes, which `scrollZoom`
-re-ranges inconsistently. Use the mode bar's box zoom instead.
+re-ranges inconsistently. Use the toolbar's box zoom instead.
 
 ### VolcanoPlot
 
@@ -653,7 +656,7 @@ spectrum(key="spectrum", state_manager=state_manager)
 - `annotated`: the raw peaks, with the signal peaks of the selected mass highlighted and each charge state labelled `z=N`.
 - `ladder`: the masses with a sequence tag drawn as a ladder, set per render with `set_ladder(masses, sequence)`. Clicking a ladder mass shows its raw peaks.
 
-**Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. A mode bar button hides or shows them.
+**Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. The **Fragments** button in the toolbar's Show group hides or shows them.
 
 ### SeriesPlot
 
@@ -782,11 +785,11 @@ picked proteins, and the same works for masses, scans or any other column.
 | Component | How the user selects |
 |-----------|----------------------|
 | `Table` | A check mark button in the toolbar shows a check box per row (hidden until then); Shift-click ticks a range; the header box ticks every row passing the filters (on a paginated table, in Python over all pages). Selected rows are marked by a bar on the left whether or not the boxes are shown |
-| `VolcanoPlot` | Box or lasso select in Plotly's mode bar (Shift adds). With `selection_presets=True`, buttons above the plot select **All changed**, **Up** or **Down** at the plot's cut-offs; `preset_labels={"up": ..., "down": ..., "changed": ..., "clear": ...}` renames them |
-| `Heatmap` | Box or lasso select in Plotly's mode bar (Shift adds); the region is resolved in Python on the full data, not the downsampled level shown; every point of the picked entries is marked |
+| `VolcanoPlot` | Box or lasso select in the plot toolbar (Shift adds). With `selection_presets=True`, buttons above the plot select **All changed**, **Up** or **Down** at the plot's cut-offs; `preset_labels={"up": ..., "down": ..., "changed": ..., "clear": ...}` renames them |
+| `Heatmap` | Box or lasso select in the plot toolbar (Shift adds); the region is resolved in Python on the full data, not the downsampled level shown; every point of the picked entries is marked |
 | `ClusteredHeatmap` | Box or lasso select over rows (the column must be `id_col`); selected rows are outlined |
 
-Each plot's mode bar gets a **Clear selection** button (the eraser).
+Each plot's toolbar gets a **Clear selection** button, with the number of selected points on it.
 
 ```python
 volcano = VolcanoPlot(
@@ -801,9 +804,24 @@ picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
 picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
 ```
 
+### Plot toolbar
+
+Every Plotly component draws its tools in a row above the plot, in labelled
+groups: **View** (box zoom, pan, select, zoom in and out, autoscale, reset, pin
+zoom, clear selection), **Annotate** (measure, peak labels, top peak labels),
+**Show** (switches such as the colorbar or the fragment ions) and **Download**.
+A tool that is on is highlighted, and a tool that made something (measurements,
+labels, a selection) shows how many, with an × that removes them. The row is
+always visible, not only on hover. Its 36 px are taken from the plot, so a
+component keeps the `height` it is given.
+
+When the groups do not fit the panel's width, the row keeps only the tools that
+are on or hold something, plus Reset, and offers every tool in a menu behind ⋯,
+sorted into the same groups. The toolbar follows the Streamlit theme.
+
 ### Measuring (`measure`)
 
-Every 2D plot has a **Measure** button (a ruler) in its Plotly mode bar: `LinePlot`,
+Every 2D plot has a **Measure** button (a ruler) in its plot toolbar: `LinePlot`,
 `MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum`, `Heatmap`, `VolcanoPlot` and
 `PCAPlot`. It is on by default; `measure=False` removes it. Pressing it switches
 clicks from selecting to measuring: click a point, then a second one. While measuring
@@ -839,8 +857,8 @@ have no measure tool.
 
 ### Peak labels (`peak_labels`)
 
-`LinePlot` and `MirrorPlot` have a **Label peaks** button (a tag) in their Plotly
-mode bar, next to the ruler. It is on by default; `peak_labels=False` removes it.
+`LinePlot` and `MirrorPlot` have a **Label peaks** button (a tag) in their plot
+toolbar, next to the ruler. It is on by default; `peak_labels=False` removes it.
 In label mode a click on a peak opens a small text box at the peak: type a label,
 Enter keeps it and Esc closes the box. Clicking one of your labels opens it again
 to change the text, and an empty text removes it. The **Remove peak labels**
@@ -852,6 +870,24 @@ spectrum shows that spectrum's labels, and going back shows the earlier ones aga
 They are plain Plotly annotations with an arrow to their peak, so the image
 download includes them. Like the measure options, `peak_labels` is a render-time
 setting and never part of the cache configuration.
+
+### Keeping the zoom in the state (`zoom_identifier`)
+
+`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot` and `Heatmap` take a `zoom_identifier`. The plot then reports its axis ranges to the `StateManager` under that identifier after a zoom or pan, and zooms to a value set there from Python. The value is plain JSON, so a page can store it (in a saved view, say) and set it before the plot is ever drawn:
+
+```python
+state = StateManager("viewer")
+state.set_selection("zoom@spectrum", {"x": [400.0, 900.0]})        # m/z 400 to 900
+state.set_selection("zoom@peak_map", {"x": [10.0, 20.0], "y": [450.0, 800.0]})
+
+LinePlot(cache_id="spectrum", ..., zoom_identifier="zoom@spectrum")(state_manager=state)
+```
+
+- `x` and `y` are `[low, high]`. A missing axis shows its full extent, and `None` is the full view.
+- The spectrum plots keep only the x range; their y axis follows the visible peaks.
+- Without `zoom_identifier` (the default) the zoom stays in the browser, as before. Only `Heatmap` always reports its zoom (default identifier `heatmap_zoom`), because the zoom picks the resolution of its data; it reads `{"x", "y"}` as well as its own `{"xRange", "yRange"}`.
+- Each report reruns the script once, debounced to 0.4 s after the last zoom or pan, like any change of the state. Give an identifier only to plots whose zoom should be kept.
+- Render-time only: it is not part of the cache.
 
 ### Image downloads (`image_format`)
 
@@ -881,13 +917,13 @@ LinePlot(
 
 | Component | Download button | Notes |
 |-----------|-----------------|-------|
-| `LinePlot`, `MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum` | Plotly mode bar | |
-| `Heatmap`, `VolcanoPlot`, `PCAPlot`, `ClusteredHeatmap` | Plotly mode bar | |
-| `Plot3D` | Plotly mode bar | WebGL scene: Plotly embeds it as a picture, also in SVG. `export_format="png"` (older API) still means PNG unless `image_format` is given |
+| `LinePlot`, `MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum` | plot toolbar | |
+| `Heatmap`, `VolcanoPlot`, `PCAPlot`, `ClusteredHeatmap` | plot toolbar | |
+| `Plot3D` | plot toolbar | WebGL scene: Plotly embeds it as a picture, also in SVG. `export_format="png"` (older API) still means PNG unless `image_format` is given |
 | `SequenceView`, `ProteinSequenceView` | Download button above the sequence | Saved from the page (dom-to-image) |
 | `ProteinStructureView` | Camera button | WebGL scene with no vector form: `"svg"` saves a PNG |
 
-The mode bar button reads "Download as SVG" (or PNG, JPEG, WebP). SVG keeps the
+The toolbar button's tooltip reads "Download as SVG" (or PNG, JPEG, WebP). SVG keeps the
 size the plots always had; PNG, JPEG and WebP are drawn at twice the size the
 view has on screen. A browser that cannot write WebP from a page (Safari) saves
 PNG instead. The file name comes from `svg_filename` where a component has it
@@ -949,6 +985,10 @@ table = Table(
 ```
 
 Render-only settings such as `title` and `colorscale` currently take part in the cache key, so changing one rebuilds the cache rather than being ignored. That is wasteful but safe.
+
+## Caches on S3
+
+When the app's workspaces live on an S3 bucket mounted as a file system (the OpenMS streamlit-template's optional S3 storage), components still write their caches to the mounted path, but read the cached parquet files through the S3 API, so polars fetches only the row groups and columns a render needs. This is switched on by the environment, not by component arguments: it applies when `WORKSPACES_S3_ENDPOINT`, `WORKSPACES_S3_BUCKET`, `WORKSPACES_S3_ACCESS_KEY` and `WORKSPACES_S3_SECRET_KEY` are all set and the cache lies under `WORKSPACES_DIR` (the bucket's root). Otherwise files are read from the local path as before. `OPENMS_INSIGHT_S3=0` turns it off. The helper is `openms_insight.core.storage.scan_parquet`.
 
 ## Cache Reconstruction
 

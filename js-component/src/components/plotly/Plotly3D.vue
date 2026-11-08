@@ -1,5 +1,8 @@
 <template>
-  <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
+  <div class="plot3d">
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -10,7 +13,9 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { Plot3DComponentArgs } from '@/types/component'
 import { imageFormatOf } from '@/utils/imageExport'
-import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 
 // Floor the stems and trace starts drop to. Far below zero so the vertical
 // segment always reaches the bottom of the z range, which starts at 0.
@@ -30,6 +35,7 @@ interface SeriesPoints {
 
 export default defineComponent({
   name: 'Plotly3D',
+  components: { PlotToolbar },
   props: {
     args: {
       type: Object as PropType<Plot3DComponentArgs>,
@@ -51,6 +57,18 @@ export default defineComponent({
     }
   },
   computed: {
+    toolbarTools(): PlotTool[] {
+      const height = this.args.height || 800
+      return [
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || this.title || 'plot3d',
+          width: height,
+          height,
+        }),
+      ]
+    },
     argsKey(): string {
       return JSON.stringify(this.args)
     },
@@ -135,9 +153,45 @@ export default defineComponent({
       }
       return [...groups.values()]
     },
+    /** Points of the selected value of a `highlight` identifier, sent apart by Python */
+    highlightSeries(): SeriesPoints | null {
+      if (!this.args.highlight) return null
+      const points = this.streamlitDataStore.allDataForDrawing?.highlightData as
+        | { x: number[]; y: number[]; z: number[] }
+        | undefined
+      const group: SeriesPoints = {
+        key: '__highlight__',
+        name: this.args.highlightName || 'Selected',
+        color: this.args.highlightColor || '#ff7501',
+        x: [],
+        y: [],
+        z: [],
+      }
+      const xs = points?.x || []
+      const ys = points?.y || []
+      const zs = points?.z || []
+      const stems = this.args.mode !== 'lines'
+      for (let i = 0; i < xs.length; i++) {
+        if (stems) {
+          if (!(zs[i] > 0)) continue
+          group.x.push(xs[i], xs[i], xs[i])
+          group.y.push(ys[i], ys[i], ys[i])
+          group.z.push(STEM_FLOOR, zs[i], STEM_FLOOR)
+        } else {
+          group.x.push(xs[i])
+          group.y.push(ys[i])
+          group.z.push(zs[i])
+        }
+      }
+      return group.x.length > 0 ? group : null
+    },
+    allSeries(): SeriesPoints[] {
+      // The highlighted points last, so they are drawn on top
+      return this.highlightSeries ? [...this.series, this.highlightSeries] : this.series
+    },
     maxZ(): number {
       let max = 0
-      for (const s of this.series) {
+      for (const s of this.allSeries) {
         for (const z of s.z) {
           if (z !== null && z > max) max = z
         }
@@ -145,7 +199,7 @@ export default defineComponent({
       return max
     },
     traces(): Plotly.Data[] {
-      return this.series.map(
+      return this.allSeries.map(
         (s) =>
           ({
             name: s.name,
@@ -154,7 +208,7 @@ export default defineComponent({
             x: s.x,
             y: s.y,
             z: s.z,
-            line: { color: s.color },
+            line: { color: s.color, width: s.key === '__highlight__' ? 4 : 2 },
             connectgaps: false,
           }) as Plotly.Data
       )
@@ -170,25 +224,42 @@ export default defineComponent({
         yaxis,
         zaxis: { title: { text: this.args.zLabel }, range: [0, this.maxZ] },
       }
-      if (this.args.cameraEye) {
-        scene.camera = { eye: this.args.cameraEye }
+      if (this.args.cameraEye || this.args.cameraCenter) {
+        scene.camera = {
+          ...(this.args.cameraEye ? { eye: this.args.cameraEye } : {}),
+          ...(this.args.cameraCenter ? { center: this.args.cameraCenter } : {}),
+        }
       }
+      if (this.args.aspectRatio) {
+        scene.aspectmode = 'manual'
+        scene.aspectratio = this.args.aspectRatio
+      }
+      // Plotly's default margins (80 px on every side) leave a wide empty frame
+      // around a 3D scene; keep room for the title only
+      const margin = { l: 0, r: 0, b: 0, t: this.title ? 50 : 10 }
       return {
         title: { text: this.args.titleBold === false ? this.title : `<b>${this.title}</b>` },
         paper_bgcolor: this.theme?.backgroundColor,
         plot_bgcolor: this.theme?.secondaryBackgroundColor,
-        height: this.args.height || 800,
+        height: (this.args.height || 800) - TOOLBAR_HEIGHT,
         font: {
           color: this.theme?.textColor,
           family: this.theme?.font,
         },
         scene: scene as Partial<Plotly.Scene>,
+        margin,
         showlegend: this.args.showLegend !== false,
       }
     },
   },
   watch: {
     'streamlitDataStore.allDataForDrawing.plotData': {
+      handler() {
+        this.requestRender()
+      },
+      deep: true,
+    },
+    'streamlitDataStore.allDataForDrawing.highlightData': {
       handler() {
         this.requestRender()
       },
@@ -221,21 +292,10 @@ export default defineComponent({
     async renderPlot(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
-      const height = this.args.height || 800
       // react keeps the WebGL scene of the previous render; newPlot builds a new one
-      const exportButtons = {
-        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: [
-          plotlyDownloadButton({
-            format: () => imageFormatOf(this.args.imageFormat),
-            filename: () => this.args.svgFilename || this.title || 'plot3d',
-            width: height,
-            height,
-          }),
-        ],
-      }
       await Plotly.react(element, this.traces, this.layout, {
-        ...exportButtons,
+        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+        displaylogo: false,
         responsive: true,
         // No "double-click to isolate" notice on a legend click
         showTips: false,

@@ -265,6 +265,7 @@ class ProteinSequenceView(BaseComponent):
         proforma_copy: bool = False,
         proforma_input: bool = False,
         isotope_errors: int | None = None,
+        method_ion_options: bool = False,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
         variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
@@ -436,6 +437,7 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_copy = bool(proforma_copy)
         self._proforma_input = bool(proforma_input)
         self.set_isotope_errors(isotope_errors)
+        self._method_ion_options = bool(method_ion_options)
         self.set_variable_modification_library(
             variable_modification_library, variable_modification_suggestions
         )
@@ -764,6 +766,10 @@ class ProteinSequenceView(BaseComponent):
         self._isotope_errors = max_errors
         return self
 
+    def set_method_ion_options(self, enabled: bool = True) -> "ProteinSequenceView":
+        self._method_ion_options = bool(enabled)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -778,6 +784,7 @@ class ProteinSequenceView(BaseComponent):
             "proformaCopy": self._proforma_copy,
             "proformaInput": self._proforma_input,
             "isotopeErrors": self._isotope_errors,
+            "methodIonOptions": self._method_ion_options,
             "variableModificationLibrary": self._variable_modification_library,
             "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,

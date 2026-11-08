@@ -15,6 +15,11 @@ export interface BaseComponentArgs {
    * holds the sorted distinct values of the column over the selected entries.
    */
   multiSelect?: Record<string, string>
+  /**
+   * State identifier the plot keeps its zoom under, {"x": [lo, hi], "y": [lo, hi]}
+   * (see composables/useZoomState.ts). Without it the zoom stays in the browser.
+   */
+  zoomIdentifier?: string
 }
 
 /**
@@ -170,6 +175,8 @@ export interface LinePlotComponentArgs
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
+  topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
+  showTopPeakLabels?: boolean // Start with the top peak labels shown
 }
 
 export interface LinePlotStyling {
@@ -419,7 +426,7 @@ export interface MirrorPlotComponentArgs
   styling?: MirrorPlotStyling
   config?: Record<string, unknown>
   height?: number
-  /** Start with the zoom pinned (the pin button in the mode bar toggles it). */
+  /** Start with the zoom pinned (the pin button in the plot toolbar toggles it). */
   keepZoom?: boolean
 }
 
@@ -475,6 +482,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
   seriesColors?: Record<string, string>
   color: string
   traceColumn?: string | null
+  /** identifier -> column; points of the selected value are drawn apart */
+  highlight?: Record<string, string>
+  highlightName?: string
+  highlightColor?: string
   title: string
   /** [identifier, title] pairs: first identifier with a selection sets the title */
   selectionTitles?: Array<[string, string]>
@@ -483,6 +494,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
   zLabel: string
   yDtick?: number | null
   cameraEye?: { x: number; y: number; z: number } | null
+  /** Relative axis lengths of the 3D box */
+  aspectRatio?: { x: number; y: number; z: number } | null
+  /** Point the camera looks at */
+  cameraCenter?: { x: number; y: number; z: number } | null
   showLegend?: boolean
   svgFilename?: string
   height?: number
@@ -604,6 +619,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   proformaInput?: boolean
   /** Isotope errors tried when matching (shows the setting); null: hidden, exact matches only */
   isotopeErrors?: number | null
+  /** Offer proton loss/addition only with c/z or radical series selected */
+  methodIonOptions?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');
