@@ -17,6 +17,7 @@ import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
 import { useTopPeakLabels } from '@/composables/useTopPeakLabels'
+import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
@@ -80,7 +81,8 @@ export default defineComponent({
       () => props.args.topPeakLabels ?? 0,
       () => !!props.args.showTopPeakLabels,
     )
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks }
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom }
   },
   data() {
     return {
@@ -824,7 +826,12 @@ export default defineComponent({
         if (this.isInitialized) {
           // Reset zoom when data changes (e.g., switching spectra), unless the
           // zoom is pinned (mode bar button; keep_zoom=True pins it initially)
-          if (!this.pinZoom.pinned) {
+          const incoming = this.zoom.incoming()
+          if (incoming !== undefined) {
+            // A zoom set with this data (a saved view opened)
+            this.manualXRange = incoming?.x
+          } else if (!this.pinZoom.pinned) {
+            if (this.manualXRange) this.zoom.report(null)
             this.manualXRange = undefined
           }
           this.lastAutoZoomedPeakIndex = undefined
@@ -849,6 +856,11 @@ export default defineComponent({
     'selectionStore.$state': {
       handler(newState) {
         console.log('[LinePlot] selection changed', newState)
+        const incoming = this.zoom.incoming()
+        if (incoming !== undefined) {
+          this.manualXRange = incoming?.x
+          this.lastAutoZoomedPeakIndex = undefined
+        }
         if (this.isDataReady && this.isInitialized) {
           this.autoZoomToSelectedAnnotation()
           this.renderPlot()
@@ -860,6 +872,9 @@ export default defineComponent({
 
   mounted() {
     this.isInitialized = true
+    // A zoom already in the state (a saved view)
+    const zoom = this.zoom.incoming()
+    if (zoom) this.manualXRange = zoom.x
     // Use nextTick to ensure DOM is fully ready
     this.$nextTick(() => {
       if (this.isDataReady) {
@@ -967,11 +982,13 @@ export default defineComponent({
           newXRange[0] = 0
         }
         this.manualXRange = newXRange
+        this.zoom.report({ x: newXRange as [number, number] })
         // Reset auto-zoom tracking when user manually zooms
         this.lastAutoZoomedPeakIndex = undefined
         this.renderPlot()
       } else if (eventData['xaxis.autorange'] === true) {
         // Reset to auto range
+        this.zoom.report(null)
         this.manualXRange = undefined
         this.lastAutoZoomedPeakIndex = undefined
         this.renderPlot()
