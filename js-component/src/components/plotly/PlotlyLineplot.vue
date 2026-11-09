@@ -32,6 +32,7 @@ import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
+import { precursorMark, type PrecursorMark } from '@/utils/precursorMark'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 
@@ -714,10 +715,15 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
-        shapes: [...this.annotationShapes, ...this.measureOverlay.shapes],
+        shapes: [
+          ...this.annotationShapes,
+          ...this.precursorOverlay.shapes,
+          ...this.measureOverlay.shapes,
+        ],
         annotations: [
           ...this.peakAnnotations,
           ...this.topPeakAnnotations,
+          ...this.precursorOverlay.annotations,
           ...this.measureOverlay.annotations,
           ...this.labels.overlay({
             color: this.theme?.textColor || '#262730',
@@ -725,6 +731,16 @@ export default defineComponent({
           }),
         ],
       }
+    },
+
+    /** The precursor's mark (see utils/precursorMark.ts). */
+    precursorOverlay(): PrecursorMark {
+      return precursorMark({
+        precursor: this.args.precursor,
+        yTop: this.yRange?.[1] ?? 0,
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+      })
     },
 
     /**
@@ -829,6 +845,14 @@ export default defineComponent({
     async 'labels.revision'() {
       if (this.isInitialized && this.isDataReady) await this.renderPlot()
       this.placeLabelEditor()
+    },
+
+    // Another precursor (or none) for the same spectrum data
+    'args.precursor': {
+      handler() {
+        if (this.isInitialized && this.isDataReady) this.renderPlot()
+      },
+      deep: true,
     },
 
     // Top peak labels switched on or off

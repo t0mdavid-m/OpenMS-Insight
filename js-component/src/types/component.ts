@@ -43,6 +43,14 @@ export interface PeakLabelArgs {
 }
 
 /**
+ * The precursor of a fragment spectrum, marked on the m/z axis (see utils/precursorMark.ts).
+ */
+export interface PrecursorArgs {
+  /** The precursor's m/z and charge (0: unknown); null or absent: not marked. */
+  precursor?: { mz: number; charge: number } | null
+}
+
+/**
  * The image download of a view (see utils/imageExport.ts).
  */
 export interface ImageExportArgs {
@@ -162,6 +170,7 @@ export interface LinePlotComponentArgs
   extends BaseComponentArgs,
     MeasureArgs,
     PeakLabelArgs,
+    PrecursorArgs,
     ImageExportArgs {
   componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
   title: string
@@ -408,6 +417,7 @@ export interface MirrorPlotComponentArgs
   extends BaseComponentArgs,
     MeasureArgs,
     PeakLabelArgs,
+    PrecursorArgs,
     ImageExportArgs {
   componentType: 'PlotlyMirrorPlot'
   title?: string

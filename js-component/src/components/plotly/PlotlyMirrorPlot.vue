@@ -24,6 +24,7 @@ import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
+import { precursorMark, type PrecursorMark } from '@/utils/precursorMark'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 
@@ -260,6 +261,13 @@ export default defineComponent({
     // Measurements added or removed
     'measure.revision'() {
       this.recolor()
+    },
+    // Another precursor (or none) for the same spectrum data
+    'args.precursor': {
+      handler() {
+        this.recolor()
+      },
+      deep: true,
     },
     // Labels added, changed or removed, or the text box opened or closed
     'labels.revision'() {
@@ -499,7 +507,13 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
       const measureOverlay = this.buildMeasureOverlay()
-      const shapes = [...stickShapes, ...labelShapes, ...measureOverlay.shapes]
+      const precursor = this.buildPrecursorMark()
+      const shapes = [
+        ...stickShapes,
+        ...labelShapes,
+        ...precursor.shapes,
+        ...measureOverlay.shapes,
+      ]
 
       // Marker traces give us click events (the shapes alone don't)
       const traces: Partial<Plotly.PlotData>[] = [
@@ -566,6 +580,7 @@ export default defineComponent({
         ...titleAnnotations,
         ...this.buildPeakAnnotations(this.annotationBoxDataTop, 'top'),
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
+        ...precursor.annotations,
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
       ]
@@ -817,7 +832,13 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
       const measureOverlay = this.buildMeasureOverlay()
-      const shapes = [...stickShapes, ...labelShapes, ...measureOverlay.shapes]
+      const precursor = this.buildPrecursorMark()
+      const shapes = [
+        ...stickShapes,
+        ...labelShapes,
+        ...precursor.shapes,
+        ...measureOverlay.shapes,
+      ]
 
       const titleAnnotations: Partial<Plotly.Annotations>[] = [
         ...(this.args.titleTop
@@ -853,11 +874,22 @@ export default defineComponent({
         ...titleAnnotations,
         ...this.buildPeakAnnotations(this.annotationBoxDataTop, 'top'),
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
+        ...precursor.annotations,
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
       ]
 
       void Plotly.relayout(this.id, { shapes, annotations })
+    },
+
+    /** The precursor's mark on the top half (see utils/precursorMark.ts). */
+    buildPrecursorMark(): PrecursorMark {
+      return precursorMark({
+        precursor: this.args.precursor,
+        yTop: this.yRangeMax,
+        color: this.measureColor,
+        background: this.theme?.backgroundColor || 'white',
+      })
     },
 
     /** Your peak labels, as annotations (see usePeakLabels). */

@@ -15,6 +15,7 @@ from ..core.measure import (
     validate_measure_tolerance,
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
+from ..core.precursor import precursor_args, validate_precursor
 from ..core.registry import register_component
 from ..core.top_peak_labels import (
     top_peak_label_args,
@@ -83,6 +84,8 @@ class LinePlot(BaseComponent):
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
         peak_labels: bool = True,
+        precursor_mz: float | None = None,
+        precursor_charge: int | None = None,
         image_format: str | None = None,
         keep_zoom: bool = False,
         top_peak_labels: int = 10,
@@ -148,6 +151,13 @@ class LinePlot(BaseComponent):
                 Labels are kept per spectrum while the plot is on the page and
                 are included in the image download. Render-time only: not part
                 of the cache.
+            precursor_mz: m/z of the spectrum's precursor (default None: not
+                marked). A dashed line marks it on the m/z axis, with
+                "precursor 2+" at its top, whether or not a peak is there; it
+                is part of the image download. Render-time only: not part of
+                the cache.
+            precursor_charge: The precursor's charge, shown in the mark's
+                label (default None or 0: unknown, not shown).
             image_format: Format of the image download: 'svg', 'png', 'jpeg'
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
@@ -190,6 +200,10 @@ class LinePlot(BaseComponent):
         self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
         self._measure_residues = validate_measure_residues(measure_residues)
         self._peak_labels = validate_peak_labels(peak_labels)
+        # Render-time options, kept out of the cache config (see core/precursor.py)
+        self._precursor_mz, self._precursor_charge = validate_precursor(
+            precursor_mz, precursor_charge
+        )
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
@@ -508,6 +522,7 @@ class LinePlot(BaseComponent):
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
         args.update(peak_label_args(self._peak_labels))
+        args.update(precursor_args(self._precursor_mz, self._precursor_charge))
         args.update(image_format_args(self._image_format))
         args.update(zoom_args(self._zoom_identifier))
         args.update(keep_zoom_args(self._keep_zoom))

@@ -16,6 +16,7 @@ from ..core.measure import (
     validate_measure_tolerance,
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
+from ..core.precursor import precursor_args, validate_precursor
 from ..core.registry import register_component
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
@@ -81,6 +82,8 @@ class MirrorPlot(BaseComponent):
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
         peak_labels: bool = True,
+        precursor_mz: float | None = None,
+        precursor_charge: int | None = None,
         # Visuals
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
@@ -164,6 +167,13 @@ class MirrorPlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options.
+            precursor_mz: m/z of the spectrum's precursor (default None: not
+                marked). A dashed line on the top half marks it on the m/z axis, with
+                "precursor 2+" at its top, whether or not a peak is there; it
+                is part of the image download. Render-time only: not part of
+                the cache.
+            precursor_charge: The precursor's charge, shown in the mark's
+                label (default None or 0: unknown, not shown).
             image_format: Format of the image download: 'svg', 'png', 'jpeg'
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
@@ -208,6 +218,10 @@ class MirrorPlot(BaseComponent):
         self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
         self._measure_residues = validate_measure_residues(measure_residues)
         self._peak_labels = validate_peak_labels(peak_labels)
+        # Render-time options, kept out of the cache config (see core/precursor.py)
+        self._precursor_mz, self._precursor_charge = validate_precursor(
+            precursor_mz, precursor_charge
+        )
         self._styling = styling or {}
         self._plot_config = config or {}
 
@@ -640,6 +654,7 @@ class MirrorPlot(BaseComponent):
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
         args.update(peak_label_args(self._peak_labels))
+        args.update(precursor_args(self._precursor_mz, self._precursor_charge))
         # Defensive: inject any unrecognised user **kwargs forwarded via super().__init__
         # without overwriting explicitly set args. All current MirrorPlot kwargs are
         # already covered above, so this loop is a no-op for normal usage.
