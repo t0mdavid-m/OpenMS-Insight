@@ -139,6 +139,7 @@ export interface TableComponentArgs extends BaseComponentArgs {
   resetSortOn?: string[]
   /** Without pagination, stay at the given height instead of shrinking to the rows */
   fillHeight?: boolean
+  fillRow?: boolean
   rowOverview?: boolean
   rowOverviewTitle?: string
   /** False hides the column menu */
@@ -175,6 +176,8 @@ export interface LinePlotComponentArgs
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
+  topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
+  showTopPeakLabels?: boolean // Start with the top peak labels shown
 }
 
 export interface LinePlotStyling {
@@ -445,7 +448,7 @@ export interface MirrorPlotComponentArgs
   styling?: MirrorPlotStyling
   config?: Record<string, unknown>
   height?: number
-  /** Start with the zoom pinned (the pin button in the mode bar toggles it). */
+  /** Start with the zoom pinned (the pin button in the plot toolbar toggles it). */
   keepZoom?: boolean
 }
 
@@ -550,7 +553,16 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, Mea
   config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
   svgFilename?: string
   /** Sequence tag drawn in the ladder view */
-  ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  ladder?: {
+    masses: number[]
+    sequence: string
+    selectedIndex?: number | null
+    key?: unknown
+    /** The residues of each gap (masses[i] to masses[i + 1]), assigned by mass */
+    labels?: string[]
+    /** The gap holding the selected residue */
+    selectedGap?: number | null
+  } | null
   /** Theoretical isotope envelope of one mass, drawn on its raw peaks */
   envelope?: {
     massIndex: number
@@ -636,6 +648,10 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   proformaCopy?: boolean
   /** The change-sequence dialog also reads ProForma */
   proformaInput?: boolean
+  /** Isotope errors tried when matching (shows the setting); null: hidden, exact matches only */
+  isotopeErrors?: number | null
+  /** Offer proton loss/addition only with c/z or radical series selected */
+  methodIonOptions?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');

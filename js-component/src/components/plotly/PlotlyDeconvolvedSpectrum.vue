@@ -1,5 +1,6 @@
 <template>
   <div class="plot-wrapper" :style="cssCustomProperties">
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="plot-container"></div>
     <MeasureHint v-if="args.measure" :measure="measure" />
     <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
@@ -42,7 +43,9 @@ import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { readableTextOn } from '@/utils/appTheme'
 import { imageFormatOf } from '@/utils/imageExport'
-import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool, type ToolIcon } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 
 type Mode = 'deconvolved' | 'annotated' | 'ladder' | 'ladder-annotated'
 
@@ -127,6 +130,22 @@ function labelTrace(labels: PlotLabel[]): Plotly.Data | null {
 }
 
 /**
+ * Label of a ladder step: its residues, shortened to the first and last two
+ * with their number when the step spans more than four.
+ */
+export function ladderLabelText(residues: string): string {
+  if (residues.length <= 4) return residues
+  return `${residues.slice(0, 2)}…${residues.slice(-2)} (${residues.length})`
+}
+
+/** Residues broken into lines of 30 for a hover text. */
+function wrapResidues(residues: string): string {
+  const lines: string[] = []
+  for (let i = 0; i < residues.length; i += 30) lines.push(residues.slice(i, i + 30))
+  return lines.join('<br>')
+}
+
+/**
  * The part of a ladder arrow segment (tail to head) inside the x range, or null
  * when none of it is. A head cut off at the axis loses its arrowhead.
  */
@@ -149,10 +168,9 @@ const ISOTOPE_SPACING = 1.00235
 /** Envelope circles show once neighbouring isotopes are this many pixels apart. */
 const ENVELOPE_MIN_SPACING_PX = 8
 
-const TOGGLE_ANNOTATIONS_ICON = {
-  width: 1792,
-  height: 1792,
-  path: 'M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z',
+const TOGGLE_ANNOTATIONS_ICON: ToolIcon = {
+  viewBox: '0 0 1792 1792',
+  markup: '<path d="M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z"/>',
 }
 /** Fragment-ion labels closer than this (pixels) to a more intense one are left out. */
 const FRAGMENT_LABEL_SPACING_PX = 14
@@ -163,22 +181,20 @@ const FRAGMENT_KIND_NAMES: Record<FragmentKind, string> = {
   I: 'Internal fragment ions',
 }
 // Square brackets: the ends of a sequence
-const TOGGLE_FRAGMENTS_ICON = {
-  width: 1000,
-  height: 1000,
-  path: 'M150 100h300v100H250v600h200v100H150z M550 100h300v800H550V800h200V200H550z',
+const TOGGLE_FRAGMENTS_ICON: ToolIcon = {
+  viewBox: '0 0 1000 1000',
+  markup: '<path d="M150 100h300v100H250v600h200v100H150z M550 100h300v800H550V800h200V200H550z"/>',
 }
-const TOGGLE_PEAKS_ICON = {
-  width: 1792,
-  height: 1792,
-  path: 'M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z',
+const TOGGLE_PEAKS_ICON: ToolIcon = {
+  viewBox: '0 0 1792 1792',
+  markup: '<path d="M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z"/>',
 }
 
 let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlyDeconvolvedSpectrum',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<DeconvolvedSpectrumComponentArgs>,
@@ -211,6 +227,57 @@ export default defineComponent({
     }
   },
   computed: {
+    toolbarTools(): PlotTool[] {
+      const tools: PlotTool[] = [
+        ...this.pinZoom.tools(),
+        ...this.measure.tools(this.measureTitle),
+        {
+          id: 'annotations',
+          group: 'show',
+          icon: TOGGLE_ANNOTATIONS_ICON,
+          label: 'Annotations',
+          short: 'Annotations',
+          active: this.annotationsVisible,
+          run: () => {
+            this.annotationsVisible = !this.annotationsVisible
+          },
+        },
+      ]
+      if (this.hasFragmentMatches) {
+        tools.push({
+          id: 'fragment-ions',
+          group: 'show',
+          icon: TOGGLE_FRAGMENTS_ICON,
+          label: 'Fragment ions',
+          short: 'Fragments',
+          active: this.fragmentIonsVisible,
+          run: () => {
+            this.fragmentIonsVisible = !this.fragmentIonsVisible
+          },
+        })
+      }
+      if (this.isMzMode) {
+        tools.push({
+          id: 'deconvolved-peaks',
+          group: 'show',
+          icon: TOGGLE_PEAKS_ICON,
+          label: 'Deconvolved peaks',
+          short: 'Deconvolved',
+          active: this.deconvolvedPeaksHighlightMode,
+          run: () => {
+            this.deconvolvedPeaksHighlightMode = !this.deconvolvedPeaksHighlightMode
+          },
+        })
+      }
+      tools.push(
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || 'spectrum',
+        }),
+      )
+      return tools
+    },
     id(): string {
       return this.uniqueId
     },
@@ -458,14 +525,62 @@ export default defineComponent({
       return this.args.ladder ? this.args.ladder.key ?? JSON.stringify(this.args.ladder.masses) : null
     },
     /**
-     * A tag's masses arrive in descending order, so the rendered tag letters use a
-     * reversed index (sequence.length - 1 - i). The selected residue is reversed
-     * into that same space so the highlight lands on the residue the user selected.
+     * The residues of each gap of the tag (masses[i] to masses[i + 1]). The
+     * Python side assigns them by mass (a gap may hold several residues); an
+     * older one sends none, and the gaps then read the sequence backwards, one
+     * residue each.
      */
-    reversedSelectedAA(): number | undefined {
+    ladderLabels(): string[] {
       const ladder = this.args.ladder
-      if (!ladder || ladder.selectedIndex === null || ladder.selectedIndex === undefined) return undefined
+      if (!ladder) return []
+      if (Array.isArray(ladder.labels)) return ladder.labels
+      const sequence = ladder.sequence ?? ''
+      return ladder.masses.slice(1).map((_, i) => sequence[sequence.length - 1 - i] ?? '')
+    },
+    /** The gap of the tag holding the selected residue (index into ladderLabels). */
+    selectedGap(): number | undefined {
+      const ladder = this.args.ladder
+      if (!ladder) return undefined
+      if ('selectedGap' in ladder) return ladder.selectedGap ?? undefined
+      if (ladder.selectedIndex === null || ladder.selectedIndex === undefined) return undefined
       return ladder.sequence.length - 1 - ladder.selectedIndex
+    },
+    /**
+     * The tag's masses found in the spectrum: their position in MassValues and
+     * in the tag. A tag mass missing from the spectrum joins its two gaps.
+     */
+    ladderMatches(): { position: number; tagIndex: number }[] {
+      const matches: { position: number; tagIndex: number }[] = []
+      const tagMasses = this.args.ladder?.masses ?? []
+      tagMasses.forEach((v, tagIndex) => {
+        for (let j = 0; j < this.MassValues.length; j++) {
+          if (Math.abs(this.MassValues[j] - v) < 1e-5) {
+            matches.push({ position: j, tagIndex })
+            break
+          }
+        }
+      })
+      return matches
+    },
+    /**
+     * Index (into the drawn tag masses) of the first mass of the drawn step
+     * holding the selected residue, or undefined.
+     */
+    selectedStep(): number | undefined {
+      const gap = this.selectedGap
+      if (gap === undefined) return undefined
+      const matches = this.ladderMatches
+      for (let i = 0; i < matches.length - 1; i++) {
+        if (matches[i].tagIndex <= gap && gap < matches[i + 1].tagIndex) return i
+      }
+      return undefined
+    },
+    /** Positions (into MassValues) of the two masses around the selected residue. */
+    selectedStepPositions(): Set<number> {
+      const step = this.selectedStep
+      const matches = this.ladderMatches
+      if (step === undefined || this.mode !== 'ladder') return new Set()
+      return new Set([matches[step].position, matches[step + 1].position])
     },
     showBackButton(): boolean {
       return this.hasLadder && this.mode === 'ladder-annotated'
@@ -473,16 +588,7 @@ export default defineComponent({
 
     /** Positions (into MassValues) highlighted by the tag or the mass selection. */
     selectedMassPositions(): number[] {
-      let positions: number[] = []
-      const tagMasses = this.args.ladder?.masses ?? []
-      for (const v of tagMasses) {
-        for (let j = 0; j < this.MassValues.length; j++) {
-          if (Math.abs(this.MassValues[j] - v) < 1e-5) {
-            positions.push(j)
-            break
-          }
-        }
-      }
+      let positions: number[] = this.ladderMatches.map((match) => match.position)
       const selected = this.selectedMassIndex
       if (
         selected !== undefined &&
@@ -542,14 +648,14 @@ export default defineComponent({
         I_y: [] as number[],
       }
       const mask = this.isMzMode ? this.highlightedMzPos : this.highlightedMassPos
-      const reversedSelectedAA = this.reversedSelectedAA
+      const selectedPositions = this.selectedStepPositions
       const fragmentKinds = this.fragmentKindPos
       for (let i = 0; i < this.xValues.length; i++) {
         const peak = Math.floor(i / 3)
         const posHighlight = mask[peak]
         if (posHighlight === undefined) continue
         const fragmentKind = fragmentKinds[peak]
-        if (posHighlight && (reversedSelectedAA === peak || reversedSelectedAA === peak - 1)) {
+        if (posHighlight && selectedPositions.has(peak)) {
           result.selected_x.push(this.xValues[i])
           result.selected_y.push(this.yValues[i])
         } else if (posHighlight) {
@@ -651,7 +757,11 @@ export default defineComponent({
 
       // Mass buttons and, for a tag, the ladder arrows between them
       const arrowAnnotations: Partial<Plotly.Annotations>[] = []
-      const reversedSelectedAA = this.reversedSelectedAA
+      // In the ladder view the highlights are the tag's masses (ladderMatches)
+      const isLadder = this.mode === 'ladder'
+      const selectedStep = isLadder ? this.selectedStep : undefined
+      const matches = this.ladderMatches
+      const labels = this.ladderLabels
       const visibleMassBoxes = this.annotationBoxData.filter((box) => box.type === 'mass' && box.visible)
       const scaling = highlighted.length === 1 ? 2 : 1
       const massLabels: PlotLabel[] = []
@@ -663,7 +773,7 @@ export default defineComponent({
         if (!visibleMassBoxes.some((box) => box.index === i)) continue
         let fillcolor = this.styling.annotationColors.massButton
         let family = 'sans-serif'
-        if (reversedSelectedAA === i || reversedSelectedAA === i - 1) {
+        if (selectedStep !== undefined && (selectedStep === i || selectedStep === i - 1)) {
           fillcolor = this.styling.annotationColors.selectedMassButton
           family = 'Arial Black, Arial Bold, Arial, sans-serif'
         }
@@ -703,7 +813,7 @@ export default defineComponent({
 
         let fillcolor = this.styling.annotationColors.sequenceArrow
         let family = 'sans-serif'
-        if (reversedSelectedAA === i) {
+        if (selectedStep !== undefined && selectedStep === i) {
           fillcolor = this.styling.annotationColors.selectedSequenceArrow
           family = 'Arial Black, Arial Bold, Arial, sans-serif'
         }
@@ -713,12 +823,13 @@ export default defineComponent({
         let xMidStart = xMid
         let xMidEnd = xMid
         const diff = Math.abs(xStart - xEnd) * 0.9
-        let AA = ''
+        let residues = ''
         let delta = 0
-        if (sequence !== undefined && sequence.length > 0) {
-          const reverseIndex = sequence.length - 1 - i
-          if (reverseIndex >= 0 && reverseIndex < sequence.length) AA = sequence[reverseIndex]
+        if (isLadder && sequence !== undefined && sequence.length > 0 && i + 1 < matches.length) {
+          // The residues of every tag gap between these two masses
+          residues = labels.slice(matches[i].tagIndex, matches[i + 1].tagIndex).join('')
         }
+        const AA = ladderLabelText(residues)
         if (xStart > xEnd) {
           delta = xStart - xEnd
           xStart -= diff
@@ -762,7 +873,7 @@ export default defineComponent({
           text: AA,
           color: fillcolor,
           family,
-          hover: 'Δ=' + delta.toFixed(2) + ' Da',
+          hover: (residues.length > 1 ? wrapResidues(residues) + '<br>' : '') + 'Δ=' + delta.toFixed(2) + ' Da',
         })
       }
       for (const trace of [labelTrace(massLabels), labelTrace(residueLabels)]) {
@@ -905,7 +1016,7 @@ export default defineComponent({
       return {
         title: { text: `<b>${this.currentTitle}</b>` },
         showlegend: false,
-        height: this.args.height || 400,
+        height: (this.args.height || 400) - TOOLBAR_HEIGHT,
         xaxis: {
           title: { text: this.xAxisLabel },
           showgrid: false,
@@ -959,8 +1070,8 @@ export default defineComponent({
     },
     measureTitle(): string {
       return this.isMzMode
-        ? 'Measure: click two peaks for their m/z difference (Esc cancels)'
-        : 'Measure: click two masses for their difference (Esc cancels)'
+        ? 'click two peaks for their m/z difference (Esc cancels)'
+        : 'click two masses for their difference (Esc cancels)'
     },
     /** Identity of the plotted masses or peaks: others drop the measurements. */
     measureKey(): string {
@@ -1345,48 +1456,9 @@ export default defineComponent({
     async graph(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
-      const modeBarButtons: Array<Record<string, unknown>> = [
-        {
-          title: this.annotationsVisible ? 'Hide Annotations' : 'Show Annotations',
-          name: 'toggleAnnotations',
-          icon: TOGGLE_ANNOTATIONS_ICON,
-          click: () => {
-            this.annotationsVisible = !this.annotationsVisible
-          },
-        },
-      ]
-      if (this.hasFragmentMatches) {
-        modeBarButtons.push({
-          title: this.fragmentIonsVisible ? 'Hide Fragment Ions' : 'Show Fragment Ions',
-          name: 'toggleFragmentIons',
-          icon: TOGGLE_FRAGMENTS_ICON,
-          click: () => {
-            this.fragmentIonsVisible = !this.fragmentIonsVisible
-          },
-        })
-      }
-      if (this.isMzMode) {
-        modeBarButtons.push({
-          title: this.deconvolvedPeaksHighlightMode ? 'Hide Deconvolved Peaks' : 'Show Deconvolved Peaks',
-          name: 'toggleDeconvolvedPeaks',
-          icon: TOGGLE_PEAKS_ICON,
-          click: () => {
-            this.deconvolvedPeaksHighlightMode = !this.deconvolvedPeaksHighlightMode
-          },
-        })
-      }
-      modeBarButtons.push(
-        plotlyDownloadButton({
-          format: () => imageFormatOf(this.args.imageFormat),
-          filename: () => this.args.svgFilename || 'spectrum',
-          icon: SPECTRUM_DOWNLOAD_ICON,
-        }) as unknown as Record<string, unknown>,
-      )
-      modeBarButtons.push(...(this.measure.modeBarButtons(this.measureTitle) as unknown as Array<Record<string, unknown>>))
-      modeBarButtons.push(...(this.pinZoom.modeBarButtons() as unknown as Array<Record<string, unknown>>))
       const plot = (await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: modeBarButtons as unknown as Plotly.ModeBarButton[],
+        displaylogo: false,
         scrollZoom: true,
       })) as unknown as { on: (event: string, handler: (data: never) => void) => void }
       plot.on('plotly_relayout', (eventData: Record<string, unknown>) => this.onRelayout(eventData))
@@ -1404,7 +1476,7 @@ export default defineComponent({
         {
           title: { text: `<b>${this.currentTitle}</b>` },
           showlegend: false,
-          height: this.args.height || 400,
+          height: (this.args.height || 400) - TOOLBAR_HEIGHT,
           xaxis: { title: { text: this.xAxisLabel }, showgrid: false },
           yaxis: { title: { text: 'Intensity' }, showgrid: true, rangemode: 'nonnegative' },
           paper_bgcolor: this.theme?.backgroundColor,
@@ -1431,7 +1503,7 @@ export default defineComponent({
 
 .back-button {
   position: absolute;
-  top: 17%;
+  top: calc(var(--toolbar-height, 36px) + 14%);
   left: 6.5%;
   z-index: 1000;
   background-color: var(--annotation-background);
