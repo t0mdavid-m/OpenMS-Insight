@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import bisect
 import itertools
-from typing import Sequence
+from collections.abc import Sequence
 
 # Monoisotopic residue masses
 RESIDUE_MASSES: dict[str, float] = {
@@ -47,7 +47,9 @@ MAX_GAP_ERROR = 1.6
 DIRECTION_MARGIN = 0.5
 
 
-def _bounds(masses: Sequence[float], sequence: str) -> tuple[list[int], float, float] | None:
+def _bounds(
+    masses: Sequence[float], sequence: str
+) -> tuple[list[int], float, float] | None:
     """Residue boundaries along ``sequence`` closest to each mass, measured from
     the first mass (so errors do not add up), with the summed and the worst
     error; None when the masses cannot be placed in order."""
@@ -70,7 +72,9 @@ def _bounds(masses: Sequence[float], sequence: str) -> tuple[list[int], float, f
     return bounds, total, worst
 
 
-def ladder_steps(masses: Sequence[float], sequence: str) -> list[tuple[int, int]] | None:
+def ladder_steps(
+    masses: Sequence[float], sequence: str
+) -> list[tuple[int, int]] | None:
     """The residues between each pair of neighbouring masses.
 
     Args:
@@ -91,7 +95,7 @@ def ladder_steps(masses: Sequence[float], sequence: str) -> list[tuple[int, int]
     forward = _bounds(masses, sequence)
 
     def slices(bounds: list[int], reverse: bool) -> list[tuple[int, int]]:
-        pairs = list(zip(bounds, bounds[1:]))
+        pairs = list(zip(bounds, bounds[1:], strict=False))
         if reverse:
             return [(n - end, n - start) for start, end in pairs]
         return pairs
@@ -99,7 +103,9 @@ def ladder_steps(masses: Sequence[float], sequence: str) -> list[tuple[int, int]
     one_per_gap = n == len(masses) - 1
     if one_per_gap:
         # The usual tag: backwards, unless reading it forwards fits clearly better
-        if forward and (backward is None or forward[1] + DIRECTION_MARGIN < backward[1]):
+        if forward and (
+            backward is None or forward[1] + DIRECTION_MARGIN < backward[1]
+        ):
             return slices(forward[0], reverse=False)
         return [(n - 1 - i, n - i) for i in range(n)]
 

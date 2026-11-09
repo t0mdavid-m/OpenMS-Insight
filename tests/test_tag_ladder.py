@@ -6,7 +6,9 @@ from openms_insight.core.tag_ladder import RESIDUE_MASSES, ladder_steps
 
 
 def _masses(start, residues):
-    return [start] + [start + m for m in accumulate(RESIDUE_MASSES[r] for r in residues)]
+    return [start] + [
+        start + m for m in accumulate(RESIDUE_MASSES[r] for r in residues)
+    ]
 
 
 def _labels(masses, sequence):
@@ -42,7 +44,7 @@ def test_gaps_with_several_residues():
     prefix = [0.0] + list(accumulate(RESIDUE_MASSES[r] for r in rev))
     masses = [1235.77 + prefix[c] for c in cuts]
     labels = _labels(masses, sequence)
-    assert labels == [rev[a:b][::-1] for a, b in zip(cuts, cuts[1:])]
+    assert labels == [rev[a:b][::-1] for a, b in zip(cuts, cuts[1:], strict=False)]
     assert "".join(reversed(labels)) == sequence
 
 

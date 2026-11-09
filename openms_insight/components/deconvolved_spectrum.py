@@ -394,7 +394,11 @@ class DeconvolvedSpectrum(BaseComponent):
             selected_gap = None
             if steps is not None and selected_index is not None:
                 selected_gap = next(
-                    (gap for gap, (start, end) in enumerate(steps) if start <= selected_index < end),
+                    (
+                        gap
+                        for gap, (start, end) in enumerate(steps)
+                        if start <= selected_index < end
+                    ),
                     None,
                 )
             self._ladder = {
