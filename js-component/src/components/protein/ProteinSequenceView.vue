@@ -307,8 +307,11 @@
       </div>
       <!-- With truncations hidden, the residues before and after the
            proteoform are summarized in one line each -->
-      <div v-if="skippedBefore > 0" class="px-2 pb-1 skipped-residues" data-testid="skipped-n-term">
-        {{ skippedText(skippedBefore, 1, skippedBefore) }}
+      <div v-if="truncatedBefore > 0" class="px-2 pb-1 truncated-residues" data-testid="truncated-n-term">
+        {{ truncatedText(truncatedBefore, 1, truncatedBefore) }}
+        <v-tooltip activator="parent" location="bottom" max-width="480">
+          <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
+        </v-tooltip>
       </div>
       <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
@@ -351,8 +354,11 @@
           />
           </template>
       </div>
-      <div v-if="skippedAfter > 0" class="px-2 pb-4 skipped-residues" data-testid="skipped-c-term">
-        {{ skippedText(skippedAfter, sequence_end + 2, sequence.length) }}
+      <div v-if="truncatedAfter > 0" class="px-2 pb-4 truncated-residues" data-testid="truncated-c-term">
+        {{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}
+        <v-tooltip activator="parent" location="bottom" max-width="480">
+          <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
+        </v-tooltip>
       </div>
       <InternalFragmentTrack
         v-if="showInternal"
@@ -907,12 +913,12 @@ export default defineComponent({
     c_truncation(): boolean {
       return this.sequence_end < (this.sequence.length - 1)
     },
-    /** Residues before the proteoform left out of the grid (truncations hidden) */
-    skippedBefore(): number {
+    /** Residues before the proteoform truncated from the grid (truncations hidden) */
+    truncatedBefore(): number {
       return this.showIdentification && !this.showTruncations ? this.sequence_start : 0
     },
-    /** Residues after the proteoform left out of the grid (truncations hidden) */
-    skippedAfter(): number {
+    /** Residues after the proteoform truncated from the grid (truncations hidden) */
+    truncatedAfter(): number {
       return this.showIdentification && !this.showTruncations
         ? Math.max(0, this.sequence.length - 1 - this.sequence_end)
         : 0
@@ -1343,10 +1349,14 @@ export default defineComponent({
         item.selected = selected.has(item.text)
       })
     },
-    /** "… 23 residues skipped (1–23)": protein positions, 1-based */
-    skippedText(count: number, first: number, last: number): string {
+    /** "… 23 residues truncated (1–23)": protein positions, 1-based */
+    truncatedText(count: number, first: number, last: number): string {
       const range = first === last ? `${first}` : `${first}–${last}`
-      return `… ${count} ${count === 1 ? 'residue' : 'residues'} skipped (${range})`
+      return `… ${count} ${count === 1 ? 'residue' : 'residues'} truncated (${range})`
+    },
+    /** The truncated residues themselves (0-based, end exclusive), shown on hover */
+    truncatedResidues(start: number, end: number): string {
+      return this.sequence.slice(start, end).join('')
     },
     updateSettings() {
       const settings = this.settings
@@ -2381,10 +2391,17 @@ export default defineComponent({
   opacity: var(--v-medium-emphasis-opacity);
 }
 
-.skipped-residues {
+.truncated-residues {
   font-size: var(--row-number-font-size, 12px);
   font-style: italic;
   opacity: 0.7;
+  cursor: help;
+  width: fit-content;
+}
+
+.truncated-sequence {
+  font-family: monospace;
+  overflow-wrap: anywhere;
 }
 
 .row-number-start {
