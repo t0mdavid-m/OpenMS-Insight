@@ -13,11 +13,17 @@ import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
-import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/component'
+import type {
+  HeatmapBox,
+  HeatmapComponentArgs,
+  HeatmapData,
+  HeatmapMarker,
+} from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { normalizeZoom } from '@/composables/useZoomState'
+import { useSelectionStore } from '@/stores/selection'
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
@@ -34,6 +40,7 @@ export default defineComponent({
   },
   setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
+    const selectionStore = useSelectionStore()
 
     // Measuring: two points, labelled with their x and y differences
     const measure = useMeasure(() => !!props.args.measure)
@@ -46,7 +53,20 @@ export default defineComponent({
     // Use shared Plotly scatter composable
     const plotlyScatter = usePlotlyScatter({
       id: computed(() => `heatmap-${props.index}`),
-      onPointClick: (point) => measure.pick({ x: Number(point.x), y: Number(point.y) }, measureSpec.value),
+      onPointClick: (point) => {
+        if (measure.pick({ x: Number(point.x), y: Number(point.y) }, measureSpec.value)) return true
+        // A marker of set_markers(): its trace carries {marker: id} as customdata
+        const custom = point.customdata as unknown
+        if (custom && typeof custom === 'object' && 'marker' in (custom as object)) {
+          const identifier = props.args.markers?.selection
+          const id = (custom as { marker: unknown }).marker
+          if (identifier && id !== undefined && id !== null) {
+            selectionStore.updateSelection(identifier, id)
+          }
+          return true
+        }
+        return false
+      },
       interactivity: computed(() => props.args.interactivity || {}),
       getData: () => {
         const data = streamlitDataStore.allDataForDrawing?.heatmapData
@@ -385,6 +405,61 @@ export default defineComponent({
       return (rows as HeatmapBox[]) || []
     },
 
+    /** Markers drawn over the points (e.g. precursors), visible range only. */
+    markerRows(): HeatmapMarker[] {
+      if (!this.args.markers) return []
+      const rows = this.streamlitDataStore.allDataForDrawing?.markerData
+      return (rows as HeatmapMarker[]) || []
+    },
+
+    /** Id of the marker selected through ``markers.selection``, from any component. */
+    selectedMarkerId(): unknown {
+      const identifier = this.args.markers?.selection
+      if (!identifier) return undefined
+      return this.selectionStore.$state[identifier]
+    },
+
+    /** The markers, then the selected one again, larger and outlined. */
+    markerTraces(): Plotly.Data[] {
+      const rows = this.markerRows
+      if (rows.length === 0) return []
+      const cfg = this.args.markers || {}
+      const color = cfg.color || '#d62728'
+      const size = cfg.size || 9
+      const hasText = rows.some((m) => m.text !== undefined && m.text !== null)
+      const outline = this.theme?.base === 'dark' ? '#ffffff' : '#262730'
+      const trace = (ms: HeatmapMarker[], selected: boolean): Plotly.Data =>
+        ({
+          // WebGL like the points: an SVG trace would be drawn beneath them
+          type: 'scattergl',
+          mode: cfg.showText && hasText && !selected ? 'markers+text' : 'markers',
+          name: selected ? 'selected' : cfg.label || 'markers',
+          showlegend: !selected && !!cfg.label,
+          x: ms.map((m) => m.x),
+          y: ms.map((m) => m.y),
+          text: ms.map((m) => m.text ?? ''),
+          textposition: 'top center',
+          textfont: { size: 10, color },
+          hovertext: ms.map((m) => m.text ?? ''),
+          hoverinfo: hasText ? 'x+y+text' : 'x+y',
+          marker: {
+            symbol: cfg.symbol || 'diamond',
+            size: selected ? size * 1.8 : size,
+            color,
+            line: { color: outline, width: selected ? 2 : 1 },
+          },
+          // Not a row of heatmapData: the click selects the marker instead
+          customdata: ms.map((m) => ({ marker: m.id }) as unknown as number),
+        }) as Plotly.Data
+      const traces = [trace(rows, false)]
+      const selectedId = this.selectedMarkerId
+      if (selectedId !== undefined && selectedId !== null) {
+        const chosen = rows.filter((m) => m.id === selectedId)
+        if (chosen.length) traces.push(trace(chosen, true))
+      }
+      return traces
+    },
+
     /** Id of the box selected through ``boxes.selection``, from any component. */
     selectedBoxId(): unknown {
       const identifier = this.args.boxes?.selection
@@ -503,7 +578,8 @@ export default defineComponent({
      */
     layout(): Partial<Plotly.Layout> {
       // In categorical mode, show legend instead of colorbar
-      const showLegend = this.isCategoricalMode || !!this.args.boxes?.label
+      const showLegend =
+        this.isCategoricalMode || !!this.args.boxes?.label || !!this.args.markers?.label
       // Use extra right margin for colorbar (continuous) or legend (categorical)
       const needsExtraRightMargin = this.isCategoricalMode || this.effectiveColorbarVisible
 
@@ -513,7 +589,7 @@ export default defineComponent({
         showlegend: showLegend,
         legend: showLegend
           ? {
-              // Continuous mode only lists the boxes: above the plot, clear of the colorbar
+              // Continuous mode only lists the boxes and markers: above the plot, clear of the colorbar
               ...(this.isCategoricalMode
                 ? { x: 1.02, y: 1, xanchor: 'left', yanchor: 'top' }
                 : { orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom' }),
@@ -587,6 +663,17 @@ export default defineComponent({
       if (this.isInitialized && this.plotInitialized) this.renderPlot()
     },
 
+    'streamlitDataStore.allDataForDrawing.markerData': {
+      handler() {
+        if (this.isInitialized) this.renderPlot()
+      },
+      deep: true,
+    },
+
+    selectedMarkerId() {
+      if (this.isInitialized && this.plotInitialized) this.renderPlot()
+    },
+
     zoomRange: {
       handler() {
         if (this.zoomRange === undefined) return
@@ -639,9 +726,10 @@ export default defineComponent({
   },
 
   methods: {
-    /** Append the box outlines, last so trace 0 stays the points. */
+    /** Append the box outlines and markers, last so trace 0 stays the points. */
     withBoxes(traces: Plotly.Data[]): Plotly.Data[] {
-      return this.boxTrace ? [...traces, this.boxTrace] : traces
+      const boxes = this.boxTrace ? [this.boxTrace] : []
+      return [...traces, ...boxes, ...this.markerTraces]
     },
 
     /** Select the smallest box containing a clicked position. */
@@ -774,28 +862,23 @@ export default defineComponent({
       // Handle zoom/pan events (heatmap-specific)
       // Uses debouncing to reduce Python round-trips during drag operations
       plotElement.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
-        let newZoom: { xRange: number[]; yRange: number[] } | undefined
-
-        if (eventData['xaxis.autorange']) {
-          // Reset zoom
-          newZoom = { xRange: [-1, -1], yRange: [-1, -1] }
-        } else if (
-          eventData['xaxis.range[0]'] !== undefined &&
-          eventData['xaxis.range[1]'] !== undefined &&
-          eventData['yaxis.range[0]'] !== undefined &&
-          eventData['yaxis.range[1]'] !== undefined
-        ) {
-          newZoom = {
-            xRange: [
-              eventData['xaxis.range[0]'] as number,
-              eventData['xaxis.range[1]'] as number,
-            ],
-            yRange: [
-              eventData['yaxis.range[0]'] as number,
-              eventData['yaxis.range[1]'] as number,
-            ],
-          }
+        // An event may carry one axis only (a zoom along x, a double click on
+        // an axis): the other keeps its range. [-1, -1] is its full extent.
+        const axisRange = (axis: 'xaxis' | 'yaxis'): number[] | undefined => {
+          const ev = eventData as Record<string, unknown>
+          if (ev[`${axis}.autorange`]) return [-1, -1]
+          const lo = ev[`${axis}.range[0]`]
+          const hi = ev[`${axis}.range[1]`]
+          if (lo !== undefined && hi !== undefined) return [lo as number, hi as number]
+          const r = ev[`${axis}.range`]
+          if (Array.isArray(r) && r.length === 2) return [r[0] as number, r[1] as number]
+          return undefined
         }
+        const x = axisRange('xaxis')
+        const y = axisRange('yaxis')
+        const previous = this.zoomRange || { xRange: [-1, -1], yRange: [-1, -1] }
+        const newZoom: { xRange: number[]; yRange: number[] } | undefined =
+          x || y ? { xRange: x || previous.xRange, yRange: y || previous.yRange } : undefined
 
         if (newZoom && !this.zoomRangesEqual(newZoom, this.zoomRange)) {
           // Store pending zoom and debounce the update

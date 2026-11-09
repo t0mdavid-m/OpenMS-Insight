@@ -436,6 +436,27 @@ heatmap.set_boxes(
 heatmap(key="peak_map", state_manager=state_manager)
 ```
 
+**Markers (e.g. precursors of identifications):**
+`set_markers()` draws a marker at each row's x and y. Like boxes, markers are
+given per render and only those in the visible range are sent. With
+`selection=`, clicking a marker sets that identifier to its id, and the
+selected marker is drawn larger. `text_column=` shows a text per marker on
+hover, and `show_text=True` writes it beside the marker.
+
+```python
+heatmap.set_markers(
+    ids_df,
+    x_column="rt",
+    y_column="precursor_mz",
+    id_column="id_idx",
+    text_column="sequence",
+    selection="identification",
+    label="Identifications",
+    show_text=True,
+)
+heatmap(key="peak_map", state_manager=state_manager)
+```
+
 ### ClusteredHeatmap
 
 Grid heatmap for categorical axes (e.g. proteins against samples), with optional
