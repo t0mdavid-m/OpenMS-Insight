@@ -305,13 +305,18 @@
           </v-row>
         </v-card>
       </div>
+      <!-- With truncations hidden, the residues before and after the
+           proteoform are summarized in one line each -->
+      <div v-if="skippedBefore > 0" class="px-2 pb-1 skipped-residues" data-testid="skipped-n-term">
+        {{ skippedText(skippedBefore, 1, skippedBefore) }}
+      </div>
       <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
           <div
             v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % perRow === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
             class="row-number row-number-start"
           >
-          {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+          {{ aa_index + 1 }}
           </div>
           <ProteinTerminalCell v-if="aa_index === 0" protein-terminal="N-term" :truncated=n_truncation :index="-1" :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"/>
           <AminoAcidCell
@@ -334,7 +339,7 @@
             v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
             class="row-number row-number-end"
           >
-            {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+            {{ aa_index + 1 }}
           </div>
           <ProteinTerminalCell
             v-if="aa_index === sequence.length - 1"
@@ -345,6 +350,9 @@
             :font-size="fontSize"
           />
           </template>
+      </div>
+      <div v-if="skippedAfter > 0" class="px-2 pb-4 skipped-residues" data-testid="skipped-c-term">
+        {{ skippedText(skippedAfter, sequence_end + 2, sequence.length) }}
       </div>
       <InternalFragmentTrack
         v-if="showInternal"
@@ -899,6 +907,16 @@ export default defineComponent({
     c_truncation(): boolean {
       return this.sequence_end < (this.sequence.length - 1)
     },
+    /** Residues before the proteoform left out of the grid (truncations hidden) */
+    skippedBefore(): number {
+      return this.showIdentification && !this.showTruncations ? this.sequence_start : 0
+    },
+    /** Residues after the proteoform left out of the grid (truncations hidden) */
+    skippedAfter(): number {
+      return this.showIdentification && !this.showTruncations
+        ? Math.max(0, this.sequence.length - 1 - this.sequence_end)
+        : 0
+    },
     c_determined(): boolean {
       return this.sequence_end_reported >= 0
     },
@@ -1325,6 +1343,11 @@ export default defineComponent({
         item.selected = selected.has(item.text)
       })
     },
+    /** "… 23 residues skipped (1–23)": protein positions, 1-based */
+    skippedText(count: number, first: number, last: number): string {
+      const range = first === last ? `${first}` : `${first}–${last}`
+      return `… ${count} ${count === 1 ? 'residue' : 'residues'} skipped (${range})`
+    },
     updateSettings() {
       const settings = this.settings
       if (settings?.ion_types !== undefined && settings.ion_types !== null) {
@@ -1394,7 +1417,9 @@ export default defineComponent({
 
         // Ensures this is only executed once
         if (!this.visibilityOptions.some(option => option.text === 'Tags')) {
-          this.visibilityOptions.push({ text: 'Truncations', selected: true })
+          // settings.show_truncations === false starts with the truncated
+          // termini summarized instead of drawn
+          this.visibilityOptions.push({ text: 'Truncations', selected: this.settings?.show_truncations !== false })
           this.visibilityOptions.push({ text: 'Tags', selected: true })
           this.visibilityOptions.push({ text: 'Internal fragments', selected: true })
           this.updateSettings()
@@ -2354,6 +2379,12 @@ export default defineComponent({
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   opacity: var(--v-medium-emphasis-opacity);
+}
+
+.skipped-residues {
+  font-size: var(--row-number-font-size, 12px);
+  font-style: italic;
+  opacity: 0.7;
 }
 
 .row-number-start {
