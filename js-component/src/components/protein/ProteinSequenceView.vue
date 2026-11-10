@@ -405,6 +405,18 @@
           >
         </FragmentTable>
       </template>
+      <template v-if="showUnmatchedMasses">
+        <FragmentTable
+          key="unmatched"
+          :table-data="unmatchedTableData"
+          :column-definitions="unmatchedColumnDefinitions"
+          :index="-(index + 1)"
+          table-layout-param="fitColumns"
+          @row-selected="onUnmatchedRowSelected"
+        >
+          <template #default>{{ unmatchedTableTitle }}</template>
+        </FragmentTable>
+      </template>
     </div>
   </v-sheet>
   </div>
@@ -734,6 +746,23 @@ export default defineComponent({
         },
       ] as ColumnDefinition[],
       fragmentTableData: [] as Record<string, unknown>[],
+      // Observed masses no selected fragment ion matches (unmatchedMasses)
+      unmatchedTableData: [] as Record<string, unknown>[],
+      unmatchedTableTitle: '' as string,
+      unmatchedColumnDefinitions: [
+        {
+          title: 'Observed mass', field: 'ObservedMass', formatter: toFixedFormatter(), sorter: 'number',
+          headerTooltip: 'An observed mass that no fragment ion of the selected types matches within the tolerance.'
+        },
+        {
+          title: 'Nearest fragment', field: 'Nearest',
+          headerTooltip: 'The theoretical fragment ion (of the selected types) closest to the observed mass.'
+        },
+        {
+          title: 'Δ to it (Da)', field: 'NearestDiffDa', formatter: toFixedFormatter(), sorter: 'number',
+          headerTooltip: 'Observed minus theoretical mass of the nearest fragment ion, in Daltons. A shift shared by several masses can point at a modification.'
+        },
+      ] as ColumnDefinition[],
       // Annotated fragment behind each fragmentTableData row
       fragmentTableSource: [] as AnnotatedFragment[],
       selectedFragment: undefined as AnnotatedFragment | undefined,
@@ -822,6 +851,10 @@ export default defineComponent({
     // Isotope errors matching uses: 0 while the switch is off
     activeIsotopeErrors(): number {
       return this.isotopeErrorsEnabled && this.isotopeMatching ? this.isotopeErrors : 0
+    },
+    showUnmatchedMasses(): boolean {
+      return this.args.unmatchedMasses === true && !this.usesAnnotator &&
+        this.showFragments && this.unmatchedTableTitle !== ''
     },
     fragmentColumns(): ColumnDefinition[] {
       const columns = this.fragmentTableColumnDefinitions
@@ -1444,6 +1477,8 @@ export default defineComponent({
         return
       }
       this.fragmentTableSource = []
+      this.unmatchedTableData = []
+      this.unmatchedTableTitle = ''
 
       if (this.sequence.length <= 0) {
         this.fragmentTableTitle = '' // if no sequence is selected, nothing to show
@@ -1477,6 +1512,10 @@ export default defineComponent({
       let matching_fragments: Record<string, unknown>[] = []
       const matchedIons: MatchedFragmentIon[] = []
       const sequence_size = this.sequence_end
+      // The theoretical fragment closest to each observed mass (unmatchedMasses)
+      const trackNearest = this.args.unmatchedMasses === true
+      const nearestName: string[] = new Array(observed_masses.length).fill('')
+      const nearestDiff: number[] = new Array(observed_masses.length).fill(Infinity)
       
       this.selectedIonSeries
         .forEach((series) => {
@@ -1525,6 +1564,13 @@ export default defineComponent({
               extraFragments.forEach(({ typeName, typeMass }) => {
                 // Mass difference = (observed-theoretical)/theoretical*1e6
                 const thisTypeMass = theoretical_mass + series.offset + typeMass
+                if (trackNearest) {
+                  const diff = observed_masses[obsIndex] - thisTypeMass
+                  if (Math.abs(diff) < Math.abs(nearestDiff[obsIndex])) {
+                    nearestDiff[obsIndex] = diff
+                    nearestName[obsIndex] = `${series.name}${theoIndex + 1}${typeName}`
+                  }
+                }
                 // The smallest isotope offset (0 without isotope errors) that
                 // brings the masses within the tolerance
                 const isotope = matchIsotopeOffset(
@@ -1573,6 +1619,21 @@ export default defineComponent({
       this.residueCleavagePercentage = this.calculateCleavagePercentage
       this.fragmentTableData = matching_fragments
       this.fragmentTableTitle = `Matching fragments (# ${matching_fragments.length})`
+      if (trackNearest) {
+        const matchedIndices = new Set(matchedIons.map((ion) => ion.massIndex))
+        const rows: Record<string, unknown>[] = []
+        observed_masses.forEach((mass, obsIndex) => {
+          if (matchedIndices.has(obsIndex)) return
+          rows.push({
+            ObservedMass: mass,
+            Nearest: nearestName[obsIndex],
+            NearestDiffDa: Number.isFinite(nearestDiff[obsIndex]) ? nearestDiff[obsIndex] : null,
+          })
+        })
+        this.unmatchedTableData = rows
+        this.unmatchedTableTitle =
+          `Unmatched masses (# ${rows.length} of ${observed_masses.length})`
+      }
       this.publishFragmentMatches(matchedIons)
     },
     // Externally annotated fragment ions: the envelopes accepted on the raw
@@ -1819,6 +1880,11 @@ export default defineComponent({
         const observedMass = this.fragmentTableData[rowIndex].ObservedMass as number
         this.updateMassTableFromFragmentMass(observedMass)
       }
+    },
+    // A row of the unmatched masses selects that mass in the mass table
+    onUnmatchedRowSelected(rowIndex?: number) {
+      if (rowIndex === undefined || !this.unmatchedTableData[rowIndex]) return
+      this.updateMassTableFromFragmentMass(this.unmatchedTableData[rowIndex].ObservedMass as number)
     },
     updateMassTableFromFragmentMass(observedMass: number) {
       // Prevent circular updates

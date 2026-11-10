@@ -631,6 +631,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */
   methodIonOptions?: boolean
+  /** List the observed masses no selected fragment ion matches, below the fragment table */
+  unmatchedMasses?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');
