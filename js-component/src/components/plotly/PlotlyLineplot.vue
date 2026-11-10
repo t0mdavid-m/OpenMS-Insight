@@ -23,6 +23,7 @@ import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
 import { useTopPeakLabels } from '@/composables/useTopPeakLabels'
+import { windowOverlay, windowRange, windowText, type WindowOverlay } from '@/utils/mzWindow'
 import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
@@ -719,8 +720,9 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
-        shapes: [...this.annotationShapes, ...this.measureOverlay.shapes],
+        shapes: [...this.windowLayer.shapes, ...this.annotationShapes, ...this.measureOverlay.shapes],
         annotations: [
+          ...this.windowLayer.annotations,
           ...this.peakAnnotations,
           ...this.topPeakAnnotations,
           ...this.measureOverlay.annotations,
@@ -752,6 +754,24 @@ export default defineComponent({
         skip: own.size > 0 ? (i) => own.has(x_values[i]) : undefined,
         color: this.theme?.textColor || '#262730',
       })
+    },
+
+    /** The shaded window kept under window_identifier (none without one). */
+    windowLayer(): WindowOverlay {
+      const id = this.args.windowIdentifier
+      if (!id) return { shapes: [], annotations: [] }
+      const value = this.selectionStore.$state[id]
+      const tolerance = this.args.windowTolerance ?? 0.01
+      const unit = this.args.windowToleranceUnit === 'ppm' ? 'ppm' : 'Da'
+      const range = windowRange(value, tolerance, unit)
+      if (!range) return { shapes: [], annotations: [] }
+      return windowOverlay(
+        range,
+        windowText(value, range, tolerance, unit),
+        this.xRange,
+        this.actualPlotWidth - 80,
+        this.styling.selectedColor,
+      )
     },
 
     /**

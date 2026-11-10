@@ -186,6 +186,9 @@ export interface LinePlotComponentArgs
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
   showTopPeakLabels?: boolean // Start with the top peak labels shown
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm'
 }
 
 export interface LinePlotStyling {
