@@ -439,6 +439,18 @@ heatmap.set_boxes(
 heatmap(key="peak_map", state_manager=state_manager)
 ```
 
+**Colour scale chosen by the user:**
+`colorscale=` of the constructor is part of the cache configuration, so a new
+value preprocesses the data again. `set_colorscale()` changes only what is
+drawn: a Plotly colorscale name or a list of `[fraction, colour]` stops, and
+optionally `reversescale`. The zoom and the selection stay.
+
+```python
+name = st.selectbox("Colormap", ["Portland", "Viridis", "Jet", "Hot"])
+heatmap.set_colorscale(name)
+heatmap(key="peak_map", state_manager=state_manager)
+```
+
 ### ClusteredHeatmap
 
 Grid heatmap for categorical axes (e.g. proteins against samples), with optional

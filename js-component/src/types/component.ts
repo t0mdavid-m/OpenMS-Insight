@@ -216,7 +216,8 @@ export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, Im
   intensityColumn: string
   xLabel?: string
   yLabel?: string
-  colorscale?: string
+  /** Named Plotly colorscale or a [fraction, colour] stop list (set_colorscale) */
+  colorscale?: string | Array<[number, string]>
   /** Reverse the colorscale direction (default: false) */
   reversescale?: boolean
   zoomIdentifier?: string

@@ -1,6 +1,7 @@
 """Heatmap component using Plotly scattergl."""
 
 import math
+from collections.abc import Sequence
 from typing import Any
 
 import polars as pl
@@ -1491,10 +1492,67 @@ class Heatmap(BaseComponent):
 
         # Add any extra config options
         args.update(self._config)
+        # set_colorscale() wins over the constructor's scale
+        render_colorscale = getattr(self, "_render_colorscale", None)
+        if render_colorscale is not None:
+            args["colorscale"] = render_colorscale
 
         args.update(measure_args(self._measure))
         args.update(image_format_args(self._image_format))
         return args
+
+    # ------------------------------------------------------------------
+    # Colour scale chosen at render time
+    # ------------------------------------------------------------------
+
+    def set_colorscale(
+        self,
+        colorscale: str | Sequence[Sequence[Any]],
+        reversescale: bool | None = None,
+    ) -> "Heatmap":
+        """
+        Colour the points with another scale, without rebuilding the cache.
+
+        The ``colorscale`` given to the constructor is part of the cache
+        configuration, so changing it there preprocesses the data again. This
+        changes only what is drawn: call it before a render, e.g. with the
+        value of a colormap selector. The zoom and the selection stay.
+
+        Args:
+            colorscale: A Plotly colorscale name (``"Viridis"``, ``"Jet"``,
+                ``"Hot"``, ...) or a list of ``[fraction, colour]`` stops from
+                0 to 1, e.g. ``plotly.colors.sequential.Plasma`` turned into
+                stops.
+            reversescale: Reverse the scale. None keeps the current setting.
+
+        Returns:
+            Self for method chaining
+        """
+        if isinstance(colorscale, str):
+            if not colorscale:
+                raise ValueError("colorscale must not be empty")
+            scale: str | list[list[Any]] = colorscale
+        else:
+            stops = [list(stop) for stop in colorscale]
+            if len(stops) < 2 or any(len(stop) != 2 for stop in stops):
+                raise ValueError(
+                    "colorscale needs at least two [fraction, colour] stops"
+                )
+            fractions = [float(stop[0]) for stop in stops]
+            if (
+                fractions[0] != 0.0
+                or fractions[-1] != 1.0
+                or fractions != sorted(fractions)
+            ):
+                raise ValueError("colorscale stops must rise from 0 to 1")
+            scale = [
+                [f, str(stop[1])] for f, stop in zip(fractions, stops, strict=True)
+            ]
+        # Not self._colorscale: that one is cache configuration
+        self._render_colorscale = scale
+        if reversescale is not None:
+            self._reversescale = bool(reversescale)
+        return self
 
     # ------------------------------------------------------------------
     # Boxes drawn over the points (e.g. features on a peak map)
