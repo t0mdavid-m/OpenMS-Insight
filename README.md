@@ -725,6 +725,25 @@ Plot3D(
 )(key="signals", state_manager=state_manager)
 ```
 
+**The region zoomed in another plot:** `zoom_identifier=` shows only the
+points inside the zoom another plot stores under that identifier (a Heatmap's
+`zoom_identifier`, default `heatmap_zoom`), on `x_column`/`y_column` or the
+columns named by `zoom_columns`. `max_points=` sends only the points with the
+largest z. Both are render-time options, not part of the cache.
+
+```python
+region = Plot3D(
+    cache_id="peak_map_3d",
+    data_path="peaks.parquet",
+    x_column="rt",
+    y_column="mz",
+    z_column="intensity",
+    zoom_identifier="heatmap_zoom",
+    max_points=5000,
+)
+region(key="peak_map_3d", state_manager=state_manager)
+```
+
 ### ProteinSequenceView
 
 Sequence view of a protein or peptide with its fragment and tag evidence: matched fragment ions (a/b/c/x/y/z), tag coverage, the selected tag, truncations, localized and ambiguous modifications and, with externally annotated fragments, internal fragments. A table below the grid lists the matched fragments. Residues, fragment rows and the masses of the spectrum are linked.

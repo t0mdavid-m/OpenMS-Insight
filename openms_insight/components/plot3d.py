@@ -7,6 +7,7 @@ import polars as pl
 from ..core.base import BaseComponent
 from ..core.image_format import image_format_args, validate_image_format
 from ..core.registry import register_component
+from ..core.zoom import normalize_zoom
 from ..preprocessing.filtering import filter_and_collect_cached
 
 
@@ -92,6 +93,9 @@ class Plot3D(BaseComponent):
         border: bool = True,
         export_format: str = "svg",
         image_format: str | None = None,
+        zoom_identifier: str | None = None,
+        zoom_columns: tuple[str, str] | None = None,
+        max_points: int | None = None,
         **kwargs,
     ):
         """
@@ -150,6 +154,15 @@ class Plot3D(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            zoom_identifier: Show only the points inside the zoom another plot
+                stores under this identifier, e.g. the ``zoom_identifier`` of a
+                Heatmap (``{"xRange": [lo, hi], "yRange": [lo, hi]}``, a
+                missing axis or ``[-1, -1]`` is the full range). Render-time
+                only: not part of the cache.
+            zoom_columns: The columns the zoom's x and y ranges apply to
+                (default: ``x_column`` and ``y_column``).
+            max_points: Send at most this many points, those with the largest
+                ``z_column`` values. Render-time only.
             **kwargs: Additional configuration options.
         """
         if mode not in ("stems", "lines"):
@@ -188,6 +201,14 @@ class Plot3D(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+        # Render-time too: the region shown follows another plot's zoom
+        if zoom_columns is not None and len(zoom_columns) != 2:
+            raise ValueError("zoom_columns needs an x and a y column")
+        if max_points is not None and max_points < 1:
+            raise ValueError("max_points must be at least 1")
+        self._zoom_identifier = zoom_identifier
+        self._zoom_columns = tuple(zoom_columns) if zoom_columns else None
+        self._max_points = max_points
 
         super().__init__(
             cache_id=cache_id,
@@ -320,6 +341,8 @@ class Plot3D(BaseComponent):
         for identifier in self._highlight:
             if identifier not in deps:
                 deps.append(identifier)
+        if self._zoom_identifier and self._zoom_identifier not in deps:
+            deps.append(self._zoom_identifier)
         return deps
 
     def _preprocess(self) -> None:
@@ -352,6 +375,8 @@ class Plot3D(BaseComponent):
         data = self._preprocessed_data.get("data")
         if data is None:
             data = self._raw_data
+        list_columns = self._list_columns()
+        data = self._in_zoom(data, state, list_columns)
         df_pandas, data_hash = filter_and_collect_cached(
             data,
             self._filters,
@@ -362,7 +387,6 @@ class Plot3D(BaseComponent):
         # List columns hold one entity's points per row (e.g. every peak of one
         # mass); spread them into one row per point now that only the selected
         # rows are left.
-        list_columns = self._list_columns()
         if list_columns and len(df_pandas) > 0:
             df_pandas = df_pandas.explode(list_columns, ignore_index=True)
             df_pandas = df_pandas.dropna(subset=[self._x_column]).astype(
@@ -372,6 +396,11 @@ class Plot3D(BaseComponent):
                     if c in list_columns
                 }
             )
+        if self._max_points is not None and len(df_pandas) > self._max_points:
+            # Most intense first would reorder traces: keep the original order
+            keep = df_pandas[self._z_column].nlargest(self._max_points).index
+            df_pandas = df_pandas.loc[sorted(keep)].reset_index(drop=True)
+            data_hash = f"{data_hash}:top{self._max_points}"
         if not self._highlight:
             return {"plotData": df_pandas, "_hash": data_hash}
         # Split off the highlighted points; they are drawn as a trace of their own
@@ -398,6 +427,25 @@ class Plot3D(BaseComponent):
             },
             "_hash": f"{data_hash}:{selected!r}",
         }
+
+    def _in_zoom(
+        self, data: pl.LazyFrame, state: dict[str, Any], list_columns: list[str]
+    ) -> pl.LazyFrame:
+        """The points inside the zoom stored under ``zoom_identifier``."""
+        if not self._zoom_identifier:
+            return data
+        zoom = normalize_zoom(state.get(self._zoom_identifier))
+        if zoom is None:
+            return data
+        x_col, y_col = self._zoom_columns or (self._x_column, self._y_column)
+        condition = None
+        for axis, column in (("x", x_col), ("y", y_col)):
+            if axis not in zoom or column in list_columns:
+                continue
+            lo, hi = zoom[axis]
+            inside = pl.col(column).is_between(lo, hi)
+            condition = inside if condition is None else condition & inside
+        return data if condition is None else data.filter(condition)
 
     def _list_columns(self) -> list[str]:
         """Columns of the cached data that hold lists of points."""
