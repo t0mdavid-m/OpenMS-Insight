@@ -118,6 +118,10 @@ export default defineComponent({
     }
   },
   computed: {
+    /** The scale as drawn: a change redraws the points (see the watcher) */
+    colorscaleKey(): string {
+      return JSON.stringify([this.args.colorscale ?? null, this.args.reversescale ?? false])
+    },
     /** Height of the plot below its toolbar (and colorbar row); the frame keeps args.height. */
     plotHeight(): number {
       return (this.args.height || 400) - TOOLBAR_HEIGHT - (this.showLegendBar ? LEGEND_HEIGHT : 0)
@@ -767,6 +771,13 @@ export default defineComponent({
         }
       },
       deep: true,
+    },
+
+    // set_colorscale() changes the scale without new data. The app's new
+    // scale replaces colors picked in the colorbar editor.
+    colorscaleKey() {
+      this.colorSpecs = {}
+      if (this.isInitialized && this.plotInitialized) this.renderPlot()
     },
 
     'streamlitDataStore.allDataForDrawing.boxData': {
