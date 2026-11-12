@@ -251,6 +251,27 @@ export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, Im
     color?: string
     maxBoxes?: number
   }
+  /** Points drawn over the heatmap, set by Heatmap.set_markers() */
+  markers?: {
+    /** Identifier the id of a clicked marker is written to */
+    selection?: string | null
+    /** Legend entry of the markers */
+    label?: string | null
+    color?: string
+    symbol?: string
+    size?: number
+    /** Write each marker's text beside it */
+    showText?: boolean
+    maxMarkers?: number
+  }
+}
+
+/** One marker of Heatmap.set_markers(), in data coordinates. */
+export interface HeatmapMarker {
+  x: number
+  y: number
+  id?: unknown
+  text?: string | null
 }
 
 /** One rectangle of Heatmap.set_boxes(), in data coordinates. */

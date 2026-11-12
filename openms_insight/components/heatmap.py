@@ -304,6 +304,9 @@ class Heatmap(BaseComponent):
         self._boxes: pl.DataFrame | None = None
         self._boxes_config: dict[str, Any] = {}
         self._boxes_key: str | None = None
+        self._markers: pl.DataFrame | None = None
+        self._markers_config: dict[str, Any] = {}
+        self._markers_key: str | None = None
 
         # Render-time options, kept out of the cache config (see core/measure.py)
         self._measure = validate_measure(measure)
@@ -1296,7 +1299,7 @@ class Heatmap(BaseComponent):
             if not levels:
                 # No levels available
                 print("[HEATMAP] No levels available", file=sys.stderr)
-                return self._add_boxes(
+                return self._add_overlays(
                     {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}, zoom
                 )
 
@@ -1386,7 +1389,7 @@ class Heatmap(BaseComponent):
                 "y": members[self._y_column].to_list(),
             }
             result["_hash"] = f"{result['_hash']}:{compute_dataframe_hash(members)}"
-        return self._add_boxes(result, zoom)
+        return self._add_overlays(result, zoom)
 
     # Most points marked as selected; a larger set is marked in part
     MAX_MULTI_SELECT_MARKS = 20000
@@ -1554,6 +1557,8 @@ class Heatmap(BaseComponent):
 
         if self._boxes is not None:
             args["boxes"] = self._boxes_config
+        if self._markers is not None:
+            args["markers"] = self._markers_config
 
         # Add any extra config options
         args.update(self._config)
@@ -1632,7 +1637,119 @@ class Heatmap(BaseComponent):
         return self
 
     def _get_render_key(self) -> str | None:
-        return self._boxes_key
+        if self._boxes_key is None and self._markers_key is None:
+            return None
+        return f"{self._boxes_key}|{self._markers_key}"
+
+    def _add_overlays(
+        self, result: dict[str, Any], zoom: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Add the boxes and markers in the visible range to the payload."""
+        return self._add_markers(self._add_boxes(result, zoom), zoom)
+
+    # ------------------------------------------------------------------
+    # Markers drawn over the points (e.g. precursors of identifications)
+    # ------------------------------------------------------------------
+
+    def set_markers(
+        self,
+        markers: pl.DataFrame | pl.LazyFrame | None,
+        x_column: str = "x",
+        y_column: str = "y",
+        id_column: str | None = None,
+        text_column: str | None = None,
+        selection: str | None = None,
+        label: str | None = None,
+        color: str = "#d62728",
+        symbol: str = "diamond",
+        size: int = 9,
+        show_text: bool = False,
+        max_markers: int = 5000,
+    ) -> "Heatmap":
+        """
+        Draw markers over the points, e.g. the precursors of identified spectra.
+
+        Markers are given per render and are not part of the cache: call this
+        before every render (None removes them). Only markers in the visible
+        range are sent, at most ``max_markers`` of them in the given order, so
+        put the important ones first.
+
+        Args:
+            markers: One row per marker.
+            x_column: Column with the marker's x position.
+            y_column: Column with the marker's y position.
+            id_column: Column identifying a marker. Needed for ``selection``.
+            text_column: Column with a text per marker (e.g. a peptide
+                sequence), shown on hover and, with ``show_text``, beside it.
+            selection: Identifier set to a marker's id when it is clicked; the
+                marker with the selected id is drawn highlighted, also when it
+                was selected elsewhere.
+            label: Legend name of the markers (default: no legend entry).
+            color: Colour of the markers.
+            symbol: Plotly marker symbol (``diamond``, ``circle``, ``x``, ...).
+            size: Marker size in pixels; the selected marker is drawn larger.
+            show_text: Write each marker's text beside it.
+            max_markers: Most markers sent per render.
+
+        Returns:
+            Self for method chaining
+        """
+        if markers is None:
+            self._markers, self._markers_config, self._markers_key = None, {}, None
+            return self
+        if selection is not None and id_column is None:
+            raise ValueError("selection= needs id_column=")
+        if show_text and text_column is None:
+            raise ValueError("show_text=True needs text_column=")
+        columns = {x_column: "x", y_column: "y"}
+        if id_column is not None:
+            columns[id_column] = "id"
+        if text_column is not None:
+            columns[text_column] = "text"
+        frame = markers.lazy() if isinstance(markers, pl.DataFrame) else markers
+        frame = frame.select(
+            [pl.col(src).alias(dst) for src, dst in columns.items()]
+        ).collect()
+        frame = frame.with_columns(pl.col(c).cast(pl.Float64) for c in ("x", "y"))
+        if text_column is not None:
+            frame = frame.with_columns(pl.col("text").cast(pl.Utf8))
+        self._markers = frame
+        self._markers_config = {
+            "selection": selection,
+            "label": label,
+            "color": color,
+            "symbol": symbol,
+            "size": size,
+            "showText": show_text,
+            "maxMarkers": max_markers,
+        }
+        self._markers_key = (
+            f"{self._markers.hash_rows().sum()}:{self._markers.height}:"
+            f"{self._markers_config}"
+        )
+        return self
+
+    def _add_markers(
+        self, result: dict[str, Any], zoom: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Add the markers inside the visible range to the payload."""
+        if self._markers is None:
+            return result
+        markers = self._markers
+        normalized = normalize_zoom(zoom)
+        if normalized is not None:
+            x_lo, x_hi = normalized.get("x", [-math.inf, math.inf])
+            y_lo, y_hi = normalized.get("y", [-math.inf, math.inf])
+            markers = markers.filter(
+                pl.col("x").is_between(x_lo, x_hi) & pl.col("y").is_between(y_lo, y_hi)
+            )
+        markers = markers.head(self._markers_config.get("maxMarkers", 5000))
+        result["markerData"] = markers.to_pandas()
+        result["_hash"] = (
+            f"{result.get('_hash', '')}:{compute_dataframe_hash(markers)}:"
+            f"{self._markers_key}"
+        )
+        return result
 
     def _add_boxes(
         self, result: dict[str, Any], zoom: dict[str, Any] | None
