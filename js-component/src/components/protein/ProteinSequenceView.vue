@@ -368,7 +368,7 @@
             :determined="c_determined"
             :font-size="fontSize"
           />
-          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline" class="truncated-residues" data-testid="truncated-c-term" :style="{ gridColumn: `span ${truncatedTrail}` }"
+          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline" class="truncated-residues truncated-residues-end" data-testid="truncated-c-term" :style="{ gridColumn: `span ${truncatedTrail}` }"
                :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
             <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
             <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" :viewBox="`0 0 ${(truncatedTrail) * 20} 8`"><polyline :points="breakPoints(truncatedTrail)" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
@@ -378,7 +378,7 @@
               <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
             </v-tooltip>
           </div>
-          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline" class="truncated-residues" data-testid="truncated-c-term" :style="{ gridColumn: '1 / -1' }"
+          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline" class="truncated-residues truncated-residues-end" data-testid="truncated-c-term" :style="{ gridColumn: '1 / -1' }"
                :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
             <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
             <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" :viewBox="`0 0 ${(perRow + 2) * 20} 8`"><polyline :points="breakPoints(perRow + 2)" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
@@ -2484,6 +2484,11 @@ export default defineComponent({
   line-height: 1;
   opacity: var(--v-medium-emphasis-opacity);
   cursor: help;
+}
+
+/* The C-terminal break line ends with its positions, on the right */
+.truncated-residues-end {
+  flex-direction: row-reverse;
 }
 
 .truncated-label {
