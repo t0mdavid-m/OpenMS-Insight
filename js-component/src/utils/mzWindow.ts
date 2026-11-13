@@ -9,7 +9,8 @@
 import type Plotly from "plotly.js-dist-min";
 import { ICONS, type PlotTool } from "./plotTools";
 
-export type ToleranceUnit = "Da" | "ppm";
+/** "Da" and "m/z" are absolute widths on the x axis, "ppm" is relative. */
+export type ToleranceUnit = "Da" | "ppm" | "m/z";
 
 /** The stored value as `[low, high]`, or undefined for no band. */
 export function windowRange(
@@ -30,7 +31,7 @@ export function windowRange(
   return undefined;
 }
 
-/** How the window reads in its label: `523.2711 ± 10 ppm` or `523.20–523.40`. */
+/** How the window reads in its label: `523.2711 ± 10 ppm`, `± 0.5 m/z` or `523.20–523.40`. */
 export function windowText(
   value: unknown,
   range: [number, number],
@@ -38,11 +39,7 @@ export function windowText(
   unit: ToleranceUnit,
 ): string {
   if (typeof value === "number") {
-    const t =
-      unit === "ppm"
-        ? `${Number(tolerance.toPrecision(4))} ppm`
-        : `${Number(tolerance.toPrecision(4))}`;
-    return `${value.toFixed(4)} ± ${t}`;
+    return `${value.toFixed(4)} ± ${Number(tolerance.toPrecision(4))} ${unit}`;
   }
   return `${range[0].toFixed(4)}–${range[1].toFixed(4)}`;
 }
@@ -116,7 +113,7 @@ export interface CurrentWindow {
   value: unknown;
   range: [number, number];
   tolerance: number;
-  unit: "ppm" | "Da";
+  unit: ToleranceUnit;
 }
 
 /** The window a plot's args point to in the selection state, if one is set. */
@@ -132,7 +129,10 @@ export function currentWindow(
   if (!id) return null;
   const value = state[id];
   const tolerance = args.windowTolerance ?? 0.01;
-  const unit: "ppm" | "Da" = args.windowToleranceUnit === "ppm" ? "ppm" : "Da";
+  const unit: ToleranceUnit =
+    args.windowToleranceUnit === "ppm" || args.windowToleranceUnit === "m/z"
+      ? args.windowToleranceUnit
+      : "Da";
   const range = windowRange(value, tolerance, unit);
   return range ? { value, range, tolerance, unit } : null;
 }

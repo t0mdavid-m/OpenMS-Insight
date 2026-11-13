@@ -44,7 +44,9 @@ def test_off_by_default(mock_streamlit, temp_cache_dir, spectra):
         ("10 ppm", 10.0, "ppm"),
         ("5ppm", 5.0, "ppm"),
         ("0.02 Da", 0.02, "Da"),
-        (" 0.5 th ", 0.5, "Da"),
+        (" 0.5 th ", 0.5, "m/z"),
+        ("0.5 m/z", 0.5, "m/z"),
+        ("0.5 MZ", 0.5, "m/z"),
         ("1e-3", 0.001, "Da"),
     ],
 )

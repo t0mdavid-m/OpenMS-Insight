@@ -188,7 +188,7 @@ export interface LinePlotComponentArgs
   showTopPeakLabels?: boolean // Start with the top peak labels shown
   windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
   windowTolerance?: number // Half-width of the band around a stored centre
-  windowToleranceUnit?: 'Da' | 'ppm'
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
 }
 
 export interface LinePlotStyling {
@@ -450,7 +450,7 @@ export interface MirrorPlotComponentArgs
   keepZoom?: boolean
   windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
   windowTolerance?: number // Half-width of the band around a stored centre
-  windowToleranceUnit?: 'Da' | 'ppm'
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
 }
 
 export interface MirrorPlotStyling {

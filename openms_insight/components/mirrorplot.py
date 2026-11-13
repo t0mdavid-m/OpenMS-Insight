@@ -194,7 +194,8 @@ class MirrorPlot(BaseComponent):
                 ``window_tolerance``), ``[low, high]``, or None for no band.
                 Render-time only: not part of the cache.
             window_tolerance: Half-width of the band around a stored centre:
-                a number of Da (default 0.01) or a string such as '10 ppm'.
+                a number of Da (default 0.01) or a string such as '10 ppm',
+                '0.02 Da' or '0.5 m/z'.
                 Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """

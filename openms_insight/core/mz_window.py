@@ -9,7 +9,8 @@ page is built from. The stored value is plain JSON:
 * ``None`` (or nothing): no band.
 
 ``window_tolerance`` is a number of Da (default 0.01) or a string such as
-``"10 ppm"`` or ``"0.02 Da"``. Both are render-time arguments, never part of
+``"10 ppm"``, ``"0.02 Da"`` or ``"0.5 m/z"`` (an absolute width on the m/z
+axis; ``"mz"`` and ``"Th"`` mean the same). Both are render-time arguments, never part of
 the cache configuration.
 """
 
@@ -21,8 +22,11 @@ from typing import Any
 DEFAULT_WINDOW_TOLERANCE = 0.01
 
 _TOLERANCE = re.compile(
-    r"^\s*([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*(da|ppm|th)?\s*$", re.I
+    r"^\s*([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*(da|ppm|th|m/z|mz)?\s*$", re.I
 )
+
+
+_UNITS = {"da": "Da", "ppm": "ppm", "th": "m/z", "m/z": "m/z", "mz": "m/z"}
 
 
 def validate_window_identifier(identifier: Any) -> str | None:
@@ -37,7 +41,7 @@ def validate_window_identifier(identifier: Any) -> str | None:
 
 
 def validate_window_tolerance(tolerance: Any) -> tuple[float, str]:
-    """``window_tolerance`` as ``(value, unit)`` with unit ``"Da"`` or ``"ppm"``."""
+    """``window_tolerance`` as ``(value, unit)``, unit ``"Da"``, ``"m/z"`` or ``"ppm"``."""
     value: float | None = None
     unit = "Da"
     if isinstance(tolerance, bool):
@@ -48,12 +52,13 @@ def validate_window_tolerance(tolerance: Any) -> tuple[float, str]:
         match = _TOLERANCE.match(tolerance)
         if match:
             value = float(match.group(1))
-            unit = "ppm" if (match.group(2) or "").lower() == "ppm" else "Da"
+            unit = _UNITS[(match.group(2) or "da").lower()]
     limit = 10_000.0 if unit == "ppm" else 100.0
     if value is None or not math.isfinite(value) or not 0 < value <= limit:
         raise ValueError(
             "window_tolerance must be a positive number of Da or a string such "
-            f"as '10 ppm' or '0.02 Da' (at most 100 Da or 10000 ppm), got {tolerance!r}"
+            "as '10 ppm', '0.02 Da' or '0.5 m/z' (at most 100 Da or m/z, or "
+            f"10000 ppm), got {tolerance!r}"
         )
     return value, unit
 
