@@ -44,7 +44,10 @@ def test_view_and_top_args(tmp_path, terms):
     )
     args = plot._get_component_args()
     assert args["viewColumn"] == "category"
-    assert args["viewNames"] == [["BP", "Biological process"], ["MF", "Molecular function"]]
+    assert args["viewNames"] == [
+        ["BP", "Biological process"],
+        ["MF", "Molecular function"],
+    ]
     assert args["viewIdentifier"] == "go_category"
     assert args["viewDefault"] == "MF"
     assert args["topChoices"] == [1, 2, 5]
