@@ -934,9 +934,13 @@ setting and never part of the cache configuration.
 
 ```python
 Heatmap(
-    cache_id="frames", data=peaks, x_column="mz", y_column="inv_k0",
+    cache_id="frames",
+    data=peaks,
+    x_column="mz",
+    y_column="inv_k0",
     intensity_column="intensity",
-    filters={"frame": "frame"}, categorical_filters=["frame"],  # levels per frame
+    filters={"frame": "frame"},
+    categorical_filters=["frame"],  # levels per frame
     stepper="frame",
 )(state_manager=state)
 ```
