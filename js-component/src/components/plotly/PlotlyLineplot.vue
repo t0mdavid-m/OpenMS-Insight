@@ -31,6 +31,14 @@ import {
   type CurrentWindow,
   type WindowOverlay,
 } from '@/utils/mzWindow'
+import {
+  markerDots,
+  markerOverlay,
+  matchMarkers,
+  sortedByX,
+  type MarkerMatch,
+  type MarkerOverlay,
+} from '@/utils/xMarkers'
 import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
@@ -42,7 +50,7 @@ import { pickedValue, sameValue, selectedValue } from '@/utils/pickValue'
 import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration
@@ -111,6 +119,8 @@ export default defineComponent({
       isInitialized: false as boolean,
       // The Window button hides the shaded window (window_identifier) and shows it again
       windowShown: true as boolean,
+      // The Markers button hides the x markers (x_markers) and shows them again
+      markersShown: true as boolean,
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
@@ -687,7 +697,36 @@ export default defineComponent({
         })
       }
 
+      // Dots on the peaks of the x markers (x_markers), drawn on top
+      const dots = markerDots(this.markerMatches, this.plotData.x_values, this.plotData.y_values)
+      if (dots) traces.push(dots)
+
       return traces
+    },
+
+    /** The x markers with their colour and matched peak. */
+    markerMatches(): MarkerMatch[] {
+      const markers = this.args.xMarkers
+      if (!this.markersShown || !markers || markers.length === 0 || !this.isDataReady || !this.plotData) return []
+      const { x_values, y_values } = this.plotData
+      const tolerance = this.args.xMarkerTolerance
+      return matchMarkers(markers, x_values, y_values, tolerance ? sortedByX(x_values) : [], tolerance)
+    },
+
+    /** Guides and labels of the x markers in view. */
+    markerLayer(): MarkerOverlay {
+      if (this.markerMatches.length === 0 || !this.plotData) return { shapes: [], annotations: [] }
+      return markerOverlay({
+        matches: this.markerMatches,
+        matching: !!this.args.xMarkerTolerance,
+        x: this.plotData.x_values,
+        y: this.plotData.y_values,
+        xRange: this.xRange,
+        yRange: this.yRange,
+        widthPx: this.actualPlotWidth - 80,
+        heightPx: this.plotHeight - (this.args.title ? 50 : 20) - 50,
+        textWidth: (text, size) => this.measureTextWidth(text, size),
+      })
     },
 
     /**
@@ -729,10 +768,16 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
-        shapes: [...this.windowLayer.shapes, ...this.annotationShapes, ...this.measureOverlay.shapes],
+        shapes: [
+          ...this.windowLayer.shapes,
+          ...this.markerLayer.shapes,
+          ...this.annotationShapes,
+          ...this.measureOverlay.shapes,
+        ],
         annotations: [
           ...this.windowLayer.annotations,
           ...this.peakAnnotations,
+          ...this.markerLayer.annotations,
           ...this.topPeakAnnotations,
           ...this.measureOverlay.annotations,
           ...this.labels.overlay({
@@ -752,6 +797,7 @@ export default defineComponent({
       const { x_values, y_values } = this.plotData
       const titled = !!this.args.title
       const own = new Set(this.args.peakLabels ? this.labels.labels.map((label) => label.x) : [])
+      const markerPeaks = new Set(this.markerMatches.map((m) => m.index))
       return this.topPeaks.annotations({
         x: x_values,
         y: y_values,
@@ -760,7 +806,11 @@ export default defineComponent({
         widthPx: this.actualPlotWidth - 80,
         heightPx: this.plotHeight - (titled ? 50 : 20) - 50,
         textWidth: (text, size) => this.measureTextWidth(text, size),
-        skip: own.size > 0 ? (i) => own.has(x_values[i]) : undefined,
+        // Peaks with your own label or an x marker's label keep only that
+        skip:
+          own.size > 0 || markerPeaks.size > 0
+            ? (i) => own.has(x_values[i]) || markerPeaks.has(i)
+            : undefined,
         color: this.theme?.textColor || '#262730',
       })
     },
@@ -814,12 +864,32 @@ export default defineComponent({
       return (this.args.height || 400) - TOOLBAR_HEIGHT
     },
 
+    /** The Markers switch, only for a plot with x markers. */
+    markerTools(): PlotTool[] {
+      if (!this.args.xMarkers || this.args.xMarkers.length === 0) return []
+      return [
+        {
+          id: 'x-markers',
+          group: 'annotate',
+          icon: ICONS.markers,
+          label: 'Show markers',
+          short: 'Markers',
+          help: this.markersShown ? 'hide the marked x positions' : 'show the marked x positions',
+          active: this.markersShown,
+          run: () => {
+            this.markersShown = !this.markersShown
+          },
+        },
+      ]
+    },
+
     toolbarTools(): PlotTool[] {
       return [
         ...this.measure.tools(this.measureTitle),
         ...this.labels.tools(),
         ...this.topPeaks.tools(),
         ...this.windowTools,
+        ...this.markerTools,
         ...this.pinZoom.tools(),
         downloadTool({
           plotId: this.id,
@@ -880,6 +950,11 @@ export default defineComponent({
 
     // Window button: the shaded window hidden or shown again
     windowShown() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // Markers button: x markers hidden or shown again
+    markersShown() {
       if (this.isInitialized && this.isDataReady) this.renderPlot()
     },
 
@@ -1031,7 +1106,11 @@ export default defineComponent({
         this.hover.bind(plotElement, this.$refs.root as HTMLElement | null, () => ({
           x: this.plotData?.x_values,
           y: this.plotData?.y_values,
-          extra: (i) => this.plotData?.annotations?.[i] || undefined,
+          extra: (i) => {
+            const marker = this.markerMatches.find((m) => m.index === i && m.label)
+            const note = this.plotData?.annotations?.[i] || undefined
+            return marker ? `${marker.label}${note ? ` · ${note}` : ''}` : note
+          },
           xName: this.args.xLabel || this.args.xColumn || 'x',
           yName: this.args.yLabel || this.args.yColumn || 'y',
         }))

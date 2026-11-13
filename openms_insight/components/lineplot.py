@@ -27,6 +27,11 @@ from ..core.top_peak_labels import (
     validate_show_top_peak_labels,
     validate_top_peak_labels,
 )
+from ..core.x_markers import (
+    validate_x_marker_tolerance,
+    validate_x_markers,
+    x_marker_args,
+)
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -94,6 +99,8 @@ class LinePlot(BaseComponent):
         keep_zoom: bool = False,
         top_peak_labels: int = 10,
         show_top_peak_labels: bool = False,
+        x_markers: dict[str, float] | list[dict[str, Any]] | None = None,
+        x_marker_tolerance: float | None = None,
         zoom_identifier: str | None = None,
         stepper: str | None = None,
         window_identifier: str | None = None,
@@ -191,6 +198,13 @@ class LinePlot(BaseComponent):
             window_tolerance: Half-width of the band around a stored centre:
                 a number of Da (default 0.01) or a string such as '10 ppm',
                 '0.02 Da' or '0.5 m/z'.
+            x_markers: Positions on the x axis to mark, as ``{label: x}`` or
+                a list of ``{'x', 'label', 'color'}`` dicts (default None).
+                Each gets a dotted guide in its own colour and its label.
+                Render-time only: not part of the cache.
+            x_marker_tolerance: With a number (x units), the most intense
+                peak within it of a marker gets a dot, the marker's label and
+                its name in the hover read-out (default None: guides only).
                 Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
@@ -223,6 +237,10 @@ class LinePlot(BaseComponent):
         # Render-time options, kept out of the cache config (see core/top_peak_labels.py)
         self._top_peak_labels = validate_top_peak_labels(top_peak_labels)
         self._show_top_peak_labels = validate_show_top_peak_labels(show_top_peak_labels)
+
+        # Render-time options, kept out of the cache config (see core/x_markers.py)
+        self._x_markers = validate_x_markers(x_markers)
+        self._x_marker_tolerance = validate_x_marker_tolerance(x_marker_tolerance)
         # Render-time option, kept out of the cache config (see core/zoom.py)
         self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
 
@@ -543,6 +561,7 @@ class LinePlot(BaseComponent):
         args.update(
             top_peak_label_args(self._top_peak_labels, self._show_top_peak_labels)
         )
+        args.update(x_marker_args(self._x_markers, self._x_marker_tolerance))
         return args
 
     def with_styling(

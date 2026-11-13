@@ -189,6 +189,8 @@ export interface LinePlotComponentArgs
   windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
   windowTolerance?: number // Half-width of the band around a stored centre
   windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
+  xMarkers?: Array<{ x: number; label: string; color?: string }> | null // Labelled x markers sorted by x (x_markers)
+  xMarkerTolerance?: number | null // Distance within which a marker takes a peak (x_marker_tolerance)
 }
 
 export interface LinePlotStyling {
@@ -487,6 +489,18 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
+  /** Column splitting the rows into views, one shown at a time */
+  viewColumn?: string
+  /** [view value, button label] pairs, in button order */
+  viewNames?: Array<[string, string]>
+  viewDefault?: string
+  /** State identifier the picked view is written to */
+  viewIdentifier?: string
+  /** Numbers of first x values the "Top n" menu offers */
+  topChoices?: number[]
+  topDefault?: number
+  /** Pixels per category of a horizontal plot that grows with its bars */
+  barHeight?: number
 }
 
 /**
@@ -605,6 +619,16 @@ export interface FragmentMatches {
   spectrum: unknown
   tolerance: { value: number; unit: string }
   fragments: MatchedFragmentIon[]
+  /** The proteoform matched (fragmentMatchesProteoform only) */
+  proteoform?: {
+    proforma: string
+    sequence: string
+    length: number
+    /** With the variable modifications */
+    theoreticalMass: number
+    /** Share of the bonds with a matched fragment on either side (%) */
+    cleavagePercentage: number
+  }
 }
 
 /**
@@ -659,6 +683,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */
   methodIonOptions?: boolean
+  /** Write the matched proteoform with the matched fragments */
+  fragmentMatchesProteoform?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');
