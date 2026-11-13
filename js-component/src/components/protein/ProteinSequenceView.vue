@@ -575,7 +575,8 @@ import type {
 } from '@/types/protein-sequence-data'
 import type { SequenceObject } from '@/types/protein-sequence-object'
 import type { ColumnDefinition } from 'tabulator-tables'
-import FragmentTable, { type FilterPreset } from './FragmentTable.vue'
+import FragmentTable from './FragmentTable.vue'
+import type { FilterPreset } from '../filterPresets'
 import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import ImageScreenshot from './ImageScreenshot.vue'
@@ -945,9 +946,8 @@ export default defineComponent({
         id: 'hide-unmatched',
         label: `Hide ${this.unmatchedTableTitle}`,
         help: this.unmatchedTableTooltip,
-        field: 'Unmatched',
-        value: true,
-        active: true,
+        filters: [{ column: 'Unmatched', op: '!=', value: true }],
+        default: true,
       }]
     },
     fragmentColumns(): ColumnDefinition[] {

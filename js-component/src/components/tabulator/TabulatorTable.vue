@@ -228,6 +228,7 @@ import type {
   NumericFilterConfig,
 } from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
+import { type FilterPreset, renderPresetSection } from '../filterPresets'
 import { combineSelection } from '@/composables/useMultiSelect'
 import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
 
@@ -243,7 +244,7 @@ type FilterValue = {
 }
 interface FilterChip {
   key: string
-  kind: 'search' | 'categorical' | 'numeric' | 'text'
+  kind: 'search' | 'preset' | 'categorical' | 'numeric' | 'text'
   field?: string
   label: string
 }
@@ -341,6 +342,8 @@ export default defineComponent({
       currentColumnFilters: [] as Array<{ field: string; type: string; value: unknown }>,
       // On/off state of the title-row toggle filters, keyed by column
       currentToggles: {} as Record<string, boolean>,
+      // On/off state of the filter presets, keyed by id
+      currentPresets: {} as Record<string, boolean>,
       // Text in the search box, and the search last sent to Python
       searchInput: '' as string,
       currentSearch: '' as string,
@@ -422,9 +425,16 @@ export default defineComponent({
      * Toggle state and search to merge into pagination requests (nothing for a
      * table that has neither, so its requests stay as they were).
      */
+    filterPresets(): FilterPreset[] {
+      return this.args.filterPresets || []
+    },
+    activePresets(): FilterPreset[] {
+      return this.filterPresets.filter((preset) => this.currentPresets[preset.id])
+    },
     viewFiltersPatch(): Record<string, unknown> {
       return {
         ...(this.toggleFilters.length > 0 ? { toggles: { ...this.currentToggles } } : {}),
+        ...(this.filterPresets.length > 0 ? { presets: { ...this.currentPresets } } : {}),
         ...(this.args.search ? { search: this.currentSearch } : {}),
       }
     },
@@ -441,6 +451,9 @@ export default defineComponent({
       const chips: FilterChip[] = []
       if (this.currentSearch) {
         chips.push({ key: 'search', kind: 'search', label: `Search: ${this.currentSearch}` })
+      }
+      for (const preset of this.activePresets) {
+        chips.push({ key: `p:${preset.id}`, kind: 'preset', field: preset.id, label: preset.label })
       }
       for (const field of this.selectedColumns) {
         const value = this.filterValues[field]
@@ -496,7 +509,10 @@ export default defineComponent({
       return `openms-insight:columns:${this.args.paginationIdentifier || this.args.title || ''}`
     },
     activeFilterCount(): number {
-      return this.selectedColumns.filter((field) => this.isFilterActive(field)).length
+      return (
+        this.activePresets.length +
+        this.selectedColumns.filter((field) => this.isFilterActive(field)).length
+      )
     },
     preparedTableData(): Record<string, unknown>[] {
       const indexField = this.args.tableIndexField || 'id'
@@ -830,6 +846,11 @@ export default defineComponent({
     for (const toggle of this.toggleFilters) {
       this.currentToggles[toggle.column] = saved[toggle.column] ?? toggle.default
     }
+    // So do the filter presets
+    const savedPresets = this.paginationState?.presets || {}
+    for (const preset of this.filterPresets) {
+      this.currentPresets[preset.id] = savedPresets[preset.id] ?? !!preset.default
+    }
     // So do the search and the dialog's filters, e.g. when the page is opened again
     this.restoreFilters()
   },
@@ -1065,6 +1086,10 @@ export default defineComponent({
         this.commitSearch()
         return
       }
+      if (chip.kind === 'preset') {
+        if (chip.field) this.setPresetActive(chip.field, false)
+        return
+      }
       const value = chip.field ? this.filterValues[chip.field] : undefined
       if (!chip.field || !value) return
       if (chip.kind === 'numeric' && value.numeric) {
@@ -1078,12 +1103,13 @@ export default defineComponent({
       this.refreshTeleportDialog()
     },
 
-    /** Remove the search and every filter of the dialog (not the title-row toggles). */
+    /** Remove the search, the presets and every filter of the dialog (not the title-row toggles). */
     clearAllFilters(): void {
       if (this.searchTimer) clearTimeout(this.searchTimer)
       this.searchInput = ''
-      const hadSearch = this.currentSearch !== ''
+      const hadSearch = this.currentSearch !== '' || this.activePresets.length > 0
       this.currentSearch = ''
+      for (const id of Object.keys(this.currentPresets)) this.currentPresets[id] = false
       for (const field of Object.keys(this.filterValues)) {
         const value = this.filterValues[field]
         if (value.numeric) value.numeric = { ...value.numeric, min: null, max: null }
@@ -1093,6 +1119,16 @@ export default defineComponent({
       // Server-side tables send the search along with the filters
       this.applyFilters()
       if (hadSearch && !this.isServerSidePagination) this.requestFilteredRows()
+      this.refreshTeleportDialog()
+    },
+
+    /**
+     * Switch a filter preset on or off. The filtering happens in Python, so
+     * this requests page 1 of the re-filtered rows.
+     */
+    setPresetActive(id: string, active: boolean): void {
+      this.currentPresets[id] = active
+      this.requestFilteredRows()
       this.refreshTeleportDialog()
     },
 
@@ -3101,6 +3137,15 @@ export default defineComponent({
         flex: 1;
         min-height: 0;
       `
+
+      // Ready-made filters first
+      renderPresetSection(
+        this.parentDocument,
+        content,
+        this.filterPresets,
+        (preset) => !!this.currentPresets[preset.id],
+        (preset, active) => this.setPresetActive(preset.id, active),
+      )
 
       // A table with suggested thresholds opens on them; the column choice follows
       if (Object.keys(this.numericFilterConfig).length > 0) {

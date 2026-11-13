@@ -89,15 +89,14 @@ import { defineComponent, type PropType } from 'vue'
 import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 
-// A ready-made filter of the filter dialog: hides rows whose `field` equals `value`
-export interface FilterPreset {
-  id: string
-  label: string
-  help?: string
-  field: string
-  value: unknown
-  active?: boolean
-}
+import {
+  type FilterPreset,
+  presetColumns,
+  presetMatches,
+  renderPresetSection,
+} from '../filterPresets'
+
+export type { FilterPreset }
 
 export default defineComponent({
   name: 'FragmentTable',
@@ -270,7 +269,7 @@ export default defineComponent({
 
       const columns = [
         ...this.columnDefinitions.map(col => col.field),
-        ...this.filterPresets.map(preset => preset.field),
+        ...presetColumns(this.filterPresets),
         'id',
       ]
       if ((this.tableData !== undefined) && (this.tableData.length > 0)) {
@@ -412,7 +411,7 @@ export default defineComponent({
       if (this.tabulator !== undefined) this.tabulator.download('csv', `${this.title}.csv`)
     },
     isPresetActive(preset: FilterPreset): boolean {
-      return this.presetActive[preset.id] ?? preset.active ?? false
+      return this.presetActive[preset.id] ?? preset.default ?? false
     },
     setPresetActive(preset: FilterPreset, active: boolean): void {
       this.presetActive[preset.id] = active
@@ -420,41 +419,14 @@ export default defineComponent({
       this.applyFilters()
     },
     renderPresets(content: HTMLElement): void {
-      if (!this.parentDocument || this.filterPresets.length === 0) return;
-      const doc = this.parentDocument;
-      const section = doc.createElement('div');
-      section.style.cssText = `
-        background-color: white;
-        border-radius: 4px;
-        border: 1px solid #e0e0e0;
-        padding: 16px;
-        margin-bottom: 24px;
-      `;
-      const heading = doc.createElement('h6');
-      heading.textContent = 'Presets:';
-      heading.style.cssText = 'color: #333; margin: 0 0 12px 0; font-size: 16px; font-weight: 500;';
-      section.appendChild(heading);
-      this.filterPresets.forEach((preset) => {
-        const label = doc.createElement('label');
-        label.style.cssText = 'display: flex; align-items: center; gap: 8px; color: #333; font-size: 14px; cursor: pointer; margin-bottom: 4px;';
-        if (preset.help) label.title = preset.help;
-        const box = doc.createElement('input');
-        box.type = 'checkbox';
-        box.checked = this.isPresetActive(preset);
-        box.addEventListener('change', () => this.setPresetActive(preset, box.checked));
-        const text = doc.createElement('span');
-        text.textContent = preset.label;
-        label.appendChild(box);
-        label.appendChild(text);
-        section.appendChild(label);
-        if (preset.help) {
-          const help = doc.createElement('div');
-          help.textContent = preset.help;
-          help.style.cssText = 'color: #666; font-size: 12px; margin: 0 0 8px 26px;';
-          section.appendChild(help);
-        }
-      });
-      content.appendChild(section);
+      if (!this.parentDocument) return;
+      renderPresetSection(
+        this.parentDocument,
+        content,
+        this.filterPresets,
+        (preset) => this.isPresetActive(preset),
+        (preset, active) => this.setPresetActive(preset, active),
+      );
     },
     openFilterDialog(): void {
       if (this.canUseTeleport()) {
@@ -659,7 +631,7 @@ export default defineComponent({
           // A function filter; Tabulator's typings only describe field filters
           const addFilter = this.tabulator?.addFilter.bind(this.tabulator) as
             ((filter: (data: Record<string, unknown>) => boolean) => void) | undefined;
-          addFilter?.((data) => data[preset.field] !== preset.value);
+          addFilter?.((data) => presetMatches(data, preset));
         });
         
         this.selectedColumns.forEach(columnField => {
