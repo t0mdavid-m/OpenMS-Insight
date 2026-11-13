@@ -7,6 +7,7 @@
  */
 
 import type Plotly from "plotly.js-dist-min";
+import { ICONS, type PlotTool } from "./plotTools";
 
 export type ToleranceUnit = "Da" | "ppm";
 
@@ -51,6 +52,13 @@ export interface WindowOverlay {
   annotations: Partial<Plotly.Annotations>[];
 }
 
+/** Label anchor for a position (0 = left edge, 1 = right edge of the view). */
+function edgeAnchor(position: number): "left" | "center" | "right" {
+  if (position > 0.85) return "right";
+  if (position < 0.15) return "left";
+  return "center";
+}
+
 /**
  * The band over the plot's height (at least `minWidthPx` wide, so a 10 ppm
  * window stays visible at full range) and its label at the top.
@@ -93,11 +101,52 @@ export function windowOverlay(
         xref: "x",
         yref: "paper",
         yanchor: "bottom",
+        // Near an edge the label runs inwards, so it is not cut off
+        xanchor: edgeAnchor((centre - xRange[0]) / (xRange[1] - xRange[0])),
         text,
         showarrow: false,
         font: { size: 11, color },
         captureevents: false,
       },
     ],
+  };
+}
+
+export interface CurrentWindow {
+  value: unknown;
+  range: [number, number];
+  tolerance: number;
+  unit: "ppm" | "Da";
+}
+
+/** The window a plot's args point to in the selection state, if one is set. */
+export function currentWindow(
+  args: {
+    windowIdentifier?: string | null;
+    windowTolerance?: number;
+    windowToleranceUnit?: string;
+  },
+  state: Record<string, unknown>,
+): CurrentWindow | null {
+  const id = args.windowIdentifier;
+  if (!id) return null;
+  const value = state[id];
+  const tolerance = args.windowTolerance ?? 0.01;
+  const unit: "ppm" | "Da" = args.windowToleranceUnit === "ppm" ? "ppm" : "Da";
+  const range = windowRange(value, tolerance, unit);
+  return range ? { value, range, tolerance, unit } : null;
+}
+
+/** The toolbar switch that hides the shaded window and shows it again. */
+export function windowTool(shown: boolean, toggle: () => void): PlotTool {
+  return {
+    id: "x-window",
+    group: "annotate",
+    icon: ICONS.window,
+    label: "Show window",
+    short: "Window",
+    help: shown ? "hide the shaded window" : "show the shaded window",
+    active: shown,
+    run: toggle,
   };
 }

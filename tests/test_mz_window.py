@@ -86,3 +86,49 @@ def test_not_part_of_the_cache(mock_streamlit, temp_cache_dir, spectra):
         after = json.load(f)
     assert before == after
     assert "window" not in json.dumps(after)
+
+
+def _mirror(spectra, cache_dir, cache_id="mirror_win", **kwargs):
+    from openms_insight import MirrorPlot
+
+    return MirrorPlot(
+        cache_id=cache_id,
+        data=spectra,
+        filters_top={"spectrum": "scan"},
+        filters_bottom={"spectrum": "scan"},
+        x_column="mz",
+        y_column="intensity",
+        cache_path=str(cache_dir),
+        **kwargs,
+    )
+
+
+def test_mirrorplot_window(mock_streamlit, temp_cache_dir, spectra):
+    assert (
+        "windowIdentifier" not in _mirror(spectra, temp_cache_dir)._get_component_args()
+    )
+    args = _mirror(
+        spectra,
+        temp_cache_dir,
+        cache_id="mirror_win_on",
+        window_identifier="xic",
+        window_tolerance="10 ppm",
+    )._get_component_args()
+    assert args["windowIdentifier"] == "xic"
+    assert (args["windowTolerance"], args["windowToleranceUnit"]) == (10.0, "ppm")
+    with pytest.raises(ValueError):
+        _mirror(spectra, temp_cache_dir, cache_id="bad", window_tolerance="10 furlongs")
+
+
+def test_mirrorplot_window_not_part_of_the_cache(
+    mock_streamlit, temp_cache_dir, spectra
+):
+    off = _mirror(spectra, temp_cache_dir, cache_id="same_mirror")
+    with open(off._get_manifest_path()) as f:
+        before = json.load(f)
+    on = _mirror(
+        spectra, temp_cache_dir, cache_id="same_mirror", window_identifier="xic"
+    )
+    with open(on._get_manifest_path()) as f:
+        after = json.load(f)
+    assert before == after

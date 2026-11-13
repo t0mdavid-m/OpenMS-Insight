@@ -23,7 +23,14 @@ import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
 import { useTopPeakLabels } from '@/composables/useTopPeakLabels'
-import { windowOverlay, windowRange, windowText, type WindowOverlay } from '@/utils/mzWindow'
+import {
+  currentWindow,
+  windowOverlay,
+  windowText,
+  windowTool,
+  type CurrentWindow,
+  type WindowOverlay,
+} from '@/utils/mzWindow'
 import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
@@ -35,7 +42,7 @@ import { pickedValue, sameValue, selectedValue } from '@/utils/pickValue'
 import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration
@@ -759,33 +766,14 @@ export default defineComponent({
     },
 
     /** The window kept under window_identifier, if one is set. */
-    currentWindow() {
-      const id = this.args.windowIdentifier
-      if (!id) return null
-      const value = this.selectionStore.$state[id]
-      const tolerance = this.args.windowTolerance ?? 0.01
-      const unit: 'ppm' | 'Da' = this.args.windowToleranceUnit === 'ppm' ? 'ppm' : 'Da'
-      const range = windowRange(value, tolerance, unit)
-      return range ? { value, range, tolerance, unit } : null
+    currentWindow(): CurrentWindow | null {
+      return currentWindow(this.args, this.selectionStore.$state)
     },
 
     /** The Window switch, only while a window is set. */
     windowTools(): PlotTool[] {
       if (!this.currentWindow) return []
-      return [
-        {
-          id: 'x-window',
-          group: 'annotate',
-          icon: ICONS.window,
-          label: 'Show window',
-          short: 'Window',
-          help: this.windowShown ? 'hide the shaded window' : 'show the shaded window',
-          active: this.windowShown,
-          run: () => {
-            this.windowShown = !this.windowShown
-          },
-        },
-      ]
+      return [windowTool(this.windowShown, () => (this.windowShown = !this.windowShown))]
     },
 
     /** The shaded window kept under window_identifier (none without one). */

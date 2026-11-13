@@ -448,6 +448,9 @@ export interface MirrorPlotComponentArgs
   height?: number
   /** Start with the zoom pinned (the pin button in the plot toolbar toggles it). */
   keepZoom?: boolean
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm'
 }
 
 export interface MirrorPlotStyling {
