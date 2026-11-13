@@ -344,6 +344,8 @@ export default defineComponent({
       currentToggles: {} as Record<string, boolean>,
       // On/off state of the filter presets, keyed by id
       currentPresets: {} as Record<string, boolean>,
+      // Where the filter dialog draws its card of filters (while it is open)
+      filterCardHost: null as HTMLElement | null,
       // Text in the search box, and the search last sent to Python
       searchInput: '' as string,
       currentSearch: '' as string,
@@ -605,6 +607,13 @@ export default defineComponent({
     },
   },
   watch: {
+    // The dialog's card of filters follows every change of the filters
+    activeFilterChips: {
+      handler(): void {
+        if (this.teleportDialog) this.renderFilterCard()
+      },
+      deep: true,
+    },
     // The checked rows changed (here or in another component)
     multiSelectionKey() {
       this.refreshCheckboxes()
@@ -1129,7 +1138,6 @@ export default defineComponent({
     setPresetActive(id: string, active: boolean): void {
       this.currentPresets[id] = active
       this.requestFilteredRows()
-      this.refreshTeleportDialog()
     },
 
     /**
@@ -3138,14 +3146,10 @@ export default defineComponent({
         min-height: 0;
       `
 
-      // Ready-made filters first
-      renderPresetSection(
-        this.parentDocument,
-        content,
-        this.filterPresets,
-        (preset) => !!this.currentPresets[preset.id],
-        (preset, active) => this.setPresetActive(preset.id, active),
-      )
+      // The filters in force and the presets first, kept current while the dialog is open
+      this.filterCardHost = this.parentDocument.createElement('div')
+      content.appendChild(this.filterCardHost)
+      this.renderFilterCard()
 
       // A table with suggested thresholds opens on them; the column choice follows
       if (Object.keys(this.numericFilterConfig).length > 0) {
@@ -3190,6 +3194,23 @@ export default defineComponent({
       this.teleportContainer.appendChild(header)
       this.teleportContainer.appendChild(content)
       this.teleportContainer.appendChild(footer)
+    },
+
+    /** (Re)draw the dialog's card of filters: the presets, then the filters the viewer set. */
+    renderFilterCard(): void {
+      const host = this.filterCardHost
+      if (!host || !this.parentDocument) return
+      host.innerHTML = ''
+      renderPresetSection(
+        this.parentDocument,
+        host,
+        this.filterPresets,
+        (preset) => !!this.currentPresets[preset.id],
+        (preset, active) => this.setPresetActive(preset.id, active),
+        this.activeFilterChips
+          .filter((chip) => chip.kind !== 'preset')
+          .map((chip) => ({ key: chip.key, label: chip.label, remove: () => this.removeFilterChip(chip) })),
+      )
     },
 
     renderColumnSelection(content: HTMLElement): void {

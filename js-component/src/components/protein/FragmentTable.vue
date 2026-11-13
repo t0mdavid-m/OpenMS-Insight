@@ -91,6 +91,7 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 
 import {
   type FilterPreset,
+  type UserFilterEntry,
   presetColumns,
   presetMatches,
   renderPresetSection,
@@ -197,6 +198,8 @@ export default defineComponent({
       debouncedTimeout: undefined as NodeJS.Timeout | undefined,
       // Teleport-related properties
       teleportDialog: false,
+      // Where the filter dialog draws its card of filters (while it is open)
+      filterCardHost: null as HTMLElement | null,
       teleportBackdrop: null as HTMLElement | null,
       teleportContainer: null as HTMLElement | null,
       parentDocument: null as Document | null,
@@ -231,6 +234,48 @@ export default defineComponent({
         field: col.field || '',
         title: col.title || col.field || ''
       })).filter(col => col.field !== '');
+    },
+    /** The filters the viewer set in the dialog, as entries of its card of filters. */
+    userFilterEntries(): UserFilterEntry[] {
+      const entries: UserFilterEntry[] = [];
+      const fmt = (value: number) => Number(value.toPrecision(6)).toString();
+      for (const field of this.selectedColumns) {
+        const value = this.filterValues[field];
+        if (!value) continue;
+        const title = this.columnNames.find((col) => col.field === field)?.title || field;
+        const type = this.filterTypes[field];
+        const clear = () => {
+          const current = this.filterValues[field];
+          if (!current) return;
+          if (type === 'numeric') {
+            current.numeric = { min: this.getMinValue(field), max: this.getMaxValue(field) };
+          } else if (type === 'categorical') {
+            current.categorical = [];
+          } else {
+            current.text = '';
+          }
+          this.applyFilters();
+          this.refreshTeleportDialog();
+        };
+        if (type === 'categorical' && value.categorical && value.categorical.length > 0) {
+          const shown = value.categorical.slice(0, 3).join(', ');
+          const more = value.categorical.length > 3 ? ` +${value.categorical.length - 3}` : '';
+          entries.push({ key: `c:${field}`, label: `${title}: ${shown}${more}`, remove: clear });
+        } else if (type === 'numeric' && value.numeric) {
+          const lo = this.getMinValue(field);
+          const hi = this.getMaxValue(field);
+          const { min, max } = value.numeric;
+          if (min === lo && max === hi) continue;
+          let label: string;
+          if (min === lo) label = `${title} ≤ ${fmt(max)}`;
+          else if (max === hi) label = `${title} ≥ ${fmt(min)}`;
+          else label = `${title} ${fmt(min)} – ${fmt(max)}`;
+          entries.push({ key: `n:${field}`, label, remove: clear });
+        } else if (type === 'text' && value.text && value.text.trim() !== '') {
+          entries.push({ key: `t:${field}`, label: `${title} ~ ${value.text}`, remove: clear });
+        }
+      }
+      return entries;
     },
     activeFilterCount(): number {
       let count = this.filterPresets.filter((preset) => this.isPresetActive(preset)).length;
@@ -299,6 +344,16 @@ export default defineComponent({
     },
   },
   watch: {
+    // The dialog's card of filters follows every change of the filters
+    userFilterEntries() {
+      if (this.teleportDialog) this.renderPresets()
+    },
+    presetActive: {
+      handler() {
+        if (this.teleportDialog) this.renderPresets()
+      },
+      deep: true,
+    },
     tableData() {
       this.drawTable()
     },
@@ -418,14 +473,18 @@ export default defineComponent({
       this.$emit('presetChanged', preset.id, active)
       this.applyFilters()
     },
-    renderPresets(content: HTMLElement): void {
-      if (!this.parentDocument) return;
+    /** (Re)draw the dialog's card of filters: the presets, then the filters the viewer set. */
+    renderPresets(): void {
+      const host = this.filterCardHost;
+      if (!this.parentDocument || !host) return;
+      host.innerHTML = '';
       renderPresetSection(
         this.parentDocument,
-        content,
+        host,
         this.filterPresets,
         (preset) => this.isPresetActive(preset),
         (preset, active) => this.setPresetActive(preset, active),
+        this.userFilterEntries,
       );
     },
     openFilterDialog(): void {
@@ -894,7 +953,10 @@ export default defineComponent({
         min-height: 0;
       `;
 
-      this.renderPresets(content);
+      // The presets and the filters in force first, kept current while the dialog is open
+      this.filterCardHost = this.parentDocument!.createElement('div');
+      content.appendChild(this.filterCardHost);
+      this.renderPresets();
       this.renderColumnSelection(content);
       this.renderFilterControls(content);
 
