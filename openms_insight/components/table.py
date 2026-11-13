@@ -164,6 +164,7 @@ class Table(BaseComponent):
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
         keyboard_navigation: bool = True,
+        collapse_columns: bool = True,
         **kwargs,
     ):
         """
@@ -297,6 +298,10 @@ class Table(BaseComponent):
                   the table's filters.
                 Example: {'q_value': {'op': '<=', 'suggestions': [0.01, 0.001]},
                 'peptides': {'op': '>=', 'suggestions': [2, 3], 'default': 2}}
+            collapse_columns: Fold the columns that do not fit the width into
+                a row overview (default). False keeps every column and scrolls
+                the table sideways instead, which suits a narrow table whose
+                columns all matter. It does not affect the cache.
             keyboard_navigation: Step through the rows with the keyboard while
                 the table has focus (after a row was clicked, or tabbed to):
                 Up and Down select the previous and next row, Page Up and Page
@@ -321,6 +326,7 @@ class Table(BaseComponent):
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
+        self._collapse_columns = bool(collapse_columns)
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
@@ -1687,6 +1693,8 @@ class Table(BaseComponent):
             args["columnMenu"] = False
         if not self._keyboard_navigation:
             args["keyboardNavigation"] = False
+        if not getattr(self, "_collapse_columns", True):
+            args["collapseColumns"] = False
         if self._reset_sort:
             args["resetSort"] = True
         if self._reset_sort_on:
