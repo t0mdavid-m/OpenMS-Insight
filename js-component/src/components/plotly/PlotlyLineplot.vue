@@ -41,7 +41,7 @@ import { usePeakHover } from '@/composables/usePeakHover'
 import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration
@@ -108,6 +108,8 @@ export default defineComponent({
   data() {
     return {
       isInitialized: false as boolean,
+      // The Markers button hides the x markers (x_markers) and shows them again
+      markersShown: true as boolean,
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
@@ -694,7 +696,7 @@ export default defineComponent({
     /** The x markers with their colour and matched peak. */
     markerMatches(): MarkerMatch[] {
       const markers = this.args.xMarkers
-      if (!markers || markers.length === 0 || !this.isDataReady || !this.plotData) return []
+      if (!this.markersShown || !markers || markers.length === 0 || !this.isDataReady || !this.plotData) return []
       const { x_values, y_values } = this.plotData
       const tolerance = this.args.xMarkerTolerance
       return matchMarkers(markers, x_values, y_values, tolerance ? sortedByX(x_values) : [], tolerance)
@@ -823,11 +825,31 @@ export default defineComponent({
       return (this.args.height || 400) - TOOLBAR_HEIGHT
     },
 
+    /** The Markers switch, only for a plot with x markers. */
+    markerTools(): PlotTool[] {
+      if (!this.args.xMarkers || this.args.xMarkers.length === 0) return []
+      return [
+        {
+          id: 'x-markers',
+          group: 'annotate',
+          icon: ICONS.markers,
+          label: 'Show markers',
+          short: 'Markers',
+          help: this.markersShown ? 'hide the marked x positions' : 'show the marked x positions',
+          active: this.markersShown,
+          run: () => {
+            this.markersShown = !this.markersShown
+          },
+        },
+      ]
+    },
+
     toolbarTools(): PlotTool[] {
       return [
         ...this.measure.tools(this.measureTitle),
         ...this.labels.tools(),
         ...this.topPeaks.tools(),
+        ...this.markerTools,
         ...this.pinZoom.tools(),
         downloadTool({
           plotId: this.id,
@@ -883,6 +905,11 @@ export default defineComponent({
 
     // Top peak labels switched on or off
     'topPeaks.on'() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // Markers button: x markers hidden or shown again
+    markersShown() {
       if (this.isInitialized && this.isDataReady) this.renderPlot()
     },
 
