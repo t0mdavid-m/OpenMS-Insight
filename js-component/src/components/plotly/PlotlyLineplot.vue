@@ -35,7 +35,7 @@ import { pickedValue, sameValue, selectedValue } from '@/utils/pickValue'
 import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration
@@ -102,6 +102,8 @@ export default defineComponent({
   data() {
     return {
       isInitialized: false as boolean,
+      // The Window button hides the shaded window (window_identifier) and shows it again
+      windowShown: true as boolean,
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
@@ -756,15 +758,41 @@ export default defineComponent({
       })
     },
 
-    /** The shaded window kept under window_identifier (none without one). */
-    windowLayer(): WindowOverlay {
+    /** The window kept under window_identifier, if one is set. */
+    currentWindow() {
       const id = this.args.windowIdentifier
-      if (!id) return { shapes: [], annotations: [] }
+      if (!id) return null
       const value = this.selectionStore.$state[id]
       const tolerance = this.args.windowTolerance ?? 0.01
-      const unit = this.args.windowToleranceUnit === 'ppm' ? 'ppm' : 'Da'
+      const unit: 'ppm' | 'Da' = this.args.windowToleranceUnit === 'ppm' ? 'ppm' : 'Da'
       const range = windowRange(value, tolerance, unit)
-      if (!range) return { shapes: [], annotations: [] }
+      return range ? { value, range, tolerance, unit } : null
+    },
+
+    /** The Window switch, only while a window is set. */
+    windowTools(): PlotTool[] {
+      if (!this.currentWindow) return []
+      return [
+        {
+          id: 'x-window',
+          group: 'annotate',
+          icon: ICONS.window,
+          label: 'Show window',
+          short: 'Window',
+          help: this.windowShown ? 'hide the shaded window' : 'show the shaded window',
+          active: this.windowShown,
+          run: () => {
+            this.windowShown = !this.windowShown
+          },
+        },
+      ]
+    },
+
+    /** The shaded window kept under window_identifier (none without one). */
+    windowLayer(): WindowOverlay {
+      const window = this.currentWindow
+      if (!window || !this.windowShown) return { shapes: [], annotations: [] }
+      const { value, range, tolerance, unit } = window
       return windowOverlay(
         range,
         windowText(value, range, tolerance, unit),
@@ -803,6 +831,7 @@ export default defineComponent({
         ...this.measure.tools(this.measureTitle),
         ...this.labels.tools(),
         ...this.topPeaks.tools(),
+        ...this.windowTools,
         ...this.pinZoom.tools(),
         downloadTool({
           plotId: this.id,
@@ -858,6 +887,11 @@ export default defineComponent({
 
     // Top peak labels switched on or off
     'topPeaks.on'() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // Window button: the shaded window hidden or shown again
+    windowShown() {
       if (this.isInitialized && this.isDataReady) this.renderPlot()
     },
 
