@@ -1,18 +1,20 @@
 <template>
   <!-- Break line marking the residues a proteoform's terminus truncates:
-       their protein positions and a zig-zag over `cells` grid cells; the
-       C-terminal one (end) runs zig-zag first, positions last. In a single
-       cell only the positions show: a zig-zag that short reads as a letter -->
-  <div :class="['truncated-residues', { 'truncated-residues-end': end }]" :aria-label="text">
+       their protein positions and a flat wave over `cells` grid cells; the
+       C-terminal one (end) runs wave first, positions last. In a single
+       cell the positions stand above the wave -->
+  <div
+    :class="['truncated-residues', { 'truncated-residues-end': end, 'truncated-residues-narrow': cells < 2 }]"
+    :aria-label="text"
+  >
     <span class="truncated-label" aria-hidden="true">{{ range }}</span>
     <svg
-      v-if="cells > 1"
       class="truncated-break" aria-hidden="true" preserveAspectRatio="none"
-      :viewBox="`0 0 ${Math.max(cells, 1) * 20} 8`"
+      :viewBox="`0 0 ${Math.max(cells, 1) * 20} 6`"
     >
-      <polyline
-        :points="points" fill="none" stroke="currentColor" stroke-width="1.2"
-        vector-effect="non-scaling-stroke"
+      <path
+        :d="path" fill="none" stroke="currentColor" stroke-width="1.2"
+        stroke-linecap="round" vector-effect="non-scaling-stroke"
       />
     </svg>
     <v-tooltip activator="parent" location="bottom" max-width="480">
@@ -44,10 +46,13 @@ export default defineComponent({
     testid: { type: String, required: true },
   },
   computed: {
-    /** Two teeth per cell, so the zig-zag keeps its pitch at any width */
-    points(): string {
-      const n = Math.max(this.cells, 1) * 4
-      return Array.from({ length: n + 1 }, (_, i) => `${i * 5},${i % 2 ? 0 : 8}`).join(' ')
+    /** A smooth wave, one period per cell, so it keeps its pitch at any
+     *  width and never reads as a letter */
+    path(): string {
+      const n = Math.max(this.cells, 1) * 2
+      let d = 'M0,3'
+      for (let i = 0; i < n; i++) d += ` q5,${i % 2 ? 6 : -6} 10,0`
+      return d
     },
   },
 })
@@ -80,7 +85,18 @@ export default defineComponent({
 .truncated-break {
   flex: 1;
   min-width: 0;
-  height: 8px;
+  height: 6px;
+}
+
+/* One cell: positions above the wave */
+.truncated-residues-narrow {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.truncated-residues-narrow .truncated-break {
+  flex: none;
+  width: 100%;
 }
 
 .truncated-range {
