@@ -360,8 +360,9 @@ class ProteinSequenceView(BaseComponent):
                 selecting that method's ion series when ``ion_types`` is not
                 given), ``show_truncations`` (True default: the residues
                 outside an identified proteoform are drawn greyed; False:
-                each truncated terminus is one line, "… n residues truncated
-                (first–last)", which shows those residues on hover). The user can change all of them in the view.
+                each truncated terminus is marked by a "⋯", whose hover text
+                gives the number and positions of those residues and the
+                residues themselves). The user can change all of them in the view.
                 See ``check_fragment_settings``.
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.

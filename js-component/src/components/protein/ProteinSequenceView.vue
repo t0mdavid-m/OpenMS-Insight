@@ -307,9 +307,11 @@
       </div>
       <!-- With truncations hidden, the residues before and after the
            proteoform are summarized in one line each -->
-      <div v-if="truncatedBefore > 0" class="px-2 pb-1 truncated-residues" data-testid="truncated-n-term">
-        {{ truncatedText(truncatedBefore, 1, truncatedBefore) }}
+      <div v-if="truncatedBefore > 0" class="px-2 pb-1 truncated-residues" data-testid="truncated-n-term"
+           :aria-label="truncatedText(truncatedBefore, 1, truncatedBefore)">
+        <span aria-hidden="true">⋯</span>
         <v-tooltip activator="parent" location="bottom" max-width="480">
+          <div class="truncated-range">{{ truncatedText(truncatedBefore, 1, truncatedBefore) }}</div>
           <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
         </v-tooltip>
       </div>
@@ -354,9 +356,11 @@
           />
           </template>
       </div>
-      <div v-if="truncatedAfter > 0" class="px-2 pb-4 truncated-residues" data-testid="truncated-c-term">
-        {{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}
+      <div v-if="truncatedAfter > 0" class="px-2 pb-4 truncated-residues" data-testid="truncated-c-term"
+           :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
+        <span aria-hidden="true">⋯</span>
         <v-tooltip activator="parent" location="bottom" max-width="480">
+          <div class="truncated-range">{{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}</div>
           <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
         </v-tooltip>
       </div>
@@ -1349,10 +1353,11 @@ export default defineComponent({
         item.selected = selected.has(item.text)
       })
     },
-    /** "… 23 residues truncated (1–23)": protein positions, 1-based */
+    /** "23 residues truncated (1–23)": protein positions, 1-based; the
+     *  hover text and label of the ⋯ marking a truncated terminus */
     truncatedText(count: number, first: number, last: number): string {
       const range = first === last ? `${first}` : `${first}–${last}`
-      return `… ${count} ${count === 1 ? 'residue' : 'residues'} truncated (${range})`
+      return `${count} ${count === 1 ? 'residue' : 'residues'} truncated (${range})`
     },
     /** The truncated residues themselves (0-based, end exclusive), shown on hover */
     truncatedResidues(start: number, end: number): string {
@@ -2392,11 +2397,15 @@ export default defineComponent({
 }
 
 .truncated-residues {
-  font-size: var(--row-number-font-size, 12px);
-  font-style: italic;
+  font-size: 18px;
+  line-height: 1;
   opacity: 0.7;
   cursor: help;
   width: fit-content;
+}
+
+.truncated-range {
+  font-weight: 600;
 }
 
 .truncated-sequence {
