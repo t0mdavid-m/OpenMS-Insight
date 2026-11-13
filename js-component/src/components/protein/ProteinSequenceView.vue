@@ -305,27 +305,39 @@
           </v-row>
         </v-card>
       </div>
-      <!-- With truncations hidden, a break line above and below the grid
-           marks the residues before and after the proteoform, labelled
-           with their protein positions; hover shows the residues -->
-      <div v-if="truncatedBefore > 0" class="px-2 pb-1 truncated-residues" data-testid="truncated-n-term"
-           :aria-label="truncatedText(truncatedBefore, 1, truncatedBefore)">
-        <span class="truncated-label" aria-hidden="true">{{ truncatedRange(1, truncatedBefore) }}</span>
-        <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
-        <v-tooltip activator="parent" location="bottom" max-width="480">
-          <div class="truncated-range">{{ truncatedText(truncatedBefore, 1, truncatedBefore) }}</div>
-          <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
-        </v-tooltip>
-      </div>
       <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
+          <!-- With truncations hidden, rows keep their protein positions and
+               a break line labelled with the positions marks the residues
+               before and after the proteoform: in the free cells of the first
+               and last row when two or more are free, else in a row of its own -->
+          <div v-if="aa_index === 0 && truncatedBefore > 0 && !nBreakInline" class="truncated-residues" data-testid="truncated-n-term" :style="{ gridColumn: '1 / -1' }"
+               :aria-label="truncatedText(truncatedBefore, 1, truncatedBefore)">
+            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(1, truncatedBefore) }}</span>
+            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
+            <v-tooltip activator="parent" location="bottom" max-width="480">
+              <div class="truncated-range">{{ truncatedText(truncatedBefore, 1, truncatedBefore) }}</div>
+              <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
+            </v-tooltip>
+          </div>
           <div
-            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % perRow === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && (aa_index % perRow === 0) && (aa_index <= sequence_end) && (aa_index > sequence_start))"
             class="row-number row-number-start"
           >
           {{ aa_index + 1 }}
           </div>
           <ProteinTerminalCell v-if="aa_index === 0" protein-terminal="N-term" :truncated=n_truncation :index="-1" :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"/>
+          <div v-if="aa_index === sequence_start && truncatedBefore > 0 && nBreakInline" class="truncated-residues" data-testid="truncated-n-term" :style="{ gridColumn: `span ${truncatedLead}` }"
+               :aria-label="truncatedText(truncatedBefore, 1, truncatedBefore)">
+            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(1, truncatedBefore) }}</span>
+            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
+            <v-tooltip activator="parent" location="bottom" max-width="480">
+              <div class="truncated-range">{{ truncatedText(truncatedBefore, 1, truncatedBefore) }}</div>
+              <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
+            </v-tooltip>
+          </div>
+          <div v-if="aa_index === sequence_start && truncatedBefore > 0 && !nBreakInline && truncatedLead > 0"
+               class="truncated-spacer" :style="{ gridColumn: `span ${truncatedLead}` }"></div>
           <AminoAcidCell
             v-if="showTruncations || ((sequence_start <= aa_index) && (sequence_end >= aa_index))"
             :index="aa_index"
@@ -343,7 +355,7 @@
             @selected="aminoAcidSelected"
           />
           <div
-            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && (aa_index % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index >= sequence_start))"
             class="row-number row-number-end"
           >
             {{ aa_index + 1 }}
@@ -356,16 +368,25 @@
             :determined="c_determined"
             :font-size="fontSize"
           />
+          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline" class="truncated-residues" data-testid="truncated-c-term" :style="{ gridColumn: `span ${truncatedTrail}` }"
+               :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
+            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
+            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
+            <v-tooltip activator="parent" location="bottom" max-width="480">
+              <div class="truncated-range">{{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}</div>
+              <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
+            </v-tooltip>
+          </div>
+          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline" class="truncated-residues" data-testid="truncated-c-term" :style="{ gridColumn: '1 / -1' }"
+               :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
+            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
+            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
+            <v-tooltip activator="parent" location="bottom" max-width="480">
+              <div class="truncated-range">{{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}</div>
+              <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
+            </v-tooltip>
+          </div>
           </template>
-      </div>
-      <div v-if="truncatedAfter > 0" class="px-2 pb-4 truncated-residues" data-testid="truncated-c-term"
-           :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
-        <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
-        <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
-        <v-tooltip activator="parent" location="bottom" max-width="480">
-          <div class="truncated-range">{{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}</div>
-          <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
-        </v-tooltip>
       </div>
       <InternalFragmentTrack
         v-if="showInternal"
@@ -919,6 +940,24 @@ export default defineComponent({
     },
     c_truncation(): boolean {
       return this.sequence_end < (this.sequence.length - 1)
+    },
+    /** Free cells before the proteoform in its first row (truncations hidden) */
+    truncatedLead(): number {
+      return this.sequence_start % this.perRow
+    },
+    /** Grid cells left after the last residue's row: the free residue cells
+     *  and the row-number column (the C-terminus takes the first of them) */
+    truncatedTrail(): number {
+      return this.perRow - 1 - (this.sequence_end % this.perRow)
+    },
+    /** The N-terminal break line fits in the first row (two free cells) */
+    nBreakInline(): boolean {
+      return this.truncatedLead >= 2
+    },
+    /** The C-terminal break line fits in the last row (two free cells after
+     *  the C-terminus) */
+    cBreakInline(): boolean {
+      return this.truncatedTrail - 1 >= 2
     },
     /** Zig-zag of the break line marking a truncated terminus (viewBox 200×8) */
     breakPoints(): string {
@@ -2407,6 +2446,14 @@ export default defineComponent({
   opacity: var(--v-medium-emphasis-opacity);
 }
 
+.sequence-grid > .truncated-residues {
+  aspect-ratio: auto;
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
+}
+
 .truncated-residues {
   display: flex;
   align-items: center;
@@ -2423,6 +2470,7 @@ export default defineComponent({
 
 .truncated-break {
   flex: 1;
+  min-width: 0;
   height: 8px;
 }
 
