@@ -276,6 +276,8 @@ LinePlot(
 
 Hovering shows the peak nearest the mouse along x, anywhere in the plot's height: a dot on the peak top and a box with its x and y (and its annotation, if any). Within two pixels of the mouse the most intense peak wins, so a dense profile spectrum reports the peak that is drawn.
 
+The mouse wheel zooms x around the mouse while y follows the peaks in view; zooming out past the full extent shows the full view. Shift + wheel or a sideways (trackpad) wheel pans x, and so does dragging with the middle button; panning stops at the ends of the data. A double-click shows the full view. Outside the plot area the wheel scrolls the page.
+
 ### MirrorPlot
 
 Two stick-style spectra rendered against a shared x-axis with the bottom half flipped, used for comparing paired spectra (experimental vs. theoretical, sample vs. reference, MS1 vs. MS2 fragments). Each half is filtered independently, while clicks on either half feed into one shared selection.
@@ -951,6 +953,25 @@ spectrum shows that spectrum's labels, and going back shows the earlier ones aga
 They are plain Plotly annotations with an arrow to their peak, so the image
 download includes them. Like the measure options, `peak_labels` is a render-time
 setting and never part of the cache configuration.
+
+### Stepping through a filter (`stepper`)
+
+Every plot with a toolbar (`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot`, `Plot3D`, `Heatmap`) takes a `stepper`: one of its filter identifiers. The plot toolbar then shows `‹ frame 12 ›`; the arrows set that identifier to the previous or next value of its column, in sorted order, and the tooltip says where the value is (`12 of 340`). While the filter has no value (and no `filter_defaults` entry) the plot starts at the first one. A peak map of one ion-mobility frame steps through the frames, a spectrum plot through its spectra:
+
+```python
+Heatmap(
+    cache_id="frames",
+    data=peaks,
+    x_column="mz",
+    y_column="inv_k0",
+    intensity_column="intensity",
+    filters={"frame": "frame"},
+    categorical_filters=["frame"],  # optional: resolution levels per frame
+    stepper="frame",
+)(state_manager=state)
+```
+
+A `Table` has no toolbar and refuses a `stepper`; a table that writes the same identifier through `interactivity` follows the steps and moves the plot when a row is clicked. The sorted values are read once from the cache; only the current value and its neighbours are sent with each render. Render-time only, not part of the cache.
 
 ### Keeping the zoom in the state (`zoom_identifier`)
 
