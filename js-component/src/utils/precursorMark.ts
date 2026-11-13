@@ -1,7 +1,7 @@
 /**
  * The precursor of a fragment spectrum on its m/z axis (LinePlot, and the top
  * half of MirrorPlot): a dashed line from the axis to the top of the plot at
- * the precursor's m/z, a small triangle and "precursor 2+" at its top. It is
+ * the precursor's m/z, and "precursor 2+" in a box centered on its top. It is
  * drawn whether or not a peak is there, and it is part of the layout, so the
  * image download has it. Hovering the label shows the exact m/z.
  *
@@ -56,30 +56,20 @@ export function precursorMark(input: PrecursorMarkInput): PrecursorMark {
     ],
     annotations: [
       {
+        // A tag centered on the line at its top, filled like the fragment
+        // labels, so the line runs out of it rather than past its side
         xref: 'x',
         yref: 'y',
         x: mz,
         y: yTop,
-        text: '▼',
+        text: precursorLabel(precursor.charge),
         showarrow: false,
         xanchor: 'center',
         yanchor: 'top',
-        font: { size: FONT_SIZE - 2, color },
-        hovertext: hover,
-        captureevents: false,
-      },
-      {
-        xref: 'x',
-        yref: 'y',
-        x: mz,
-        y: yTop,
-        xshift: 6,
-        text: precursorLabel(precursor.charge),
-        showarrow: false,
-        xanchor: 'left',
-        yanchor: 'top',
-        font: { size: FONT_SIZE, color },
-        bgcolor: background,
+        align: 'center',
+        font: { size: FONT_SIZE, color: background },
+        bgcolor: color,
+        borderpad: 3,
         hovertext: hover,
         captureevents: false,
       },
