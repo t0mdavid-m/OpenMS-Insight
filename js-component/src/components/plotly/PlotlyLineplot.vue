@@ -30,6 +30,7 @@ import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
+import { stepperTools } from '@/utils/stepper'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
@@ -774,7 +775,11 @@ export default defineComponent({
     },
 
     toolbarTools(): PlotTool[] {
+      const stepper = this.args.stepper
       return [
+        ...stepperTools(stepper, stepper ? this.selectionStore.$state[stepper.identifier] : undefined, (id, value) =>
+          this.selectionStore.updateSelection(id, value),
+        ),
         ...this.measure.tools(this.measureTitle),
         ...this.labels.tools(),
         ...this.topPeaks.tools(),

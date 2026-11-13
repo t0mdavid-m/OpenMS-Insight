@@ -563,6 +563,13 @@ class BaseComponent(ABC):
         """
         pass
 
+    def _state_args(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Component arguments that depend on the current state (default none).
+
+        Called on every render after ``_get_component_args()``; keep it cheap.
+        """
+        return {}
+
     @abstractmethod
     def _get_component_args(self) -> dict[str, Any]:
         """

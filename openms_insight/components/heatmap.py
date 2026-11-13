@@ -19,6 +19,7 @@ from ..core.multi_select import (
     values_in_region,
 )
 from ..core.registry import register_component
+from ..core.stepper import first_step, sorted_values, stepper_args, validate_stepper
 from ..core.storage import scan_parquet
 from ..core.zoom import normalize_zoom
 from ..preprocessing.compression import (
@@ -147,6 +148,7 @@ class Heatmap(BaseComponent):
         color_columns: dict[str, str] | None = None,
         layer_column: str | None = None,
         colorbar_editor: bool = True,
+        stepper: str | None = None,
         **kwargs,
     ):
         """
@@ -266,6 +268,10 @@ class Heatmap(BaseComponent):
             colorbar_editor: The colorbar, drawn below the plot, opens an
                 editor on click: one, two or three colors, presets, reverse and
                 reset (default True; False keeps ``colorscale``).
+            stepper: A filter identifier, listed in ``categorical_filters``,
+                to step through with ``◀`` / ``▶`` buttons in the toolbar, e.g.
+                the frames of an ion-mobility run shown as m/z × 1/K0 (default
+                None: no buttons). Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -367,6 +373,14 @@ class Heatmap(BaseComponent):
             **kwargs,
         )
         self._config.pop("multi_select", None)
+
+        # Render-time option, kept out of the cache config (see core/stepper.py)
+        self._stepper = validate_stepper(stepper, self._filters)
+        if self._stepper and self._stepper not in self._categorical_filters:
+            raise ValueError(
+                f"stepper {self._stepper!r} must be listed in categorical_filters: "
+                "each of its values needs its own resolution levels"
+            )
 
     def _get_cache_config(self) -> dict[str, Any]:
         """
@@ -1499,6 +1513,37 @@ class Heatmap(BaseComponent):
             if value is not None and column in schema:
                 condition = condition & (pl.col(column) == value)
         return full.filter(condition).select(columns).collect()
+
+    def _stepper_values(self) -> list[Any]:
+        """The sorted values of the stepped filter's column (see core/stepper.py)."""
+        return sorted_values(
+            self._cache_dir,
+            self._filters[self._stepper],
+            lambda: list(
+                (self._preprocessed_data.get("categorical_filter_values") or {}).get(
+                    self._stepper, []
+                )
+            ),
+        )
+
+    def _state_args(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The stepper's current value and neighbours (see core/stepper.py)."""
+        if not self._stepper:
+            return {}
+        return stepper_args(
+            self._stepper,
+            self._stepper,
+            self._stepper_values(),
+            state.get(self._stepper),
+        )
+
+    def get_initial_selection(self, state: dict[str, Any]) -> dict[str, Any] | None:
+        """The stepper's first value while its filter has none."""
+        if not self._stepper:
+            return None
+        return first_step(
+            self._stepper, self._stepper_values(), state, self._filter_defaults
+        )
 
     def _get_component_args(self) -> dict[str, Any]:
         """

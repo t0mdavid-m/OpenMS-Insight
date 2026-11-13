@@ -1,3 +1,4 @@
+import type { StepperArgs } from '@/utils/stepper'
 /**
  * Type definitions for component configuration and data structures.
  */
@@ -178,6 +179,7 @@ export interface LinePlotComponentArgs
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
   showTopPeakLabels?: boolean // Start with the top peak labels shown
+  stepper?: StepperArgs // Previous / next buttons for one filter (core/stepper.py)
 }
 
 export interface LinePlotStyling {
@@ -238,6 +240,7 @@ export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, Im
   layerColumn?: string
   /** False: the colorbar below the plot cannot be edited */
   colorbarEditor?: boolean
+  stepper?: StepperArgs // Previous / next buttons for one filter (core/stepper.py)
   /** Identifier → column; the points of each identifier's selected value are ringed */
   highlight?: Record<string, string>
   /** Selections a click sets besides `interactivity` (null clears one) */
