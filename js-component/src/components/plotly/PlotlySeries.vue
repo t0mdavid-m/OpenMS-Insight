@@ -1,14 +1,15 @@
 <template>
   <div class="series-plot">
-    <MeasureHint v-if="args.measure" :measure="measure" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <MeasureHint v-if="measurable" :measure="measure" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
-import Plotly from '@/plotly/basic'
+// The cartesian bundle: scatter, bar and box traces
+import Plotly from '@/plotly/cartesian'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -19,6 +20,7 @@ import MeasureHint from './MeasureHint.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
@@ -40,9 +42,20 @@ export default defineComponent({
   setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    const measure = useMeasure(() => !!props.args.measure)
+    // Bars and boxes stand on categories: nothing to measure between them
+    const measure = useMeasure(
+      () => !!props.args.measure && props.args.mode !== 'bars' && props.args.mode !== 'box',
+    )
     const zoom = useZoomState(() => props.args.zoomIdentifier)
-    return { streamlitDataStore, selectionStore, measure, zoom, zoomStamp: zoom.stamp, uniqueId: `series-plot-${++plotIdCounter}` }
+    return {
+      streamlitDataStore,
+      selectionStore,
+      measure,
+      layers: useLayers(),
+      zoom,
+      zoomStamp: zoom.stamp,
+      uniqueId: `series-plot-${++plotIdCounter}`,
+    }
   },
   data() {
     return {
@@ -52,9 +65,16 @@ export default defineComponent({
     }
   },
   computed: {
+    measurable(): boolean {
+      return !!this.args.measure && this.args.mode !== 'bars' && this.args.mode !== 'box'
+    },
+    horizontal(): boolean {
+      return this.args.orientation === 'h'
+    },
     toolbarTools(): PlotTool[] {
       return [
-        ...this.measure.tools(this.measureTitle),
+        ...(this.measurable ? this.measure.tools(this.measureTitle) : []),
+        ...this.layers.tool(this.layerList, 'Series'),
         downloadTool({
           plotId: this.id,
           format: () => imageFormatOf(this.args.imageFormat),
@@ -74,6 +94,18 @@ export default defineComponent({
     },
     columns(): Record<string, unknown[]> {
       return (this.streamlitDataStore.allDataForDrawing?.plotData as Record<string, unknown[]>) || {}
+    },
+    /** True when some position holds points of two or more series. */
+    sharedPositions(): boolean {
+      const seen = new Map<unknown, string>()
+      for (const group of this.series) {
+        for (const x of group.x) {
+          const owner = seen.get(x)
+          if (owner !== undefined && owner !== group.key) return true
+          seen.set(x, group.key)
+        }
+      }
+      return false
     },
     /** Points grouped by series, in series_names order then order of appearance. */
     series(): Array<{ key: string; name: string; x: number[]; y: number[]; rows: number[]; text: string[] }> {
@@ -102,24 +134,40 @@ export default defineComponent({
       }
       return [...groups.values()]
     },
+    /** The series the toolbar shows or hides. */
+    layerList(): Layer[] {
+      const colors = this.args.seriesColors || {}
+      return this.series.map((s) => ({ key: s.key, label: s.name, color: colors[s.key] }))
+    },
     traces(): Plotly.Data[] {
       const colors = this.args.seriesColors || {}
-      return this.series.map((s) => {
-        const trace: Record<string, unknown> = {
-          x: s.x,
-          y: s.y,
-          mode: this.args.mode || 'lines+markers',
-          type: 'scatter',
-          name: s.name,
+      return this.series.filter((s) => this.layers.visible(s.key)).map((s) => {
+        const mode = this.args.mode || 'lines+markers'
+        // Horizontal: the categories (x column) on the vertical axis
+        const [x, y] = this.horizontal ? [s.y, s.x] : [s.x, s.y]
+        const trace: Record<string, unknown> = { x, y, name: s.name }
+        if (mode === 'bars') {
+          trace.type = 'bar'
+          trace.orientation = this.horizontal ? 'h' : 'v'
+        } else if (mode === 'box') {
+          trace.type = 'box'
+          trace.orientation = this.horizontal ? 'h' : 'v'
+          trace.boxpoints = 'outliers'
+        } else {
+          trace.type = 'scatter'
+          trace.mode = mode
         }
         if (this.args.hoverColumn) {
           trace.text = s.text
           trace.hovertemplate = '%{text}<br>%{x}, %{y}<extra>%{fullData.name}</extra>'
+          // Hover text only: a bar would otherwise print it on itself
+          if (mode === 'bars') trace.textposition = 'none'
         }
         const color = colors[s.key]
         if (color) {
           trace.marker = { color }
           trace.line = { color }
+          if (mode === 'box') trace.fillcolor = color + '55'
         }
         return trace as Plotly.Data
       })
@@ -165,32 +213,41 @@ export default defineComponent({
       })
     },
     layout(): Partial<Plotly.Layout> {
-      const selectionShapes = this.selectedX.map((x) => ({
-          type: 'line',
-          xref: 'x',
-          yref: 'paper',
-          x0: x,
-          x1: x,
-          y0: 0,
-          y1: 1,
-          line: { color: '#d62728', width: 1.5, dash: 'dash' },
-        })) as Partial<Plotly.Shape>[]
+      const line = { color: '#d62728', width: 1.5, dash: 'dash' }
+      const selectionShapes = this.selectedX.map((x) =>
+        this.horizontal
+          ? { type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: x, y1: x, line }
+          : { type: 'line', xref: 'x', yref: 'paper', x0: x, x1: x, y0: 0, y1: 1, line },
+      ) as Partial<Plotly.Shape>[]
+      const mode = this.args.mode || 'lines+markers'
+      // The axis along the x column (positions or categories) and the value axis
+      const positionAxis: Record<string, unknown> = {
+        title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
+        showgrid: false,
+        automargin: true,
+      }
+      const valueAxis: Record<string, unknown> = {
+        title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
+        showgrid: true,
+        rangemode: this.args.yRangeMode || 'nonnegative',
+        fixedrange: !!this.args.fixedYRange,
+        automargin: true,
+      }
+      // Horizontal categories read from the top, in the order of the data
+      if (this.horizontal) positionAxis.autorange = 'reversed'
+      const xaxis = this.horizontal ? valueAxis : positionAxis
+      const yaxis = this.horizontal ? positionAxis : valueAxis
       return {
         shapes: [...selectionShapes, ...this.measureOverlay.shapes],
         annotations: this.measureOverlay.annotations,
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: this.args.showLegend !== false,
         height: (this.args.height || 400) - TOOLBAR_HEIGHT,
-        xaxis: {
-          title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
-          showgrid: false,
-        },
-        yaxis: {
-          title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
-          showgrid: true,
-          rangemode: this.args.yRangeMode || 'nonnegative',
-          fixedrange: !!this.args.fixedYRange,
-        },
+        xaxis,
+        yaxis,
+        // Side by side only where series share a position, else full width
+        ...(mode === 'bars' ? { barmode: this.sharedPositions ? 'group' : 'overlay' } : {}),
+        ...(mode === 'box' ? { boxmode: this.sharedPositions ? 'group' : 'overlay' } : {}),
         paper_bgcolor: this.theme?.backgroundColor || 'white',
         plot_bgcolor: this.theme?.backgroundColor || 'white',
         font: {
@@ -202,6 +259,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // A series shown or hidden from the toolbar
+    'layers.state.hidden'() {
+      this.requestRender()
+    },
     // A zoom set from Python (a saved view opened)
     zoomStamp() {
       const incoming = this.zoom.incoming()
@@ -287,6 +348,8 @@ export default defineComponent({
       const interactivity = this.args.interactivity || {}
       if (Object.keys(interactivity).length === 0 || !eventData.points?.length) return
       const point = eventData.points[0]
+      // A box stands for many rows: a click on it picks none
+      if (this.args.mode === 'box') return
       const row = this.series[point.curveNumber]?.rows[point.pointIndex]
       if (row === undefined) return
       for (const [identifier, column] of Object.entries(interactivity)) {

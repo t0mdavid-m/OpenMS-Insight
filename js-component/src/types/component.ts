@@ -1,3 +1,4 @@
+import type { StepperArgs } from '@/utils/stepper'
 /**
  * Type definitions for component configuration and data structures.
  */
@@ -20,6 +21,8 @@ export interface BaseComponentArgs {
    * (see composables/useZoomState.ts). Without it the zoom stays in the browser.
    */
   zoomIdentifier?: string
+  /** Previous / next buttons for one filter, shown by PlotToolbar (core/stepper.py). */
+  stepper?: StepperArgs
 }
 
 /**
@@ -142,10 +145,15 @@ export interface TableComponentArgs extends BaseComponentArgs {
   fillRow?: boolean
   rowOverview?: boolean
   rowOverviewTitle?: string
+  /** A button per row and action, sending the row to Python */
+  rowActions?: Array<{ id: string, icon: string, label?: string }>
   /** False hides the column menu */
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  collapseColumns?: boolean
+  /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
+  excelExport?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */
@@ -232,6 +240,12 @@ export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, Im
   intensityLabel?: string
   /** Column whose text is shown above the intensity when hovering a point */
   hoverColumn?: string
+  /** Label → column of further values the points can be colored by (toolbar "Color") */
+  colorColumns?: Record<string, string>
+  /** Column whose values are layers shown or hidden from the toolbar ("Layers") */
+  layerColumn?: string
+  /** False: the colorbar below the plot cannot be edited */
+  colorbarEditor?: boolean
   /** Identifier → column; the points of each identifier's selected value are ringed */
   highlight?: Record<string, string>
   /** Selections a click sets besides `interactivity` (null clears one) */
@@ -385,6 +399,8 @@ export interface ClusteredHeatmapComponentArgs extends BaseComponentArgs, ImageE
   colorscale?: string | Array<[number, string]>
   reversescale?: boolean
   intensityLabel?: string
+  /** False: the colorbar below the plot cannot be edited */
+  colorbarEditor?: boolean
   height?: number
 }
 
@@ -450,7 +466,9 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   /** [series value, legend name] pairs, in drawing order */
   seriesNames?: Array<[string, string]>
   seriesColors?: Record<string, string>
-  mode?: 'lines' | 'markers' | 'lines+markers'
+  mode?: 'lines' | 'markers' | 'lines+markers' | 'bars' | 'box'
+  /** 'h': bars and boxes horizontal, the x column on the vertical axis */
+  orientation?: 'v' | 'h'
   title?: string
   xLabel?: string
   yLabel?: string
@@ -581,6 +599,16 @@ export interface FragmentMatches {
   spectrum: unknown
   tolerance: { value: number; unit: string }
   fragments: MatchedFragmentIon[]
+  /** The proteoform matched (fragmentMatchesProteoform only) */
+  proteoform?: {
+    proforma: string
+    sequence: string
+    length: number
+    /** With the variable modifications */
+    theoreticalMass: number
+    /** Share of the bonds with a matched fragment on either side (%) */
+    cleavagePercentage: number
+  }
 }
 
 /**
@@ -627,12 +655,18 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   proformaCopy?: boolean
   /** The change-sequence dialog also reads ProForma */
   proformaInput?: boolean
+  /** The change-sequence dialog gets a UniProt accession field that fills in the sequence */
+  uniprotLookup?: boolean
+  /** Identifier holding the shown proteoform as ProForma, both ways */
+  proformaIdentifier?: string | null
   /** Isotope errors tried when matching (shows the setting); null: hidden, exact matches only */
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */
   methodIonOptions?: boolean
   /** List the observed masses no selected fragment ion matches, below the fragment table */
   unmatchedMasses?: boolean
+  /** Write the matched proteoform with the matched fragments */
+  fragmentMatchesProteoform?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');

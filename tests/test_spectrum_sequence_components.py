@@ -270,6 +270,53 @@ class TestSeriesPlot:
                 cache_path=str(temp_cache_dir),
             )
 
+    def test_bars_and_box(self, mock_streamlit, temp_cache_dir):
+        counts = pl.LazyFrame(
+            {
+                "sample": ["s1", "s2", "s1", "s2"],
+                "n": [10, 12, 4, 5],
+                "kind": ["a", "a", "b", "b"],
+            }
+        )
+        bars = SeriesPlot(
+            cache_id="bars",
+            data=counts,
+            x_column="sample",
+            y_column="n",
+            series_column="kind",
+            mode="bars",
+            orientation="h",
+            cache_path=str(temp_cache_dir),
+        )
+        args = bars._get_component_args()
+        assert args["mode"] == "bars"
+        assert args["orientation"] == "h"
+        cached = SeriesPlot(cache_id="bars", cache_path=str(temp_cache_dir))
+        assert cached._get_component_args()["mode"] == "bars"
+        assert cached._get_component_args()["orientation"] == "h"
+
+        box = SeriesPlot(
+            cache_id="box",
+            data=counts,
+            x_column="sample",
+            y_column="n",
+            mode="box",
+            cache_path=str(temp_cache_dir),
+        )
+        assert box._get_component_args()["mode"] == "box"
+        assert box._get_component_args()["orientation"] == "v"
+
+    def test_rejects_unknown_mode_and_orientation(self, mock_streamlit, temp_cache_dir):
+        data = pl.LazyFrame({"x": [1.0], "y": [1.0]})
+        with pytest.raises(ValueError, match="mode"):
+            SeriesPlot(
+                cache_id="m", data=data, mode="pie", cache_path=str(temp_cache_dir)
+            )
+        with pytest.raises(ValueError, match="orientation"):
+            SeriesPlot(
+                cache_id="o", data=data, orientation="x", cache_path=str(temp_cache_dir)
+            )
+
 
 class TestPlot3D:
     def _plot(self, data, cache_dir):
@@ -757,6 +804,66 @@ class TestProteinSequenceView:
         assert view._get_component_args()["proformaInput"] is True
         assert "proforma_input" not in view._get_cache_config()
 
+    def test_uniprot_lookup_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_uniprot_lookup",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["uniprotLookup"] is False
+        assert view.set_uniprot_lookup() is view
+        assert view._get_component_args()["uniprotLookup"] is True
+        assert (
+            view.set_uniprot_lookup(False)._get_component_args()["uniprotLookup"]
+            is False
+        )
+        assert "uniprot_lookup" not in view._get_cache_config()
+        enabled = ProteinSequenceView(
+            cache_id="seq_uniprot_lookup_on",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            uniprot_lookup=True,
+        )
+        assert enabled._get_component_args()["uniprotLookup"] is True
+
+    def test_proforma_identifier_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_proforma_identifier",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["proformaIdentifier"] is None
+        assert view.set_proforma_identifier("proforma") is view
+        assert view._get_component_args()["proformaIdentifier"] == "proforma"
+        assert "proforma_identifier" not in view._get_cache_config()
+        linked = ProteinSequenceView(
+            cache_id="seq_proforma_identifier_on",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            proforma_identifier="proforma",
+        )
+        assert linked._get_component_args()["proformaIdentifier"] == "proforma"
+
     def test_isotope_errors_args(self, mock_streamlit, temp_cache_dir: Path):
         view = ProteinSequenceView(
             cache_id="seq_isotope_errors",
@@ -977,6 +1084,23 @@ class TestProteinSequenceView:
         assert restored._get_component_args()["fragmentMatchesIdentifier"] is None
         assert restored.set_fragment_matches_identifier("matches") is restored
         assert restored._get_component_args()["fragmentMatchesIdentifier"] == "matches"
+
+        # The matched proteoform is written only on request, never cached
+        assert keyed._get_component_args()["fragmentMatchesProteoform"] is False
+        with_proteoform = ProteinSequenceView(
+            cache_id="seq_matches_keyed",
+            fragment_matches_identifier="matches",
+            fragment_matches_proteoform=True,
+            cache_path=str(temp_cache_dir),
+        )
+        assert (
+            with_proteoform._get_component_args()["fragmentMatchesProteoform"] is True
+        )
+        assert "fragment_matches_proteoform" not in with_proteoform._get_cache_config()
+        assert restored.set_fragment_matches_proteoform() is restored
+        assert restored._get_component_args()["fragmentMatchesProteoform"] is True
+        restored.set_fragment_matches_proteoform(False)
+        assert restored._get_component_args()["fragmentMatchesProteoform"] is False
 
 
 def test_table_navigation_uses_render_state_manager():

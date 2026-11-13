@@ -12,7 +12,7 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Memory-efficient preprocessing** via subprocess isolation
 - **Automatic disk caching** with config-based invalidation
 - **Cache reconstruction** - components can be restored from cache without re-specifying configuration
-- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV export
+- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV and Excel export
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
 - **Mirror plot component** for paired-spectrum comparison with independent per-side filtering and shared click selection
 - **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
@@ -175,6 +175,7 @@ Table(
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
 - `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
 - `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+- `collapse_columns`: Columns that do not fit the table's width fold into a row overview (default). `False` keeps every column and scrolls the table sideways instead, for a narrow table whose columns all matter. It does not affect the cache.
 - `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
 
 **Filters.** The filter button opens a dialog with a filter per column: values to
@@ -240,6 +241,22 @@ table.export_data()  # whole table, initial sort
 table.export_data(state)  # as rendered for this selection state
 ```
 
+**Excel export.** With `xlsxwriter` installed (`pip install openms-insight[excel]`),
+the download button of a paginated table opens a menu with CSV and **Excel (.xlsx)**.
+The workbook holds the same rows, with the column titles as its header and list
+columns joined with `; `, and an "About" sheet: the table, when it was exported,
+the number of rows, the sort, the filters and the search. `export_info` adds rows
+of your own to that sheet, such as the run and its settings; it is not part of the
+cache configuration:
+
+```python
+Table(..., export_info={"Run": "Run 3", "Database": "yeast.fasta, 6,115 proteins"})
+```
+
+Text is written as text, so a value starting with `=` is not run as a formula. A
+sheet holds at most 1,048,575 rows; beyond that the About sheet says how many were
+left out.
+
 ### LinePlot
 
 Stick-style line plot using Plotly.js for mass spectra visualization.
@@ -274,6 +291,8 @@ LinePlot(
 - `top_peak_labels`, `show_top_peak_labels`: The **Label top peaks** button (a number sign) in the plot toolbar shows the m/z of the most intense peaks in view, 10 by default (`top_peak_labels=0` removes the button). The labels are placed again on every zoom or pan, most intense first, leaving out any that would overlap, so zooming in labels more peaks. `show_top_peak_labels=True` starts with them shown. Peaks carrying one of your own labels keep only that label. Render-time only, like `keep_zoom`
 
 Hovering shows the peak nearest the mouse along x, anywhere in the plot's height: a dot on the peak top and a box with its x and y (and its annotation, if any). Within two pixels of the mouse the most intense peak wins, so a dense profile spectrum reports the peak that is drawn.
+
+The mouse wheel zooms x around the mouse while y follows the peaks in view; zooming out past the full extent shows the full view. Shift + wheel or a sideways (trackpad) wheel pans x, and so does dragging with the middle button; panning stops at the ends of the data. A double-click shows the full view. Outside the plot area the wheel scrolls the page.
 
 ### MirrorPlot
 
@@ -353,6 +372,33 @@ Heatmap(
 - `hover_column`: Column whose text is shown when hovering a point, above its intensity
 - `on_select`: Selections a click sets besides `interactivity`, as Table's `on_select` (None clears one)
 - `highlight`: Mapping of identifier names to column names. The points whose column value is the identifier's selected value are ringed, whichever component selected it (looked up in the full data, so a point the current level dropped is still marked)
+- `color_columns`: Your own further numeric columns the points can be colored by, as label to column. The toolbar's **Color** button lists the intensity and these, with a slider that shows only the points from a value up (see [Plot toolbar](#plot-toolbar))
+- `layer_column`: Your own column whose values are layers the toolbar's **Layers** button shows or hides. In categorical mode the categories are the layers unless this names another column
+- `colorbar_editor`: The colorbar below the plot opens an editor on click (default True; False keeps `colorscale`)
+
+**Coloring by your own columns, and layers:**
+Nothing in these options is specific to mass spectrometry: they take any columns of
+your data. A map of weather stations, colored by rainfall, temperature or sunny
+days, with the station networks as layers:
+
+```python
+Heatmap(
+    cache_id="stations",
+    data=stations,
+    x_column="longitude",
+    y_column="latitude",
+    intensity_column="rainfall",
+    log_scale=False,
+    intensity_label="Rainfall (mm)",
+    color_columns={"Temperature (°C)": "temperature", "Sunny days": "sunny_days"},
+    layer_column="network",  # e.g. "Airport", "Volunteer"
+)
+```
+
+The columns are checked when the component is built from data: a name that is
+not in the data raises a `ValueError`. They are render-time options, so adding or
+changing them reuses the cache. Downsampling keeps the points of highest
+intensity; coloring by another column colors those points.
 
 **Marking a selection made elsewhere:**
 ```python
@@ -474,6 +520,7 @@ ClusteredHeatmap(
 - `row_cluster` / `col_cluster`: Cluster that axis and draw its dendrogram (left for rows, top for columns). Skipped automatically when the axis has fewer than 2 entries
 - `linkage_method` / `linkage_metric`: Passed through to `scipy.cluster.hierarchy.linkage`
 - `colorscale`, `reversescale`, `intensity_label`: Cell color mapping and colorbar label. Without a `colorscale`, cells use a diverging scale centred on 0 (blue, the page colour, orange) that follows the app's light or dark theme, which suits z-scores
+- `colorbar_editor`: The colorbar below the plot opens an editor on click (one, two or three colors, presets, reverse, reset); default True, False keeps `colorscale`
 - Layout: the heatmap fills the component's width. Row labels sit right of the heatmap; when the rows are too close to label them all, every n-th one is labelled (the heading of the label column says which) and long labels are cut. Hovering a cell shows its full row label, sample, group and value
 - `group_colors`: Map group value -> color for the annotation bar. Groups without an explicit color get one from a default palette
 
@@ -660,7 +707,9 @@ spectrum(key="spectrum", state_manager=state_manager)
 
 ### SeriesPlot
 
-Line and marker plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`).
+Line, marker, bar or box plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`), and for counts or distributions per sample.
+
+`mode` is `"lines"` (default), `"markers"`, `"lines+markers"`, `"bars"` (one bar per x value and series, the series side by side) or `"box"` (one box per x value and series, drawn from all y values at that x). `orientation="h"` turns bars and boxes sideways, the x values listed top to bottom, which suits long labels such as GO terms or file names.
 
 ```python
 from openms_insight import SeriesPlot
@@ -676,6 +725,27 @@ SeriesPlot(
     x_label="Score",
     y_label="Density",
 )(key="density", state_manager=state_manager)
+
+# Identified proteins per sample, as bars
+SeriesPlot(
+    cache_id="proteins_per_sample",
+    data=counts,  # columns: sample, proteins, kind
+    x_column="sample",
+    y_column="proteins",
+    series_column="kind",
+    mode="bars",
+)(key="per_sample", state_manager=state_manager)
+
+# Abundances per sample, as boxes
+SeriesPlot(
+    cache_id="abundances",
+    data=abundances,  # columns: sample, log2_abundance, step
+    x_column="sample",
+    y_column="log2_abundance",
+    series_column="step",
+    mode="box",
+    y_range_mode="normal",
+)(key="abundances", state_manager=state_manager)
 ```
 
 ### Plot3D
@@ -819,6 +889,35 @@ When the groups do not fit the panel's width, the row keeps only the tools that
 are on or hold something, plus Reset, and offers every tool in a menu behind ⋯,
 sorted into the same groups. The toolbar follows the Streamlit theme.
 
+Some tools open a menu below the toolbar (inside ⋯ on a narrow toolbar):
+
+- **Layers** shows or hides parts of a plot, one entry per layer with its color;
+  one layer always stays shown. The layers are what your data defines: the
+  values of `Heatmap(layer_column=...)` or of its `category_column`, the groups
+  of `PCAPlot`, the series of `SeriesPlot` and `Plot3D`, and up-, down-regulated
+  and not significant in `VolcanoPlot`.
+- **Color** (`Heatmap`) picks what the points are colored by: the intensity or
+  a column of `color_columns`, and the lowest value shown.
+
+`Heatmap` and `ClusteredHeatmap` draw their colorbar small below the plot. A
+click opens an editor: one, two or three colors, the position of the middle
+color, presets, Reverse and Reset. `colorbar_editor=False` keeps `colorscale`.
+
+These choices last while the component is on the page; they are not kept in the
+state.
+
+**In a component of your own.** The pieces are not tied to these components. In
+`js-component/src`:
+
+- `utils/plotTools.ts`: a `PlotTool` with `menu` (sections of kind `choice`,
+  `toggles` or `range`) opens that menu instead of running.
+- `composables/useLayers.ts`: `useLayers()` keeps which layers are hidden;
+  `layers.tool(list)` is the Layers button and `layers.visible(key)` tells the
+  component what to draw.
+- `components/plotly/ColorbarLegend.vue` with `utils/colorscale.ts`: the colorbar
+  row and its editor for any Plotly colorscale (a name or a stop list); it emits
+  the chosen colors, which `specToStops()` turns into a stop list for Plotly.
+
 ### Measuring (`measure`)
 
 Every 2D plot has a **Measure** button (a ruler) in its plot toolbar: `LinePlot`,
@@ -870,6 +969,45 @@ spectrum shows that spectrum's labels, and going back shows the earlier ones aga
 They are plain Plotly annotations with an arrow to their peak, so the image
 download includes them. Like the measure options, `peak_labels` is a render-time
 setting and never part of the cache configuration.
+
+### Using a clicked peak elsewhere (an XIC, say)
+
+A click on a LinePlot peak writes the `interactivity` columns of that peak to the state. Map an identifier to the x column to hand the m/z to the rest of the page, next to any id the click already selects:
+
+```python
+LinePlot(
+    cache_id="ms2",
+    data=peaks,
+    x_column="mz",
+    y_column="intensity",
+    interactivity={"peak": "peak_id", "xic_mz": "mz"},
+)(state_manager=state)
+
+mz = state.get_selection("xic_mz")  # None until a peak is clicked
+if mz is not None:
+    show_xic(mz)  # the page's own code
+```
+
+The peak is the one the hover read-out shows. Columns reach the browser as 32-bit floats, so a float is written as the shortest decimal that is the same 32-bit float (`341.3387`, not `341.33868408203125`); the plot still marks that peak as selected.
+
+### Stepping through a filter (`stepper`)
+
+Every plot with a toolbar (`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot`, `Plot3D`, `Heatmap`) takes a `stepper`: one of its filter identifiers. The plot toolbar then shows `‹ frame 12 ›`; the arrows set that identifier to the previous or next value of its column, in sorted order, and the tooltip says where the value is (`12 of 340`). While the filter has no value (and no `filter_defaults` entry) the plot starts at the first one. A peak map of one ion-mobility frame steps through the frames, a spectrum plot through its spectra:
+
+```python
+Heatmap(
+    cache_id="frames",
+    data=peaks,
+    x_column="mz",
+    y_column="inv_k0",
+    intensity_column="intensity",
+    filters={"frame": "frame"},
+    categorical_filters=["frame"],  # optional: resolution levels per frame
+    stepper="frame",
+)(state_manager=state)
+```
+
+A `Table` has no toolbar and refuses a `stepper`; a table that writes the same identifier through `interactivity` follows the steps and moves the plot when a row is clicked. The sorted values are read once from the cache; only the current value and its neighbours are sent with each render. Render-time only, not part of the cache.
 
 ### Keeping the zoom in the state (`zoom_identifier`)
 

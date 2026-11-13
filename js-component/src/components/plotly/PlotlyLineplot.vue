@@ -3,7 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
     <PeakHoverTip
       :tip="hover.tip"
@@ -30,6 +30,8 @@ import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
+import { pickedValue, sameValue, selectedValue } from '@/utils/pickValue'
+import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
@@ -93,7 +95,8 @@ export default defineComponent({
     )
     const zoom = useZoomState(() => props.args.zoomIdentifier)
     const hover = usePeakHover()
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom, hover }
+    const navigation = useXNavigation()
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom, hover, navigation }
   },
   data() {
     return {
@@ -229,7 +232,7 @@ export default defineComponent({
         if (columnValues && Array.isArray(columnValues)) {
           // Find the index with matching value
           for (let i = 0; i < columnValues.length; i++) {
-            if (columnValues[i] === selectedValue) {
+            if (sameValue(columnValues[i], selectedValue)) {
               return i
             }
           }
@@ -237,7 +240,7 @@ export default defineComponent({
           // Fallback: if no interactivity column data, try matching x values
           const xValues = this.plotData.x_values
           for (let i = 0; i < xValues.length; i++) {
-            if (xValues[i] === selectedValue) {
+            if (sameValue(xValues[i], selectedValue)) {
               return i
             }
           }
@@ -294,12 +297,14 @@ export default defineComponent({
       if (this.manualXRange) {
         return this.manualXRange
       }
+      return this.fullXRange ?? [0, 1]
+    },
 
-      if (!this.isDataReady || !this.plotData) return [0, 1]
-
+    /** The x range of the full view (all peaks, 2 % padding). */
+    fullXRange(): [number, number] | undefined {
+      if (!this.isDataReady || !this.plotData) return undefined
       const [minX, maxX] = finiteExtent(this.plotData.x_values)
       const padding = (maxX - minX) * 0.02
-
       return [minX - padding, maxX + padding]
     },
 
@@ -964,7 +969,8 @@ export default defineComponent({
         await Plotly.react(this.id, this.traces, this.layout, {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
           displaylogo: false,
-          scrollZoom: true,
+          // The wheel is handled by useXNavigation (x only)
+          scrollZoom: false,
           responsive: true,
         })
 
@@ -988,10 +994,46 @@ export default defineComponent({
           yName: this.args.yLabel || this.args.yColumn || 'y',
         }))
         this.topPeaks.bind(plotElement)
+        this.navigation.bind(plotElement, {
+          current: () => {
+            const range = plotElement?._fullLayout?.xaxis?.range
+            return range ? [Number(range[0]), Number(range[1])] : undefined
+          },
+          full: () => this.fullXRange,
+          apply: (range) => {
+            this.onRelayout(
+              range
+                ? { 'xaxis.range[0]': range[0], 'xaxis.range[1]': range[1] }
+                : { 'xaxis.autorange': true },
+            )
+          },
+        })
         if (plotElement && needsListeners) {
           plotElement._insightListeners = true
+          // Plotly reports a click only near a vertex of a stick, so a click
+          // half-way up a tall peak is lost. A click on a peak the hover shows
+          // that Plotly did not report is handled the same way.
+          let plotlyClickAt = -Infinity
+          let downAt: { x: number; y: number } | null = null
           plotElement.on('plotly_click', (eventData: any) => {
+            plotlyClickAt = performance.now()
             this.onPlotClick(eventData)
+          })
+          plotElement.addEventListener('mousedown', (event: MouseEvent) => {
+            downAt = { x: event.clientX, y: event.clientY }
+          })
+          plotElement.addEventListener('click', (event: MouseEvent) => {
+            const start = downAt
+            downAt = null
+            // A zoom box or pan ends with a click too
+            if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return
+            const index = this.hover.indexAt(event)
+            if (index === undefined || !this.plotData) return
+            const x = this.plotData.x_values[index]
+            setTimeout(() => {
+              if (performance.now() - plotlyClickAt < 300) return
+              this.onPlotClick({ event, points: [{ x }] })
+            })
           })
 
           plotElement.on('plotly_relayout', (eventData: any) => {
@@ -1026,7 +1068,17 @@ export default defineComponent({
         this.zoom.report(null)
         this.manualXRange = undefined
         this.lastAutoZoomedPeakIndex = undefined
-        this.renderPlot()
+        // A double-click lets Plotly autorange both axes. When the plot was
+        // already at its full view, the new layout equals the last one, so
+        // Plotly.react kept Plotly's own ranges (tallest peak cut off). Set
+        // the ranges again explicitly.
+        this.renderPlot().then(() => {
+          if (!document.getElementById(this.id)) return
+          Plotly.relayout(this.id, {
+            'xaxis.range': [...this.xRange],
+            'yaxis.range': [...this.yRange],
+          } as Partial<Plotly.Layout>)
+        })
       }
     },
 
@@ -1194,14 +1246,18 @@ export default defineComponent({
         if (!this.plotData) return
 
         const xValues = this.plotData.x_values
-        let nearestIndex = 0
-        let nearestDistance = Infinity
-
-        for (let i = 0; i < xValues.length; i++) {
-          const distance = Math.abs(xValues[i] - clickedX)
-          if (distance < nearestDistance) {
-            nearestDistance = distance
-            nearestIndex = i
+        // The peak the hover read-out shows, so a click selects what is shown;
+        // else the peak nearest the clicked x
+        let nearestIndex = eventData.event ? this.hover.indexAt(eventData.event) : undefined
+        if (nearestIndex === undefined) {
+          let nearestDistance = Infinity
+          nearestIndex = 0
+          for (let i = 0; i < xValues.length; i++) {
+            const distance = Math.abs(xValues[i] - clickedX)
+            if (distance < nearestDistance) {
+              nearestDistance = distance
+              nearestIndex = i
+            }
           }
         }
 
@@ -1213,10 +1269,10 @@ export default defineComponent({
 
           if (columnValues && Array.isArray(columnValues) && nearestIndex < columnValues.length) {
             // Use the value from the interactivity column
-            this.selectionStore.updateSelection(identifier, columnValues[nearestIndex])
+            this.selectionStore.updateSelection(identifier, selectedValue(columnValues[nearestIndex]))
           } else if (column === this.args.xColumn) {
             // Fallback: use x value if no interactivity column data
-            this.selectionStore.updateSelection(identifier, xValues[nearestIndex])
+            this.selectionStore.updateSelection(identifier, pickedValue(xValues[nearestIndex]))
           }
         }
       }
@@ -1268,6 +1324,11 @@ export default defineComponent({
 <style scoped>
 .lineplot {
   position: relative;
+}
+
+/* Middle-button pan (useXNavigation) */
+.plot-container :deep(.x-panning .nsewdrag) {
+  cursor: grabbing !important;
 }
 
 .plot-container {
