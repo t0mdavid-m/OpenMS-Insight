@@ -150,6 +150,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
   collapseColumns?: boolean
+  /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
+  excelExport?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */
