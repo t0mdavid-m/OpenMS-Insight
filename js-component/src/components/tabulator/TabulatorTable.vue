@@ -821,7 +821,10 @@ export default defineComponent({
     }
     // A table fitted to its rows resizes with them: the frame follows it
     if (!this.isServerSidePagination) {
+      // Not before the table is built: until then it is a toolbar over an empty
+      // box, and the frame shrank to that and grew back with the rows
       this.rootResizeObserver = new ResizeObserver(() => {
+        if (!this.isTableBuilt) return
         Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
       })
       this.rootResizeObserver.observe(this.$el as HTMLElement)
