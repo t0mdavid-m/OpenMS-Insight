@@ -305,11 +305,13 @@
           </v-row>
         </v-card>
       </div>
-      <!-- With truncations hidden, the residues before and after the
-           proteoform are summarized in one line each -->
+      <!-- With truncations hidden, a break line above and below the grid
+           marks the residues before and after the proteoform, labelled
+           with their protein positions; hover shows the residues -->
       <div v-if="truncatedBefore > 0" class="px-2 pb-1 truncated-residues" data-testid="truncated-n-term"
            :aria-label="truncatedText(truncatedBefore, 1, truncatedBefore)">
-        <span aria-hidden="true">⋯</span>
+        <span class="truncated-label" aria-hidden="true">{{ truncatedRange(1, truncatedBefore) }}</span>
+        <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
         <v-tooltip activator="parent" location="bottom" max-width="480">
           <div class="truncated-range">{{ truncatedText(truncatedBefore, 1, truncatedBefore) }}</div>
           <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
@@ -358,7 +360,8 @@
       </div>
       <div v-if="truncatedAfter > 0" class="px-2 pb-4 truncated-residues" data-testid="truncated-c-term"
            :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
-        <span aria-hidden="true">⋯</span>
+        <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
+        <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 200 8"><polyline :points="breakPoints" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
         <v-tooltip activator="parent" location="bottom" max-width="480">
           <div class="truncated-range">{{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}</div>
           <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
@@ -917,6 +920,10 @@ export default defineComponent({
     c_truncation(): boolean {
       return this.sequence_end < (this.sequence.length - 1)
     },
+    /** Zig-zag of the break line marking a truncated terminus (viewBox 200×8) */
+    breakPoints(): string {
+      return Array.from({ length: 41 }, (_, i) => `${i * 5},${i % 2 ? 0 : 8}`).join(' ')
+    },
     /** Residues before the proteoform truncated from the grid (truncations hidden) */
     truncatedBefore(): number {
       return this.showIdentification && !this.showTruncations ? this.sequence_start : 0
@@ -1353,11 +1360,15 @@ export default defineComponent({
         item.selected = selected.has(item.text)
       })
     },
-    /** "23 residues truncated (1–23)": protein positions, 1-based; the
-     *  hover text and label of the ⋯ marking a truncated terminus */
+    /** "1–23": protein positions (1-based) of truncated residues, the
+     *  label of the break line marking a truncated terminus */
+    truncatedRange(first: number, last: number): string {
+      return first === last ? `${first}` : `${first}–${last}`
+    },
+    /** "23 residues truncated (1–23)": hover text and accessible label
+     *  of the break line */
     truncatedText(count: number, first: number, last: number): string {
-      const range = first === last ? `${first}` : `${first}–${last}`
-      return `${count} ${count === 1 ? 'residue' : 'residues'} truncated (${range})`
+      return `${count} ${count === 1 ? 'residue' : 'residues'} truncated (${this.truncatedRange(first, last)})`
     },
     /** The truncated residues themselves (0-based, end exclusive), shown on hover */
     truncatedResidues(start: number, end: number): string {
@@ -2397,11 +2408,22 @@ export default defineComponent({
 }
 
 .truncated-residues {
-  font-size: 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
   line-height: 1;
-  opacity: 0.7;
+  opacity: var(--v-medium-emphasis-opacity);
   cursor: help;
-  width: fit-content;
+}
+
+.truncated-label {
+  white-space: nowrap;
+}
+
+.truncated-break {
+  flex: 1;
+  height: 8px;
 }
 
 .truncated-range {
