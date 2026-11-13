@@ -1,10 +1,12 @@
 <template>
   <!-- Break line marking the residues a proteoform's terminus truncates:
        their protein positions and a zig-zag over `cells` grid cells; the
-       C-terminal one (end) runs zig-zag first, positions last -->
+       C-terminal one (end) runs zig-zag first, positions last. In a single
+       cell only the positions show: a zig-zag that short reads as a letter -->
   <div :class="['truncated-residues', { 'truncated-residues-end': end }]" :aria-label="text">
     <span class="truncated-label" aria-hidden="true">{{ range }}</span>
     <svg
+      v-if="cells > 1"
       class="truncated-break" aria-hidden="true" preserveAspectRatio="none"
       :viewBox="`0 0 ${Math.max(cells, 1) * 20} 8`"
     >
