@@ -307,37 +307,47 @@
       </div>
       <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
-          <!-- With truncations hidden, rows keep their protein positions and
-               a break line labelled with the positions marks the residues
-               before and after the proteoform: in the free cells of the first
-               and last row when one is free, else in a row of its own -->
-          <div v-if="aa_index === 0 && truncatedBefore > 0 && !nBreakInline" class="truncated-residues" data-testid="truncated-n-term" :style="{ gridColumn: '1 / -1' }"
-               :aria-label="truncatedText(truncatedBefore, 1, truncatedBefore)">
-            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(1, truncatedBefore) }}</span>
-            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" :viewBox="`0 0 ${(perRow + 2) * 20} 8`"><polyline :points="breakPoints(perRow + 2)" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
-            <v-tooltip activator="parent" location="bottom" max-width="480">
-              <div class="truncated-range">{{ truncatedText(truncatedBefore, 1, truncatedBefore) }}</div>
-              <div v-if="truncatedMass(0, truncatedBefore) !== null" class="truncated-mass" data-testid="truncated-n-term-mass">{{ truncatedMassText(0, truncatedBefore) }}</div>
-              <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
-            </v-tooltip>
-          </div>
+          <!-- With truncations hidden, rows keep their protein positions. The
+               first row runs: an empty row-number cell, the break line (the
+               truncated positions, then a zig-zag), N, the sequence; the last
+               row: the sequence, C, the break line (zig-zag, then positions),
+               an empty row-number cell. The break line needs one free cell,
+               else it takes a row of its own. -->
+          <TruncationBreak
+            :range="truncatedRange(1, truncatedBefore)" :text="truncatedText(truncatedBefore, 1, truncatedBefore)"
+            :mass="truncatedMassText(0, truncatedBefore)" :residues="truncatedResidues(0, truncatedBefore)"
+            testid="truncated-n-term" data-testid="truncated-n-term"
+            v-if="aa_index === 0 && truncatedBefore > 0 && !nBreakInline"
+            :cells="perRow" :style="{ gridColumn: '2 / -2' }"
+          />
           <div
             v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && (aa_index % perRow === 0) && (aa_index <= sequence_end) && (aa_index > sequence_start))"
             class="row-number row-number-start"
           >
           {{ aa_index + 1 }}
           </div>
-          <ProteinTerminalCell v-if="aa_index === 0" protein-terminal="N-term" :truncated=n_truncation :index="-1" :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"/>
-          <div v-if="aa_index === sequence_start && truncatedBefore > 0 && nBreakInline" class="truncated-residues" data-testid="truncated-n-term" :style="{ gridColumn: `span ${truncatedLead}` }"
-               :aria-label="truncatedText(truncatedBefore, 1, truncatedBefore)">
-            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(1, truncatedBefore) }}</span>
-            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" :viewBox="`0 0 ${(truncatedLead) * 20} 8`"><polyline :points="breakPoints(truncatedLead)" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
-            <v-tooltip activator="parent" location="bottom" max-width="480">
-              <div class="truncated-range">{{ truncatedText(truncatedBefore, 1, truncatedBefore) }}</div>
-              <div v-if="truncatedMass(0, truncatedBefore) !== null" class="truncated-mass" data-testid="truncated-n-term-mass">{{ truncatedMassText(0, truncatedBefore) }}</div>
-              <span class="truncated-sequence" data-testid="truncated-n-term-sequence">{{ truncatedResidues(0, truncatedBefore) }}</span>
-            </v-tooltip>
-          </div>
+          <ProteinTerminalCell
+            v-if="aa_index === 0 && (truncatedBefore === 0 || truncatedLead === 0)"
+            protein-terminal="N-term" :truncated=n_truncation :index="-1"
+            :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"
+            :style="truncatedBefore > 0 ? { gridColumn: '1' } : undefined"
+          />
+          <div
+            v-if="aa_index === sequence_start && truncatedBefore > 0 && truncatedLead > 0"
+            class="truncated-gap" :style="{ gridColumn: '1' }"
+          ></div>
+          <TruncationBreak
+            :range="truncatedRange(1, truncatedBefore)" :text="truncatedText(truncatedBefore, 1, truncatedBefore)"
+            :mass="truncatedMassText(0, truncatedBefore)" :residues="truncatedResidues(0, truncatedBefore)"
+            testid="truncated-n-term" data-testid="truncated-n-term"
+            v-if="aa_index === sequence_start && truncatedBefore > 0 && nBreakInline"
+            :cells="truncatedLead - 1" :style="{ gridColumn: `span ${truncatedLead - 1}` }"
+          />
+          <ProteinTerminalCell
+            v-if="aa_index === sequence_start && truncatedBefore > 0 && truncatedLead > 0"
+            protein-terminal="N-term" :truncated=n_truncation :index="-1"
+            :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"
+          />
           <AminoAcidCell
             v-if="showTruncations || ((sequence_start <= aa_index) && (sequence_end >= aa_index))"
             :index="aa_index"
@@ -368,26 +378,20 @@
             :determined="c_determined"
             :font-size="fontSize"
           />
-          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline" class="truncated-residues truncated-residues-end" data-testid="truncated-c-term" :style="{ gridColumn: `span ${truncatedTrail}` }"
-               :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
-            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
-            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" :viewBox="`0 0 ${(truncatedTrail) * 20} 8`"><polyline :points="breakPoints(truncatedTrail)" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
-            <v-tooltip activator="parent" location="bottom" max-width="480">
-              <div class="truncated-range">{{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}</div>
-              <div v-if="truncatedMass(sequence_end + 1, sequence.length) !== null" class="truncated-mass" data-testid="truncated-c-term-mass">{{ truncatedMassText(sequence_end + 1, sequence.length) }}</div>
-              <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
-            </v-tooltip>
-          </div>
-          <div v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline" class="truncated-residues truncated-residues-end" data-testid="truncated-c-term" :style="{ gridColumn: '1 / -1' }"
-               :aria-label="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)">
-            <span class="truncated-label" aria-hidden="true">{{ truncatedRange(sequence_end + 2, sequence.length) }}</span>
-            <svg class="truncated-break" aria-hidden="true" preserveAspectRatio="none" :viewBox="`0 0 ${(perRow + 2) * 20} 8`"><polyline :points="breakPoints(perRow + 2)" fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>
-            <v-tooltip activator="parent" location="bottom" max-width="480">
-              <div class="truncated-range">{{ truncatedText(truncatedAfter, sequence_end + 2, sequence.length) }}</div>
-              <div v-if="truncatedMass(sequence_end + 1, sequence.length) !== null" class="truncated-mass" data-testid="truncated-c-term-mass">{{ truncatedMassText(sequence_end + 1, sequence.length) }}</div>
-              <span class="truncated-sequence" data-testid="truncated-c-term-sequence">{{ truncatedResidues(sequence_end + 1, sequence.length) }}</span>
-            </v-tooltip>
-          </div>
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline"
+            :cells="truncatedTrail - 1" :style="{ gridColumn: `span ${truncatedTrail - 1}` }"
+          />
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline"
+            :cells="perRow" :style="{ gridColumn: '2 / -2' }"
+          />
           </template>
       </div>
       <InternalFragmentTrack
@@ -558,6 +562,7 @@ import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
+import TruncationBreak from './TruncationBreak.vue'
 import { STANDARD_RESIDUE_MASSES } from '@/utils/measure'
 import { builtInLibrary, extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
 import {
@@ -637,6 +642,7 @@ export default defineComponent({
     ProteinTerminalCell,
     ImageScreenshot,
     InternalFragmentTrack,
+    TruncationBreak,
   },
   props: {
     args: {
@@ -948,14 +954,15 @@ export default defineComponent({
     truncatedLead(): number {
       return this.sequence_start % this.perRow
     },
-    /** Grid cells left after the last residue's row: the free residue cells
-     *  and the row-number column (the C-terminus takes the first of them) */
+    /** Free cells after the proteoform in its last row (truncations hidden);
+     *  the C-terminus takes the first of them */
     truncatedTrail(): number {
       return this.perRow - 1 - (this.sequence_end % this.perRow)
     },
-    /** The N-terminal break line fits in the first row (a free cell) */
+    /** The N-terminal break line fits in the first row: a free cell beside
+     *  the one N takes */
     nBreakInline(): boolean {
-      return this.truncatedLead >= 1
+      return this.truncatedLead >= 2
     },
     /** The C-terminal break line fits in the last row (a free cell after
      *  the C-terminus) */
@@ -1408,12 +1415,6 @@ export default defineComponent({
     truncatedText(count: number, first: number, last: number): string {
       return `${count} ${count === 1 ? 'residue' : 'residues'} truncated (${this.truncatedRange(first, last)})`
     },
-    /** Zig-zag of a break line spanning `cells` grid cells: two teeth per
-     *  cell (viewBox `cells * 20` × 8), so it keeps its pitch at any width */
-    breakPoints(cells: number): string {
-      const n = Math.max(cells, 1) * 4
-      return Array.from({ length: n + 1 }, (_, i) => `${i * 5},${i % 2 ? 0 : 8}`).join(' ')
-    },
     /** Summed monoisotopic residue masses (Da) of the truncated residues
      *  (0-based, end exclusive); null when one of them is not a standard
      *  residue */
@@ -1427,8 +1428,9 @@ export default defineComponent({
       return mass
     },
     /** "Residue mass 2,156.21 Da": hover text of the break line */
-    truncatedMassText(start: number, end: number): string {
-      const mass = this.truncatedMass(start, end) ?? 0
+    truncatedMassText(start: number, end: number): string | null {
+      const mass = this.truncatedMass(start, end)
+      if (mass === null) return null
       return `Residue mass ${mass.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Da`
     },
     /** The truncated residues themselves (0-based, end exclusive), shown on hover */
@@ -2468,50 +2470,16 @@ export default defineComponent({
   opacity: var(--v-medium-emphasis-opacity);
 }
 
+.sequence-grid > .truncated-gap {
+  aspect-ratio: auto;
+}
+
 .sequence-grid > .truncated-residues {
   aspect-ratio: auto;
   align-self: center;
   min-width: 0;
   overflow: hidden;
   padding: 0 4px;
-}
-
-.truncated-residues {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  line-height: 1;
-  opacity: var(--v-medium-emphasis-opacity);
-  cursor: help;
-}
-
-/* The C-terminal break line ends with its positions, on the right */
-.truncated-residues-end {
-  flex-direction: row-reverse;
-}
-
-.truncated-label {
-  white-space: nowrap;
-}
-
-.truncated-break {
-  flex: 1;
-  min-width: 0;
-  height: 8px;
-}
-
-.truncated-range {
-  font-weight: 600;
-}
-
-.truncated-mass {
-  font-variant-numeric: tabular-nums;
-}
-
-.truncated-sequence {
-  font-family: monospace;
-  overflow-wrap: anywhere;
 }
 
 .row-number-start {
