@@ -1,11 +1,13 @@
 /**
  * Labelled x markers on a LinePlot (x_markers).
  *
- * Each marker gets a dotted guide over the plot's height at its x, in its own
- * colour. With a tolerance, the most intense peak within it of the marker is
- * the marker's peak: it gets a dot in the marker colour, and the label sits
- * above it (at the guide's top for a marker without a peak, whose guide is
- * then fainter). Labels are left out where they would overlap a label already
+ * Each marker gets a dotted guide at its x, in its own colour. With a
+ * tolerance, the most intense peak within it of the marker is the marker's
+ * peak: it gets a dot in the marker colour, and the label sits above it (at
+ * the plot's top for a marker without a peak, whose guide is then fainter).
+ * The guide stops short of the dot and the label, so neither is crossed out:
+ * above a peak it runs from the label up, otherwise from the axis up to the
+ * label. Labels are left out where they would overlap a label already
  * placed, left to right, so zooming in shows more of them.
  */
 
@@ -31,6 +33,12 @@ export interface MarkerOverlay {
 const FONT_SIZE = 11
 /** Pixels kept between marker labels. */
 const LABEL_GAP_PX = 3
+/** Height of a label line, in pixels. */
+const LABEL_HEIGHT_PX = Math.ceil(FONT_SIZE * 1.4)
+/** Space kept between a guide and the dot or label it leads to, in pixels. */
+const GUIDE_GAP_PX = 3
+/** Radius of a marker's dot, in pixels. */
+const DOT_RADIUS_PX = 3.5
 
 /** A distinct colour per marker, evenly spaced around the hue circle. */
 export function markerColor(i: number, n: number): string {
@@ -93,6 +101,8 @@ export interface MarkerOverlayInput {
   yRange: number[]
   /** Width of the plot area, in pixels. */
   widthPx: number
+  /** Height of the plot area, in pixels. */
+  heightPx: number
   /** Whether markers are matched to peaks; unmatched guides are then fainter. */
   matching: boolean
   textWidth: (text: string, fontSize: number) => number
@@ -106,43 +116,63 @@ export function markerOverlay(input: MarkerOverlayInput): MarkerOverlay {
   const annotations: Partial<Plotly.Annotations>[] = []
   if (!(span > 0) || widthPx <= 0) return { shapes, annotations }
 
-  let labelRight = -Infinity
-  for (const m of matches) {
-    if (m.x < xRange[0] || m.x > xRange[1]) continue
-    const matched = m.index !== undefined
+  const ySpan = yRange[1] - yRange[0]
+  const guide = (m: MarkerMatch, y0: number, y1: number) => {
+    if (!(y1 > y0)) return
     shapes.push({
       type: 'line',
       xref: 'x',
       yref: 'paper',
       x0: m.x,
       x1: m.x,
-      y0: 0,
-      y1: 1,
+      y0,
+      y1,
       line: { color: m.color, width: 1, dash: 'dot' },
-      opacity: matched || !input.matching ? 0.9 : 0.45,
+      opacity: m.index !== undefined || !input.matching ? 0.9 : 0.45,
       layer: 'below',
     })
-    if (!m.label) continue
-    // The label sits over the marker's peak, or at the top without one
+  }
+  const px2paper = (px: number) => (input.heightPx > 0 ? px / input.heightPx : 0)
+
+  let labelRight = -Infinity
+  for (const m of matches) {
+    if (m.x < xRange[0] || m.x > xRange[1]) continue
+    const matched = m.index !== undefined
     const peakY = matched ? y[m.index as number] : undefined
+    const onPeak = matched && (peakY as number) < yRange[1] && ySpan > 0
+    // The label sits over the marker's peak, or at the top without one;
+    // it is left out where it would overlap a label placed before it
+    let labelled = false
     const labelX = matched ? x[m.index as number] : m.x
-    const px = ((labelX - xRange[0]) / span) * widthPx
-    const width = input.textWidth(m.label, FONT_SIZE)
-    if (px - width / 2 < labelRight + LABEL_GAP_PX) continue
-    labelRight = px + width / 2
-    const onPeak = matched && (peakY as number) < yRange[1]
-    annotations.push({
-      x: labelX,
-      y: onPeak ? (peakY as number) : 1,
-      xref: 'x',
-      yref: onPeak ? 'y' : 'paper',
-      yanchor: onPeak ? 'bottom' : 'top',
-      yshift: onPeak ? 6 : 0,
-      text: m.label,
-      showarrow: false,
-      font: { size: FONT_SIZE, color: m.color },
-      captureevents: false,
-    })
+    if (m.label) {
+      const px = ((labelX - xRange[0]) / span) * widthPx
+      const width = input.textWidth(m.label, FONT_SIZE)
+      if (px - width / 2 >= labelRight + LABEL_GAP_PX) {
+        labelRight = px + width / 2
+        labelled = true
+        annotations.push({
+          x: labelX,
+          y: onPeak ? (peakY as number) : 1,
+          xref: 'x',
+          yref: onPeak ? 'y' : 'paper',
+          yanchor: onPeak ? 'bottom' : 'top',
+          yshift: onPeak ? 6 : 0,
+          text: m.label,
+          showarrow: false,
+          font: { size: FONT_SIZE, color: m.color },
+          captureevents: false,
+        })
+      }
+    }
+    if (onPeak) {
+      // From above the dot (and its label) to the top
+      const peak = Math.max(0, ((peakY as number) - yRange[0]) / ySpan)
+      const above = labelled ? 6 + LABEL_HEIGHT_PX : DOT_RADIUS_PX
+      guide(m, peak + px2paper(above + GUIDE_GAP_PX), 1)
+    } else {
+      // From the axis to below the label at the top
+      guide(m, 0, labelled ? 1 - px2paper(LABEL_HEIGHT_PX + GUIDE_GAP_PX) : 1)
+    }
   }
 
   return { shapes, annotations }

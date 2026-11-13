@@ -713,6 +713,7 @@ export default defineComponent({
         xRange: this.xRange,
         yRange: this.yRange,
         widthPx: this.actualPlotWidth - 80,
+        heightPx: this.plotHeight - (this.args.title ? 50 : 20) - 50,
         textWidth: (text, size) => this.measureTextWidth(text, size),
       })
     },
