@@ -332,6 +332,7 @@
           <div
             v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && (aa_index >= sequence_start) && (aa_index <= sequence_end) && (gridCell(aa_index) === 0) && (aa_index > sequence_start || truncatedBefore > 0))"
             class="row-number row-number-start"
+            :style="showTruncations ? undefined : { gridColumn: '1' }"
           >
           {{ aa_index + 1 }}
           </div>
