@@ -94,17 +94,55 @@ def test_heatmap_frames(mock_streamlit, temp_cache_dir, frames):
     assert (args["count"], args["index"], args["prev"], args["next"]) == (3, 1, 1, 3)
 
 
-def test_heatmap_needs_a_categorical_filter(mock_streamlit, temp_cache_dir, frames):
-    with pytest.raises(ValueError, match="categorical_filters"):
-        Heatmap(
-            cache_id="nocat",
-            data=frames,
-            x_column="mz",
-            y_column="im",
-            intensity_column="intensity",
-            filters={"frame": "frame"},
+def test_heatmap_without_categorical_filter(mock_streamlit, temp_cache_dir, frames):
+    heatmap = Heatmap(
+        cache_id="nocat",
+        data=frames,
+        x_column="mz",
+        y_column="im",
+        intensity_column="intensity",
+        filters={"frame": "frame"},
+        cache_path=str(temp_cache_dir),
+        stepper="frame",
+    )
+    args = heatmap._state_args({"frame": 3})["stepper"]
+    assert (args["count"], args["index"], args["prev"], args["next"]) == (3, 2, 2, None)
+
+
+def test_other_plots_accept_a_stepper(mock_streamlit, temp_cache_dir):
+    from openms_insight import MirrorPlot
+
+    data = pl.LazyFrame(
+        {
+            "scan": [1, 1, 4],
+            "mz": [100.0, 200.0, 300.0],
+            "intensity": [1.0, 2.0, 3.0],
+        }
+    )
+    mirror = MirrorPlot(
+        cache_id="mirror",
+        data=data,
+        filters_top={"spectrum": "scan"},
+        filters_bottom={"spectrum": "scan"},
+        x_column="mz",
+        y_column="intensity",
+        cache_path=str(temp_cache_dir),
+        stepper="spectrum",
+    )
+    args = mirror._state_args({"spectrum": 1})["stepper"]
+    assert (args["count"], args["next"]) == (2, 4)
+
+
+def test_table_has_no_stepper(mock_streamlit, temp_cache_dir, spectra):
+    from openms_insight import Table
+
+    with pytest.raises(ValueError, match="stepper"):
+        Table(
+            cache_id="table",
+            data=spectra,
+            filters={"spectrum": "scan"},
             cache_path=str(temp_cache_dir),
-            stepper="frame",
+            stepper="spectrum",
         )
 
 

@@ -3,7 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
     <PeakHoverTip
       :tip="hover.tip"
@@ -30,7 +30,6 @@ import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
-import { stepperTools } from '@/utils/stepper'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
@@ -775,11 +774,7 @@ export default defineComponent({
     },
 
     toolbarTools(): PlotTool[] {
-      const stepper = this.args.stepper
       return [
-        ...stepperTools(stepper, stepper ? this.selectionStore.$state[stepper.identifier] : undefined, (id, value) =>
-          this.selectionStore.updateSelection(id, value),
-        ),
         ...this.measure.tools(this.measureTitle),
         ...this.labels.tools(),
         ...this.topPeaks.tools(),

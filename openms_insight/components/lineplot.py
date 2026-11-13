@@ -16,13 +16,6 @@ from ..core.measure import (
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
-from ..core.stepper import (
-    first_step,
-    sorted_values,
-    stepper_args,
-    unique_values,
-    validate_stepper,
-)
 from ..core.top_peak_labels import (
     top_peak_label_args,
     validate_show_top_peak_labels,
@@ -66,6 +59,7 @@ class LinePlot(BaseComponent):
     """
 
     _component_type: str = "lineplot"
+    _supports_stepper = True
 
     def __init__(
         self,
@@ -234,11 +228,9 @@ class LinePlot(BaseComponent):
             annotation_column=annotation_column,
             styling=styling,
             config=config,
+            stepper=stepper,
             **kwargs,
         )
-
-        # Render-time option, kept out of the cache config (see core/stepper.py)
-        self._stepper = validate_stepper(stepper, self._filters)
 
     def _get_cache_config(self) -> dict[str, Any]:
         """
@@ -465,34 +457,6 @@ class LinePlot(BaseComponent):
             "_hash": data_hash,
             "_plotConfig": self._build_plot_config(highlight_col, annotation_col),
         }
-
-    def _stepper_values(self) -> list[Any]:
-        """The sorted values of the stepped filter's column (see core/stepper.py)."""
-        column = self._filters[self._stepper]
-        return sorted_values(
-            self._cache_dir,
-            column,
-            lambda: unique_values(self._preprocessed_data.get("data"), column),
-        )
-
-    def _state_args(self, state: dict[str, Any]) -> dict[str, Any]:
-        """The stepper's current value and neighbours (see core/stepper.py)."""
-        if not self._stepper:
-            return {}
-        return stepper_args(
-            self._stepper,
-            self._stepper,
-            self._stepper_values(),
-            state.get(self._stepper),
-        )
-
-    def get_initial_selection(self, state: dict[str, Any]) -> dict[str, Any] | None:
-        """The stepper's first value while its filter has none."""
-        if not self._stepper:
-            return None
-        return first_step(
-            self._stepper, self._stepper_values(), state, self._filter_defaults
-        )
 
     def _get_component_args(self) -> dict[str, Any]:
         """

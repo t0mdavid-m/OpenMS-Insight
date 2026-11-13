@@ -1,6 +1,8 @@
 """Previous / next buttons for one filter of a plot: ``stepper``.
 
-A plot given ``stepper="frame"`` (an identifier of its ``filters``) gets two
+Any plot with a toolbar (LinePlot, MirrorPlot, DeconvolvedSpectrum, Heatmap,
+Plot3D, SeriesPlot, VolcanoPlot, PCAPlot) takes it; BaseComponent handles the
+argument. A plot given ``stepper="frame"`` (an identifier of its ``filters``) gets two
 buttons in its toolbar, ``◀ frame 12`` and ``▶``, that set that identifier to
 the previous or next value of its column, in sorted order. A peak map of one
 ion-mobility frame (m/z × 1/K0) can so step through the frames, and a spectrum

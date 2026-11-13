@@ -930,7 +930,7 @@ setting and never part of the cache configuration.
 
 ### Stepping through a filter (`stepper`)
 
-`LinePlot` and `Heatmap` take a `stepper`: one of their filter identifiers. The plot toolbar then shows `‹ frame 12 ›`; the arrows set that identifier to the previous or next value of its column, in sorted order, and the tooltip says where the value is (`12 of 340`). While the filter has no value (and no `filter_defaults` entry) the plot starts at the first one. A peak map of one ion-mobility frame steps through the frames, a spectrum plot through its spectra:
+Every plot with a toolbar (`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot`, `Plot3D`, `Heatmap`) takes a `stepper`: one of its filter identifiers. The plot toolbar then shows `‹ frame 12 ›`; the arrows set that identifier to the previous or next value of its column, in sorted order, and the tooltip says where the value is (`12 of 340`). While the filter has no value (and no `filter_defaults` entry) the plot starts at the first one. A peak map of one ion-mobility frame steps through the frames, a spectrum plot through its spectra:
 
 ```python
 Heatmap(
@@ -940,12 +940,12 @@ Heatmap(
     y_column="inv_k0",
     intensity_column="intensity",
     filters={"frame": "frame"},
-    categorical_filters=["frame"],  # levels per frame
+    categorical_filters=["frame"],  # optional: resolution levels per frame
     stepper="frame",
 )(state_manager=state)
 ```
 
-For a `Heatmap` the identifier must be in `categorical_filters`, which builds the resolution levels of each value. The sorted values are read once from the cache; only the current value and its neighbours are sent with each render. Render-time only, not part of the cache.
+A `Table` has no toolbar and refuses a `stepper`; a table that writes the same identifier through `interactivity` follows the steps and moves the plot when a row is clicked. The sorted values are read once from the cache; only the current value and its neighbours are sent with each render. Render-time only, not part of the cache.
 
 ### Keeping the zoom in the state (`zoom_identifier`)
 

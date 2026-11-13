@@ -3,7 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
   </div>
@@ -20,7 +20,6 @@ import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables
 import { axisQuantity } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
-import { stepperTools } from '@/utils/stepper'
 import PlotToolbar from './PlotToolbar.vue'
 import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
 import { normalizeZoom } from '@/composables/useZoomState'
@@ -126,12 +125,6 @@ export default defineComponent({
 
     toolbarTools(): PlotTool[] {
       const tools: PlotTool[] = []
-      const stepper = this.args.stepper
-      tools.push(
-        ...stepperTools(stepper, stepper ? this.selectionStore.$state[stepper.identifier] : undefined, (id, value) =>
-          this.selectionStore.updateSelection(id, value),
-        ),
-      )
       if (this.multiSelectEnabled) tools.push(clearSelectionTool(() => this.clearMultiSelect(), this.selectedCount))
       tools.push(...this.measure.tools())
       tools.push(...this.layers.tool(this.layerList))
