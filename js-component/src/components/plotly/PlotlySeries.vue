@@ -95,6 +95,18 @@ export default defineComponent({
     columns(): Record<string, unknown[]> {
       return (this.streamlitDataStore.allDataForDrawing?.plotData as Record<string, unknown[]>) || {}
     },
+    /** True when some position holds points of two or more series. */
+    sharedPositions(): boolean {
+      const seen = new Map<unknown, string>()
+      for (const group of this.series) {
+        for (const x of group.x) {
+          const owner = seen.get(x)
+          if (owner !== undefined && owner !== group.key) return true
+          seen.set(x, group.key)
+        }
+      }
+      return false
+    },
     /** Points grouped by series, in series_names order then order of appearance. */
     series(): Array<{ key: string; name: string; x: number[]; y: number[]; rows: number[]; text: string[] }> {
       const hoverColumn = this.args.hoverColumn
@@ -148,6 +160,8 @@ export default defineComponent({
         if (this.args.hoverColumn) {
           trace.text = s.text
           trace.hovertemplate = '%{text}<br>%{x}, %{y}<extra>%{fullData.name}</extra>'
+          // Hover text only: a bar would otherwise print it on itself
+          if (mode === 'bars') trace.textposition = 'none'
         }
         const color = colors[s.key]
         if (color) {
@@ -231,8 +245,9 @@ export default defineComponent({
         height: (this.args.height || 400) - TOOLBAR_HEIGHT,
         xaxis,
         yaxis,
-        ...(mode === 'bars' ? { barmode: 'group' } : {}),
-        ...(mode === 'box' ? { boxmode: 'group' } : {}),
+        // Side by side only where series share a position, else full width
+        ...(mode === 'bars' ? { barmode: this.sharedPositions ? 'group' : 'overlay' } : {}),
+        ...(mode === 'box' ? { boxmode: this.sharedPositions ? 'group' : 'overlay' } : {}),
         paper_bgcolor: this.theme?.backgroundColor || 'white',
         plot_bgcolor: this.theme?.backgroundColor || 'white',
         font: {
