@@ -688,7 +688,9 @@ spectrum(key="spectrum", state_manager=state_manager)
 
 ### SeriesPlot
 
-Line and marker plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`).
+Line, marker, bar or box plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`), and for counts or distributions per sample.
+
+`mode` is `"lines"` (default), `"markers"`, `"lines+markers"`, `"bars"` (one bar per x value and series, the series side by side) or `"box"` (one box per x value and series, drawn from all y values at that x). `orientation="h"` turns bars and boxes sideways, the x values listed top to bottom, which suits long labels such as GO terms or file names.
 
 ```python
 from openms_insight import SeriesPlot
@@ -704,6 +706,27 @@ SeriesPlot(
     x_label="Score",
     y_label="Density",
 )(key="density", state_manager=state_manager)
+
+# Identified proteins per sample, as bars
+SeriesPlot(
+    cache_id="proteins_per_sample",
+    data=counts,  # columns: sample, proteins, kind
+    x_column="sample",
+    y_column="proteins",
+    series_column="kind",
+    mode="bars",
+)(key="per_sample", state_manager=state_manager)
+
+# Abundances per sample, as boxes
+SeriesPlot(
+    cache_id="abundances",
+    data=abundances,  # columns: sample, log2_abundance, step
+    x_column="sample",
+    y_column="log2_abundance",
+    series_column="step",
+    mode="box",
+    y_range_mode="normal",
+)(key="abundances", state_manager=state_manager)
 ```
 
 ### Plot3D
