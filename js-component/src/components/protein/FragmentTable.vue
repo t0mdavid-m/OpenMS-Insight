@@ -89,6 +89,16 @@ import { defineComponent, type PropType } from 'vue'
 import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 
+// A ready-made filter of the filter dialog: hides rows whose `field` equals `value`
+export interface FilterPreset {
+  id: string
+  label: string
+  help?: string
+  field: string
+  value: unknown
+  active?: boolean
+}
+
 export default defineComponent({
   name: 'FragmentTable',
   props: {
@@ -138,8 +148,16 @@ export default defineComponent({
       required: false,
       default: () => undefined
     },
+    // Ready-made filters offered at the top of the filter dialog. Each hides
+    // the rows whose `field` equals `value` while it is on; `active` is its
+    // state until the user switches it.
+    filterPresets: {
+      type: Array as PropType<FilterPreset[]>,
+      required: false,
+      default: () => []
+    },
   },
-  emits: ['rowSelected'],
+  emits: ['rowSelected', 'presetChanged'],
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     return { streamlitDataStore }
@@ -169,6 +187,8 @@ export default defineComponent({
         }
       }>,
       filterTypes: {} as Record<string, 'categorical' | 'numeric' | 'text'>,
+      // Presets the user switched, by id (others keep their `active`)
+      presetActive: {} as Record<string, boolean>,
       columnAnalysis: {} as Record<string, {
         uniqueValues: (string | number)[],
         minValue?: number,
@@ -214,7 +234,7 @@ export default defineComponent({
       })).filter(col => col.field !== '');
     },
     activeFilterCount(): number {
-      let count = 0;
+      let count = this.filterPresets.filter((preset) => this.isPresetActive(preset)).length;
       
       for (const columnField of this.selectedColumns) {
         const filterValue = this.filterValues[columnField];
@@ -248,7 +268,11 @@ export default defineComponent({
     },
     preparedTableData(): Record<string, unknown>[] {
 
-      const columns = [...this.columnDefinitions.map(col => col.field), 'id']
+      const columns = [
+        ...this.columnDefinitions.map(col => col.field),
+        ...this.filterPresets.map(preset => preset.field),
+        'id',
+      ]
       if ((this.tableData !== undefined) && (this.tableData.length > 0)) {
         const tableDataWithId: Record<string, unknown>[] = []
         this.tableData.forEach((row, index) => {
@@ -278,6 +302,10 @@ export default defineComponent({
   watch: {
     tableData() {
       this.drawTable()
+    },
+    filterPresets() {
+      this.applyFilters()
+      if (this.teleportDialog) this.refreshTeleportDialog()
     },
     selectedRowIndexFromListening(newVal: number | undefined) {
       console.log('🔍 [DEBUG] TabulatorTable selectedRowIndexFromListening watcher triggered:', newVal)
@@ -382,6 +410,51 @@ export default defineComponent({
     },
     downloadTable(): void {
       if (this.tabulator !== undefined) this.tabulator.download('csv', `${this.title}.csv`)
+    },
+    isPresetActive(preset: FilterPreset): boolean {
+      return this.presetActive[preset.id] ?? preset.active ?? false
+    },
+    setPresetActive(preset: FilterPreset, active: boolean): void {
+      this.presetActive[preset.id] = active
+      this.$emit('presetChanged', preset.id, active)
+      this.applyFilters()
+    },
+    renderPresets(content: HTMLElement): void {
+      if (!this.parentDocument || this.filterPresets.length === 0) return;
+      const doc = this.parentDocument;
+      const section = doc.createElement('div');
+      section.style.cssText = `
+        background-color: white;
+        border-radius: 4px;
+        border: 1px solid #e0e0e0;
+        padding: 16px;
+        margin-bottom: 24px;
+      `;
+      const heading = doc.createElement('h6');
+      heading.textContent = 'Presets:';
+      heading.style.cssText = 'color: #333; margin: 0 0 12px 0; font-size: 16px; font-weight: 500;';
+      section.appendChild(heading);
+      this.filterPresets.forEach((preset) => {
+        const label = doc.createElement('label');
+        label.style.cssText = 'display: flex; align-items: center; gap: 8px; color: #333; font-size: 14px; cursor: pointer; margin-bottom: 4px;';
+        if (preset.help) label.title = preset.help;
+        const box = doc.createElement('input');
+        box.type = 'checkbox';
+        box.checked = this.isPresetActive(preset);
+        box.addEventListener('change', () => this.setPresetActive(preset, box.checked));
+        const text = doc.createElement('span');
+        text.textContent = preset.label;
+        label.appendChild(box);
+        label.appendChild(text);
+        section.appendChild(label);
+        if (preset.help) {
+          const help = doc.createElement('div');
+          help.textContent = preset.help;
+          help.style.cssText = 'color: #666; font-size: 12px; margin: 0 0 8px 26px;';
+          section.appendChild(help);
+        }
+      });
+      content.appendChild(section);
     },
     openFilterDialog(): void {
       if (this.canUseTeleport()) {
@@ -580,6 +653,14 @@ export default defineComponent({
         if (!this.tabulator) return;
 
         this.tabulator.clearFilter(true);
+
+        this.filterPresets.forEach((preset) => {
+          if (!this.isPresetActive(preset)) return;
+          // A function filter; Tabulator's typings only describe field filters
+          const addFilter = this.tabulator?.addFilter.bind(this.tabulator) as
+            ((filter: (data: Record<string, unknown>) => boolean) => void) | undefined;
+          addFilter?.((data) => data[preset.field] !== preset.value);
+        });
         
         this.selectedColumns.forEach(columnField => {
           const filterValue = this.filterValues[columnField];
@@ -841,6 +922,7 @@ export default defineComponent({
         min-height: 0;
       `;
 
+      this.renderPresets(content);
       this.renderColumnSelection(content);
       this.renderFilterControls(content);
 

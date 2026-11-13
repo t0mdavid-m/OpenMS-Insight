@@ -396,21 +396,12 @@
           :index="index"
           :selected-row-index-from-listening="selectedFragTableRowIndex"
           :go-to-fields="['Name']"
+          :filter-presets="fragmentFilterPresets"
           table-layout-param="fitColumns"
           @row-selected="onFragmentTableRowSelected"
+          @preset-changed="onFragmentPresetChanged"
         >
           <template #default>{{ fragmentTableTitle }}</template>
-          <template #start-title-row>
-            <v-checkbox
-              v-if="unmatchedAvailable"
-              v-model="showUnmatched"
-              class="unmatched-filter"
-              hide-details
-              density="compact"
-              :label="unmatchedTableTitle"
-              :title="unmatchedTableTooltip"
-            ></v-checkbox>
-          </template>
           <template #end-title-row
             >% Residue cleavage: {{ residueCleavagePercentage.toFixed(3) }}%</template
           >
@@ -519,7 +510,7 @@ import type {
 } from '@/types/protein-sequence-data'
 import type { SequenceObject } from '@/types/protein-sequence-object'
 import type { ColumnDefinition } from 'tabulator-tables'
-import FragmentTable from './FragmentTable.vue'
+import FragmentTable, { type FilterPreset } from './FragmentTable.vue'
 import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import ImageScreenshot from './ImageScreenshot.vue'
@@ -750,6 +741,7 @@ export default defineComponent({
       unmatchedTableData: [] as Record<string, unknown>[],
       unmatchedTableTitle: '' as string,
       unmatchedTableTooltip: '' as string,
+      // Mirrors the 'Hide unmatched masses' preset of the fragment table
       showUnmatched: false as boolean,
       // Annotated fragment behind each fragmentTableData row
       fragmentTableSource: [] as AnnotatedFragment[],
@@ -845,14 +837,25 @@ export default defineComponent({
         this.unmatchedTableTitle !== ''
     },
     // The fragment table's rows: the matched fragments, then the unmatched
-    // masses when their filter is off (hidden by default)
+    // masses, which the table's 'Hide unmatched masses' preset hides by default
     fragmentRows(): Record<string, unknown>[] {
-      if (!this.unmatchedAvailable || !this.showUnmatched) return this.fragmentTableData
+      if (!this.unmatchedAvailable) return this.fragmentTableData
       return [...this.fragmentTableData, ...this.unmatchedTableData]
+    },
+    fragmentFilterPresets(): FilterPreset[] {
+      if (!this.unmatchedAvailable) return []
+      return [{
+        id: 'hide-unmatched',
+        label: `Hide ${this.unmatchedTableTitle}`,
+        help: this.unmatchedTableTooltip,
+        field: 'Unmatched',
+        value: true,
+        active: true,
+      }]
     },
     fragmentColumns(): ColumnDefinition[] {
       const columns = this.columnsWithIsotope
-      if (!this.unmatchedAvailable || !this.showUnmatched) return columns
+      if (!this.unmatchedAvailable) return columns
       const at = columns.findIndex((column) => column.field === 'Name') + 1
       return [
         ...columns.slice(0, at),
@@ -1646,9 +1649,10 @@ export default defineComponent({
           })
         })
         this.unmatchedTableData = rows
-        this.unmatchedTableTitle = `Unmatched (${rows.length})`
+        this.unmatchedTableTitle =
+          `unmatched masses (${rows.length} of ${observed_masses.length})`
         this.unmatchedTableTooltip =
-          `Show the ${rows.length} of ${observed_masses.length} observed masses that no fragment ion matches, with the nearest fragment ion`
+          'Observed masses no fragment ion of the selected types matches. Shown, each is listed as \'unmatched\' with the nearest fragment ion and the differences to it.'
       }
       this.publishFragmentMatches(matchedIons)
     },
@@ -1887,6 +1891,9 @@ export default defineComponent({
       if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
       this.selectionStore.updateSelection(id, next)
     },
+    onFragmentPresetChanged(id: string, active: boolean) {
+      if (id === 'hide-unmatched') this.showUnmatched = !active
+    },
     onFragmentTableRowSelected(rowIndex?: number) {
       const row = rowIndex === undefined ? undefined : this.fragmentRows[rowIndex]
       // An unmatched mass is no fragment: only the mass table follows it
@@ -1972,6 +1979,8 @@ export default defineComponent({
       
       for (let i = 0; i < this.fragmentRows.length; i++) {
         const fragmentRow = this.fragmentRows[i]
+        // Hidden unmatched rows cannot be selected
+        if (fragmentRow.Unmatched && !this.showUnmatched) continue
         const observedMass = fragmentRow.ObservedMass as number
         
         if (observedMass !== undefined) {
@@ -2395,10 +2404,6 @@ export default defineComponent({
 </style>
 
 <style scoped lang="scss">
-.unmatched-filter {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
 .sequence-view-row {
   display: flex;
 }

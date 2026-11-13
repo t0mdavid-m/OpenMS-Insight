@@ -378,14 +378,15 @@ class ProteinSequenceView(BaseComponent):
                 table has an Isotope column. The precursor's Δ in ppm and its
                 isotope reading are shown either way. None (default): no
                 setting, exact matches only.
-            unmatched_masses: Offer a "Show unmatched masses" filter on the
-                fragment table, off by default. Ticked, the table also lists
-                the observed masses that no fragment ion of the selected types
-                matches, each with the nearest theoretical fragment ion and
-                its mass difference (a shift shared by several masses can
-                point at a modification). Clicking such a row selects the mass
-                in the mass table. Not offered with annotated fragments.
-                Default False.
+            unmatched_masses: List the observed masses that no fragment ion
+                of the selected types matches as rows of the fragment table
+                ('unmatched', with the nearest theoretical fragment ion and the
+                differences to it; a shift shared by several masses can point
+                at a modification). The table's filter dialog has a preset,
+                'Hide unmatched masses', that is on by default, so the rows
+                show only once the user switches it off. Clicking such a row
+                selects the mass in the mass table. Not offered with annotated
+                fragments. Default False.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
@@ -781,7 +782,7 @@ class ProteinSequenceView(BaseComponent):
         return self
 
     def set_unmatched_masses(self, enabled: bool = True) -> "ProteinSequenceView":
-        """Offer the fragment table's filter for unmatched masses.
+        """List unmatched masses in the fragment table (hidden by a preset).
 
         Not cached, so a view loaded from its cache can set it per render. See
         ``unmatched_masses`` in the constructor.
