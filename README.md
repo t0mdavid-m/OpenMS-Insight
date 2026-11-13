@@ -199,12 +199,20 @@ Table(
         "peptides": {"op": ">=", "suggestions": [2, 3], "default": 2},
     },
     filter_presets=[
-        {"label": "Hide contaminants", "column": "is_contaminant",
-         "op": "!=", "value": True, "default": True},
-        {"label": "Well supported", "filters": [
-            {"column": "peptides", "op": ">=", "value": 2},
-            {"column": "q_value", "op": "<=", "value": 0.01},
-        ]},
+        {
+            "label": "Hide contaminants",
+            "column": "is_contaminant",
+            "op": "!=",
+            "value": True,
+            "default": True,
+        },
+        {
+            "label": "Well supported",
+            "filters": [
+                {"column": "peptides", "op": ">=", "value": 2},
+                {"column": "q_value", "op": "<=", "value": 0.01},
+            ],
+        },
     ],
 )
 ```
