@@ -31,6 +31,7 @@ import {
   type CurrentWindow,
   type WindowOverlay,
 } from '@/utils/mzWindow'
+import { copyText, fillUsi, usiTool } from '@/utils/usi'
 import {
   markerDots,
   markerOverlay,
@@ -119,6 +120,9 @@ export default defineComponent({
       isInitialized: false as boolean,
       // The Window button hides the shaded window (window_identifier) and shows it again
       windowShown: true as boolean,
+      /** Outcome of the last USI copy, shown on its button for a moment (null: none). */
+      usiCopied: null as boolean | null,
+      usiTimer: 0,
       // The Markers button hides the x markers (x_markers) and shows them again
       markersShown: true as boolean,
       manualXRange: undefined as number[] | undefined,
@@ -820,6 +824,17 @@ export default defineComponent({
       return currentWindow(this.args, this.selectionStore.$state)
     },
 
+    /** The shown spectrum's USI, once every placeholder of `usi` has a value. */
+    currentUsi(): string | null {
+      return fillUsi(this.args.usi, this.selectionStore.$state)
+    },
+
+    /** The USI button, only while the USI is complete. */
+    usiTools(): PlotTool[] {
+      const usi = this.currentUsi
+      return usi ? [usiTool(usi, this.usiCopied, () => this.copyUsi(usi))] : []
+    },
+
     /** The Window switch, only while a window is set. */
     windowTools(): PlotTool[] {
       if (!this.currentWindow) return []
@@ -890,6 +905,7 @@ export default defineComponent({
         ...this.topPeaks.tools(),
         ...this.windowTools,
         ...this.markerTools,
+        ...this.usiTools,
         ...this.pinZoom.tools(),
         downloadTool({
           plotId: this.id,
@@ -1045,6 +1061,12 @@ export default defineComponent({
   },
 
   methods: {
+    /** Copies the USI and shows the outcome on its button for two seconds. */
+    async copyUsi(usi: string) {
+      this.usiCopied = await copyText(usi)
+      window.clearTimeout(this.usiTimer)
+      this.usiTimer = window.setTimeout(() => (this.usiCopied = null), 2000)
+    },
     /**
      * Measure text width in pixels using Canvas API.
      * Caches the canvas context for performance.

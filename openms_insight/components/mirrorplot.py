@@ -23,6 +23,7 @@ from ..core.mz_window import (
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
+from ..core.usi import usi_args, validate_usi
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -97,6 +98,7 @@ class MirrorPlot(BaseComponent):
         zoom_identifier: str | None = None,
         window_identifier: str | None = None,
         window_tolerance: float | str = DEFAULT_WINDOW_TOLERANCE,
+        usi: str | None = None,
         **kwargs,
     ):
         """
@@ -197,6 +199,11 @@ class MirrorPlot(BaseComponent):
                 a number of Da (default 0.01) or a string such as '10 ppm',
                 '0.02 Da' or '0.5 m/z'.
                 Render-time only: not part of the cache.
+            usi: Universal Spectrum Identifier of the shown spectrum, for a
+                USI button that copies it, e.g.
+                'mzspec:PXD000561:run1:scan:{spectrum}'. A ``{identifier}``
+                placeholder takes the value the state holds there (default
+                None: no button). Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         # Subprocess preprocessing re-instantiates the component via
@@ -255,6 +262,9 @@ class MirrorPlot(BaseComponent):
         # Render-time options, kept out of the cache config (see core/mz_window.py)
         self._window_identifier = validate_window_identifier(window_identifier)
         self._window_tolerance = validate_window_tolerance(window_tolerance)
+
+        # Render-time option, kept out of the cache config (see core/usi.py)
+        self._usi = validate_usi(usi)
 
         super().__init__(
             cache_id=cache_id,
@@ -672,6 +682,7 @@ class MirrorPlot(BaseComponent):
         args.update(image_format_args(self._image_format))
         args.update(zoom_args(self._zoom_identifier))
         args.update(mz_window_args(self._window_identifier, self._window_tolerance))
+        args.update(usi_args(self._usi))
         args.update(keep_zoom_args(self._keep_zoom))
         return args
 
