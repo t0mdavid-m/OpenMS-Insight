@@ -1133,7 +1133,9 @@ class Heatmap(BaseComponent):
         if not levels:
             return True
         level = levels[0]
-        schema = level.collect_schema() if isinstance(level, pl.LazyFrame) else level.schema
+        schema = (
+            level.collect_schema() if isinstance(level, pl.LazyFrame) else level.schema
+        )
         return all(
             schema.get(column) is None or schema[column].is_numeric()
             for column in (self._x_column, self._y_column)
@@ -1152,7 +1154,11 @@ class Heatmap(BaseComponent):
         Only its numeric axis, if any, is cut to the zoom; the category axis
         keeps all its points (such heatmaps are small: one cell per pair).
         """
-        data = filtered_raw if filtered_raw is not None else (levels[-1] if levels else None)
+        data = (
+            filtered_raw
+            if filtered_raw is not None
+            else (levels[-1] if levels else None)
+        )
         if data is None:
             return pl.DataFrame()
         if isinstance(data, pl.DataFrame):
@@ -1161,7 +1167,11 @@ class Heatmap(BaseComponent):
         normalized = normalize_zoom(zoom) or {}
         for axis, column in (("x", self._x_column), ("y", self._y_column)):
             r = normalized.get(axis)
-            if r is not None and schema.get(column) is not None and schema[column].is_numeric():
+            if (
+                r is not None
+                and schema.get(column) is not None
+                and schema[column].is_numeric()
+            ):
                 data = data.filter(pl.col(column).is_between(r[0], r[1]))
         if non_categorical_filters:
             df_pandas, _ = filter_and_collect_cached(
@@ -1201,7 +1211,9 @@ class Heatmap(BaseComponent):
 
         # A category axis (sample names, protein names) has no numeric range:
         # the browser zooms it on its own, and every point is sent
-        if not self._numeric_axes(levels or ([filtered_raw] if filtered_raw is not None else [])):
+        if not self._numeric_axes(
+            levels or ([filtered_raw] if filtered_raw is not None else [])
+        ):
             return self._select_categorical_zoom(
                 zoom, state, levels, filtered_raw, non_categorical_filters
             )

@@ -11,6 +11,8 @@ from openms_insight.components.sequenceview import SequenceView
 from openms_insight.components.volcanoplot import VolcanoPlot
 
 
-@pytest.mark.parametrize("cls", [LinePlot, MirrorPlot, PCAPlot, SequenceView, VolcanoPlot])
+@pytest.mark.parametrize(
+    "cls", [LinePlot, MirrorPlot, PCAPlot, SequenceView, VolcanoPlot]
+)
 def test_call_accepts_help(cls):
     assert "help" in inspect.signature(cls.__call__).parameters

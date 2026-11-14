@@ -659,7 +659,9 @@ class BaseComponent(ABC):
         self._help = text or None
         return self
 
-    def set_toolbar_settings(self, settings: list[dict[str, Any]] | None) -> "BaseComponent":
+    def set_toolbar_settings(
+        self, settings: list[dict[str, Any]] | None
+    ) -> "BaseComponent":
         """Replace the settings of the plot's toolbar (see core/settings.py)."""
         if settings is not None and not self._supports_stepper:
             raise ValueError(f"{type(self).__name__} has no plot toolbar for settings")

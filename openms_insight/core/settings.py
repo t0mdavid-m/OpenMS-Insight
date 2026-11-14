@@ -51,7 +51,12 @@ def validate_settings(settings: Any) -> list[dict[str, Any]] | None:
             options = []
             for option in setting.get("options") or []:
                 if isinstance(option, dict):
-                    options.append({"value": option["value"], "label": str(option.get("label", option["value"]))})
+                    options.append(
+                        {
+                            "value": option["value"],
+                            "label": str(option.get("label", option["value"])),
+                        }
+                    )
                 else:
                     options.append({"value": option, "label": str(option)})
             if not options:
@@ -62,8 +67,12 @@ def validate_settings(settings: Any) -> list[dict[str, Any]] | None:
         elif kind == "range":
             for bound in ("min", "max"):
                 if not isinstance(setting.get(bound), (int, float)):
-                    raise ValueError(f"range setting {identifier!r} needs a number {bound}")
-            entry.update(min=setting["min"], max=setting["max"], step=setting.get("step") or 1)
+                    raise ValueError(
+                        f"range setting {identifier!r} needs a number {bound}"
+                    )
+            entry.update(
+                min=setting["min"], max=setting["max"], step=setting.get("step") or 1
+            )
             if entry["default"] is None:
                 entry["default"] = setting["min"]
         else:
@@ -74,5 +83,9 @@ def validate_settings(settings: Any) -> list[dict[str, Any]] | None:
 
 def setting_value(state_manager: Any, setting: dict[str, Any]) -> Any:
     """The value of ``setting`` in ``state_manager``, else its default."""
-    value = state_manager.get_selection(setting["identifier"]) if state_manager is not None else None
+    value = (
+        state_manager.get_selection(setting["identifier"])
+        if state_manager is not None
+        else None
+    )
     return setting.get("default") if value is None else value

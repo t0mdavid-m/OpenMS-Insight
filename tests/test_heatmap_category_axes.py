@@ -57,11 +57,26 @@ def test_toolbar_settings_validated_and_kept_out_of_cache(tmp_path):
 
     df = pl.DataFrame({"x": [1.0, 2.0], "y": [1.0, 2.0], "v": [1.0, 2.0]})
     settings = [
-        {"identifier": "top_n", "label": "Proteins shown", "kind": "range", "min": 20, "max": 200, "step": 10, "default": 50},
+        {
+            "identifier": "top_n",
+            "label": "Proteins shown",
+            "kind": "range",
+            "min": 20,
+            "max": 200,
+            "step": 10,
+            "default": 50,
+        },
         {"identifier": "scale", "label": "Scale", "options": ["z", "log"]},
     ]
-    hm = Heatmap(cache_id="hs", data=df.lazy(), x_column="x", y_column="y", intensity_column="v",
-                 cache_path=str(tmp_path), toolbar_settings=settings)
+    hm = Heatmap(
+        cache_id="hs",
+        data=df.lazy(),
+        x_column="x",
+        y_column="y",
+        intensity_column="v",
+        cache_path=str(tmp_path),
+        toolbar_settings=settings,
+    )
     assert [s["identifier"] for s in hm._toolbar_settings] == ["top_n", "scale"]
     assert hm._toolbar_settings[1]["default"] == "z"
     assert "toolbar_settings" not in hm._get_cache_config()
