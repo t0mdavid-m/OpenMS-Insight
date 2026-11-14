@@ -639,8 +639,9 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   uniprotLookup?: boolean
   /** Identifier holding the shown proteoform as ProForma, both ways */
   proformaIdentifier?: string | null
-  /** 'pyopenms' when the Python side reads the app's ProForma (ProForma 2.0) */
-  proformaReader?: string | null
+  /** Identifier the Change sequence dialog writes a ProForma to ({text, n}),
+   * read by pyOpenMS on the Python side and sent back as proformaDialogRead */
+  proformaDialogIdentifier?: string | null
   /** Isotope errors tried when matching (shows the setting); null: hidden, exact matches only */
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */

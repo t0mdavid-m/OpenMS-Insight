@@ -563,6 +563,7 @@
         <v-btn
           :color="accentColor"
           variant="elevated"
+          :loading="dialogProFormaN > 0"
           @click="submitCustomSequence"
         >
           Apply Sequence
@@ -605,11 +606,8 @@ import {
   type ModificationLocalization,
 } from './modification-localization'
 import {
-  findLibraryId,
   fixedFromId,
   formatMass,
-  parseProForma,
-  ProFormaError,
   toProForma,
   type ProFormaModification,
 } from './proforma'
@@ -732,6 +730,22 @@ function sameModifications(a: ModificationData[], b: ModificationData[]): boolea
       .sort()
       .join('|')
   return key(a) === key(b)
+}
+
+// Modifications on one residue (start == end) as the residue menus hold them:
+// summed masses and joined labels per position
+function perResidue(mods: { start: number; end: number; mass: number; label: string }[]): {
+  masses: Record<number, number>
+  labels: Record<number, string>
+} {
+  const masses: Record<number, number> = {}
+  const labels: Record<number, string> = {}
+  for (const m of mods) {
+    if (m.start !== m.end) continue
+    masses[m.start] = (masses[m.start] ?? 0) + m.mass
+    labels[m.start] = labels[m.start] ? `${labels[m.start]} + ${m.label}` : m.label
+  }
+  return { masses, labels }
 }
 
 export default defineComponent({
@@ -920,6 +934,9 @@ export default defineComponent({
       pendingProFormaSpans: null as string | null,
       // A ProForma from the app whose pyOpenMS reading has not come yet
       waitingProForma: null as string | null,
+      // Number of the dialog's ProForma request (proformaDialogIdentifier)
+      // whose pyOpenMS reading the dialog waits for; 0: none
+      dialogProFormaN: 0,
       // Number of the app's (or the dialog's) request the view shows
       appliedProFormaN: 0,
       proformaSyncError: '' as string,
@@ -940,6 +957,10 @@ export default defineComponent({
     // The app's ProForma as pyOpenMS read it (Python side), when it can
     proformaRead(): ProFormaRead | undefined {
       return (this.streamlitDataStore.allDataForDrawing.proformaRead as ProFormaRead | null) ?? undefined
+    },
+    // The dialog's ProForma as pyOpenMS read it (Python side)
+    proformaDialogRead(): ProFormaRead | undefined {
+      return (this.streamlitDataStore.allDataForDrawing.proformaDialogRead as ProFormaRead | null) ?? undefined
     },
     // What is in the ProForma identifier: {text, by, n}. 'app' and 'dialog'
     // are requests, numbered; 'view' is what the view shows, with the number
@@ -1391,6 +1412,12 @@ export default defineComponent({
         return
       }
       this.applyExternalProForma(value)
+    },
+    // pyOpenMS's reading of the dialog's ProForma
+    proformaDialogRead(read: ProFormaRead | undefined) {
+      if (!read || this.dialogProFormaN === 0 || read.n !== this.dialogProFormaN) return
+      this.dialogProFormaN = 0
+      this.applyDialogRead(read)
     },
     protonShiftAllowed(allowed: boolean) {
       if (!allowed) this.ionTypesExtra['proton loss/addition'] = false
@@ -2582,32 +2609,12 @@ export default defineComponent({
           this.proformaSyncError = fromApp.error
           return
         }
-        const masses: Record<number, number> = {}
-        const labels: Record<number, string> = {}
-        for (const m of fromApp.modifications ?? []) {
-          if (m.start !== m.end) continue
-          masses[m.start] = (masses[m.start] ?? 0) + m.mass
-          labels[m.start] = labels[m.start] ? `${labels[m.start]} + ${m.label}` : m.label
-        }
+        const { masses, labels } = perResidue(fromApp.modifications ?? [])
         read = { sequence: fromApp.sequence ?? '', fixedIds: fromApp.fixed_ids ?? [], masses, labels }
-      } else if (this.args.proformaReader === 'pyopenms' && /[[\]<>(){}?-]/.test(text)) {
+      } else {
         // ProForma is read by pyOpenMS on the app's side: wait for it
         this.waitingProForma = text
         return
-      } else {
-        try {
-          read = /[[\]<>(){}?-]/.test(text)
-            ? this.readProForma(text)
-            : { sequence: text.toUpperCase().replace(/\s+/g, ''), fixedIds: [] as string[], masses: {}, labels: {} }
-        } catch (error) {
-          // The app still sends pyOpenMS's reading of it
-          if (this.args.proformaReader === 'pyopenms') {
-            this.waitingProForma = text
-            return
-          }
-          this.proformaSyncError = error instanceof Error ? error.message : String(error)
-          return
-        }
       }
       this.customModifications = [...read.fixedIds]
       if (this.args.modificationsIdentifier) {
@@ -2636,115 +2643,74 @@ export default defineComponent({
       }
     },
     closeSequenceDialog(): void {
+      this.dialogProFormaN = 0
       this.sequenceDialog = false
       this.customSequenceInput = ''
       this.sequenceInputError = ''
     },
-    // A ProForma input as the view's sequence, fixed modification ids and
-    // per-residue masses; throws ProFormaError with a message for the dialog
-    readProForma(text: string): {
-      sequence: string
-      fixedIds: string[]
-      masses: Record<number, number>
-      labels: Record<number, string>
-    } {
-      const parsed = parseProForma(text)
-      const residues = parsed.sequence
-      const fixedLibrary = this.args.modificationLibrary ?? []
-      const variableLibrary = this.args.variableModificationLibrary ?? []
-      const fixedIds: string[] = []
-      for (const f of parsed.fixed) {
-        const residue = f.site === 'N-term' ? residues[0] : f.site === 'C-term' ? residues[residues.length - 1] : undefined
-        const id = findLibraryId(f.name, f.site, fixedLibrary.map((m) => m.id), residue)
-        if (!id || !this.args.modificationsIdentifier) {
-          throw new ProFormaError(`Unknown fixed modification ${f.name} on ${f.site}`)
-        }
-        if (!fixedIds.includes(id)) fixedIds.push(id)
+    // The dialog's ProForma as pyOpenMS read it: the sequence and its
+    // modifications, or the error, shown in the dialog
+    applyDialogRead(read: ProFormaRead): void {
+      if (read.error) {
+        this.sequenceInputError = read.error
+        return
       }
-      const masses: Record<number, number> = {}
-      const labels: Record<number, string> = {}
-      for (const m of parsed.modifications) {
-        const site = m.index < 0 ? 'N-term' : m.index >= residues.length ? 'C-term' : residues[m.index]
-        const where = m.index < 0 ? 'the N-terminus' : m.index >= residues.length ? 'the C-terminus' : `${site}${m.index + 1}`
-        let mass = m.mass
-        let label = m.name
-        if (m.name) {
-          const residue = m.index < 0 ? residues[0] : residues[residues.length - 1]
-          for (const library of [variableLibrary, fixedLibrary]) {
-            const id = findLibraryId(m.name, site, library.map((e) => e.id), residue)
-            const entry = id ? library.find((e) => e.id === id) : undefined
-            if (entry) {
-              mass ??= entry.mass
-              label = entry.id
-              break
-            }
-          }
-        }
-        if (mass === undefined) {
-          throw new ProFormaError(`Unknown modification ${m.name} on ${where}: give its mass, e.g. [+42.0106]`)
-        }
-        masses[m.index] = (masses[m.index] ?? 0) + mass
-        const text = label ?? formatMass(mass)
-        labels[m.index] = labels[m.index] ? `${labels[m.index]} + ${text}` : text
+      const sequence = read.sequence ?? ''
+      const fixedIds = read.fixed_ids ?? []
+      const mods = read.modifications ?? []
+      if (mods.some((m) => m.start !== m.end)) {
+        this.sequenceInputError =
+          'Ranges and unlocalized modifications are shown when the app links this view ' +
+          '(proforma_identifier): place each modification on one residue'
+        return
       }
-      return { sequence: residues, fixedIds, masses, labels }
+      if (this.isEdited) {
+        if (fixedIds.length > 0) {
+          this.sequenceInputError = 'Fixed modifications cannot be set on an identification'
+          return
+        }
+        this.writeEdit({
+          action: 'update',
+          sequence,
+          start_position: 0,
+          end_position: sequence.length - 1,
+          modifications: mods.map((m) => ({ start: m.start, end: m.end, mass_diff: m.mass, labels: m.label })),
+        })
+      } else {
+        if (fixedIds.length > 0 && this.args.modificationsIdentifier) {
+          this.customModifications = [...new Set([...this.customModifications, ...fixedIds])]
+          this.selectionStore.updateSelection(this.args.modificationsIdentifier, [...this.customModifications])
+        }
+        if (this.args.sequenceIdentifier) {
+          this.selectionStore.updateSelection(this.args.sequenceIdentifier, sequence)
+        }
+        const { masses, labels } = perResidue(mods)
+        this.variableModData.setAll(masses, labels)
+      }
+      this.closeSequenceDialog()
     },
     submitCustomSequence(): void {
       const input = this.customSequenceInput
       // Linked with the app and read by pyOpenMS there: the app takes it
-      if (
-        this.args.proformaIdentifier && this.args.proformaReader === 'pyopenms' &&
-        !this.isEdited && /[[\]<>(){}?-]/.test(input)
-      ) {
+      if (this.args.proformaIdentifier && !this.isEdited && /[[\]<>(){}?-]/.test(input)) {
         this.proformaSyncError = ''
         this.selectionStore.updateSelection(this.args.proformaIdentifier, {
           text: input.trim(),
           by: 'dialog',
           n: Math.max(this.appliedProFormaN, this.proformaLink?.n ?? 0) + 1,
         })
-        this.sequenceDialog = false
-        this.customSequenceInput = ''
-        this.sequenceInputError = ''
+        this.closeSequenceDialog()
         return
       }
-      if (this.args.proformaInput && /[[\]<>(){}?-]/.test(input)) {
-        let read
-        try {
-          read = this.readProForma(input)
-        } catch (error) {
-          this.sequenceInputError = error instanceof Error ? error.message : String(error)
-          return
-        }
-        if (this.isEdited) {
-          if (read.fixedIds.length > 0) {
-            this.sequenceInputError = 'Fixed modifications cannot be set on an identification'
-            return
-          }
-          this.writeEdit({
-            action: 'update',
-            sequence: read.sequence,
-            start_position: 0,
-            end_position: read.sequence.length - 1,
-            modifications: Object.entries(read.masses).map(([index, mass]) => ({
-              start: Number(index),
-              end: Number(index),
-              mass_diff: mass,
-              labels: read.labels[Number(index)] ?? '',
-            })),
-          })
-        } else {
-          if (read.fixedIds.length > 0 && this.args.modificationsIdentifier) {
-            this.customModifications = [...new Set([...this.customModifications, ...read.fixedIds])]
-            this.selectionStore.updateSelection(this.args.modificationsIdentifier, [...this.customModifications])
-          }
-          if (this.args.sequenceIdentifier) {
-            this.selectionStore.updateSelection(this.args.sequenceIdentifier, read.sequence)
-          }
-          this.variableModData.setAll(read.masses, read.labels)
-        }
-        this.sequenceDialog = false
-        this.customSequenceInput = ''
+      // ProForma is read by pyOpenMS on the Python side; the dialog stays
+      // open until its reading comes (proformaDialogRead)
+      const dialogId = this.args.proformaDialogIdentifier
+      if (this.args.proformaInput && dialogId && /[[\]<>(){}?-]/.test(input)) {
+        const stored = this.selectionStore.$state[dialogId] as { n?: number } | undefined
+        const n = Math.max(this.dialogProFormaN, stored?.n ?? 0) + 1
         this.sequenceInputError = ''
+        this.dialogProFormaN = n
+        this.selectionStore.updateSelection(dialogId, { text: input.trim(), n })
         return
       }
       if (this.isEdited) {

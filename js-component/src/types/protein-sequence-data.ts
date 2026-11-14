@@ -37,6 +37,8 @@ export type ProFormaRead = {
   sequence?: string
   fixed_ids?: string[]
   modifications?: { start: number; end: number; mass: number; label: string }[]
+  /** Number of the dialog request it answers (dialog reads only) */
+  n?: number
 }
 
 // What an edit of an identification writes to editIdentifier. 'edit' starts

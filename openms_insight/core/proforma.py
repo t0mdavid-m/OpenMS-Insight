@@ -141,9 +141,14 @@ def read_proforma(
         ``mass`` and ``label``.
 
     Raises:
-        ProFormaReadError: the text cannot be read or shown.
-        ImportError: pyopenms has no ProForma parser.
+        ProFormaReadError: the text cannot be read or shown, or the
+            installed pyopenms has no ProForma parser.
     """
+    if not available():
+        raise ProFormaReadError(
+            "Reading ProForma needs pyOpenMS 3.6 or later; this one has no "
+            "ProForma parser"
+        )
     from pyopenms import ProForma
 
     text = "".join(text.split())

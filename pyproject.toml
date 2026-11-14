@@ -43,6 +43,8 @@ dependencies = [
     "numpy",
     "scipy",
     "scikit-learn>=1.0",
+    # ProForma 2.0 (ProteinSequenceView) is read with OpenMS's own parser
+    "pyopenms>=3.6",
 ]
 
 [project.optional-dependencies]

@@ -756,6 +756,45 @@ class TestProteinSequenceView:
         assert view.set_proforma_input() is view
         assert view._get_component_args()["proformaInput"] is True
         assert "proforma_input" not in view._get_cache_config()
+        dialog = view._get_component_args()["proformaDialogIdentifier"]
+        assert dialog == "proforma-dialog@seq_proforma_input"
+        assert dialog in view.get_state_dependencies()
+
+    def test_proforma_dialog_read_by_pyopenms(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        pytest.importorskip("pyopenms")
+        from openms_insight.core import proforma
+
+        if not proforma.available():  # pragma: no cover - older pyopenms
+            pytest.skip("pyopenms without ProForma")
+        view = ProteinSequenceView(
+            cache_id="seq_proforma_dialog",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            proforma_input=True,
+            cache_path=str(temp_cache_dir),
+        )
+        dialog = view._proforma_dialog_identifier()
+        state = {"protein": 0, dialog: {"text": "PEPS[+79.9663]K", "n": 3}}
+        read = view._prepare_vue_data(state)["proformaDialogRead"]
+        assert read["n"] == 3
+        assert read["sequence"] == "PEPSK"
+        assert [(m["start"], m["end"]) for m in read["modifications"]] == [(3, 3)]
+        assert abs(read["modifications"][0]["mass"] - 79.9663) < 1e-3
+        state[dialog] = {"text": "PEP[Nonsense]K", "n": 4}
+        read = view._prepare_vue_data(state)["proformaDialogRead"]
+        assert read["n"] == 4 and read["error"]
+        # Without proforma_input the dialog reads no ProForma
+        view.set_proforma_input(False)
+        assert "proformaDialogRead" not in view._prepare_vue_data(state)
 
     def test_uniprot_lookup_args(self, mock_streamlit, temp_cache_dir: Path):
         data = pl.LazyFrame(
