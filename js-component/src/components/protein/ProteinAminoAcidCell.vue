@@ -111,6 +111,27 @@
             @update:model-value="updateSelectedModification"
           />
         </v-list-item>
+        <template v-if="editRange">
+          <v-divider class="my-1" />
+          <v-list-item
+            density="compact"
+            prepend-icon="mdi-ray-start"
+            :disabled="index > editRange.end || index === editRange.start"
+            data-testid="start-proteoform-here"
+            @click="setRange(index, editRange.end)"
+          >
+            <v-list-item-title>Start proteoform here</v-list-item-title>
+          </v-list-item>
+          <v-list-item
+            density="compact"
+            prepend-icon="mdi-ray-end"
+            :disabled="index < editRange.start || index === editRange.end"
+            data-testid="end-proteoform-here"
+            @click="setRange(editRange.start, index)"
+          >
+            <v-list-item-title>End proteoform here</v-list-item-title>
+          </v-list-item>
+        </template>
         <v-list-item v-if="customSelected">
           <v-form @submit.prevent>
             <v-text-field
@@ -176,6 +197,8 @@ interface SequenceViewContext {
   entry: () => SequenceData | undefined
   selectedAA: () => number | undefined
   setSelectedAA: (position?: number) => void
+  editRange?: () => { start: number; end: number } | null
+  setRange?: (start: number, end: number) => void
 }
 
 export default defineComponent({
@@ -407,6 +430,10 @@ export default defineComponent({
     view(): SequenceViewContext {
       return this.sequenceView as SequenceViewContext
     },
+    // The residue range of an edited identification, else null
+    editRange(): { start: number; end: number } | null {
+      return this.view.editRange?.() ?? null
+    },
     coverage(): number {
       if (this.sequenceObject.coverage !== undefined) 
       {
@@ -460,6 +487,10 @@ export default defineComponent({
         return
       }
       this.menuOpen = !this.menuOpen
+    },
+    setRange(start: number, end: number): void {
+      this.menuOpen = false
+      this.view.setRange?.(start, end)
     },
     selectCell(): void {
       if (this.DoesThisAAHaveSequenceTags && this.showTags) {
