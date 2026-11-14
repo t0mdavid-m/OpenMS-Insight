@@ -1165,6 +1165,7 @@ class SequenceView:
         key: str | None = None,
         state_manager: Optional["StateManager"] = None,
         height: int | None = None,
+        help: str | None = None,
     ) -> SequenceViewResult:
         """
         Render the component in Streamlit.
@@ -1178,6 +1179,8 @@ class SequenceView:
         Returns:
             SequenceViewResult with annotations DataFrame (if available)
         """
+        if help is not None:
+            self._help = help or None
         from ..core.state import get_default_state_manager
         from ..rendering.bridge import get_component_annotations, render_component
 

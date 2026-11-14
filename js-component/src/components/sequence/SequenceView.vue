@@ -3,7 +3,7 @@
     <v-sheet class="pa-4 rounded-lg" :theme="theme?.base ?? 'light'" border>
       <!-- Header with mass information -->
       <div class="d-flex justify-center mb-2">
-        <h4>Sequence View</h4>
+        <h4>{{ args.title || 'Sequence View' }}</h4>
       </div>
 
       <!-- Toolbar -->

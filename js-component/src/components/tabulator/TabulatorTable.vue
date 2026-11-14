@@ -4,7 +4,7 @@
     style="padding: 8px; width: 98%; box-sizing: border-box"
     :style="isServerSidePagination ? {} : { minHeight: '200px' }"
   >
-    <div class="d-flex">
+    <div class="d-flex table-toolbar-host">
       <div class="table-toolbar">
         <div class="table-toolbar-buttons">
           <v-btn
@@ -3792,6 +3792,33 @@ export default defineComponent({
   grid-template-columns: minmax(max-content, 1fr) minmax(0, max-content) minmax(min-content, 1fr);
   align-items: center;
   column-gap: 8px;
+}
+
+/* A narrow table puts its title on a row of its own, above the buttons and
+   toggles, so the title is never cut to a few letters */
+.table-toolbar-host {
+  container-type: inline-size;
+}
+@container (max-width: 640px) {
+  .table-toolbar {
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-areas:
+      'title title'
+      'buttons toggles';
+    row-gap: 2px;
+  }
+  .table-toolbar-title {
+    grid-area: title;
+  }
+  .table-toolbar-buttons {
+    grid-area: buttons;
+  }
+  .table-toolbar-toggles {
+    grid-area: toggles;
+  }
+  .table-search {
+    min-width: 120px;
+  }
 }
 
 .table-toolbar-buttons {

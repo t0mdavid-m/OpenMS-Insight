@@ -1,5 +1,9 @@
 <template>
-  <div v-if="componentArgs !== undefined" class="insight-root">
+  <div
+    v-if="componentArgs !== undefined"
+    class="insight-root"
+    :class="{ 'with-help': componentArgs.help && componentArgs.componentType !== 'TabulatorTable' }"
+  >
     <HelpIcon
       v-if="componentArgs.help && componentArgs.componentType !== 'TabulatorTable'"
       :text="componentArgs.help"
@@ -379,6 +383,11 @@ body {
 
 .insight-root {
   position: relative;
+}
+/* The help icon keeps a gutter of its own, so it never covers a toolbar or
+   a plot's first button */
+.insight-root.with-help {
+  padding-left: 22px;
 }
 
 /* The app's text font (set from the theme by applyThemeFonts), also for

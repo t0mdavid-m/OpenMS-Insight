@@ -38,6 +38,28 @@ function formatValue(v: number): string {
   return String(Number(v.toPrecision(3)))
 }
 
+/** Longest tick label on a text axis; longer names keep their start and end. */
+const MAX_TICK_LABEL = 18
+
+/**
+ * Ticks of an axis whose values are text (sample or protein names): long names
+ * are shortened in the middle, so they leave the plot its room (the full name
+ * stays in the hover), and at most `most` of them are labelled.
+ */
+function textTicks(values: unknown[], most: number): Partial<Plotly.LayoutAxis> {
+  if (!values.length || typeof values[0] !== 'string') return {}
+  const names = [...new Set(values as string[])]
+  if (!names.some((n) => n.length > MAX_TICK_LABEL) && names.length <= most) return {}
+  const step = Math.max(1, Math.ceil(names.length / most))
+  const shown = names.filter((_, i) => i % step === 0)
+  const half = Math.floor((MAX_TICK_LABEL - 1) / 2)
+  return {
+    tickmode: 'array',
+    tickvals: shown,
+    ticktext: shown.map((n) => (n.length > MAX_TICK_LABEL ? `${n.slice(0, half)}…${n.slice(-half)}` : n)),
+  }
+}
+
 export default defineComponent({
   name: 'PlotlyHeatmap',
   components: { MeasureHint, PlotToolbar, ColorbarLegend },
@@ -359,6 +381,16 @@ export default defineComponent({
       if (!this.isDataReady) return []
       const yCol = this.args.yColumn
       return this.heatmapData.map((row) => row[yCol] as number)
+    },
+
+    /** Tick labels of a text x axis, shortened (see textTicks). */
+    xTicks(): Partial<Plotly.LayoutAxis> {
+      return textTicks(this.xValues as unknown[], 40)
+    },
+
+    /** Tick labels of a text y axis, shortened (see textTicks). */
+    yTicks(): Partial<Plotly.LayoutAxis> {
+      return textTicks(this.yValues as unknown[], Math.max(4, Math.floor(this.plotHeight / 14)))
     },
 
     /**
@@ -727,11 +759,13 @@ export default defineComponent({
           title: this.args.xLabel ? { text: this.args.xLabel, standoff: 8 } : undefined,
           range: this.xRange,
           automargin: true,
+          ...this.xTicks,
         },
         yaxis: {
           title: this.args.yLabel ? { text: this.args.yLabel, standoff: 8 } : undefined,
           range: this.yRange,
           automargin: true,
+          ...this.yTicks,
         },
         margin: {
           l: 60,
