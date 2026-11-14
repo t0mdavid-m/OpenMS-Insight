@@ -98,6 +98,7 @@
         </div>
         <div class="table-toolbar-title">
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
+          <HelpIcon v-if="args.help" :text="args.help" />
           <v-btn
             v-if="multiSelectEnabled"
             variant="text"
@@ -230,6 +231,7 @@ import type {
 import { isCustomFormatter, getCustomFormatter } from './formatters'
 import { type FilterPreset, renderPresetSection } from '../filterPresets'
 import { combineSelection } from '@/composables/useMultiSelect'
+import HelpIcon from '../common/HelpIcon.vue'
 import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
 
 // Global counter for unique table IDs
@@ -280,6 +282,7 @@ const KEY_MOVES: Record<string, KeyMove> = {
 
 export default defineComponent({
   name: 'TabulatorTable',
+  components: { HelpIcon },
   props: {
     args: {
       type: Object as PropType<TableComponentArgs>,

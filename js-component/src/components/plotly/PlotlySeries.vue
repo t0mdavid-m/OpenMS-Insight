@@ -15,7 +15,7 @@
       </button>
     </div>
     <MeasureHint v-if="measurable" :measure="measure" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>

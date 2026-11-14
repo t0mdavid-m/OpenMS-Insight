@@ -1024,6 +1024,12 @@ def _render_component(
     component_args = component._get_component_args()
     if height is not None:
         component_args["height"] = height
+    help_text = getattr(component, "_help", None)
+    if help_text:
+        component_args["help"] = help_text
+    toolbar_settings = getattr(component, "_toolbar_settings", None)
+    if toolbar_settings:
+        component_args["toolbarSettings"] = toolbar_settings
 
     # Batch resend: if any component requested data in previous run, clear ALL hashes
     if st.session_state.get(_BATCH_RESEND_KEY):

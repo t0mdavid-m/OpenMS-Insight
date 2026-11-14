@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import polars as pl
 
 from .cache import CacheMissError, atomic_write, cache_lock, get_cache_dir
+from .settings import validate_settings
 from .stepper import (
     first_step,
     sorted_values,
@@ -134,9 +135,16 @@ class BaseComponent(ABC):
             **kwargs: Component-specific configuration options. ``stepper``
                 (a filter identifier) is taken out here: previous / next
                 buttons in the plot toolbar (see core/stepper.py), render-time
-                only and never part of the cache configuration
+                only and never part of the cache configuration. ``help`` (a
+                short text) is taken out too: an info icon in the view's
+                corner shows it as a tooltip, render-time only as well
+                (``set_help`` changes it, ``None`` hides the icon).
+                ``toolbar_settings`` (see core/settings.py) puts a gear menu in
+                the plot toolbar whose values go to selection identifiers
         """
         stepper = kwargs.pop("stepper", None)
+        self._help: str | None = kwargs.pop("help", None) or None
+        toolbar_settings = kwargs.pop("toolbar_settings", None)
         self._setup_component(
             cache_id,
             data=data,
@@ -153,6 +161,9 @@ class BaseComponent(ABC):
         if stepper is not None and not self._supports_stepper:
             raise ValueError(f"{type(self).__name__} has no plot toolbar for a stepper")
         self._stepper = validate_stepper(stepper, self._filters)
+        if toolbar_settings is not None and not self._supports_stepper:
+            raise ValueError(f"{type(self).__name__} has no plot toolbar for settings")
+        self._toolbar_settings = validate_settings(toolbar_settings)
 
     def _setup_component(
         self,
@@ -638,6 +649,23 @@ class BaseComponent(ABC):
             return data
         return getattr(self, "_raw_data", None)
 
+    def set_help(self, text: str | None) -> "BaseComponent":
+        """Show ``text`` as the tooltip of an info icon on the view (None: no icon).
+
+        For explanations a reader needs once (what the view shows, how to
+        interact with it), which would otherwise sit as text around the view.
+        Render-time only: it is not part of the cache configuration.
+        """
+        self._help = text or None
+        return self
+
+    def set_toolbar_settings(self, settings: list[dict[str, Any]] | None) -> "BaseComponent":
+        """Replace the settings of the plot's toolbar (see core/settings.py)."""
+        if settings is not None and not self._supports_stepper:
+            raise ValueError(f"{type(self).__name__} has no plot toolbar for settings")
+        self._toolbar_settings = validate_settings(settings)
+        return self
+
     def _stepper_values(self) -> list[Any]:
         """The sorted values of the stepped filter's column, read once per cache."""
         column = self._filters[self._stepper]
@@ -756,6 +784,7 @@ class BaseComponent(ABC):
         key: str | None = None,
         state_manager: Optional["StateManager"] = None,
         height: int | None = None,
+        help: str | None = None,
     ) -> Any:
         """
         Render the component in Streamlit.
@@ -766,6 +795,8 @@ class BaseComponent(ABC):
                 If not provided, uses a default shared StateManager.
             height: Optional height in pixels for the component.
                 If not provided, uses DEFAULT_COMPONENT_HEIGHT (400px).
+            help: Tooltip text of an info icon on the view for this render
+                (overrides the one given at construction or by ``set_help``).
 
         Returns:
             The value returned by the Vue component (usually selection state)
@@ -779,6 +810,8 @@ class BaseComponent(ABC):
         # Use default height if not specified
         if height is None:
             height = DEFAULT_COMPONENT_HEIGHT
+        if help is not None:
+            self._help = help or None
 
         return render_component(
             component=self, state_manager=state_manager, key=key, height=height

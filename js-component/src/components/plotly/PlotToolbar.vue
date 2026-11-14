@@ -135,6 +135,7 @@ import { defineComponent, h, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { stepperTools, type StepperArgs } from '@/utils/stepper'
+import { settingsTools, type SettingArgs } from '@/utils/settings'
 import ToolMenuSections from './ToolMenuSections.vue'
 import {
   GROUP_LABELS,
@@ -195,6 +196,11 @@ export default defineComponent({
       type: Object as PropType<StepperArgs | undefined>,
       default: undefined,
     },
+    /** The component's `settings` argument: a gear menu of settings kept in the state. */
+    settings: {
+      type: Array as PropType<SettingArgs[] | undefined>,
+      default: undefined,
+    },
   },
   setup() {
     return { streamlitDataStore: useStreamlitDataStore(), selectionStore: useSelectionStore(), ICONS, CARET }
@@ -221,9 +227,14 @@ export default defineComponent({
         this.selectionStore.updateSelection(identifier, value),
       )
     },
-    /** The component's tools with the stepper's buttons first. */
+    settingsTools(): PlotTool[] {
+      return settingsTools(this.settings, this.selectionStore.$state as Record<string, unknown>, (identifier, value) =>
+        this.selectionStore.updateSelection(identifier, value),
+      )
+    },
+    /** The component's tools with the stepper's buttons first and its settings last. */
     allTools(): PlotTool[] {
-      return [...this.stepperTools, ...this.tools]
+      return [...this.stepperTools, ...this.tools, ...this.settingsTools]
     },
     groups(): Group[] {
       const all: PlotTool[] = [...this.plotlyButtons, ...this.allTools]

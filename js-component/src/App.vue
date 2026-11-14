@@ -1,5 +1,10 @@
 <template>
-  <div v-if="componentArgs !== undefined">
+  <div v-if="componentArgs !== undefined" class="insight-root">
+    <HelpIcon
+      v-if="componentArgs.help && componentArgs.componentType !== 'TabulatorTable'"
+      :text="componentArgs.help"
+      floating
+    />
     <component
       :is="currentComponent"
       :args="componentArgs"
@@ -27,6 +32,7 @@ import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
 import { applyAppTheme } from './utils/appTheme'
+import HelpIcon from './components/common/HelpIcon.vue'
 // Each view is its own chunk, so a page with several views does not load and
 // run Plotly in every table's frame
 const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
@@ -46,6 +52,7 @@ const ProteinStructureView = defineAsyncComponent(() => import('./components/pro
 export default defineComponent({
   name: 'App',
   components: {
+    HelpIcon,
     TabulatorTable,
     PlotlyLineplot,
     PlotlyHeatmap,
@@ -368,6 +375,10 @@ export default defineComponent({
 <style>
 body {
   margin: 0;
+}
+
+.insight-root {
+  position: relative;
 }
 
 /* The app's text font (set from the theme by applyThemeFonts), also for

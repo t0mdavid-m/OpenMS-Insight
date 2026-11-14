@@ -3,7 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
   </div>
@@ -721,13 +721,17 @@ export default defineComponent({
         ...SELECTION_LAYOUT,
         shapes: [...this.selectedBoxShapes, ...this.measureOverlay.shapes],
         annotations: this.measureOverlay.annotations,
+        // automargin: text tick labels (sample or protein names) push the
+        // axis title out instead of running into it
         xaxis: {
-          title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
+          title: this.args.xLabel ? { text: this.args.xLabel, standoff: 8 } : undefined,
           range: this.xRange,
+          automargin: true,
         },
         yaxis: {
-          title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
+          title: this.args.yLabel ? { text: this.args.yLabel, standoff: 8 } : undefined,
           range: this.yRange,
+          automargin: true,
         },
         margin: {
           l: 60,
