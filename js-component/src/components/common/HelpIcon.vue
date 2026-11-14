@@ -38,8 +38,8 @@ export default defineComponent({
 }
 .insight-help.floating {
   position: absolute;
-  top: 4px;
-  left: 4px;
+  top: 10px;
+  left: 6px;
   z-index: 5;
 }
 .insight-help-text {

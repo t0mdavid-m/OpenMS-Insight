@@ -32,7 +32,7 @@
 import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
-import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { isClickedRow, usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionTool, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
@@ -261,6 +261,24 @@ export default defineComponent({
       return selected
     },
 
+    /** The values of this plot's interactivity identifiers, to redraw the ring when one changes. */
+    clickedKey(): string {
+      const state = this.selectionStore.$state as Record<string, unknown>
+      return JSON.stringify(Object.keys(this.args.interactivity || {}).map((identifier) => state[identifier] ?? null))
+    },
+
+    /** Row indices of the point a click selected (shown when no set is selected). */
+    clickedRowIndices(): Set<number> {
+      const clicked = new Set<number>()
+      const interactivity = this.args.interactivity || {}
+      if (Object.keys(interactivity).length === 0) return clicked
+      const state = this.selectionStore.$state as Record<string, unknown>
+      this.volcanoData.forEach((row, idx) => {
+        if (isClickedRow(row as Record<string, unknown>, interactivity, state)) clicked.add(idx)
+      })
+      return clicked
+    },
+
     /**
      * Build Plotly data traces.
      */
@@ -331,12 +349,15 @@ export default defineComponent({
         })
       }
 
-      if (this.multiSelectEnabled && this.selectedRowIndices.size > 0) {
+      const ringed = this.multiSelectEnabled && this.selectedRowIndices.size > 0
+        ? this.selectedRowIndices
+        : this.clickedRowIndices
+      if (ringed.size > 0) {
         const x: number[] = []
         const y: number[] = []
         for (const group of [ns, down, up]) {
           group.indices.forEach((rowIndex, i) => {
-            if (this.selectedRowIndices.has(rowIndex)) {
+            if (ringed.has(rowIndex)) {
               x.push(group.x[i])
               y.push(group.y[i])
             }
@@ -592,6 +613,13 @@ export default defineComponent({
     },
 
     pThreshold() {
+      if (this.isInitialized && this.isDataReady) {
+        this.renderPlot()
+      }
+    },
+
+    // The clicked point changed (here or in another component)
+    clickedKey() {
       if (this.isInitialized && this.isDataReady) {
         this.renderPlot()
       }

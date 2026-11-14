@@ -1,6 +1,7 @@
 <template>
   <div class="sequence-view-container" :style="containerStyle">
-    <v-sheet class="pa-4 rounded-lg" :theme="theme?.base ?? 'light'" border>
+    <v-sheet class="pa-4 rounded-lg help-card" :theme="theme?.base ?? 'light'" border>
+      <HelpIcon v-if="args.help" :text="args.help" floating class="card-help" />
       <!-- Header with mass information -->
       <div class="d-flex justify-center mb-2">
         <h4>{{ args.title || 'Sequence View' }}</h4>
@@ -185,6 +186,7 @@
 </template>
 
 <script lang="ts">
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { defineComponent } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -209,7 +211,7 @@ function toSuperscript(n: number): string {
 
 export default defineComponent({
   name: 'SequenceView',
-  components: {
+  components: { HelpIcon,
     AminoAcidCell,
     ImageScreenshot,
   },
@@ -830,5 +832,13 @@ export default defineComponent({
   background-color: rgba(128, 128, 128, 0.2);
   border-radius: 4px;
   aspect-ratio: 1;
+}
+
+.help-card {
+  position: relative;
+}
+.help-card > .card-help {
+  top: 6px;
+  left: 6px;
 }
 </style>

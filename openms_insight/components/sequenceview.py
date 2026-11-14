@@ -567,6 +567,9 @@ class SequenceView:
         self._svg_filename = svg_filename
         self._image_format = validate_image_format(image_format, allow_none=True)
 
+        # The view's explanation (the info icon), never part of the cache
+        self._help: str | None = kwargs.pop("help", None) or None
+
         # Determine if data is provided (creation mode vs reconstruction mode)
         has_sequence_data = sequence_data is not None or sequence_data_path is not None
 

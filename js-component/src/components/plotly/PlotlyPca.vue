@@ -7,10 +7,11 @@
 </template>
 
 <script lang="ts">
+import { selectionOverlay } from '@/composables/useMultiSelect'
 import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
-import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { isClickedRow, usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import type { PCAPlotComponentArgs, PCAData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
@@ -286,7 +287,33 @@ export default defineComponent({
         })
       }
 
+      // The clicked sample, ringed as a box or lasso selection is elsewhere
+      const interactivity = this.args.interactivity || {}
+      if (Object.keys(interactivity).length > 0) {
+        const state = this.selectionStore.$state as Record<string, unknown>
+        const x: number[] = []
+        const y: number[] = []
+        for (const groupKey of this.orderedGroupKeys) {
+          if (!this.layers.visible(groupKey)) continue
+          const points = this.groupedPoints.get(groupKey)!
+          points.indices.forEach((rowIndex: number, i: number) => {
+            const row = this.pcaData[rowIndex] as unknown as Record<string, unknown>
+            if (row && isClickedRow(row, interactivity, state)) {
+              x.push(points.x[i])
+              y.push(points.y[i])
+            }
+          })
+        }
+        traces.push(...selectionOverlay(x, y, 9))
+      }
+
       return traces
+    },
+
+    /** The values of this plot's interactivity identifiers, to redraw the ring when one changes. */
+    clickedKey(): string {
+      const state = this.selectionStore.$state as Record<string, unknown>
+      return JSON.stringify(Object.keys(this.args.interactivity || {}).map((identifier) => state[identifier] ?? null))
     },
 
     /**
@@ -403,6 +430,10 @@ export default defineComponent({
   },
 
   watch: {
+    // The clicked sample changed (here or in another component)
+    clickedKey() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
     // A group shown or hidden from the toolbar
     'layers.state.hidden'() {
       this.renderPlot()
