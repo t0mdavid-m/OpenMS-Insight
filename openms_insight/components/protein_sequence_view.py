@@ -429,7 +429,13 @@ class ProteinSequenceView(BaseComponent):
                 ``sequence`` (string), ``start_position``, ``end_position``
                 and ``modifications`` (list of {start, end, mass_diff,
                 labels}; -1 the N-terminus, the sequence length the
-                C-terminus). ``'reset'``: back to the search result.
+                C-terminus). While editing, a residue's right-click menu
+                starts or ends the proteoform there and a toolbar button
+                restores the truncated residues; both write an ``'update'``
+                with the new ``start_position``/``end_position`` (the
+                modifications outside the range left out), for which the app
+                gives fragment masses of the residues in that range.
+                ``'reset'``: back to the search result.
                 Render-time only: not part of the cache.
             fragment_matches_identifier: Identifier the matched fragment
                 ions are written to whenever they change (another entry or
