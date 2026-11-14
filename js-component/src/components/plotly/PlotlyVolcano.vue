@@ -1,6 +1,6 @@
 <template>
   <div class="volcano-plot">
-    <div v-if="multiSelectEnabled && args.selectionPresets" class="volcano-select-bar">
+    <div v-if="multiSelectEnabled && args.selectionPresets" ref="selectBar" class="volcano-select-bar">
       <span class="volcano-select-label">Select</span>
       <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
         {{ presetLabel('changed') }} ({{ presetCounts.changed }})
@@ -127,12 +127,15 @@ export default defineComponent({
         ? 'select'
         : 'zoom') as string,
       shiftHeld: false as boolean,
+      // Height of the selection presets above the plot, part of args.height
+      selectBarHeight: 0 as number,
+      selectBarObserver: null as ResizeObserver | null,
     }
   },
   computed: {
-    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    /** Height of the plot below its toolbar and selection presets; the frame keeps args.height. */
     plotHeight(): number {
-      return (this.args.height || 400) - TOOLBAR_HEIGHT
+      return Math.max(120, (this.args.height || 400) - TOOLBAR_HEIGHT - this.selectBarHeight)
     },
 
     toolbarTools(): PlotTool[] {
@@ -537,6 +540,12 @@ export default defineComponent({
         void Plotly.relayout(element, this.zoom.layoutFor(incoming))
       }
     },
+    // The presets bar wrapped or unwrapped: the plot takes the rest of args.height
+    plotHeight(height: number) {
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, { height }).then(() => this.updateFrameHeight())
+    },
     measureKey: {
       handler(key: string) {
         this.measure.setDataKey(key)
@@ -604,14 +613,39 @@ export default defineComponent({
         this.renderPlot()
       }
       this.setupResizeObserver()
+      this.observeSelectBar()
     })
+  },
+
+  updated() {
+    this.observeSelectBar()
   },
 
   beforeUnmount() {
     this.cleanupResizeObserver()
+    this.selectBarObserver?.disconnect()
   },
 
   methods: {
+    /** Keep selectBarHeight equal to the presets bar (it wraps on narrow plots). */
+    observeSelectBar(): void {
+      const bar = this.$refs.selectBar as HTMLElement | undefined
+      if (!bar) {
+        this.selectBarHeight = 0
+        return
+      }
+      const measure = () => { this.selectBarHeight = Math.ceil(bar.getBoundingClientRect().height) }
+      const observed = (this.selectBarObserver as unknown as { target?: HTMLElement } | null)?.target
+      if (observed !== bar && window.ResizeObserver) {
+        this.selectBarObserver?.disconnect()
+        const observer = new ResizeObserver(measure)
+        observer.observe(bar);
+        (observer as unknown as { target: HTMLElement }).target = bar
+        this.selectBarObserver = observer
+      }
+      measure()
+    },
+
     async renderPlot(): Promise<void> {
       try {
         const element = document.getElementById(this.id)
