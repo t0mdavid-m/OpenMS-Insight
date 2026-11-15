@@ -1,23 +1,5 @@
 <template>
   <div class="volcano-plot">
-    <div v-if="multiSelectEnabled && args.selectionPresets" ref="selectBar" class="volcano-select-bar">
-      <span class="volcano-select-label">Select</span>
-      <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
-        {{ presetLabel('changed') }} ({{ presetCounts.changed }})
-      </button>
-      <button type="button" class="volcano-select-button" :disabled="!presetCounts.up" @click="selectPreset('up')">
-        <span class="volcano-swatch" :style="{ background: args.upColor || '#E74C3C' }"></span>
-        {{ presetLabel('up') }} ({{ presetCounts.up }})
-      </button>
-      <button type="button" class="volcano-select-button" :disabled="!presetCounts.down" @click="selectPreset('down')">
-        <span class="volcano-swatch" :style="{ background: args.downColor || '#3498DB' }"></span>
-        {{ presetLabel('down') }} ({{ presetCounts.down }})
-      </button>
-      <button type="button" class="volcano-select-button" :disabled="!selectedCount" @click="clearSelection">
-        {{ presetLabel('clear') }}
-      </button>
-      <span v-if="selectedCount" class="volcano-select-hint">{{ selectedCount }} selected</span>
-    </div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div class="volcano-plot-area">
@@ -39,7 +21,7 @@ import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
@@ -122,15 +104,10 @@ export default defineComponent({
       isInitialized: false as boolean,
       // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
       nativeZoom: null as ZoomValue | null,
-      // Box or lasso select when several points can be selected, else zoom;
-      // kept across re-renders when the user switches in the mode bar
-      dragmode: (this.args.multiSelect && Object.keys(this.args.multiSelect).length > 0
-        ? 'select'
-        : 'zoom') as string,
+      // Zoom until the user picks box or lasso select in the toolbar; kept
+      // across re-renders when the user switches
+      dragmode: 'zoom' as string,
       shiftHeld: false as boolean,
-      // Height of the selection presets above the plot, part of args.height
-      selectBarHeight: 0 as number,
-      selectBarObserver: null as ResizeObserver | null,
       // Where each label (by its place in labelledPoints) sits relative to its point
       labelOffsets: [] as LabelOffset[],
     }
@@ -138,12 +115,14 @@ export default defineComponent({
   computed: {
     /** Height of the plot below its toolbar and selection presets; the frame keeps args.height. */
     plotHeight(): number {
-      return Math.max(120, (this.args.height || 400) - TOOLBAR_HEIGHT - this.selectBarHeight)
+      return Math.max(120, (this.args.height || 400) - TOOLBAR_HEIGHT)
     },
 
     toolbarTools(): PlotTool[] {
       return [
-        ...(this.multiSelectEnabled ? [clearSelectionTool(() => this.clearSelection(), this.selectedCount)] : []),
+        ...(this.multiSelectEnabled
+          ? [this.args.selectionPresets ? this.selectTool() : clearSelectionTool(() => this.clearSelection(), this.selectedCount)]
+          : []),
         ...this.measure.tools(),
         ...this.layers.tool(this.layerList),
         this.downloadTool(),
@@ -244,6 +223,36 @@ export default defineComponent({
       })
 
       return { up, down, ns }
+    },
+
+    /**
+     * The view a volcano opens with: centred on a fold change of 0 so the
+     * two arms are equally wide, from 0 up, with the threshold lines inside
+     * and some room around the outermost points. A few far outliers (more than
+     * three times the 95th percentile away) do not squeeze the volcano: they
+     * are left out of the first view and Reset axes keeps it, zooming out
+     * shows them.
+     */
+    initialRange(): { x: [number, number]; y: [number, number] } {
+      const xs: number[] = []
+      const ys: number[] = []
+      for (const row of this.volcanoData) {
+        const x = Number(row[this.args.log2fcColumn])
+        const y = Number(row[this.args.neglog10pColumn])
+        if (Number.isFinite(x)) xs.push(Math.abs(x))
+        if (Number.isFinite(y)) ys.push(y)
+      }
+      const reach = (values: number[], floor: number): number => {
+        if (!values.length) return floor
+        const sorted = [...values].sort((a, b) => a - b)
+        const top = sorted[sorted.length - 1]
+        const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]
+        const cap = p95 > 0 ? p95 * 3 : top
+        return Math.max(floor, Math.min(top, cap))
+      }
+      const xReach = reach(xs, this.fcThreshold * 1.5) * 1.12 || 1
+      const yReach = reach(ys, this.neglog10PThreshold * 1.3) * 1.12 || 1
+      return { x: [-xReach, xReach], y: [0, yReach] }
     },
 
     /** Number of points each selection button selects. */
@@ -525,13 +534,16 @@ export default defineComponent({
         ...SELECTION_LAYOUT,
         xaxis: {
           title: { text: this.args.xLabel || 'log2 Fold Change' },
+          range: this.initialRange.x,
+          autorange: false,
           zeroline: true,
           zerolinecolor: 'rgba(150, 150, 150, 0.3)',
           zerolinewidth: 1,
         },
         yaxis: {
           title: { text: this.args.yLabel || '-log10(p-value)' },
-          rangemode: 'tozero',
+          range: this.initialRange.y,
+          autorange: false,
         },
         shapes: [...this.thresholdShapes, ...this.measureOverlay.shapes],
         annotations: [...this.pointAnnotations, ...this.measureOverlay.annotations],
@@ -557,7 +569,15 @@ export default defineComponent({
       this.nativeZoom = incoming
       const element = document.getElementById(this.id)
       if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
-        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+        const update = this.zoom.layoutFor(incoming)
+        // An axis the saved view leaves free opens at the first view, not the full extent
+        for (const axis of ['x', 'y'] as const) {
+          if (update[`${axis}axis.autorange`] === true) {
+            update[`${axis}axis.autorange`] = false
+            update[`${axis}axis.range`] = [...this.initialRange[axis]]
+          }
+        }
+        void Plotly.relayout(element, update)
       }
     },
     // The presets bar wrapped or unwrapped: the plot takes the rest of args.height
@@ -640,39 +660,14 @@ export default defineComponent({
         this.renderPlot()
       }
       this.setupResizeObserver()
-      this.observeSelectBar()
     })
-  },
-
-  updated() {
-    this.observeSelectBar()
   },
 
   beforeUnmount() {
     this.cleanupResizeObserver()
-    this.selectBarObserver?.disconnect()
   },
 
   methods: {
-    /** Keep selectBarHeight equal to the presets bar (it wraps on narrow plots). */
-    observeSelectBar(): void {
-      const bar = this.$refs.selectBar as HTMLElement | undefined
-      if (!bar) {
-        this.selectBarHeight = 0
-        return
-      }
-      const measure = () => { this.selectBarHeight = Math.ceil(bar.getBoundingClientRect().height) }
-      const observed = (this.selectBarObserver as unknown as { target?: HTMLElement } | null)?.target
-      if (observed !== bar && window.ResizeObserver) {
-        this.selectBarObserver?.disconnect()
-        const observer = new ResizeObserver(measure)
-        observer.observe(bar);
-        (observer as unknown as { target: HTMLElement }).target = bar
-        this.selectBarObserver = observer
-      }
-      measure()
-    },
-
     async renderPlot(): Promise<void> {
       try {
         const element = document.getElementById(this.id)
@@ -760,6 +755,37 @@ export default defineComponent({
       return this.args.presetLabels?.[name] || defaults[name] || name
     },
 
+    /** Select: the changed, up- or down-regulated points at once, and clear (with the count selected). */
+    selectTool(): PlotTool {
+      const counts = this.presetCounts
+      return {
+        id: 'select-presets',
+        group: 'view',
+        icon: ICONS.select,
+        label: 'Select',
+        short: 'Select',
+        keep: true,
+        help: this.selectedCount > 0 ? `${this.selectedCount} selected` : 'select the changed points',
+        count: this.selectedCount,
+        clear: { label: this.presetLabel('clear'), run: () => this.clearSelection() },
+        menu: [{
+          kind: 'actions',
+          label: 'Select',
+          items: [
+            { value: 'changed', label: this.presetLabel('changed'), count: counts.changed, disabled: !counts.changed },
+            { value: 'up', label: this.presetLabel('up'), count: counts.up, color: this.args.upColor || '#E74C3C', disabled: !counts.up },
+            { value: 'down', label: this.presetLabel('down'), count: counts.down, color: this.args.downColor || '#3498DB', disabled: !counts.down },
+            { value: 'clear', label: this.presetLabel('clear'), disabled: !this.selectedCount },
+          ],
+          run: (value: string) => {
+            if (value === 'clear') this.clearSelection()
+            else this.selectPreset(value as 'changed' | 'up' | 'down')
+          },
+        }],
+        run: () => undefined,
+      }
+    },
+
     /** Select every significant (changed), up- or down-regulated point. */
     selectPreset(preset: 'changed' | 'up' | 'down'): void {
       const { up, down } = this.categorizedData
@@ -843,47 +869,6 @@ export default defineComponent({
   position: relative;
 }
 
-.volcano-select-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 4px 2px;
-  font-size: 13px;
-}
-.volcano-select-label {
-  font-weight: 600;
-  opacity: 0.8;
-}
-.volcano-select-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 10px;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  border-radius: 12px;
-  cursor: pointer;
-}
-.volcano-select-button:hover:not(:disabled) {
-  border-color: rgba(128, 128, 128, 0.9);
-  background: rgba(128, 128, 128, 0.12);
-}
-.volcano-select-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.volcano-swatch {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-}
-.volcano-select-hint {
-  opacity: 0.65;
-  font-size: 12px;
-}
 .volcano-container {
   position: relative;
   width: 100%;

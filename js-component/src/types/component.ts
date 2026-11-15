@@ -494,6 +494,8 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   yRangeMode?: 'nonnegative' | 'tozero' | 'normal'
   /** Column whose text is shown on hover */
   hoverColumn?: string | null
+  /** Column whose value in the first shown row is added to the title */
+  subtitleColumn?: string | null
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number

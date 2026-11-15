@@ -82,6 +82,7 @@ class SeriesPlot(BaseComponent):
         font: dict[str, str] | None = None,
         y_range_mode: str = "nonnegative",
         hover_column: str | None = None,
+        subtitle_column: str | None = None,
         orientation: str = "v",
         measure: bool = True,
         image_format: str | None = None,
@@ -135,6 +136,9 @@ class SeriesPlot(BaseComponent):
                 signed values such as mass errors).
             hover_column: Column whose text is shown when hovering a point
                 (e.g. a fragment name), above its x and y values.
+            subtitle_column: Column whose value in the first shown row is
+                added to the title (e.g. the name of the entry the filters
+                picked), so the plot says what it shows.
             orientation: 'v' (default) or 'h': with 'h', bars and boxes lie
                 horizontally, x_column on the vertical axis and y_column on
                 the horizontal one (e.g. GO terms and their -log10 p-value).
@@ -233,6 +237,7 @@ class SeriesPlot(BaseComponent):
         self._font = dict(font) if font else None
         self._y_range_mode = y_range_mode
         self._hover_column = hover_column
+        self._subtitle_column = subtitle_column
         self._orientation = orientation
         self._view_column = view_column
         self._view_names = dict(view_names or {})
@@ -284,6 +289,7 @@ class SeriesPlot(BaseComponent):
             font=font,
             y_range_mode=y_range_mode,
             hover_column=hover_column,
+            subtitle_column=subtitle_column,
             orientation=orientation,
             view_column=view_column,
             view_names=view_names,
@@ -316,6 +322,11 @@ class SeriesPlot(BaseComponent):
                 else {}
             ),
             **({"hover_column": self._hover_column} if self._hover_column else {}),
+            **(
+                {"subtitle_column": self._subtitle_column}
+                if self._subtitle_column
+                else {}
+            ),
             **({"orientation": self._orientation} if self._orientation != "v" else {}),
             **(
                 {
@@ -350,6 +361,7 @@ class SeriesPlot(BaseComponent):
         self._font = config.get("font")
         self._y_range_mode = config.get("y_range_mode", "nonnegative")
         self._hover_column = config.get("hover_column")
+        self._subtitle_column = config.get("subtitle_column")
         self._orientation = config.get("orientation", "v")
         self._view_column = config.get("view_column")
         self._view_names = config.get("view_names") or {}
@@ -366,6 +378,7 @@ class SeriesPlot(BaseComponent):
             ("y_column", self._y_column),
             ("series_column", self._series_column),
             ("hover_column", self._hover_column),
+            ("subtitle_column", self._subtitle_column),
             ("view_column", self._view_column),
         ):
             if column is not None and column not in columns:
@@ -449,6 +462,7 @@ class SeriesPlot(BaseComponent):
         for column in [
             self._series_column,
             self._hover_column,
+            getattr(self, "_subtitle_column", None),
             self._view_column,
             *(self._interactivity or {}).values(),
             *(self._filters or {}).values(),
@@ -510,6 +524,8 @@ class SeriesPlot(BaseComponent):
         }
         if self._title:
             args["title"] = self._title
+        if getattr(self, "_subtitle_column", None):
+            args["subtitleColumn"] = self._subtitle_column
         if self._svg_filename:
             args["svgFilename"] = self._svg_filename
         if self._font:

@@ -38,7 +38,7 @@
 
     <!-- The choices of a tool with a menu, below the toolbar -->
     <div
-      v-if="openMenuTool && !collapsed"
+      v-if="openMenuTool"
       ref="toolMenu"
       class="toolbar-menu"
       role="menu"
@@ -54,14 +54,18 @@
         <button
           v-for="tool in pinned"
           :key="tool.id"
+          :ref="tool.menu ? `pinnedButton-${tool.id}` : undefined"
           type="button"
           class="toolbar-button"
-          :class="{ active: tool.active, labelled: !!tool.short && tool.active }"
+          :class="{ active: tool.active || openTool === tool.id, labelled: !!tool.short && (tool.active || tool.keep) }"
           :title="titleOf(tool)"
-          @click="tool.run()"
+          :aria-haspopup="tool.menu ? 'menu' : undefined"
+          :aria-expanded="tool.menu ? openTool === tool.id : undefined"
+          @click="press(tool)"
         >
           <ToolIconSvg :icon="tool.icon" />
-          <span v-if="tool.short && tool.active" class="toolbar-label">{{ tool.short }}</span>
+          <span v-if="tool.short && (tool.active || tool.keep)" class="toolbar-label">{{ tool.short }}</span>
+          <ToolIconSvg v-if="tool.menu" class="toolbar-caret" :icon="CARET" :size="12" />
           <span v-if="tool.count" class="toolbar-count">{{ tool.count }}</span>
           <span
             v-if="tool.clear && tool.count"
@@ -259,7 +263,7 @@ export default defineComponent({
     /** What a narrow toolbar keeps: tools that are on or hold something, and Reset. */
     pinned(): PlotTool[] {
       const keep = this.plotlyButtons.filter((tool) => tool.keep)
-      const on = this.tools.filter((tool) => tool.active || (tool.count ?? 0) > 0)
+      const on = this.tools.filter((tool) => tool.keep || tool.active || (tool.count ?? 0) > 0)
       return [...this.stepperTools, ...on, ...keep]
     },
     cssCustomProperties(): Record<string, string> {
@@ -357,7 +361,8 @@ export default defineComponent({
       if (this.openTool) this.$nextTick(() => this.fit())
     },
     menuButton(id: string): HTMLElement | undefined {
-      const ref = this.$refs[`menuButton-${id}`] as HTMLElement | HTMLElement[] | undefined
+      const key = this.collapsed ? `pinnedButton-${id}` : `menuButton-${id}`
+      const ref = this.$refs[key] as HTMLElement | HTMLElement[] | undefined
       return Array.isArray(ref) ? ref[0] : ref
     },
     onPointerDown(event: Event): void {

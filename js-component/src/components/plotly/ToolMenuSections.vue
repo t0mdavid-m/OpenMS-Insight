@@ -41,6 +41,22 @@
         </button>
       </template>
 
+      <template v-else-if="section.kind === 'actions'">
+        <button
+          v-for="item in section.items"
+          :key="item.value"
+          type="button"
+          class="menu-item"
+          role="menuitem"
+          :disabled="item.disabled"
+          @click="section.run(item.value)"
+        >
+          <span v-if="item.color" class="menu-swatch" :style="{ background: item.color }"></span>
+          <span class="menu-label">{{ item.label }}</span>
+          <span v-if="item.count !== undefined" class="menu-count">{{ item.count }}</span>
+        </button>
+      </template>
+
       <label v-else-if="section.kind === 'range'" class="menu-range">
         <input
           type="range"
@@ -108,6 +124,12 @@ export default defineComponent({
 }
 .menu-item:disabled {
   cursor: default;
+  opacity: 0.45;
+}
+.menu-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--tb-muted);
 }
 .menu-item:focus-visible {
   outline: 2px solid var(--tb-accent);

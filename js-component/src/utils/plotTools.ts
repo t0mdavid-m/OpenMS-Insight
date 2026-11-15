@@ -57,7 +57,15 @@ export interface ToolMenuRange {
   format?: (value: number) => string
 }
 
-export type ToolMenuSection = ToolMenuChoice | ToolMenuToggles | ToolMenuRange
+/** Commands, each a menu item that runs once (e.g. select every up-regulated point). */
+export interface ToolMenuActions {
+  kind: 'actions'
+  label: string
+  items: { value: string; label: string; count?: number; color?: string; disabled?: boolean }[]
+  run: (value: string) => void
+}
+
+export type ToolMenuSection = ToolMenuChoice | ToolMenuToggles | ToolMenuRange | ToolMenuActions
 
 export interface PlotTool {
   id: string
@@ -80,6 +88,8 @@ export interface PlotTool {
    * calling `run` (on a narrow toolbar they are listed in the ⋯ menu).
    */
   menu?: ToolMenuSection[]
+  /** Stays on a narrow toolbar, beside Reset, instead of moving into the ⋯ menu. */
+  keep?: boolean
   run: () => void
 }
 
@@ -112,6 +122,9 @@ export const ICONS = {
     'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z',
   layers:
     'M11.99 18.54 4.62 12.81 3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z',
+  /** A dashed box, as a box selection draws it. */
+  select:
+    'M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2zM8 8h8v8H8V8z',
   deselect:
     'M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2z',
 } as const

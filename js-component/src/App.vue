@@ -404,8 +404,9 @@ body {
 .insight-root.with-help .plot-toolbar {
   padding-left: 26px;
 }
-.insight-root.with-help .volcano-select-bar {
-  padding-left: 28px;
+/* The info icon of a table on the line of its buttons and title */
+.insight-root.with-help:has(.table-toolbar) > .insight-help.floating {
+  top: 17px;
 }
 .insight-root.with-help .table-toolbar {
   padding-left: 22px;

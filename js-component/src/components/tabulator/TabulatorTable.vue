@@ -3792,8 +3792,8 @@ export default defineComponent({
   column-gap: 8px;
 }
 
-/* A narrow table puts its title on a row of its own, above the buttons and
-   toggles, so the title is never cut to a few letters */
+/* A narrow table keeps its title on the line of its buttons (shortened with
+   an ellipsis when it must be) and puts the toggles on a row below */
 .table-toolbar-host {
   container-type: inline-size;
 }
@@ -3801,18 +3801,20 @@ export default defineComponent({
   .table-toolbar {
     grid-template-columns: max-content minmax(0, 1fr);
     grid-template-areas:
-      'title title'
-      'buttons toggles';
+      'buttons title'
+      'toggles toggles';
     row-gap: 2px;
   }
   .table-toolbar-title {
     grid-area: title;
+    justify-content: flex-start;
   }
   .table-toolbar-buttons {
     grid-area: buttons;
   }
   .table-toolbar-toggles {
     grid-area: toggles;
+    justify-content: flex-start;
   }
   .table-search {
     min-width: 120px;

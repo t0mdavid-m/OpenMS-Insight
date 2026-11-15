@@ -164,7 +164,12 @@ export default defineComponent({
     shownTitle(): string | undefined {
       const title = this.args.title
       if (!title) return undefined
-      return title.split('{view}').join(this.currentViewLabel)
+      const shown = title.split('{view}').join(this.currentViewLabel)
+      const column = this.args.subtitleColumn
+      if (!column) return shown
+      const values = (this.columns[column] as unknown[]) || []
+      const first = this.shownRows.length ? values[this.shownRows[0]] : undefined
+      return first === undefined || first === null || first === '' ? shown : `${shown}: ${first}`
     },
     switchStyle(): Record<string, string> {
       const theme = this.theme
@@ -430,12 +435,13 @@ export default defineComponent({
         title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
         showgrid: false,
         automargin: true,
+        fixedrange: mode === 'bars',
       }
       const valueAxis: Record<string, unknown> = {
         title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
         showgrid: true,
         rangemode: this.args.yRangeMode || 'nonnegative',
-        fixedrange: !!this.args.fixedYRange,
+        fixedrange: !!this.args.fixedYRange || mode === 'bars',
         automargin: true,
       }
       // Grouped marks are placed like bars, which would stretch the value axis
@@ -449,9 +455,15 @@ export default defineComponent({
       return {
         shapes: [...selectionShapes, ...this.measureOverlay.shapes],
         annotations: this.measureOverlay.annotations,
-        title: this.shownTitle ? { text: `<b>${this.shownTitle}</b>` } : undefined,
+        // The title just above the plot area: Plotly's own margin leaves a wide gap
+        title: this.shownTitle
+          ? { text: `<b>${this.shownTitle}</b>`, y: 1, yref: 'container', yanchor: 'top', pad: { t: 8 } }
+          : undefined,
+        margin: { t: this.shownTitle ? 40 : 12, r: 16, b: 40, l: 48 },
         showlegend: this.args.showLegend !== false,
         height: this.plotHeight,
+        // Bars are read, not explored: no zoom, pan or box select
+        ...(mode === 'bars' ? { dragmode: false } : {}),
         xaxis,
         yaxis,
         // Side by side only where series share a position, else full width
@@ -546,7 +558,9 @@ export default defineComponent({
       const element = document.getElementById(this.id)
       if (!element) return
       await Plotly.newPlot(element, this.traces, withZoom(this.layout, this.nativeZoom), {
-        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+        modeBarButtonsToRemove: this.args.mode === 'bars'
+          ? ['toImage', 'sendDataToCloud', 'zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d']
+          : ['toImage', 'sendDataToCloud'],
         displaylogo: false,
         responsive: true,
       })
