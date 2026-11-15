@@ -960,6 +960,11 @@ def defer_reruns() -> Iterator[None]:
             table(key="table", state_manager=state_manager)
             plot(key="plot", state_manager=state_manager)
     """
+    if _deferred_rerun.get() is not None:
+        # Inside another defer_reruns() (a page drawing a grid that defers its
+        # own reruns): the outer block reruns once for both
+        yield
+        return
     _apply_new_vue_values()
     pending = [False]
     token = _deferred_rerun.set(pending)

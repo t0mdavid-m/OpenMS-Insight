@@ -21,7 +21,7 @@ import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
-import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
@@ -227,32 +227,42 @@ export default defineComponent({
 
     /**
      * The view a volcano opens with: centred on a fold change of 0 so the
-     * two arms are equally wide, from 0 up, with the threshold lines inside
-     * and some room around the outermost points. A few far outliers (more than
-     * three times the 95th percentile away) do not squeeze the volcano: they
-     * are left out of the first view and Reset axes keeps it, zooming out
-     * shows them.
+     * two arms are equally wide, with the threshold lines inside and room
+     * around the outermost points, so no marker is cut at an edge. A few far
+     * outliers among the not significant points (more than three times the
+     * 95th percentile away) do not squeeze the volcano: they are left out of
+     * the first view and Reset axes keeps it, zooming out shows them. A
+     * significant point is always in view.
      */
     initialRange(): { x: [number, number]; y: [number, number] } {
       const xs: number[] = []
       const ys: number[] = []
+      let sigX = 0
+      let sigY = 0
       for (const row of this.volcanoData) {
         const x = Number(row[this.args.log2fcColumn])
         const y = Number(row[this.args.neglog10pColumn])
         if (Number.isFinite(x)) xs.push(Math.abs(x))
         if (Number.isFinite(y)) ys.push(y)
+        const p = Number(row[this.args.pvalueColumn])
+        if (Number.isFinite(x) && Number.isFinite(y) &&
+            computeSignificance(x, p, this.fcThreshold, this.pThreshold) !== 'ns') {
+          sigX = Math.max(sigX, Math.abs(x))
+          sigY = Math.max(sigY, y)
+        }
       }
-      const reach = (values: number[], floor: number): number => {
-        if (!values.length) return floor
+      const reach = (values: number[], floor: number, keep: number): number => {
+        if (!values.length) return Math.max(floor, keep)
         const sorted = [...values].sort((a, b) => a - b)
         const top = sorted[sorted.length - 1]
         const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]
         const cap = p95 > 0 ? p95 * 3 : top
-        return Math.max(floor, Math.min(top, cap))
+        return Math.max(floor, keep, Math.min(top, cap))
       }
-      const xReach = reach(xs, this.fcThreshold * 1.5) * 1.12 || 1
-      const yReach = reach(ys, this.neglog10PThreshold * 1.3) * 1.12 || 1
-      return { x: [-xReach, xReach], y: [0, yReach] }
+      const xReach = reach(xs, this.fcThreshold * 1.5, sigX) * 1.12 || 1
+      const yReach = reach(ys, this.neglog10PThreshold * 1.3, sigY) * 1.12 || 1
+      // Points at -log10(p) = 0 sit on the axis: a little room below keeps them whole.
+      return { x: [-xReach, xReach], y: [-yReach * 0.03, yReach] }
     },
 
     /** Number of points each selection button selects. */
@@ -520,7 +530,7 @@ export default defineComponent({
     layout(): Partial<Plotly.Layout> {
       return {
         ...this.themeLayout,
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: this.args.title ? { text: boldTitle(this.args.title, this.id).text } : undefined,
         showlegend: true,
         legend: {
           orientation: 'h',

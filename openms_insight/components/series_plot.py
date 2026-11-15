@@ -73,6 +73,7 @@ class SeriesPlot(BaseComponent):
         series_names: dict[str, str] | None = None,
         series_colors: dict[str, str] | None = None,
         mode: str = "lines+markers",
+        series_modes: dict[str, str] | None = None,
         title: str | None = None,
         x_label: str | None = None,
         y_label: str | None = None,
@@ -122,6 +123,10 @@ class SeriesPlot(BaseComponent):
             mode: 'lines', 'markers' or 'lines+markers' (Plotly scatter modes),
                 'bars' (bars, the series side by side) or 'box' (a box per x
                 value and series, from the y values of its rows).
+            series_modes: A scatter mode per series value that is drawn
+                otherwise than ``mode``, such as ``{"mean": "lines"}`` for a
+                mean line among points drawn as ``mode="markers"``.
+                Render-time only: it does not change the cache.
             title: Plot title.
             x_label: X-axis label (default: x_column).
             y_label: Y-axis label (default: y_column).
@@ -228,6 +233,13 @@ class SeriesPlot(BaseComponent):
         self._series_names = series_names or {}
         self._series_colors = series_colors or {}
         self._mode = mode
+        self._series_modes = dict(series_modes or {})
+        for name, series_mode in self._series_modes.items():
+            if series_mode not in ("lines", "markers", "lines+markers"):
+                raise ValueError(
+                    f"series_modes[{name!r}] must be 'lines', 'markers' or "
+                    f"'lines+markers', got {series_mode!r}"
+                )
         self._title = title
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
@@ -514,6 +526,8 @@ class SeriesPlot(BaseComponent):
             "seriesColors": self._series_colors,
             "mode": self._mode,
             "xLabel": self._x_label,
+            # Render-time: a series drawn other than ``mode`` (a mean line among points)
+            **({"seriesModes": self._series_modes} if self._series_modes else {}),
             "yLabel": self._y_label,
             "showLegend": self._show_legend,
             "fixedYRange": self._fixed_y_range,

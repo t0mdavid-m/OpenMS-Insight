@@ -189,3 +189,40 @@ export function plotlyTools(element: HTMLElement | null): PlotlyTool[] {
 export function toolTitle(tool: PlotTool): string {
   return tool.help ? `${tool.label}: ${tool.help}` : tool.label
 }
+
+/**
+ * Break a plot title into lines that fit ``width`` pixels (Plotly draws a
+ * title on one line and cuts it off at both edges otherwise). Breaks at spaces;
+ * returns the lines joined with <br> and how many there are.
+ */
+export function wrapTitle(
+  text: string,
+  width: number | undefined,
+  charWidth = 8.5,
+): { text: string; lines: number } {
+  if (!text || !width || width <= 0) return { text, lines: 1 }
+  const budget = Math.max(12, Math.floor((width - 32) / charWidth))
+  if (text.length <= budget) return { text, lines: 1 }
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(' ')) {
+    if (line && line.length + 1 + word.length > budget) {
+      lines.push(line)
+      line = word
+    } else {
+      line = line ? `${line} ${word}` : word
+    }
+  }
+  if (line) lines.push(line)
+  return { text: lines.join('<br>'), lines: lines.length }
+}
+
+/** A bold Plotly title that wraps to the width of the element with ``id``. */
+export function boldTitle(text: string, id?: string): { text: string; lines: number } {
+  const width = id ? document.getElementById(id)?.clientWidth : undefined
+  const wrapped = wrapTitle(text, width)
+  return {
+    text: wrapped.text.split('<br>').map((part) => `<b>${part}</b>`).join('<br>'),
+    lines: wrapped.lines,
+  }
+}

@@ -2,10 +2,9 @@
   <div
     v-if="componentArgs !== undefined"
     class="insight-root"
-    :class="{ 'with-help': !!componentArgs.help && !helpInCard }"
   >
     <HelpIcon
-      v-if="componentArgs.help && !helpInCard"
+      v-if="componentArgs.help && !helpInCard && helpState.claimed === 0"
       :text="componentArgs.help"
       floating
     />
@@ -29,7 +28,8 @@
 </template>
 
 <script lang="ts">
-import { defineAsyncComponent, defineComponent, watch, toRaw, type Component } from 'vue'
+import { defineAsyncComponent, defineComponent, provide, watch, toRaw, type Component } from 'vue'
+import { HELP_KEY, createHelpState } from './composables/useHelp'
 import { useTheme } from 'vuetify'
 import { stateValues, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -77,6 +77,21 @@ export default defineComponent({
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
+
+    // A toolbar or table title that draws the help icon in its own row claims
+    // it; the icon floats in the corner only while no view has claimed it
+    const helpState = createHelpState()
+    provide(HELP_KEY, helpState)
+    watch(
+      () => {
+        const c = streamlitDataStore.args?.components
+        const a = c && c.length > 0 && c[0].length > 0 ? c[0][0].componentArgs : undefined
+        const inCard = ['SequenceView', 'ProteinSequenceView'].includes(String(a?.componentType))
+        return a?.help && !inCard ? String(a.help) : ''
+      },
+      (text) => { helpState.text = text },
+      { immediate: true },
+    )
 
     // Checkboxes, switches and buttons take the app's primary colour
     const vuetifyTheme = useTheme()
@@ -266,7 +281,7 @@ export default defineComponent({
       { immediate: true }
     )
 
-    return { streamlitDataStore, selectionStore }
+    return { streamlitDataStore, selectionStore, helpState }
   },
   data() {
     return {
@@ -399,19 +414,6 @@ body {
 .insight-root {
   position: relative;
 }
-/* The help icon sits in the view's top left corner, in the toolbar row: the
-   toolbar keeps room for it, the plot or table below keeps its full width */
-.insight-root.with-help .plot-toolbar {
-  padding-left: 26px;
-}
-/* The info icon of a table on the line of its buttons and title */
-.insight-root.with-help:has(.table-toolbar) > .insight-help.floating {
-  top: 17px;
-}
-.insight-root.with-help .table-toolbar {
-  padding-left: 22px;
-}
-
 /* The app's text font (set from the theme by applyThemeFonts), also for
    Vuetify's typography classes, which name Roboto */
 html,

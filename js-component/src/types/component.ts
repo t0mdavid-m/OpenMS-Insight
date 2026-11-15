@@ -483,6 +483,8 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   seriesNames?: Array<[string, string]>
   seriesColors?: Record<string, string>
   mode?: 'lines' | 'markers' | 'lines+markers' | 'bars' | 'box'
+  /** Scatter mode per series value drawn otherwise than mode */
+  seriesModes?: Record<string, 'lines' | 'markers' | 'lines+markers'>
   /** 'h': bars and boxes horizontal, the x column on the vertical axis */
   orientation?: 'v' | 'h'
   title?: string

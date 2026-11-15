@@ -1,9 +1,9 @@
 <template>
   <div class="sequence-view-container" :style="containerStyle">
     <v-sheet class="pa-4 rounded-lg help-card" :theme="theme?.base ?? 'light'" border>
-      <HelpIcon v-if="args.help" :text="args.help" floating class="card-help" />
-      <!-- Header with mass information -->
-      <div class="d-flex justify-center mb-2">
+      <!-- Header with mass information; the info icon beside the title, as on tables -->
+      <div class="d-flex justify-center align-center mb-2">
+        <HelpIcon v-if="args.help" :text="args.help" class="title-help" />
         <h4>{{ args.title || 'Sequence View' }}</h4>
       </div>
 
@@ -837,8 +837,8 @@ export default defineComponent({
 .help-card {
   position: relative;
 }
-.help-card > .card-help {
-  top: 6px;
-  left: 6px;
+.title-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
 }
 </style>

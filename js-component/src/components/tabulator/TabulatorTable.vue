@@ -97,6 +97,7 @@
           />
         </div>
         <div class="table-toolbar-title">
+          <HelpIcon v-if="helpText" class="table-help" :text="helpText" />
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
           <v-btn
             v-if="multiSelectEnabled"
@@ -230,6 +231,8 @@ import type {
 import { isCustomFormatter, getCustomFormatter } from './formatters'
 import { type FilterPreset, renderPresetSection } from '../filterPresets'
 import { combineSelection } from '@/composables/useMultiSelect'
+import { useHelp } from '@/composables/useHelp'
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
 
 // Global counter for unique table IDs
@@ -280,6 +283,7 @@ const KEY_MOVES: Record<string, KeyMove> = {
 
 export default defineComponent({
   name: 'TabulatorTable',
+  components: { HelpIcon },
 
   props: {
     args: {
@@ -293,7 +297,9 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     // Generate unique ID on setup
     const uniqueId = `table-${Date.now()}-${++tableIdCounter}`
-    return { streamlitDataStore, selectionStore, uniqueId }
+    // The view's info icon beside the title, not over the buttons
+    const helpText = useHelp()
+    return { streamlitDataStore, selectionStore, uniqueId, helpText }
   },
   data() {
     return {
@@ -3834,6 +3840,11 @@ export default defineComponent({
   align-items: center;
   justify-content: center;
   gap: 2px;
+}
+
+.table-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
 }
 
 .table-toolbar-title h4 {

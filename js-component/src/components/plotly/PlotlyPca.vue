@@ -16,7 +16,7 @@ import type { PCAPlotComponentArgs, PCAData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
@@ -393,7 +393,7 @@ export default defineComponent({
 
       return {
         ...this.themeLayout,
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: this.args.title ? { text: boldTitle(this.args.title, this.id).text } : undefined,
         showlegend: true,
         legend: {
           orientation: 'h',

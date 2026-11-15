@@ -10,12 +10,13 @@
     :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT + (args.uniprotLookup ? UNIPROT_ROW_HEIGHT : 0)}px` } : undefined"
   >
   <div class="sequence-view-column">
-  <div v-if="args.title" class="d-flex justify-center">
+  <div v-if="args.title" class="d-flex justify-center align-center">
+    <HelpIcon v-if="args.help" :text="args.help" class="title-help" />
     <h4>{{ args.title }}</h4>
   </div>
 
   <v-sheet class="pa-4 rounded-lg help-card" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
-      <HelpIcon v-if="args.help" :text="args.help" floating class="card-help" />
+      <HelpIcon v-if="args.help && !args.title" :text="args.help" floating class="card-help" />
     <div class="sequence-and-scale">
     <div :id="sequencePartId" class="sequence-part">
       <!-- Label and value pairs wrap as whole pairs, never inside one -->
@@ -2721,6 +2722,10 @@ export default defineComponent({
 .help-card > .card-help {
   top: 6px;
   left: 6px;
+}
+.title-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
 }
 </style>
 

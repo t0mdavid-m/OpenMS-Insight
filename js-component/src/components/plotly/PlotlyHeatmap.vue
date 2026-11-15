@@ -19,7 +19,7 @@ import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/comp
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
-import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
 import { normalizeZoom } from '@/composables/useZoomState'
@@ -734,7 +734,7 @@ export default defineComponent({
 
       return {
         ...this.themeLayout,
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: this.args.title ? { text: boldTitle(this.args.title, this.id).text } : undefined,
         showlegend: showLegend,
         legend: showLegend
           ? {

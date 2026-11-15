@@ -1,21 +1,25 @@
 <template>
   <div class="series-plot">
-    <div v-if="views.length > 1" class="view-switch" role="tablist" :style="switchStyle">
-      <button
-        v-for="[value, label] in views"
-        :key="value"
-        type="button"
-        role="tab"
-        class="view-button"
-        :class="{ active: value === currentView }"
-        :aria-selected="value === currentView"
-        @click="pickView(value)"
-      >
-        {{ label }}
-      </button>
-    </div>
     <MeasureHint v-if="measurable" :measure="measure" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings">
+      <!-- The views in the toolbar's row, left of the tools: one row of controls -->
+      <template v-if="views.length > 1" #lead>
+        <div class="view-switch" role="tablist" :style="switchStyle">
+          <button
+            v-for="[value, label] in views"
+            :key="value"
+            type="button"
+            role="tab"
+            class="view-button"
+            :class="{ active: value === currentView }"
+            :aria-selected="value === currentView"
+            @click="pickView(value)"
+          >
+            {{ label }}
+          </button>
+        </div>
+      </template>
+    </PlotToolbar>
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -33,7 +37,7 @@ import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
@@ -42,7 +46,6 @@ import { SELECTION_ACCENT } from '@/composables/useMultiSelect'
 let plotIdCounter = 0
 
 /** Height of the row of view buttons in pixels. */
-const VIEW_SWITCH_HEIGHT = 34
 /** Space of the title and the value axis around the bars of a growing plot. */
 const BAR_PLOT_MARGIN = 110
 
@@ -155,11 +158,10 @@ export default defineComponent({
       const base = this.args.height || 400
       const barHeight = this.args.barHeight
       if (!barHeight || !this.horizontal) return base
-      const extra = this.views.length > 1 ? VIEW_SWITCH_HEIGHT : 0
-      return Math.max(base, BAR_PLOT_MARGIN + TOOLBAR_HEIGHT + extra + barHeight * this.shownCategories)
+      return Math.max(base, BAR_PLOT_MARGIN + TOOLBAR_HEIGHT + barHeight * this.shownCategories)
     },
     plotHeight(): number {
-      return this.totalHeight - TOOLBAR_HEIGHT - (this.views.length > 1 ? VIEW_SWITCH_HEIGHT : 0)
+      return this.totalHeight - TOOLBAR_HEIGHT
     },
     shownTitle(): string | undefined {
       const title = this.args.title
@@ -178,7 +180,6 @@ export default defineComponent({
         '--vs-background': theme?.backgroundColor || '#ffffff',
         '--vs-accent': theme?.primaryColor || '#1436b8',
         '--vs-font': theme?.font || 'sans-serif',
-        height: `${VIEW_SWITCH_HEIGHT}px`,
       }
     },
     measurable(): boolean {
@@ -293,7 +294,7 @@ export default defineComponent({
           trace.boxpoints = 'outliers'
         } else {
           trace.type = 'scatter'
-          trace.mode = mode
+          trace.mode = (this.args.seriesModes || {})[s.key] || mode
         }
         if (this.args.hoverColumn) {
           trace.text = s.text
@@ -452,14 +453,16 @@ export default defineComponent({
       if (this.horizontal) positionAxis.autorange = 'reversed'
       const xaxis = this.horizontal ? valueAxis : positionAxis
       const yaxis = this.horizontal ? positionAxis : valueAxis
+      // A long title wraps to the plot's width instead of running off both edges
+      const title = this.shownTitle ? boldTitle(this.shownTitle, this.id) : undefined
       return {
         shapes: [...selectionShapes, ...this.measureOverlay.shapes],
         annotations: this.measureOverlay.annotations,
         // The title just above the plot area: Plotly's own margin leaves a wide gap
-        title: this.shownTitle
-          ? { text: `<b>${this.shownTitle}</b>`, y: 1, yref: 'container', yanchor: 'top', pad: { t: 8 } }
+        title: title
+          ? { text: title.text, y: 1, yref: 'paper', yanchor: 'bottom', pad: { b: 10 } }
           : undefined,
-        margin: { t: this.shownTitle ? 40 : 12, r: 16, b: 40, l: 48 },
+        margin: { t: title ? 18 + 20 * title.lines : 12, r: 16, b: 40, l: 48 },
         showlegend: this.args.showLegend !== false,
         height: this.plotHeight,
         // Bars are read, not explored: no zoom, pan or box select
@@ -623,14 +626,13 @@ export default defineComponent({
   align-items: center;
   gap: 4px;
   flex-wrap: nowrap;
-  overflow-x: auto;
   font-family: var(--vs-font);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .view-button {
-  height: 28px;
-  padding: 0 12px;
+  height: 24px;
+  padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--vs-text) 16%, transparent);
   border-radius: 999px;
   background: var(--vs-background);

@@ -1,5 +1,10 @@
 <template>
   <div ref="root" class="plot-toolbar" :style="cssCustomProperties">
+    <!-- The view's info icon and the component's own controls (a view switch), left of the tools -->
+    <div v-if="helpText || $slots.lead" ref="lead" class="toolbar-lead">
+      <HelpIcon v-if="helpText" :text="helpText" />
+      <slot name="lead" />
+    </div>
     <!-- Every group in a row; also kept (hidden) while collapsed, to measure whether it fits again -->
     <div ref="full" class="toolbar-row" :class="{ measuring: collapsed }" :aria-hidden="collapsed">
       <div v-for="group in groups" :key="group.name" class="toolbar-group" role="group" :aria-label="group.label">
@@ -141,6 +146,8 @@ import { useSelectionStore } from '@/stores/selection'
 import { stepperTools, type StepperArgs } from '@/utils/stepper'
 import { settingsTools, type SettingArgs } from '@/utils/settings'
 import ToolMenuSections from './ToolMenuSections.vue'
+import HelpIcon from '@/components/common/HelpIcon.vue'
+import { useHelp } from '@/composables/useHelp'
 import {
   GROUP_LABELS,
   GROUP_ORDER,
@@ -186,7 +193,7 @@ const SELECTION_TOOLS = ['plotly-dragmode:select', 'plotly-dragmode:lasso']
 
 export default defineComponent({
   name: 'PlotToolbar',
-  components: { ToolIconSvg, ToolMenuSections },
+  components: { ToolIconSvg, ToolMenuSections, HelpIcon },
   props: {
     /** Id of the element Plotly draws the plot in. */
     plotId: {
@@ -215,7 +222,13 @@ export default defineComponent({
     },
   },
   setup() {
-    return { streamlitDataStore: useStreamlitDataStore(), selectionStore: useSelectionStore(), ICONS, CARET }
+    return {
+      streamlitDataStore: useStreamlitDataStore(),
+      selectionStore: useSelectionStore(),
+      helpText: useHelp(),
+      ICONS,
+      CARET,
+    }
   },
   data() {
     return {
@@ -335,7 +348,8 @@ export default defineComponent({
       const root = this.$refs.root as HTMLElement | undefined
       const full = this.$refs.full as HTMLElement | undefined
       if (!root || !full) return
-      const needed = full.scrollWidth
+      const lead = this.$refs.lead as HTMLElement | undefined
+      const needed = full.scrollWidth + (lead ? lead.offsetWidth + 8 : 0)
       const collapsed = needed > root.clientWidth + 1
       if (collapsed !== this.collapsed) {
         this.collapsed = collapsed
@@ -408,6 +422,15 @@ export default defineComponent({
   --tb-border: color-mix(in srgb, var(--tb-text) 16%, transparent);
   --tb-active-bg: color-mix(in srgb, var(--tb-accent) 13%, var(--tb-background));
   --tb-hover-bg: color-mix(in srgb, var(--tb-text) 7%, var(--tb-background));
+}
+.toolbar-lead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  padding-left: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .toolbar-row {
   display: flex;
