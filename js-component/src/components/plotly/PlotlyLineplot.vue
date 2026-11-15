@@ -53,6 +53,7 @@ import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
+import { relativeLabel, relativeValues } from '@/utils/relativeIntensity'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -125,6 +126,8 @@ export default defineComponent({
       usiTimer: 0,
       // The Markers button hides the x markers (x_markers) and shows them again
       markersShown: true as boolean,
+      // The Relative button shows intensities as % of the highest peak (relative_intensity)
+      relativeShown: !!this.args.relativeIntensity as boolean,
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
@@ -193,9 +196,10 @@ export default defineComponent({
       const yCol = (config?.yColumn as string) || this.args.yColumn || 'y'
 
       // Map to expected PlotData format
+      const yValues = (rawData[yCol] as number[]) || []
       const result: PlotData = {
         x_values: (rawData[xCol] as number[]) || [],
-        y_values: (rawData[yCol] as number[]) || [],
+        y_values: this.relativeShown ? relativeValues(yValues) : yValues,
       }
 
       // Add highlight mask if present
@@ -750,7 +754,7 @@ export default defineComponent({
           range: this.xRange,
         },
         yaxis: {
-          title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
+          title: this.yAxisLabel ? { text: this.yAxisLabel } : undefined,
           showgrid: true,
           gridcolor: this.theme?.secondaryBackgroundColor || '#f0f0f0',
           rangemode: 'nonnegative',
@@ -879,6 +883,31 @@ export default defineComponent({
       return (this.args.height || 400) - TOOLBAR_HEIGHT
     },
 
+    /** The y axis title: "Relative intensity (%)" while the Relative switch is on. */
+    yAxisLabel(): string | undefined {
+      return this.relativeShown ? relativeLabel(this.args.yLabel) : this.args.yLabel
+    },
+
+    /** The Relative switch: intensities as a percentage of the highest peak. */
+    relativeTools(): PlotTool[] {
+      return [
+        {
+          id: 'relative-intensity',
+          group: 'view',
+          icon: ICONS.percent,
+          label: 'Relative intensity',
+          short: 'Relative',
+          help: this.relativeShown
+            ? 'show the absolute intensities'
+            : 'show intensities as % of the highest peak',
+          active: this.relativeShown,
+          run: () => {
+            this.relativeShown = !this.relativeShown
+          },
+        },
+      ]
+    },
+
     /** The Markers switch, only for a plot with x markers. */
     markerTools(): PlotTool[] {
       if (!this.args.xMarkers || this.args.xMarkers.length === 0) return []
@@ -907,6 +936,7 @@ export default defineComponent({
         ...this.markerTools,
         ...this.usiTools,
         ...this.pinZoom.tools(),
+        ...this.relativeTools,
         downloadTool({
           plotId: this.id,
           format: () => imageFormatOf(this.args.imageFormat),
@@ -972,6 +1002,16 @@ export default defineComponent({
     // Markers button: x markers hidden or shown again
     markersShown() {
       if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // Relative button: intensities switched between relative and absolute
+    relativeShown() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // relative_intensity changed from Python
+    'args.relativeIntensity'(on: boolean | undefined) {
+      this.relativeShown = !!on
     },
 
     // One click tool at a time
@@ -1134,7 +1174,7 @@ export default defineComponent({
             return marker ? `${marker.label}${note ? ` · ${note}` : ''}` : note
           },
           xName: this.args.xLabel || this.args.xColumn || 'x',
-          yName: this.args.yLabel || this.args.yColumn || 'y',
+          yName: this.yAxisLabel || this.args.yColumn || 'y',
         }))
         this.topPeaks.bind(plotElement)
         this.navigation.bind(plotElement, {
