@@ -1,5 +1,14 @@
 <template>
-  <div v-if="componentArgs !== undefined">
+  <div
+    v-if="componentArgs !== undefined"
+    class="insight-root"
+    :class="{ 'with-help': !!componentArgs.help && !helpInCard }"
+  >
+    <HelpIcon
+      v-if="componentArgs.help && !helpInCard"
+      :text="componentArgs.help"
+      floating
+    />
     <component
       :is="currentComponent"
       :args="componentArgs"
@@ -27,6 +36,10 @@ import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
 import { applyAppTheme } from './utils/appTheme'
+import HelpIcon from './components/common/HelpIcon.vue'
+
+// Height of the view with its data, measured; sent along with the next state
+let reportedFrameHeight = 0
 // Each view is its own chunk, so a page with several views does not load and
 // run Plotly in every table's frame
 const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
@@ -46,6 +59,7 @@ const ProteinStructureView = defineAsyncComponent(() => import('./components/pro
 export default defineComponent({
   name: 'App',
   components: {
+    HelpIcon,
     TabulatorTable,
     PlotlyLineplot,
     PlotlyHeatmap,
@@ -178,6 +192,8 @@ export default defineComponent({
         plainState._event = JSON.parse(JSON.stringify(event))
         streamlitDataStore.event = null
       }
+      // The view's last height, so Python reserves it when the view is drawn again
+      if (reportedFrameHeight > 0) plainState._frameHeight = reportedFrameHeight
       Streamlit.setComponentValue(plainState)
       console.log('[App] setComponentValue CALLED')
     }
@@ -271,6 +287,12 @@ export default defineComponent({
     },
 
     /**
+     * Views drawn on a card show their help icon in the card's corner.
+     */
+    helpInCard(): boolean {
+      return ['SequenceView', 'ProteinSequenceView'].includes(String(this.componentArgs?.componentType))
+    },
+    /**
      * Get the Vue component based on componentType.
      */
     currentComponent(): Component | null {
@@ -325,7 +347,8 @@ export default defineComponent({
     // the document is briefly taller than the view, and the frame grew to that.
     this.resizeObserver = new ResizeObserver(() => {
       if (this.streamlitDataStore.hash) {
-        Streamlit.setFrameHeight(this.viewHeight())
+        reportedFrameHeight = this.viewHeight()
+        Streamlit.setFrameHeight(reportedFrameHeight)
       }
     })
     this.resizeObserver.observe(this.$el as HTMLElement)
@@ -333,7 +356,10 @@ export default defineComponent({
     this.$watch(
       () => !!this.streamlitDataStore.hash,
       (hasData: boolean) => {
-        if (hasData) this.$nextTick(() => Streamlit.setFrameHeight(this.viewHeight()))
+        if (hasData) this.$nextTick(() => {
+          reportedFrameHeight = this.viewHeight()
+          Streamlit.setFrameHeight(reportedFrameHeight)
+        })
       },
       { immediate: true }
     )
@@ -368,6 +394,21 @@ export default defineComponent({
 <style>
 body {
   margin: 0;
+}
+
+.insight-root {
+  position: relative;
+}
+/* The help icon sits in the view's top left corner, in the toolbar row: the
+   toolbar keeps room for it, the plot or table below keeps its full width */
+.insight-root.with-help .plot-toolbar {
+  padding-left: 26px;
+}
+.insight-root.with-help .volcano-select-bar {
+  padding-left: 28px;
+}
+.insight-root.with-help .table-toolbar {
+  padding-left: 22px;
 }
 
 /* The app's text font (set from the theme by applyThemeFonts), also for

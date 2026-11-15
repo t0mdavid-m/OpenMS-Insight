@@ -23,6 +23,10 @@ export interface BaseComponentArgs {
   zoomIdentifier?: string
   /** Previous / next buttons for one filter, shown by PlotToolbar (core/stepper.py). */
   stepper?: StepperArgs
+  /** Tooltip of an info icon on the view, explaining it (the component's ``help``). */
+  help?: string
+  /** Settings in the plot toolbar's gear menu (core/settings.py). */
+  toolbarSettings?: import('@/utils/settings').SettingArgs[]
 }
 
 /**

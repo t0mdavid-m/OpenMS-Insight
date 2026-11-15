@@ -50,6 +50,7 @@
           :value="section.value"
           :aria-label="section.label"
           @input="section.input(Number(($event.target as HTMLInputElement).value))"
+          @change="section.change?.(Number(($event.target as HTMLInputElement).value))"
         />
         <span class="menu-range-value">{{ section.format ? section.format(section.value) : section.value }}</span>
       </label>

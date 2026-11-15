@@ -135,6 +135,7 @@ import { defineComponent, h, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { stepperTools, type StepperArgs } from '@/utils/stepper'
+import { settingsTools, type SettingArgs } from '@/utils/settings'
 import ToolMenuSections from './ToolMenuSections.vue'
 import {
   GROUP_LABELS,
@@ -176,6 +177,9 @@ interface Group {
   tools: PlotTool[]
 }
 
+/** Plotly's tools that only make sense when the plot reports what they select. */
+const SELECTION_TOOLS = ['plotly-dragmode:select', 'plotly-dragmode:lasso']
+
 export default defineComponent({
   name: 'PlotToolbar',
   components: { ToolIconSvg, ToolMenuSections },
@@ -194,6 +198,16 @@ export default defineComponent({
     stepper: {
       type: Object as PropType<StepperArgs | undefined>,
       default: undefined,
+    },
+    /** The component's `settings` argument: a gear menu of settings kept in the state. */
+    settings: {
+      type: Array as PropType<SettingArgs[] | undefined>,
+      default: undefined,
+    },
+    /** Whether the plot reports a selection of several points; without it, box select and lasso are hidden. */
+    selection: {
+      type: Boolean,
+      default: false,
     },
   },
   setup() {
@@ -221,9 +235,14 @@ export default defineComponent({
         this.selectionStore.updateSelection(identifier, value),
       )
     },
-    /** The component's tools with the stepper's buttons first. */
+    settingsTools(): PlotTool[] {
+      return settingsTools(this.settings, this.selectionStore.$state as Record<string, unknown>, (identifier, value) =>
+        this.selectionStore.updateSelection(identifier, value),
+      )
+    },
+    /** The component's tools with the stepper's buttons first and its settings last. */
     allTools(): PlotTool[] {
-      return [...this.stepperTools, ...this.tools]
+      return [...this.stepperTools, ...this.tools, ...this.settingsTools]
     },
     groups(): Group[] {
       const all: PlotTool[] = [...this.plotlyButtons, ...this.allTools]
@@ -299,7 +318,9 @@ export default defineComponent({
       })
     },
     readPlotlyButtons(): void {
-      const next = plotlyTools(document.getElementById(this.plotId))
+      const next = plotlyTools(document.getElementById(this.plotId)).filter(
+        (tool) => this.selection || !SELECTION_TOOLS.includes(tool.id),
+      )
       const same =
         next.length === this.plotlyButtons.length &&
         next.every((tool, i) => tool.id === this.plotlyButtons[i].id && tool.active === this.plotlyButtons[i].active)

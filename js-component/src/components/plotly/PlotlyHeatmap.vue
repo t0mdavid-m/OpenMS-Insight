@@ -3,7 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" :selection="!!multiSelectEnabled" />
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
   </div>
@@ -36,6 +36,28 @@ function formatValue(v: number): string {
   const a = Math.abs(v)
   if (a !== 0 && (a >= 1e5 || a < 1e-3)) return v.toExponential(1)
   return String(Number(v.toPrecision(3)))
+}
+
+/** Longest tick label on a text axis; longer names keep their start and end. */
+const MAX_TICK_LABEL = 18
+
+/**
+ * Ticks of an axis whose values are text (sample or protein names): long names
+ * are shortened in the middle, so they leave the plot its room (the full name
+ * stays in the hover), and at most `most` of them are labelled.
+ */
+function textTicks(values: unknown[], most: number): Partial<Plotly.LayoutAxis> {
+  if (!values.length || typeof values[0] !== 'string') return {}
+  const names = [...new Set(values as string[])]
+  if (!names.some((n) => n.length > MAX_TICK_LABEL) && names.length <= most) return {}
+  const step = Math.max(1, Math.ceil(names.length / most))
+  const shown = names.filter((_, i) => i % step === 0)
+  const half = Math.floor((MAX_TICK_LABEL - 1) / 2)
+  return {
+    tickmode: 'array',
+    tickvals: shown,
+    ticktext: shown.map((n) => (n.length > MAX_TICK_LABEL ? `${n.slice(0, half)}…${n.slice(-half)}` : n)),
+  }
 }
 
 export default defineComponent({
@@ -359,6 +381,16 @@ export default defineComponent({
       if (!this.isDataReady) return []
       const yCol = this.args.yColumn
       return this.heatmapData.map((row) => row[yCol] as number)
+    },
+
+    /** Tick labels of a text x axis, shortened (see textTicks). */
+    xTicks(): Partial<Plotly.LayoutAxis> {
+      return textTicks(this.xValues as unknown[], 40)
+    },
+
+    /** Tick labels of a text y axis, shortened (see textTicks). */
+    yTicks(): Partial<Plotly.LayoutAxis> {
+      return textTicks(this.yValues as unknown[], Math.max(4, Math.floor(this.plotHeight / 14)))
     },
 
     /**
@@ -721,13 +753,19 @@ export default defineComponent({
         ...SELECTION_LAYOUT,
         shapes: [...this.selectedBoxShapes, ...this.measureOverlay.shapes],
         annotations: this.measureOverlay.annotations,
+        // automargin: text tick labels (sample or protein names) push the
+        // axis title out instead of running into it
         xaxis: {
-          title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
+          title: this.args.xLabel ? { text: this.args.xLabel, standoff: 8 } : undefined,
           range: this.xRange,
+          automargin: true,
+          ...this.xTicks,
         },
         yaxis: {
-          title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
+          title: this.args.yLabel ? { text: this.args.yLabel, standoff: 8 } : undefined,
           range: this.yRange,
+          automargin: true,
+          ...this.yTicks,
         },
         margin: {
           l: 60,

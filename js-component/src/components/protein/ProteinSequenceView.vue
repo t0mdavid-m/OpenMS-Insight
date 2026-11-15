@@ -14,7 +14,8 @@
     <h4>{{ args.title }}</h4>
   </div>
 
-  <v-sheet class="pa-4 rounded-lg" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
+  <v-sheet class="pa-4 rounded-lg help-card" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
+      <HelpIcon v-if="args.help" :text="args.help" floating class="card-help" />
     <div class="sequence-and-scale">
     <div :id="sequencePartId" class="sequence-part">
       <!-- Label and value pairs wrap as whole pairs, never inside one -->
@@ -592,6 +593,7 @@
 </template>
 
 <script lang="ts">
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { defineComponent, toRaw, type PropType } from 'vue'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
@@ -702,7 +704,7 @@ function sameModifications(a: ModificationData[], b: ModificationData[]): boolea
 
 export default defineComponent({
   name: 'ProteinSequenceView',
-  components: {
+  components: { HelpIcon,
     SequenceViewInformation,
     FragmentTable,
     AminoAcidCell,
@@ -2711,6 +2713,14 @@ export default defineComponent({
 .sequence-regex-field .v-field__input {
   padding-top: 19px;
   padding-bottom: 4px;
+}
+
+.help-card {
+  position: relative;
+}
+.help-card > .card-help {
+  top: 6px;
+  left: 6px;
 }
 </style>
 
