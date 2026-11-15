@@ -177,6 +177,9 @@ interface Group {
   tools: PlotTool[]
 }
 
+/** Plotly's tools that only make sense when the plot reports what they select. */
+const SELECTION_TOOLS = ['plotly-dragmode:select', 'plotly-dragmode:lasso']
+
 export default defineComponent({
   name: 'PlotToolbar',
   components: { ToolIconSvg, ToolMenuSections },
@@ -200,6 +203,11 @@ export default defineComponent({
     settings: {
       type: Array as PropType<SettingArgs[] | undefined>,
       default: undefined,
+    },
+    /** Whether the plot reports a selection of several points; without it, box select and lasso are hidden. */
+    selection: {
+      type: Boolean,
+      default: false,
     },
   },
   setup() {
@@ -310,7 +318,9 @@ export default defineComponent({
       })
     },
     readPlotlyButtons(): void {
-      const next = plotlyTools(document.getElementById(this.plotId))
+      const next = plotlyTools(document.getElementById(this.plotId)).filter(
+        (tool) => this.selection || !SELECTION_TOOLS.includes(tool.id),
+      )
       const same =
         next.length === this.plotlyButtons.length &&
         next.every((tool, i) => tool.id === this.plotlyButtons[i].id && tool.active === this.plotlyButtons[i].active)

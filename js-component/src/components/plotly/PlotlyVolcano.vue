@@ -21,7 +21,7 @@
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div class="volcano-plot-area">
-      <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
+      <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" :selection="!!multiSelectEnabled" />
       <div :id="id" class="volcano-container" :style="{ minHeight: `${plotHeight}px` }"></div>
       <MeasureHint v-if="args.measure" :measure="measure" />
     </div>
@@ -33,6 +33,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { isClickedRow, usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { placeLabels, type LabelOffset } from '@/composables/labelPlacement'
 import { clearSelectionTool, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
@@ -130,6 +131,8 @@ export default defineComponent({
       // Height of the selection presets above the plot, part of args.height
       selectBarHeight: 0 as number,
       selectBarObserver: null as ResizeObserver | null,
+      // Where each label (by its place in labelledPoints) sits relative to its point
+      labelOffsets: [] as LabelOffset[],
     }
   },
   computed: {
@@ -429,12 +432,9 @@ export default defineComponent({
       return shapes
     },
 
-    /**
-     * Build annotations for top significant points.
-     */
-    pointAnnotations(): Partial<Plotly.Annotations>[] {
+    /** The most significant changed points, labelled (at most args.maxLabels). */
+    labelledPoints(): Array<{ label: string; log2fc: number; neglog10p: number }> {
       if (!this.args.labelColumn) return []
-
       const maxLabels = this.args.maxLabels ?? 10
       if (maxLabels <= 0) return []
 
@@ -443,49 +443,48 @@ export default defineComponent({
       const neglog10pCol = this.args.neglog10pColumn
       const pvalueCol = this.args.pvalueColumn
 
-      // Get significant points and sort by -log10(p) descending
-      const significantPoints: Array<{
-        label: string
-        log2fc: number
-        neglog10p: number
-      }> = []
-
+      const significantPoints: Array<{ label: string; log2fc: number; neglog10p: number }> = []
       this.volcanoData.forEach((row) => {
         const log2fc = Number(row[log2fcCol]) || 0
         const pvalue = Number(row[pvalueCol]) || 1
         const neglog10p = Number(row[neglog10pCol]) || 0
         const label = String(row[labelCol] || '')
-
         const category = computeSignificance(log2fc, pvalue, this.fcThreshold, this.pThreshold)
         if (category !== 'ns' && label) {
           significantPoints.push({ label, log2fc, neglog10p })
         }
       })
-
-      // Sort by significance (most significant first)
+      // Most significant first
       significantPoints.sort((a, b) => b.neglog10p - a.neglog10p)
+      return significantPoints.slice(0, maxLabels)
+    },
 
-      // Take top N
-      const topPoints = significantPoints.slice(0, maxLabels)
-
-      return topPoints.map((point) => ({
-        x: point.log2fc,
-        y: point.neglog10p,
-        text: point.label,
-        showarrow: true,
-        arrowhead: 0,
-        arrowsize: 0.5,
-        arrowwidth: 1,
-        arrowcolor: 'rgba(100, 100, 100, 0.5)',
-        ax: 0,
-        ay: -25,
-        font: {
-          size: 10,
-          color: this.theme?.textColor || 'black',
-        },
-        bgcolor: this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
-        borderpad: 2,
-      }))
+    /**
+     * Labels of the top significant points, each placed where its box
+     * covers no other point and no other label (labelOffsets).
+     */
+    pointAnnotations(): Partial<Plotly.Annotations>[] {
+      return this.labelledPoints.map((point, i) => {
+        const offset = this.labelOffsets[i] ?? { ax: 0, ay: -25 }
+        return {
+          x: point.log2fc,
+          y: point.neglog10p,
+          text: point.label,
+          showarrow: true,
+          arrowhead: 0,
+          arrowsize: 0.5,
+          arrowwidth: 1,
+          arrowcolor: 'rgba(100, 100, 100, 0.5)',
+          ax: offset.ax,
+          ay: offset.ay,
+          font: {
+            size: 10,
+            color: this.theme?.textColor || 'black',
+          },
+          bgcolor: this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
+          borderpad: 2,
+        }
+      })
     },
 
     /** Identity of the plotted points: other data drops the measurements. */
@@ -688,6 +687,13 @@ export default defineComponent({
         )
         this.setupClickHandler()
         this.setupSelectHandlers()
+        this.placePointLabels()
+        // Zoomed or panned: the labels find their free side again
+        ;(element as Plotly.PlotlyHTMLElement).on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+          if (Object.keys(eventData || {}).some((k) => k.startsWith('xaxis') || k.startsWith('yaxis'))) {
+            this.placePointLabels()
+          }
+        })
         this.zoom.bindNative(element as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
         this.measure.bindLabelClicks(element)
 
@@ -699,6 +705,37 @@ export default defineComponent({
         console.error('PlotlyVolcano: Error rendering plot:', error)
         this.renderFallback()
       }
+    },
+
+    /**
+     * Move labels that cover another point or label to a free side, using the
+     * axes as drawn; relayouts the annotations when an offset changed.
+     */
+    placePointLabels(): void {
+      const element = document.getElementById(this.id) as (Plotly.PlotlyHTMLElement & {
+        _fullLayout?: {
+          xaxis: { l2p: (v: number) => number }
+          yaxis: { l2p: (v: number) => number }
+          _size: { w: number; h: number }
+        }
+      }) | null
+      const full = element?._fullLayout
+      if (!element || !full || this.labelledPoints.length === 0) return
+      const toPx = (x: number, y: number) => ({ px: full.xaxis.l2p(x), py: full.yaxis.l2p(y) })
+      const hidden = new Set(this.layers.state.hidden)
+      const { up, down, ns } = this.categorizedData
+      const points: Array<{ px: number; py: number }> = []
+      for (const [name, group] of [['ns', ns], ['down', down], ['up', up]] as const) {
+        if (hidden.has(name)) continue
+        group.x.forEach((x, i) => points.push(toPx(x, group.y[i])))
+      }
+      const offsets = placeLabels(
+        this.labelledPoints.map((p) => ({ ...toPx(p.log2fc, p.neglog10p), text: p.label })),
+        points, full._size.w, full._size.h,
+      )
+      if (JSON.stringify(offsets) === JSON.stringify(this.labelOffsets)) return
+      this.labelOffsets = offsets
+      void Plotly.relayout(element, { annotations: this.layout.annotations })
     },
 
     /** Plotly's selection styling for a trace whose points are rows `indices`. */

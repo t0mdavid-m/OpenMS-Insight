@@ -404,6 +404,9 @@ body {
 .insight-root.with-help .plot-toolbar {
   padding-left: 26px;
 }
+.insight-root.with-help .volcano-select-bar {
+  padding-left: 28px;
+}
 .insight-root.with-help .table-toolbar {
   padding-left: 22px;
 }
