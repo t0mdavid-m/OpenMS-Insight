@@ -842,6 +842,8 @@ view(key="structure", state_manager=state_manager)
 
 The structure is given per render with `set_structure()`, since where it comes from is up to the app. With `on_structure_action(handler)`, the view offers buttons to upload a structure file and to remove an uploaded one. The handler receives `{"op": "upload", "accession", "name", "data"}` or `{"op": "remove", "accession"}` and returns True to rerun.
 
+The script button in the view's toolbar saves the colouring as shown (fragment evidence, modifications, hidden termini; not the current selection) as a script for a desktop viewer: a ChimeraX Python script (`.py`, File > Open) or a PyMOL script (`.pml`, File > Run Script). Each script carries the structure itself and lists what the colours mean in its header, so the one file is all that is needed.
+
 ---
 
 ## Shared Component Arguments
