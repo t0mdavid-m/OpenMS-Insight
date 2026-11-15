@@ -33,6 +33,7 @@ import {
   type CurrentWindow,
   type WindowOverlay,
 } from '@/utils/mzWindow'
+import { copyText, fillUsi, usiTool } from '@/utils/usi'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
@@ -96,6 +97,9 @@ export default defineComponent({
       isInitialized: false as boolean,
       // The Window button hides the shaded window (window_identifier) and shows it again
       windowShown: true as boolean,
+      /** Outcome of the last USI copy, shown on its button for a moment (null: none). */
+      usiCopied: null as boolean | null,
+      usiTimer: 0,
       manualXRange: undefined as number[] | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
       labelEditorPosition: null as { left: number; top: number } | null,
@@ -110,6 +114,17 @@ export default defineComponent({
     /** The window kept under window_identifier, if one is set. */
     currentWindow(): CurrentWindow | null {
       return currentWindow(this.args, this.selectionStore.$state)
+    },
+
+    /** The shown spectrum's USI, once every placeholder of `usi` has a value. */
+    currentUsi(): string | null {
+      return fillUsi(this.args.usi, this.selectionStore.$state)
+    },
+
+    /** The USI button, only while the USI is complete. */
+    usiTools(): PlotTool[] {
+      const usi = this.currentUsi
+      return usi ? [usiTool(usi, this.usiCopied, () => this.copyUsi(usi))] : []
     },
 
     /** The Window switch, only while a window is set. */
@@ -137,6 +152,7 @@ export default defineComponent({
         ...this.labels.tools(),
         ...this.pinZoom.tools(),
         ...this.windowTools,
+        ...this.usiTools,
         downloadTool({
           plotId: this.id,
           format: () => imageFormatOf(this.args.imageFormat),
@@ -328,6 +344,12 @@ export default defineComponent({
     this.render()
   },
   methods: {
+    /** Copies the USI and shows the outcome on its button for two seconds. */
+    async copyUsi(usi: string) {
+      this.usiCopied = await copyText(usi)
+      window.clearTimeout(this.usiTimer)
+      this.usiTimer = window.setTimeout(() => (this.usiCopied = null), 2000)
+    },
     extractSide(
       dataKey: 'plotDataTop' | 'plotDataBottom',
       highlightConfigKey: 'topHighlightColumn' | 'bottomHighlightColumn',

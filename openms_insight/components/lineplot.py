@@ -27,6 +27,7 @@ from ..core.top_peak_labels import (
     validate_show_top_peak_labels,
     validate_top_peak_labels,
 )
+from ..core.usi import usi_args, validate_usi
 from ..core.x_markers import (
     validate_x_marker_tolerance,
     validate_x_markers,
@@ -105,6 +106,7 @@ class LinePlot(BaseComponent):
         stepper: str | None = None,
         window_identifier: str | None = None,
         window_tolerance: float | str = DEFAULT_WINDOW_TOLERANCE,
+        usi: str | None = None,
         **kwargs,
     ):
         """
@@ -206,6 +208,11 @@ class LinePlot(BaseComponent):
                 peak within it of a marker gets a dot, the marker's label and
                 its name in the hover read-out (default None: guides only).
                 Render-time only: not part of the cache.
+            usi: Universal Spectrum Identifier of the shown spectrum, for a
+                USI button that copies it, e.g.
+                'mzspec:PXD000561:run1:scan:{spectrum}'. A ``{identifier}``
+                placeholder takes the value the state holds there (default
+                None: no button). Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -247,6 +254,9 @@ class LinePlot(BaseComponent):
         # Render-time options, kept out of the cache config (see core/mz_window.py)
         self._window_identifier = validate_window_identifier(window_identifier)
         self._window_tolerance = validate_window_tolerance(window_tolerance)
+
+        # Render-time option, kept out of the cache config (see core/usi.py)
+        self._usi = validate_usi(usi)
 
         super().__init__(
             cache_id=cache_id,
@@ -562,6 +572,7 @@ class LinePlot(BaseComponent):
             top_peak_label_args(self._top_peak_labels, self._show_top_peak_labels)
         )
         args.update(x_marker_args(self._x_markers, self._x_marker_tolerance))
+        args.update(usi_args(self._usi))
         return args
 
     def with_styling(
