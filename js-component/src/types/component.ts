@@ -188,6 +188,7 @@ export interface LinePlotComponentArgs
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
+  relativeIntensity?: boolean // Start with intensities as % of the highest peak (Relative button)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
   showTopPeakLabels?: boolean // Start with the top peak labels shown
   windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
