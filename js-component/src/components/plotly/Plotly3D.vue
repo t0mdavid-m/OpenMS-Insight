@@ -14,9 +14,18 @@ import { useSelectionStore } from '@/stores/selection'
 import type { Plot3DComponentArgs } from '@/types/component'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
+
+// Looking straight down the intensity axis: the scene as a flat RT x m/z map
+const TOP_VIEW_CAMERA = { eye: { x: 0, y: 0, z: 2.2 }, up: { x: 0, y: 1, z: 0 }, center: { x: 0, y: 0, z: 0 } }
+const TOP_VIEW_ICON = 'M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h4v4H7V7zm6 0h4v4h-4V7zm-6 6h4v4H7v-4zm6 0h4v4h-4v-4z'
+
+function formatIntensity(v: number): string {
+  if (v >= 1e4 || (v > 0 && v < 0.01)) return v.toExponential(1)
+  return String(Math.round(v * 100) / 100)
+}
 
 // Floor the stems and trace starts drop to. Far below zero so the vertical
 // segment always reaches the bottom of the z range, which starts at 0.
@@ -55,6 +64,10 @@ export default defineComponent({
   data() {
     return {
       drawPending: false,
+      /** Lowest z drawn; absent: every point. */
+      minZ: undefined as number | undefined,
+      /** Seen from above, as a flat map without perspective. */
+      topView: false,
     }
   },
   computed: {
@@ -62,6 +75,19 @@ export default defineComponent({
       const height = this.args.height || 800
       return [
         ...this.layers.tool(this.layerList, 'Series'),
+        this.filterTool,
+        {
+          id: 'top-view',
+          group: 'view',
+          icon: TOP_VIEW_ICON,
+          label: 'View from above',
+          short: 'From above',
+          help: this.topView ? 'back to the 3D view' : 'flat map, seen along the ' + (this.args.zLabel || 'z') + ' axis',
+          active: this.topView,
+          run: () => {
+            this.topView = !this.topView
+          },
+        },
         downloadTool({
           plotId: this.id,
           format: () => imageFormatOf(this.args.imageFormat),
@@ -70,6 +96,42 @@ export default defineComponent({
           height,
         }),
       ]
+    },
+    /** The "Filter" button: the lowest z drawn, from 0 to the highest z of the data. */
+    filterTool(): PlotTool {
+      const hi = this.dataMaxZ
+      const label = this.args.zLabel || 'z'
+      return {
+        id: 'filter',
+        group: 'show',
+        icon: ICONS.palette,
+        label: 'Filter',
+        short: this.minZ === undefined ? 'Filter' : `${label} ≥ ${formatIntensity(this.minZ)}`,
+        help: `which points are drawn, by their ${label}`,
+        active: this.minZ !== undefined,
+        menu: [
+          {
+            kind: 'range',
+            label: `Show ${label} from`,
+            min: 0,
+            max: hi,
+            step: hi > 0 ? hi / 100 : 1,
+            value: this.minZ ?? 0,
+            format: (v: number) => (v <= 0 ? 'all' : `≥ ${formatIntensity(v)}`),
+            input: (v: number) => {
+              this.minZ = v <= 0 ? undefined : v
+            },
+          },
+        ],
+        run: () => {},
+      }
+    },
+    /** Highest z of the data, before the filter. */
+    dataMaxZ(): number {
+      const zs = (this.columns[this.args.zColumn] as number[]) || []
+      let max = 0
+      for (const z of zs) if (z > max) max = z
+      return max
     },
     argsKey(): string {
       return JSON.stringify(this.args)
@@ -125,6 +187,7 @@ export default defineComponent({
         const x = xs[i]
         const y = ys[i]
         const z = zs[i]
+        if (this.minZ !== undefined && !(z >= this.minZ)) continue
 
         if (stems) {
           // Points at or below the floor of the z range draw nothing
@@ -206,6 +269,7 @@ export default defineComponent({
       return max
     },
     traces(): Plotly.Data[] {
+      if (this.topView) return this.topViewTraces
       return this.allSeries.map(
         (s) =>
           ({
@@ -220,6 +284,58 @@ export default defineComponent({
           }) as Plotly.Data
       )
     },
+    /** Seen from above a stem is a point: one marker per peak, coloured by its height */
+    topViewTraces(): Plotly.Data[] {
+      const maxZ = this.maxZ || 1
+      const single = this.allSeries.filter((s) => s.key !== '__highlight__').length === 1
+      return this.allSeries.map((s) => {
+        const x: number[] = []
+        const y: number[] = []
+        const z: number[] = []
+        for (let i = 0; i < s.z.length; i++) {
+          const zi = s.z[i]
+          if (zi === null || zi <= STEM_FLOOR || zi <= TRACE_FLOOR) continue
+          x.push(s.x[i] as number)
+          y.push(s.y[i] as number)
+          z.push(zi)
+        }
+        const highlight = s.key === '__highlight__'
+        return {
+          name: s.name,
+          type: 'scatter3d',
+          mode: 'markers',
+          x,
+          y,
+          z,
+          marker: highlight
+            ? { color: s.color, size: 5 }
+            : {
+                size: 3,
+                // Square root, so weak peaks stay visible next to strong ones
+                color: z.map((v) => Math.sqrt(v)),
+                cmin: 0,
+                cmax: Math.sqrt(maxZ),
+                // One series: a blue scale by height; several: each its own colour
+                colorscale: single
+                  ? [
+                      [0, '#c6d3ff'],
+                      [0.5, '#3157e9'],
+                      [1, '#0b1a5c'],
+                    ]
+                  : [
+                      [0, s.color],
+                      [1, s.color],
+                    ],
+                showscale: single,
+                colorbar: single
+                  ? { title: { text: this.args.zLabel || 'z' }, thickness: 12, len: 0.6, tickvals: [], ticks: '' }
+                  : undefined,
+                opacity: 0.9,
+              },
+          hovertemplate: `${this.args.xLabel || 'x'}: %{x}<br>${this.args.yLabel || 'y'}: %{y}<br>${this.args.zLabel || 'z'}: %{z:.3s}<extra>${s.name}</extra>`,
+        } as Plotly.Data
+      })
+    },
     layout(): Partial<Plotly.Layout> {
       const yaxis: Record<string, unknown> = { title: { text: this.args.yLabel } }
       if (this.args.yDtick !== undefined && this.args.yDtick !== null) {
@@ -229,14 +345,21 @@ export default defineComponent({
       const scene: Record<string, unknown> = {
         xaxis: { title: { text: this.args.xLabel } },
         yaxis,
-        zaxis: { title: { text: this.args.zLabel }, range: [0, this.maxZ] },
+        // Seen from above the z axis is a point: no title or ticks to overlap
+        zaxis: this.topView
+          ? { title: { text: '' }, showticklabels: false, range: [0, this.maxZ] }
+          : { title: { text: this.args.zLabel }, range: [0, this.maxZ] },
       }
-      if (this.args.cameraEye || this.args.cameraCenter) {
+      if (this.topView) {
+        scene.camera = { ...TOP_VIEW_CAMERA, projection: { type: 'orthographic' } }
+      } else if (this.args.cameraEye || this.args.cameraCenter) {
         scene.camera = {
           ...(this.args.cameraEye ? { eye: this.args.cameraEye } : {}),
           ...(this.args.cameraCenter ? { center: this.args.cameraCenter } : {}),
         }
       }
+      // A rotation of the user stays across reruns; switching the view applies its camera
+      scene.uirevision = this.topView ? 'top' : 'free'
       if (this.args.aspectRatio) {
         scene.aspectmode = 'manual'
         scene.aspectratio = this.args.aspectRatio
@@ -281,6 +404,12 @@ export default defineComponent({
     },
     // By value: the arguments arrive as a new object on every rerun
     argsKey() {
+      this.requestRender()
+    },
+    minZ() {
+      this.requestRender()
+    },
+    topView() {
       this.requestRender()
     },
   },
