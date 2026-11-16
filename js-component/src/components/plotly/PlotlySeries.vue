@@ -3,8 +3,8 @@
     <MeasureHint v-if="measurable" :measure="measure" />
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings">
       <!-- The views in the toolbar's row, left of the tools: one row of controls -->
-      <template v-if="views.length > 1" #lead>
-        <div class="view-switch" role="tablist" :style="switchStyle">
+      <template v-if="views.length > 1 || switches.length > 1" #lead>
+        <div v-if="views.length > 1" class="view-switch" role="tablist" :style="switchStyle">
           <button
             v-for="[value, label] in views"
             :key="value"
@@ -18,9 +18,24 @@
             {{ label }}
           </button>
         </div>
+        <!-- A second switch whose value the caller reads (switch_identifier) -->
+        <div v-if="switches.length > 1" class="view-switch" role="tablist" :style="switchStyle">
+          <button
+            v-for="[value, label] in switches"
+            :key="value"
+            type="button"
+            role="tab"
+            class="view-button"
+            :class="{ active: value === currentSwitch }"
+            :aria-selected="value === currentSwitch"
+            @click="pickSwitch(value)"
+          >
+            {{ label }}
+          </button>
+        </div>
       </template>
     </PlotToolbar>
-    <div :id="id" class="plot-container"></div>
+    <div :id="id" class="plot-container" :style="{ minHeight: `${plotHeight}px` }"></div>
   </div>
 </template>
 
@@ -41,7 +56,7 @@ import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotToo
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
-import { SELECTION_ACCENT } from '@/composables/useMultiSelect'
+import { SELECTION_ACCENT, clearSelectionTool } from '@/composables/useMultiSelect'
 
 let plotIdCounter = 0
 
@@ -115,6 +130,31 @@ export default defineComponent({
         }
       }
       return values[0]
+    },
+    /** [value, label] of the buttons of switch_identifier. */
+    switches(): Array<[string, string]> {
+      if (!this.args.switchIdentifier) return []
+      return (this.args.switchNames || []).map(([k, v]) => [String(k), v] as [string, string])
+    },
+    /** The switch button that is on: the state's value, else the default. */
+    currentSwitch(): string | null {
+      const values = this.switches.map(([value]) => value)
+      if (!values.length) return null
+      const identifier = this.args.switchIdentifier as string
+      for (const candidate of [this.selectionStore.$state[identifier], this.args.switchDefault]) {
+        if (candidate !== undefined && candidate !== null && values.includes(String(candidate))) {
+          return String(candidate)
+        }
+      }
+      return values[0]
+    },
+    /** Entries of the first clear identifier holding a list. */
+    clearCount(): number {
+      for (const identifier of this.args.clearIdentifiers || []) {
+        const value = this.selectionStore.$state[identifier]
+        if (Array.isArray(value)) return value.length
+      }
+      return 0
     },
     currentViewLabel(): string {
       const view = this.views.find(([value]) => value === this.currentView)
@@ -208,7 +248,11 @@ export default defineComponent({
             run: () => {},
           }]
         : []
+      const clear: PlotTool[] = (this.args.clearIdentifiers || []).length
+        ? [{ ...clearSelectionTool(() => this.clearIdentifiers(), this.clearCount), short: 'Clear selection', keep: true }]
+        : []
       return [
+        ...clear,
         ...top,
         ...(this.measurable ? this.measure.tools(this.measureTitle) : []),
         ...this.layers.tool(this.layerList, 'Series'),
@@ -581,6 +625,21 @@ export default defineComponent({
       // Skip no-op writes (see ProteinSequenceView)
       if (identifier && this.selectionStore.$state[identifier] !== value) {
         this.selectionStore.updateSelection(identifier, value)
+      }
+    },
+    pickSwitch(value: string): void {
+      const identifier = this.args.switchIdentifier
+      // Skip no-op writes (see ProteinSequenceView)
+      if (identifier && this.selectionStore.$state[identifier] !== value) {
+        this.selectionStore.updateSelection(identifier, value)
+      }
+    },
+    clearIdentifiers(): void {
+      for (const identifier of this.args.clearIdentifiers || []) {
+        const value = this.selectionStore.$state[identifier]
+        if (value !== undefined && value !== null) {
+          this.selectionStore.updateSelection(identifier, null)
+        }
       }
     },
     onClick(eventData: { points: Array<{ curveNumber: number; pointIndex: number }> }): void {

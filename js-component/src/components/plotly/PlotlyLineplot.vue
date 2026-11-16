@@ -4,7 +4,7 @@
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
-    <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+    <div :id="id" class="plot-container" :style="{ ...cssCustomProperties, minHeight: `${plotHeight}px` }"></div>
     <PeakHoverTip
       :tip="hover.tip"
       :color="theme?.textColor || '#262730'"

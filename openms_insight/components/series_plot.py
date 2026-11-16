@@ -97,6 +97,10 @@ class SeriesPlot(BaseComponent):
         bar_height: int | None = None,
         highlight: dict[str, str] | None = None,
         highlight_data: pl.LazyFrame | pl.DataFrame | None = None,
+        switch_identifier: str | None = None,
+        switch_names: dict[str, str] | None = None,
+        switch_default: str | None = None,
+        clear_identifiers: list[str] | None = None,
         **kwargs,
     ):
         """
@@ -197,6 +201,20 @@ class SeriesPlot(BaseComponent):
                 for a plot drawn from fewer rows than it can mark, such as
                 boxes drawn from thinned values. Needs the x and y columns
                 and the ``highlight`` columns.
+            switch_identifier: State identifier of a second switch in the
+                toolbar's row, after the views: one button per entry of
+                ``switch_names`` (value: label, in that order). A click writes
+                the button's value there, for the caller to read and decide
+                what to show (e.g. the terms of a selection or of all
+                entries). None (default) draws no switch. Render-time only.
+            switch_names: The buttons of that switch (value: label).
+            switch_default: The button that is on while the identifier holds
+                none of the values (default: the first).
+            clear_identifiers: State identifiers a "Clear selection" button in
+                the toolbar sets to None (e.g. the selection another component
+                made, and ``switch_identifier``). Its tooltip counts the
+                entries of the first one holding a list. None (default) draws
+                no button. Render-time only.
             **kwargs: Additional configuration options.
         """
         if y_range_mode not in ("nonnegative", "tozero", "normal"):
@@ -225,6 +243,14 @@ class SeriesPlot(BaseComponent):
             raise ValueError("top_default needs top_choices")
         if view_identifier is not None and view_column is None:
             raise ValueError("view_identifier needs view_column")
+        if switch_identifier is not None and not switch_names:
+            raise ValueError("switch_identifier needs switch_names")
+        if switch_default is not None and str(switch_default) not in {
+            str(k) for k in (switch_names or {})
+        }:
+            raise ValueError(
+                f"switch_default {switch_default!r} is not one of switch_names"
+            )
         if bar_height is not None and int(bar_height) < 1:
             raise ValueError("bar_height must be a positive number of pixels")
         self._x_column = x_column
@@ -260,6 +286,11 @@ class SeriesPlot(BaseComponent):
         # Render-time: the identifier the picked view goes to, the bar height
         self._view_identifier = view_identifier
         self._bar_height = int(bar_height) if bar_height is not None else None
+        # Render-time: a switch whose value the caller reads, a clear button
+        self._switch_identifier = switch_identifier
+        self._switch_names = dict(switch_names or {})
+        self._switch_default = switch_default
+        self._clear_identifiers = list(clear_identifiers or [])
 
         self._highlight = dict(highlight or {})
         if highlight_data is not None and not self._highlight:
@@ -560,4 +591,12 @@ class SeriesPlot(BaseComponent):
             args["topDefault"] = self._top_default
         if self._bar_height:
             args["barHeight"] = self._bar_height
+        if getattr(self, "_switch_identifier", None):
+            args["switchIdentifier"] = self._switch_identifier
+            # Lists keep the order of switch_names through JSON
+            args["switchNames"] = [[str(k), v] for k, v in self._switch_names.items()]
+            if self._switch_default is not None:
+                args["switchDefault"] = str(self._switch_default)
+        if getattr(self, "_clear_identifiers", None):
+            args["clearIdentifiers"] = list(self._clear_identifiers)
         return args

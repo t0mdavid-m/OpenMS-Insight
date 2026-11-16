@@ -92,3 +92,32 @@ def test_cache_restores_views(tmp_path, terms):
 def test_invalid_options(tmp_path, terms, kwargs):
     with pytest.raises(ValueError):
         _plot(tmp_path, terms, **kwargs)
+
+
+def test_switch_and_clear_args(tmp_path, terms):
+    plot = _plot(
+        tmp_path,
+        terms,
+        switch_identifier="go_mode",
+        switch_names={"selection": "Selection", "all": "All proteins"},
+        switch_default="selection",
+        clear_identifiers=["picked", "go_mode"],
+    )
+    args = plot._get_component_args()
+    assert args["switchIdentifier"] == "go_mode"
+    assert args["switchNames"] == [["selection", "Selection"], ["all", "All proteins"]]
+    assert args["switchDefault"] == "selection"
+    assert args["clearIdentifiers"] == ["picked", "go_mode"]
+
+
+def test_no_switch_by_default(tmp_path, terms):
+    args = _plot(tmp_path, terms)._get_component_args()
+    assert "switchIdentifier" not in args
+    assert "clearIdentifiers" not in args
+
+
+def test_switch_needs_names(tmp_path, terms):
+    with pytest.raises(ValueError):
+        _plot(tmp_path, terms, switch_identifier="go_mode")
+    with pytest.raises(ValueError):
+        _plot(tmp_path, terms, switch_identifier="go_mode", switch_names={"a": "A"}, switch_default="b")

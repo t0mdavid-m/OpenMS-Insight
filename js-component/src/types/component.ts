@@ -513,6 +513,12 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   topDefault?: number
   /** Pixels per category of a horizontal plot that grows with its bars */
   barHeight?: number
+  /** A second switch in the toolbar, writing its value to this identifier. */
+  switchIdentifier?: string
+  switchNames?: Array<[string, string]>
+  switchDefault?: string
+  /** Identifiers a "Clear selection" button sets to null. */
+  clearIdentifiers?: string[]
 }
 
 /**

@@ -1,7 +1,7 @@
 <template>
   <div class="plot-wrapper" :style="cssCustomProperties">
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
-    <div :id="id" class="plot-container"></div>
+    <div :id="id" class="plot-container" :style="{ minHeight: `${layout.height}px` }"></div>
     <MeasureHint v-if="args.measure" :measure="measure" />
     <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
       ↩

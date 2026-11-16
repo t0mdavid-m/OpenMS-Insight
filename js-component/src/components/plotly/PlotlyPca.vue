@@ -2,7 +2,7 @@
   <div class="pca-plot">
     <MeasureHint v-if="args.measure" :measure="measure" />
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
-    <div :id="id" class="pca-container"></div>
+    <div :id="id" class="pca-container" :style="{ minHeight: `${layout.height}px` }"></div>
   </div>
 </template>
 
