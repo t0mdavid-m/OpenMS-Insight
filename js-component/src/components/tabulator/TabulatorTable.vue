@@ -1220,6 +1220,7 @@ export default defineComponent({
               colDef.formatter = customFormatter
             }
           }
+          this.withRowMarks(colDef)
           return colDef as ColumnDefinition
         })],
         initialSort: this.args.initialSort,
@@ -2966,6 +2967,62 @@ export default defineComponent({
       })
     },
 
+    // Row marks: the Mark column draws a button per mark, the Note column is
+    // edited in place; both send the change to Python, which keeps them in the state
+    withRowMarks(colDef: Record<string, unknown>): void {
+      const marks = this.args.rowMarks
+      if (!marks) return
+      if (colDef.field === marks.field) {
+        colDef.headerSort = colDef.headerSort ?? true
+        // A button shows the mark's initial, or its label where two share one
+        const initials = marks.options.map((o) => o.label.charAt(0).toUpperCase())
+        const short = new Set(initials).size === initials.length
+        colDef.minWidth = short ? 40 + 26 * marks.options.length : 40 + 70 * marks.options.length
+        colDef.accessorDownload = (value: unknown) => value ?? ''
+        colDef.formatter = (cell: CellComponent) => {
+          const current = cell.getValue()
+          const wrap = document.createElement('span')
+          wrap.className = 'row-marks'
+          marks.options.forEach((option) => {
+            const button = document.createElement('button')
+            const active = current === option.label
+            button.type = 'button'
+            button.className = `row-mark${short ? '' : ' wide'}${active ? ' active' : ''}`
+            button.textContent = short ? option.label.charAt(0).toUpperCase() : option.label
+            button.title = active ? `${option.label} (click to take it off)` : option.label
+            button.setAttribute('aria-label', option.label)
+            button.setAttribute('aria-pressed', active ? 'true' : 'false')
+            button.dataset.mark = option.label
+            button.style.setProperty('--mark-color', option.color)
+            wrap.appendChild(button)
+          })
+          return wrap
+        }
+        colDef.cellClick = (event: UIEvent, cell: CellComponent) => {
+          const button = (event.target as HTMLElement | null)?.closest('button.row-mark') as HTMLElement | null
+          if (!button) return
+          const label = button.dataset.mark ?? null
+          const mark = cell.getValue() === label ? null : label
+          const key = cell.getRow().getData()[this.args.tableIndexField || 'id']
+          ;(cell.getRow() as unknown as { update: (d: Record<string, unknown>) => void }).update({ [marks.field]: mark })
+          this.streamlitDataStore.sendEvent({ type: 'row_mark', key, mark })
+        }
+      } else if (marks.noteField && colDef.field === marks.noteField) {
+        colDef.editor = 'input'
+        colDef.minWidth = colDef.minWidth ?? 120
+        colDef.formatter = (cell: CellComponent) => {
+          const value = cell.getValue()
+          if (value) return String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+          return '<span class="row-note-empty">Add a note</span>'
+        }
+        colDef.accessorDownload = (value: unknown) => value ?? ''
+        colDef.cellEdited = (cell: CellComponent) => {
+          const key = cell.getRow().getData()[this.args.tableIndexField || 'id']
+          this.streamlitDataStore.sendEvent({ type: 'row_mark', key, note: cell.getValue() ?? '' })
+        }
+      }
+    },
+
     rowOverviewValue(col: Record<string, any>, value: unknown): string {
       const placeholders = (col.formatterParams && col.formatterParams.placeholders) || {}
       if (value !== null && value !== undefined && String(value) in placeholders) {
@@ -3986,6 +4043,40 @@ export default defineComponent({
 }
 
 /* Dark mode pagination styling */
+.row-marks {
+  display: inline-flex;
+  gap: 4px;
+}
+.row-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid var(--mark-color);
+  color: var(--mark-color);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.row-mark.wide {
+  width: auto;
+  border-radius: 11px;
+  padding: 0 8px;
+}
+.row-mark:hover {
+  opacity: 1;
+}
+.row-mark.active {
+  background: var(--mark-color);
+  color: #fff;
+  opacity: 1;
+}
+.row-note-empty {
+  opacity: 0.45;
+  font-style: italic;
+}
 .row-overview-button {
   cursor: pointer;
   font-size: 18px;

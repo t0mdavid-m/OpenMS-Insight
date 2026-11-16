@@ -23,6 +23,14 @@ from ..core.multi_select import (
     selection_values,
 )
 from ..core.registry import register_component
+from ..core.row_marks import (
+    MARK_FIELD,
+    NOTE_FIELD,
+    apply_row_mark,
+    normalize_row_marks,
+    row_marks_args,
+    with_row_marks,
+)
 from ..preprocessing.filtering import compute_dataframe_hash
 
 # A spreadsheet reads a cell starting with one of these as a formula, so a value
@@ -177,6 +185,9 @@ class Table(BaseComponent):
         keyboard_navigation: bool = True,
         collapse_columns: bool = True,
         export_info: dict[str, Any] | None = None,
+        row_marks: list[str | dict[str, str]] | None = None,
+        row_notes: bool = False,
+        row_marks_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -347,6 +358,19 @@ class Table(BaseComponent):
                 order. The download menu offers Excel (.xlsx) next to CSV when
                 ``xlsxwriter`` is installed and the table is paginated on the
                 server. Not part of the cache configuration.
+            row_marks: Marks a row can be given, e.g. ``["Accept", "Reject"]``
+                or ``[{"label": "Accept", "color": "#2e7d32"}]``. Adds a Mark
+                column with a button per mark; clicking one marks the row,
+                clicking it again takes the mark off. The marks are kept in
+                the state under ``row_marks_identifier``, keyed by the row's
+                ``index_field`` value, and shown as the column ``mark``, which
+                sorts, filters and downloads like any other column. Not part
+                of the cache configuration.
+            row_notes: Add a Note column (``note``) whose cells are edited in
+                place, kept with the marks.
+            row_marks_identifier: State identifier of the marks and notes
+                (default ``"<cache_id>_marks"``): ``{"<index value>": {"mark":
+                "Accept", "note": "..."}}``. Tables sharing it share the marks.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -364,6 +388,13 @@ class Table(BaseComponent):
         self._keyboard_navigation = bool(keyboard_navigation)
         self._collapse_columns = bool(collapse_columns)
         self._export_info = dict(export_info or {})
+        self._row_marks = normalize_row_marks(row_marks)
+        self._row_notes = bool(row_notes)
+        self._row_marks_identifier = (
+            (row_marks_identifier or f"{cache_id}_marks")
+            if self._row_marks or self._row_notes
+            else None
+        )
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
@@ -602,6 +633,8 @@ class Table(BaseComponent):
         deps = list(self._filters.keys()) if self._filters else []
         deps.extend(k for k in self._range_filters if k not in deps)
         deps.append(self._pagination_identifier)
+        if self._marks_on():
+            deps.append(self._row_marks_identifier)
         # Include interactivity identifiers for page navigation
         if self._interactivity:
             deps.extend(self._interactivity.keys())
@@ -930,6 +963,9 @@ class Table(BaseComponent):
         for col in self._multi_select.values():
             if col not in columns_to_select:
                 columns_to_select.append(col)
+        for col in self._mark_fields():
+            if col not in columns_to_select:
+                columns_to_select.append(col)
         # Include columns needed for filtering
         if self._filters:
             for col in self._filters.values():
@@ -1025,6 +1061,7 @@ class Table(BaseComponent):
             data = filter_selection(data, column, selected_value)
 
         data = self._apply_range_filters(data, state)
+        data = self._with_marks(data, state)
 
         # Get pagination state
         pagination_state = state.get(self._pagination_identifier)
@@ -1472,6 +1509,56 @@ class Table(BaseComponent):
             )
         return data
 
+    def _marks_on(self) -> bool:
+        return bool(getattr(self, "_row_marks_identifier", None))
+
+    def _mark_fields(self) -> list[str]:
+        """The columns the marks and notes add."""
+        if not self._marks_on():
+            return []
+        fields = [MARK_FIELD] if self._row_marks else []
+        if self._row_notes:
+            fields.append(NOTE_FIELD)
+        return fields
+
+    def _with_marks(self, data: pl.LazyFrame, state: dict[str, Any]) -> pl.LazyFrame:
+        """Add the ``mark`` (and ``note``) column from the marks in the state."""
+        if not self._marks_on():
+            return data
+        data = with_row_marks(
+            data,
+            self._index_field,
+            state.get(self._row_marks_identifier),
+            notes=self._row_notes,
+        )
+        if not self._row_marks:
+            data = data.drop(MARK_FIELD)
+        return data
+
+    def _set_row_mark(self, event: dict[str, Any]) -> bool:
+        """A mark button was clicked or a note edited."""
+        if not self._marks_on():
+            return False
+        from ..core.state import get_render_state_manager
+
+        state_manager = get_render_state_manager()
+        changes: dict[str, Any] = {}
+        if "mark" in event and self._row_marks:
+            changes["mark"] = event.get("mark")
+        if "note" in event and self._row_notes:
+            changes["note"] = event.get("note")
+        if not changes:
+            return False
+        marks = apply_row_mark(
+            state_manager.get_selection(self._row_marks_identifier),
+            event.get("key"),
+            [m["label"] for m in self._row_marks],
+            **changes,
+        )
+        if marks is None:
+            return False
+        return bool(state_manager.set_selection(self._row_marks_identifier, marks))
+
     def _apply_validation_filters(
         self, data: pl.LazyFrame, state: dict[str, Any]
     ) -> pl.LazyFrame:
@@ -1744,6 +1831,8 @@ class Table(BaseComponent):
             if action is None or not isinstance(row, dict):
                 return False
             return bool(action["handler"](row))
+        if event.get("type") == "row_mark":
+            return self._set_row_mark(event)
         return self._select_all(event)
 
     def _select_all(self, event: dict[str, Any]) -> bool:
@@ -1803,6 +1892,7 @@ class Table(BaseComponent):
                 continue
             data = filter_selection(data, column, selected_value)
         data = self._apply_range_filters(data, state)
+        data = self._with_marks(data, state)
 
         pagination_state = state.get(self._pagination_identifier) or {}
         data = self._apply_toggle_filters(data, pagination_state)
@@ -1911,8 +2001,29 @@ class Table(BaseComponent):
             args["numericFilters"] = self._numeric_filters
         if self._filter_presets:
             args["filterPresets"] = self._filter_presets
+        if self._marks_on():
+            self._add_mark_args(args)
 
         return args
+
+    def _add_mark_args(self, args: dict[str, Any]) -> None:
+        """The Mark and Note columns, their filter metadata and options."""
+        args.update(
+            row_marks_args(self._row_marks, self._row_notes, self._row_marks_identifier)
+        )
+        metadata = dict(args.get("columnMetadata") or {})
+        columns = list(args.get("columnDefinitions") or [])
+        if self._row_marks:
+            metadata[MARK_FIELD] = {
+                "type": "categorical",
+                "unique_values": [m["label"] for m in self._row_marks],
+            }
+            columns.append({"field": MARK_FIELD, "title": "Mark", "hozAlign": "left"})
+        if self._row_notes:
+            metadata[NOTE_FIELD] = {"type": "text"}
+            columns.append({"field": NOTE_FIELD, "title": "Note", "hozAlign": "left"})
+        args["columnMetadata"] = metadata
+        args["columnDefinitions"] = columns
 
     def with_column_formatter(
         self,
