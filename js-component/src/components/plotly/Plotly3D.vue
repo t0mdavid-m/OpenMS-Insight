@@ -1,5 +1,5 @@
 <template>
-  <div class="plot3d">
+  <div class="plot3d" :style="fullscreen ? { background: theme?.backgroundColor || '#ffffff' } : undefined">
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
   </div>
@@ -19,7 +19,11 @@ import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Looking straight down the intensity axis: the scene as a flat RT x m/z map
-const TOP_VIEW_CAMERA = { eye: { x: 0, y: 0, z: 2.2 }, up: { x: 0, y: 1, z: 0 }, center: { x: 0, y: 0, z: 0 } }
+const TOP_VIEW_CAMERA = {
+  eye: { x: 0, y: 0, z: 2.2 },
+  up: { x: 0, y: 1, z: 0 },
+  center: { x: 0, y: 0, z: 0 },
+}
 const TOP_VIEW_ICON = 'M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h4v4H7V7zm6 0h4v4h-4V7zm-6 6h4v4H7v-4zm6 0h4v4h-4v-4z'
 
 function formatIntensity(v: number): string {
@@ -41,7 +45,21 @@ interface SeriesPoints {
   x: (number | null)[]
   y: (number | null)[]
   z: (number | null)[]
+  /** z of the point each vertex belongs to, for colouring by height */
+  c: number[]
 }
+
+/** How the points are coloured: by their series, or by z scaled to the points shown or to all data. */
+type ColourMode = 'series' | 'relative' | 'absolute'
+
+// Light to dark blue; the square root of z, so weak points stay visible next to strong ones
+const HEIGHT_COLORSCALE: [number, string][] = [
+  [0, '#c6d3ff'],
+  [0.5, '#3157e9'],
+  [1, '#0b1a5c'],
+]
+const FULLSCREEN_ICON = 'M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z'
+const EXIT_FULLSCREEN_ICON = 'M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z'
 
 export default defineComponent({
   name: 'Plotly3D',
@@ -59,7 +77,12 @@ export default defineComponent({
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore, layers: useLayers(), uniqueId: `plot3d-${++plotIdCounter}` }
+    return {
+      streamlitDataStore,
+      selectionStore,
+      layers: useLayers(),
+      uniqueId: `plot3d-${++plotIdCounter}`,
+    }
   },
   data() {
     return {
@@ -68,6 +91,9 @@ export default defineComponent({
       minZ: undefined as number | undefined,
       /** Seen from above, as a flat map without perspective. */
       topView: false,
+      colourMode: 'series' as ColourMode,
+      /** The plot fills the screen. */
+      fullscreen: false,
     }
   },
   computed: {
@@ -76,17 +102,29 @@ export default defineComponent({
       return [
         ...this.layers.tool(this.layerList, 'Series'),
         this.filterTool,
+        this.colourTool,
         {
           id: 'top-view',
           group: 'view',
           icon: TOP_VIEW_ICON,
           label: 'View from above',
           short: 'From above',
-          help: this.topView ? 'back to the 3D view' : 'flat map, seen along the ' + (this.args.zLabel || 'z') + ' axis',
+          help: this.topView
+            ? 'back to the 3D view'
+            : 'flat map, seen along the ' + (this.args.zLabel || 'z') + ' axis',
           active: this.topView,
           run: () => {
             this.topView = !this.topView
           },
+        },
+        {
+          id: 'fullscreen',
+          group: 'view',
+          icon: this.fullscreen ? EXIT_FULLSCREEN_ICON : FULLSCREEN_ICON,
+          label: this.fullscreen ? 'Exit full screen' : 'Full screen',
+          help: this.fullscreen ? 'back to the page (Esc)' : 'the plot fills the screen',
+          active: this.fullscreen,
+          run: () => this.toggleFullscreen(),
         },
         downloadTool({
           plotId: this.id,
@@ -125,6 +163,51 @@ export default defineComponent({
         ],
         run: () => {},
       }
+    },
+    /** The "Colour" button: by series, or by z relative to the points shown or absolute. */
+    colourTool(): PlotTool {
+      const label = this.args.zLabel || 'z'
+      const shorts: Record<ColourMode, string> = {
+        series: 'Colour',
+        relative: 'Relative',
+        absolute: 'Absolute',
+      }
+      return {
+        id: 'colour',
+        group: 'show',
+        icon: ICONS.colorbar,
+        label: 'Colour',
+        short: shorts[this.colourMode],
+        help: `colour the points by series or by their ${label}`,
+        active: this.colourMode !== 'series',
+        menu: [
+          {
+            kind: 'choice',
+            label: 'Colour points',
+            options: [
+              { value: 'series', label: 'By series' },
+              {
+                value: 'relative',
+                label: `By ${label}, scaled to the points shown`,
+              },
+              { value: 'absolute', label: `By ${label}, scaled to all data` },
+            ],
+            value: this.colourMode,
+            select: (v: string) => {
+              this.colourMode = v as ColourMode
+            },
+          },
+        ],
+        run: () => {},
+      }
+    },
+    /** The z range the colour scale spans. Seen from above, points are always
+     * coloured by height, scaled to the points shown unless "absolute" is picked. */
+    colourRange(): [number, number] | null {
+      const mode = this.colourMode === 'series' && this.topView ? 'relative' : this.colourMode
+      if (mode === 'series') return null
+      if (mode === 'absolute') return [0, this.dataMaxZ || 1]
+      return [this.minZ ?? 0, this.maxZ || 1]
     },
     /** Highest z of the data, before the filter. */
     dataMaxZ(): number {
@@ -173,7 +256,15 @@ export default defineComponent({
       const groups = new Map<string, SeriesPoints>()
       for (const [k] of xs.length > 0 ? this.args.seriesNames || [] : []) {
         const key = String(k)
-        groups.set(key, { key, name: this.seriesName(key), color: colors[key] || this.args.color, x: [], y: [], z: [] })
+        groups.set(key, {
+          key,
+          name: this.seriesName(key),
+          color: colors[key] || this.args.color,
+          x: [],
+          y: [],
+          z: [],
+          c: [],
+        })
       }
       // Last trace seen per series, to start a new polyline when it changes
       const lastTrace = new Map<string, unknown>()
@@ -181,7 +272,15 @@ export default defineComponent({
       for (let i = 0; i < xs.length; i++) {
         const key = seriesColumn ? String(seriesValues[i]) : ''
         if (!groups.has(key)) {
-          groups.set(key, { key, name: this.seriesName(key), color: colors[key] || this.args.color, x: [], y: [], z: [] })
+          groups.set(key, {
+            key,
+            name: this.seriesName(key),
+            color: colors[key] || this.args.color,
+            x: [],
+            y: [],
+            z: [],
+            c: [],
+          })
         }
         const group = groups.get(key)!
         const x = xs[i]
@@ -195,6 +294,7 @@ export default defineComponent({
           group.x.push(x, x, x)
           group.y.push(y, y, y)
           group.z.push(STEM_FLOOR, z, STEM_FLOOR)
+          group.c.push(z, z, z)
           continue
         }
 
@@ -205,16 +305,19 @@ export default defineComponent({
             group.x.push(null)
             group.y.push(null)
             group.z.push(null)
+            group.c.push(0)
           }
           // Each trace rises from the floor at its first point
           group.x.push(x)
           group.y.push(y)
           group.z.push(TRACE_FLOOR)
+          group.c.push(z)
           lastTrace.set(key, trace)
         }
         group.x.push(x)
         group.y.push(y)
         group.z.push(z)
+        group.c.push(z)
       }
       return [...groups.values()]
     },
@@ -231,6 +334,7 @@ export default defineComponent({
         x: [],
         y: [],
         z: [],
+        c: [],
       }
       const xs = points?.x || []
       const ys = points?.y || []
@@ -252,7 +356,11 @@ export default defineComponent({
     },
     /** The series the toolbar shows or hides. */
     layerList(): Layer[] {
-      return this.series.map((s) => ({ key: s.key, label: s.name, color: s.color }))
+      return this.series.map((s) => ({
+        key: s.key,
+        label: s.name,
+        color: s.color,
+      }))
     },
     allSeries(): SeriesPoints[] {
       // The highlighted points last, so they are drawn on top
@@ -270,24 +378,36 @@ export default defineComponent({
     },
     traces(): Plotly.Data[] {
       if (this.topView) return this.topViewTraces
-      return this.allSeries.map(
-        (s) =>
-          ({
-            name: s.name,
-            type: 'scatter3d',
-            mode: 'lines',
-            x: s.x,
-            y: s.y,
-            z: s.z,
-            line: { color: s.color, width: s.key === '__highlight__' ? 4 : 2 },
-            connectgaps: false,
-          }) as Plotly.Data
-      )
+      const range = this.colourRange
+      let scaleShown = false
+      return this.allSeries.map((s) => {
+        const highlight = s.key === '__highlight__'
+        const line: Record<string, unknown> = {
+          color: s.color,
+          width: highlight ? 4 : 2,
+        }
+        if (range && !highlight) {
+          Object.assign(line, this.heightColours(s.c, range, !scaleShown))
+          scaleShown = true
+        }
+        return {
+          name: s.name,
+          type: 'scatter3d',
+          mode: 'lines',
+          x: s.x,
+          y: s.y,
+          z: s.z,
+          line,
+          connectgaps: false,
+        } as Plotly.Data
+      })
     },
-    /** Seen from above a stem is a point: one marker per peak, coloured by its height */
+    /** Seen from above a stem is a point: one marker per peak */
     topViewTraces(): Plotly.Data[] {
-      const maxZ = this.maxZ || 1
-      const single = this.allSeries.filter((s) => s.key !== '__highlight__').length === 1
+      const plain = this.allSeries.filter((s) => s.key !== '__highlight__')
+      // Several series keep their colours unless a colouring by height is picked
+      const range = this.colourMode === 'series' && plain.length > 1 ? null : this.colourRange
+      let scaleShown = false
       return this.allSeries.map((s) => {
         const x: number[] = []
         const y: number[] = []
@@ -300,6 +420,13 @@ export default defineComponent({
           z.push(zi)
         }
         const highlight = s.key === '__highlight__'
+        const marker: Record<string, unknown> = highlight
+          ? { color: s.color, size: 5 }
+          : { color: s.color, size: 3, opacity: 0.9 }
+        if (range && !highlight) {
+          Object.assign(marker, this.heightColours(z, range, !scaleShown))
+          scaleShown = true
+        }
         return {
           name: s.name,
           type: 'scatter3d',
@@ -307,37 +434,15 @@ export default defineComponent({
           x,
           y,
           z,
-          marker: highlight
-            ? { color: s.color, size: 5 }
-            : {
-                size: 3,
-                // Square root, so weak peaks stay visible next to strong ones
-                color: z.map((v) => Math.sqrt(v)),
-                cmin: 0,
-                cmax: Math.sqrt(maxZ),
-                // One series: a blue scale by height; several: each its own colour
-                colorscale: single
-                  ? [
-                      [0, '#c6d3ff'],
-                      [0.5, '#3157e9'],
-                      [1, '#0b1a5c'],
-                    ]
-                  : [
-                      [0, s.color],
-                      [1, s.color],
-                    ],
-                showscale: single,
-                colorbar: single
-                  ? { title: { text: this.args.zLabel || 'z' }, thickness: 12, len: 0.6, tickvals: [], ticks: '' }
-                  : undefined,
-                opacity: 0.9,
-              },
+          marker,
           hovertemplate: `${this.args.xLabel || 'x'}: %{x}<br>${this.args.yLabel || 'y'}: %{y}<br>${this.args.zLabel || 'z'}: %{z:.3s}<extra>${s.name}</extra>`,
         } as Plotly.Data
       })
     },
     layout(): Partial<Plotly.Layout> {
-      const yaxis: Record<string, unknown> = { title: { text: this.args.yLabel } }
+      const yaxis: Record<string, unknown> = {
+        title: { text: this.args.yLabel },
+      }
       if (this.args.yDtick !== undefined && this.args.yDtick !== null) {
         yaxis.dtick = this.args.yDtick
         yaxis.tick0 = 0
@@ -347,11 +452,18 @@ export default defineComponent({
         yaxis,
         // Seen from above the z axis is a point: no title or ticks to overlap
         zaxis: this.topView
-          ? { title: { text: '' }, showticklabels: false, range: [0, this.maxZ] }
+          ? {
+              title: { text: '' },
+              showticklabels: false,
+              range: [0, this.maxZ],
+            }
           : { title: { text: this.args.zLabel }, range: [0, this.maxZ] },
       }
       if (this.topView) {
-        scene.camera = { ...TOP_VIEW_CAMERA, projection: { type: 'orthographic' } }
+        scene.camera = {
+          ...TOP_VIEW_CAMERA,
+          projection: { type: 'orthographic' },
+        }
       } else if (this.args.cameraEye || this.args.cameraCenter) {
         scene.camera = {
           ...(this.args.cameraEye ? { eye: this.args.cameraEye } : {}),
@@ -368,10 +480,12 @@ export default defineComponent({
       // around a 3D scene; keep room for the title only
       const margin = { l: 0, r: 0, b: 0, t: this.title ? 50 : 10 }
       return {
-        title: { text: this.args.titleBold === false ? this.title : `<b>${this.title}</b>` },
+        title: {
+          text: this.args.titleBold === false ? this.title : `<b>${this.title}</b>`,
+        },
         paper_bgcolor: this.theme?.backgroundColor,
         plot_bgcolor: this.theme?.secondaryBackgroundColor,
-        height: (this.args.height || 800) - TOOLBAR_HEIGHT,
+        height: (this.fullscreen ? window.innerHeight : this.args.height || 800) - TOOLBAR_HEIGHT,
         font: {
           color: this.theme?.textColor,
           family: this.theme?.font,
@@ -412,11 +526,51 @@ export default defineComponent({
     topView() {
       this.requestRender()
     },
+    colourMode() {
+      this.requestRender()
+    },
+    fullscreen() {
+      this.requestRender()
+    },
   },
   mounted() {
+    document.addEventListener('fullscreenchange', this.onFullscreenChange)
     this.requestRender()
   },
+  beforeUnmount() {
+    document.removeEventListener('fullscreenchange', this.onFullscreenChange)
+  },
   methods: {
+    /** Colour settings of a line or marker that colour each point by its z within `range`. */
+    heightColours(values: number[], [lo, hi]: [number, number], withScale: boolean): Record<string, unknown> {
+      const root = (v: number) => Math.sqrt(Math.max(0, Math.min(hi, v) - lo))
+      return {
+        color: values.map(root),
+        cmin: 0,
+        cmax: Math.sqrt(Math.max(hi - lo, 1e-12)),
+        colorscale: HEIGHT_COLORSCALE,
+        showscale: withScale,
+        colorbar: withScale
+          ? {
+              title: { text: this.args.zLabel || 'z' },
+              thickness: 12,
+              len: 0.6,
+              tickvals: [0, Math.sqrt(Math.max(hi - lo, 1e-12))],
+              ticktext: [formatIntensity(lo), formatIntensity(hi)],
+            }
+          : undefined,
+      }
+    },
+    toggleFullscreen(): void {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen()
+      } else {
+        void (this.$el as HTMLElement).requestFullscreen?.()
+      }
+    },
+    onFullscreenChange(): void {
+      this.fullscreen = document.fullscreenElement === this.$el
+    },
     /** Draw once per update: one update often changes several watched values
      * (the data and the selection), and each drawing costs a full Plotly render.
      * Drawn in a task of its own, so the other views of the page, which share
