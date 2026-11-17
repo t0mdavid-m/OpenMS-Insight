@@ -95,6 +95,28 @@
             @update:model-value="onSearchInput"
             @keyup.enter="commitSearch"
           />
+          <!-- Where the selected row is among the rows passing the filters -->
+          <div v-if="shownPlace" class="table-place">
+            <v-btn
+              variant="text"
+              size="x-small"
+              icon="mdi-chevron-up"
+              :disabled="shownPlace.position <= 1"
+              title="Previous row (↑)"
+              @click="stepFromButton('up')"
+            />
+            <span class="table-place-text" :title="placeTitle">
+              {{ shownPlace.position.toLocaleString() }} of {{ shownPlace.total.toLocaleString() }}
+            </span>
+            <v-btn
+              variant="text"
+              size="x-small"
+              icon="mdi-chevron-down"
+              :disabled="shownPlace.position >= shownPlace.total"
+              title="Next row (↓)"
+              @click="stepFromButton('down')"
+            />
+          </div>
         </div>
         <div class="table-toolbar-title">
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
@@ -387,12 +409,30 @@ export default defineComponent({
       // Position (over all pages) of the row the keys moved to while its page
       // is being fetched, the page asked for and when
       keyNavTarget: null as number | null,
+      // The selected row's place among the rows passing the filters (1-based),
+      // while it is on the page in view
+      selectedPlace: null as { position: number; total: number } | null,
       keyNavRequestedPage: null as number | null,
       keyNavRequestedAt: 0,
       keyNavCheckTimer: null as ReturnType<typeof setTimeout> | null,
     }
   },
   computed: {
+    /** The selected row's place, or the row the keys are moving to while its page loads. */
+    shownPlace(): { position: number; total: number } | null {
+      const place = this.selectedPlace
+      if (!place) return null
+      if (this.keyNavTarget !== null) {
+        return { position: Math.min(place.total, this.keyNavTarget + 1), total: place.total }
+      }
+      return place
+    },
+    placeTitle(): string {
+      return this.args.keyboardNavigation === false
+        ? 'The selected row among the rows passing the filters, in the current sort'
+        : 'The selected row among the rows passing the filters, in the current sort. ' +
+            'Up and Down, Page Up and Page Down, Home and End move it too.'
+    },
     // Buttons and chips in the table's dialogs take the app's primary colour
     accentColor(): string {
       return this.streamlitDataStore.theme?.primaryColor || '#1976d2'
@@ -1335,8 +1375,10 @@ export default defineComponent({
       // Ensure visual selection matches selection state after render.
       // Only sync if no row is currently selected to avoid infinite loops
       // (selecting a row triggers render, which would trigger sync again).
+      this.tabulator.on('rowSelectionChanged', () => this.refreshSelectedPlace())
       this.tabulator.on('renderComplete', () => {
         this.refreshCheckboxes()
+        this.refreshSelectedPlace()
         // A page the keys asked for has arrived
         this.applyKeyNavTarget()
         this.keepKeyboardRowInView()
@@ -2122,6 +2164,38 @@ export default defineComponent({
       event.preventDefault()
       event.stopPropagation()
       this.stepSelection(move)
+    },
+
+    /** Where the one selected row is among the rows passing the filters, if on this page. */
+    refreshSelectedPlace(): void {
+      if (this.args.showPosition === false || !this.tabulator) {
+        this.selectedPlace = null
+        return
+      }
+      const selectedRows = this.tabulator.getSelectedRows() as any[]
+      if (selectedRows.length !== 1) {
+        this.selectedPlace = null
+        return
+      }
+      const rows = this.tabulator.getRows('active') as any[]
+      const server = this.isServerSidePagination
+      const state = this.paginationState
+      const pageSize = server ? state?.page_size || this.args.pageSize || 100 : Math.max(rows.length, 1)
+      const offset = server ? ((state?.page || 1) - 1) * pageSize : 0
+      const total = server ? (state?.total_rows ?? rows.length) : rows.length
+      const id = selectedRows[0].getIndex()
+      const local = rows.findIndex((row) => row.getIndex() === id)
+      this.selectedPlace = local >= 0 && total > 0 ? { position: offset + local + 1, total } : null
+    },
+
+    /** Previous or next row from the toolbar; the keys then go on from there. */
+    stepFromButton(move: KeyMove): void {
+      this.stepSelection(move)
+      const holder = (this.tabulator as any)?.rowManager?.element as HTMLElement | undefined
+      if (holder) {
+        if (!holder.hasAttribute('tabindex')) holder.setAttribute('tabindex', '0')
+        holder.focus({ preventScroll: true })
+      }
     },
 
     /** Rows that fit in the visible part of the table (Page Up/Down step). */
@@ -3845,6 +3919,20 @@ export default defineComponent({
 }
 
 /* Toolbar search box: as tall as the buttons beside it */
+.table-place {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.table-place-text {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+  padding: 0 2px;
+}
+
 .table-search {
   flex: 0 1 240px;
   min-width: 140px;

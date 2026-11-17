@@ -175,6 +175,7 @@ class Table(BaseComponent):
         numeric_filters: dict[str, dict[str, Any]] | None = None,
         filter_presets: list[dict[str, Any]] | None = None,
         keyboard_navigation: bool = True,
+        show_position: bool = True,
         collapse_columns: bool = True,
         export_info: dict[str, Any] | None = None,
         **kwargs,
@@ -341,6 +342,12 @@ class Table(BaseComponent):
                 for 200 ms, so holding a key down does not rerun the app for
                 every row it passes. False leaves the keys to the browser.
                 Display-only, so not part of the cache configuration.
+            show_position: Show where the selected row is among the rows
+                passing the filters, in the current sort ("3 of 132"), with
+                buttons for the previous and the next row, in the toolbar.
+                Shown while the selected row is on the page in view. False
+                leaves it out. Display-only, so not part of the cache
+                configuration.
             export_info: What the Excel download's "About" sheet says besides
                 the table, its sort, filters and search: ``{"Run": "Run 3",
                 "Search": "10 ppm, Trypsin/P"}``, one row per item, in this
@@ -362,6 +369,7 @@ class Table(BaseComponent):
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
+        self._show_position = bool(show_position)
         self._collapse_columns = bool(collapse_columns)
         self._export_info = dict(export_info or {})
         self._reset_sort = bool(reset_sort)
@@ -1863,6 +1871,8 @@ class Table(BaseComponent):
             args["columnMenu"] = False
         if not self._keyboard_navigation:
             args["keyboardNavigation"] = False
+        if not getattr(self, "_show_position", True):
+            args["showPosition"] = False
         if not getattr(self, "_collapse_columns", True):
             args["collapseColumns"] = False
         if self._pagination and excel_available():

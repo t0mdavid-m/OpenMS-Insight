@@ -155,6 +155,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  // Where the selected row is ("3 of 132") with previous/next buttons (default on)
+  showPosition?: boolean
   collapseColumns?: boolean
   /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
   excelExport?: boolean
