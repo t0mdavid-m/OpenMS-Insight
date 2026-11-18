@@ -175,6 +175,7 @@ class Table(BaseComponent):
         numeric_filters: dict[str, dict[str, Any]] | None = None,
         filter_presets: list[dict[str, Any]] | None = None,
         keyboard_navigation: bool = True,
+        narrowed_labels: dict[str, str | dict[str, str] | bool] | None = None,
         collapse_columns: bool = True,
         export_info: dict[str, Any] | None = None,
         **kwargs,
@@ -341,6 +342,17 @@ class Table(BaseComponent):
                 for 200 ms, so holding a key down does not rerun the app for
                 every row it passes. False leaves the keys to the browser.
                 Display-only, so not part of the cache configuration.
+            narrowed_labels: How the table names what a linked filter
+                (``filters``) narrows the table to, per identifier: a label
+                (``{"protein": "Protein"}`` shows "Protein: 12") or a label
+                and a column of this table whose value is shown instead of
+                the selected one (``{"protein": {"label": "Protein",
+                "column": "accession"}}`` shows "Protein: P02768"). Each
+                linked filter in force is shown as a chip above the table
+                ("Narrowed to Protein: P02768"); an identifier without an
+                entry is named after its column. ``False`` for an identifier
+                leaves its chip out. Display-only, so not part of the cache
+                configuration.
             export_info: What the Excel download's "About" sheet says besides
                 the table, its sort, filters and search: ``{"Run": "Run 3",
                 "Search": "10 ppm, Trypsin/P"}``, one row per item, in this
@@ -362,6 +374,7 @@ class Table(BaseComponent):
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
+        self._narrowed_labels = dict(narrowed_labels or {})
         self._collapse_columns = bool(collapse_columns)
         self._export_info = dict(export_info or {})
         self._reset_sort = bool(reset_sort)
@@ -1024,6 +1037,7 @@ class Table(BaseComponent):
 
             data = filter_selection(data, column, selected_value)
 
+        narrowed = self._narrowed_chips(data, state)
         data = self._apply_range_filters(data, state)
 
         # Get pagination state
@@ -1377,6 +1391,7 @@ class Table(BaseComponent):
                 # The filters in force, so a view that is drawn again (e.g. after
                 # the page was left and opened again) shows them
                 **({"column_filters": column_filters} if column_filters else {}),
+                **({"narrowed": narrowed} if narrowed else {}),
                 **({"search": search} if search else {}),
             },
             "_auto_selection": auto_selection,
@@ -1816,6 +1831,38 @@ class Table(BaseComponent):
             pagination_state.get("sort_dir", "asc"),
         )
         return self._order_export_columns(data.collect())
+
+    def _narrowed_chips(
+        self, data: pl.LazyFrame, state: dict[str, Any]
+    ) -> list[dict[str, str]]:
+        """What the linked filters in force narrow ``data`` (already filtered) to, one chip each."""
+        labels = getattr(self, "_narrowed_labels", {}) or {}
+        chips: list[dict[str, str]] = []
+        for identifier, column in self._filters.items():
+            spec = labels.get(identifier, column)
+            if spec is False:
+                continue
+            value = state.get(identifier)
+            if value is None and self._filter_defaults:
+                value = self._filter_defaults.get(identifier)
+            if value is None:
+                continue
+            label = spec.get("label", column) if isinstance(spec, dict) else str(spec)
+            shown = value
+            value_column = spec.get("column") if isinstance(spec, dict) else None
+            if value_column:
+                try:
+                    first = data.select(value_column).head(1).collect()
+                except (pl.exceptions.ColumnNotFoundError, pl.exceptions.SchemaError):
+                    first = None
+                if first is not None and first.height > 0 and first[0, 0] is not None:
+                    shown = first[0, 0]
+            if isinstance(shown, (list, tuple)):
+                shown = ", ".join(str(v) for v in shown)
+            chips.append(
+                {"identifier": identifier, "label": str(label), "value": str(shown)}
+            )
+        return chips
 
     def _get_component_args(self) -> dict[str, Any]:
         """
