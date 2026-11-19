@@ -15,6 +15,7 @@ from openms_insight import (
     IMAGE_FORMATS,
     MirrorPlot,
     ProteinStructureView,
+    SequenceLogo,
     SequenceView,
     Table,
     get_image_format,
@@ -49,6 +50,7 @@ IMAGE_CASES += [
         {"filters": {"identification": "scan_id"}},
         {"peaks_data": "sample_peaks_data"},
     ),
+    (SequenceLogo, "sample_sequence_data", {"sequence_column": "sequence"}, {}),
 ]
 IMAGE_IDS = [case[0].__name__ for case in IMAGE_CASES]
 

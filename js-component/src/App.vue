@@ -42,6 +42,7 @@ const PlotlyDeconvolvedSpectrum = defineAsyncComponent(() => import('./component
 const SequenceView = defineAsyncComponent(() => import('./components/sequence/SequenceView.vue'))
 const ProteinSequenceView = defineAsyncComponent(() => import('./components/protein/ProteinSequenceView.vue'))
 const ProteinStructureView = defineAsyncComponent(() => import('./components/protein/ProteinStructureView.vue'))
+const SequenceLogo = defineAsyncComponent(() => import('./components/logo/SequenceLogo.vue'))
 
 export default defineComponent({
   name: 'App',
@@ -59,6 +60,7 @@ export default defineComponent({
     SequenceView,
     ProteinSequenceView,
     ProteinStructureView,
+    SequenceLogo,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -303,6 +305,8 @@ export default defineComponent({
           return ProteinSequenceView
         case 'ProteinStructureView':
           return ProteinStructureView
+        case 'SequenceLogo':
+          return SequenceLogo
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null
