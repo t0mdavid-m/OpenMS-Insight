@@ -822,7 +822,7 @@ from openms_insight import SequenceLogo
 
 logo = SequenceLogo(
     cache_id="cleavage_logo",
-    data=sites,                      # one row per site, e.g. "AKLRGVEA"
+    data=sites,  # one row per site, e.g. "AKLRGVEA"
     sequence_column="window",
     weight_column="spectral_count",  # optional, default 1 per row
     position_labels=["P4", "P3", "P2", "P1", "P1'", "P2'", "P3'", "P4'"],
