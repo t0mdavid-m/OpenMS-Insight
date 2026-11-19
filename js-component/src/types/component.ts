@@ -156,6 +156,10 @@ export interface TableComponentArgs extends BaseComponentArgs {
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
   collapseColumns?: boolean
+  /** Place in a chain of tables: Enter goes one level down, Backspace up */
+  level?: number
+  /** State key the tables of one chain share for those moves */
+  levelIdentifier?: string
   /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
   excelExport?: boolean
   /** Show the toolbar search box */
