@@ -169,6 +169,20 @@ def _modification_library(
     ]
 
 
+def proforma_text(value: Any) -> str:
+    """The ProForma in a ``proforma_identifier`` value: a string, or
+    ``{"text", "by", "n"}`` as the view and its dialog write it."""
+    if isinstance(value, dict):
+        value = value.get("text")
+    return value if isinstance(value, str) else ""
+
+
+def _proforma_available() -> bool:
+    from ..core import proforma
+
+    return proforma.available()
+
+
 def pyopenms_modification_library() -> list[dict[str, Any]]:
     """Every modification in pyOpenMS ``ModificationsDB`` (Unimod and more), as
     the dicts ``modification_library`` takes: ``id`` (the full id, e.g.
@@ -389,7 +403,11 @@ class ProteinSequenceView(BaseComponent):
                 Accepts isoforms (``P0ACF0-2``) and FASTA identifiers
                 (``sp|P0ACF0|DBHA_ECOLI``).
             proforma_identifier: Identifier holding the shown proteoform as
-                ProForma 2.0, both ways: the view writes it whenever its
+                ProForma 2.0, both ways, as ``{"text", "by", "n"}``: the app
+                (``by="app"``) and the view's dialog (``"dialog"``) write
+                numbered requests, the view answers with ``by="view"`` and the
+                number of the request it shows (``proforma_text`` reads the
+                text; a plain string from the app works too). The view writes it whenever its
                 sequence or modifications change (in the dialog, the residue
                 menus), and a ProForma (or plain sequence) the
                 app writes there becomes the view's sequence, fixed and
@@ -632,8 +650,12 @@ class ProteinSequenceView(BaseComponent):
         return "sequenceData"
 
     def get_state_dependencies(self) -> list[str]:
-        # Mass and residue selections only change highlighting, done in Vue
-        return list(self._filters.keys())
+        # Mass and residue selections only change highlighting, done in Vue;
+        # the app's ProForma is read here (see _read_app_proforma)
+        deps = list(self._filters.keys())
+        if self._proforma_identifier:
+            deps.append(self._proforma_identifier)
+        return deps
 
     def _selected_row(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """The first row of data matching the filters, or None."""
@@ -682,10 +704,45 @@ class ProteinSequenceView(BaseComponent):
                         row.get(self._spectrum_key_column)
                     )
         payload = {"sequenceData": sequence_data, "spectrumData": spectrum_data}
+        proforma = self._read_app_proforma(state)
+        if proforma is not None:
+            payload["proformaRead"] = proforma
         data_hash = hashlib.md5(
             json.dumps(payload, sort_keys=True, default=str).encode()
         ).hexdigest()
         return {**payload, "_hash": data_hash}
+
+    def _read_app_proforma(self, state: dict[str, Any]) -> dict[str, Any] | None:
+        """The ProForma the app (or the dialog) put in ``proforma_identifier``,
+        read by pyOpenMS (see ``openms_insight.core.proforma``): ``text`` with
+        the result, or with ``error``. None without such a text, for the
+        view's own answer, or without a pyOpenMS that reads ProForma; the view
+        then reads it itself."""
+        if not self._proforma_identifier:
+            return None
+        value = state.get(self._proforma_identifier)
+        # The view's own answer (by="view") is what it shows already: not read
+        # again, so its writes leave the payload alone and cause no further
+        # rerun (the view also ignores it, see externalProForma in Vue)
+        if isinstance(value, dict) and value.get("by") == "view":
+            return None
+        text = proforma_text(value)
+        if not text.strip():
+            return None
+        from ..core import proforma
+
+        if not proforma.available():
+            return None
+        ids = lambda library: [e["id"] for e in library or []]  # noqa: E731
+        try:
+            read = proforma.read_proforma(
+                text,
+                ids(getattr(self, "_modification_library", None)),
+                ids(getattr(self, "_variable_modification_library", None)),
+            )
+        except proforma.ProFormaReadError as e:
+            return {"text": text, "error": str(e)}
+        return {"text": text, **read}
 
     def set_tag(
         self, start: int | None, end: int | None = None
@@ -884,6 +941,9 @@ class ProteinSequenceView(BaseComponent):
             "proformaInput": self._proforma_input,
             "uniprotLookup": self._uniprot_lookup,
             "proformaIdentifier": self._proforma_identifier,
+            "proformaReader": "pyopenms"
+            if self._proforma_identifier and _proforma_available()
+            else None,
             "isotopeErrors": self._isotope_errors,
             "methodIonOptions": self._method_ion_options,
             "unmatchedMasses": self._unmatched_masses,
