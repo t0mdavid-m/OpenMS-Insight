@@ -721,6 +721,23 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
 /**
  * Union type for all component arguments.
  */
+/**
+ * Sequence logo arguments.
+ */
+export interface SequenceLogoComponentArgs extends BaseComponentArgs, ImageExportArgs {
+  componentType: 'SequenceLogo'
+  colors: Record<string, string>
+  units: 'bits' | 'probability'
+  yMax: number
+  yLabel: string
+  positionLabels?: string[] | null
+  firstPosition?: number
+  length?: number | null
+  interactivity?: Record<string, string>
+  title?: string
+  height?: number
+}
+
 export type ComponentArgs =
   | TableComponentArgs
   | LinePlotComponentArgs
@@ -735,6 +752,7 @@ export type ComponentArgs =
   | DeconvolvedSpectrumComponentArgs
   | ProteinSequenceViewComponentArgs
   | ProteinStructureViewComponentArgs
+  | SequenceLogoComponentArgs
 
 /**
  * Component layout entry.

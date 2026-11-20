@@ -9,6 +9,7 @@ from .pca import PCAPlot
 from .plot3d import Plot3D
 from .protein_sequence_view import ProteinSequenceView, pyopenms_modification_library
 from .protein_structure_view import ProteinStructureView
+from .sequence_logo import SequenceLogo
 from .series_plot import SeriesPlot
 from .table import Table
 from .volcanoplot import VolcanoPlot
@@ -27,4 +28,5 @@ __all__ = [
     "ProteinSequenceView",
     "pyopenms_modification_library",
     "ProteinStructureView",
+    "SequenceLogo",
 ]

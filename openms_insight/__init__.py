@@ -17,6 +17,7 @@ from .components.protein_sequence_view import (
     pyopenms_modification_library,
 )
 from .components.protein_structure_view import ProteinStructureView
+from .components.sequence_logo import SequenceLogo
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.series_plot import SeriesPlot
 from .components.table import Table
@@ -51,6 +52,7 @@ __all__ = [
     "VolcanoPlot",
     "SequenceView",
     "SequenceViewResult",
+    "SequenceLogo",
     "MirrorPlot",
     "PCAPlot",
     "SeriesPlot",

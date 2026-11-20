@@ -813,6 +813,28 @@ Every modification the view applies (one set in a residue menu, or one of an edi
 
 `fragment_matches_identifier=` (or `set_fragment_matches_identifier()`) publishes the matched fragments (name, ion type, kind, mass, index of the matched mass and, for annotated fragments, charge and m/z) with the tolerance, for a `DeconvolvedSpectrum` to mark. Give `spectrum_key_column=` (the spectrum's id column, e.g. `scan_idx`) so a spectrum showing another scan ignores them.
 
+### SequenceLogo
+
+Sequence logo of aligned sequences of equal length, such as the residues around cleavage or modification sites. Each position is a stack of the residues found there, the most frequent on top. With `units="bits"` (default) a letter is as high as its share of the position times the position's information content against a background (uniform over the alphabet, or a dict of residue frequencies such as those of the searched proteome); with `units="probability"` it is as high as its frequency.
+
+```python
+from openms_insight import SequenceLogo
+
+logo = SequenceLogo(
+    cache_id="cleavage_logo",
+    data=sites,  # one row per site, e.g. "AKLRGVEA"
+    sequence_column="window",
+    weight_column="spectral_count",  # optional, default 1 per row
+    position_labels=["P4", "P3", "P2", "P1", "P1'", "P2'", "P3'", "P4'"],
+    filters={"protease": "protease"},
+    interactivity={"site_residue": "residue", "site_position": "position"},
+    title="Cleavage sites",
+)
+logo(key="logo", state_manager=state_manager, height=300)
+```
+
+`alphabet` is `"protein"` (the 20 amino acids), `"dna"`, `"rna"` or the residues as a string; characters outside it (gaps, `X`) are not counted. `colors` overrides the default colour per residue. A click on a letter sets the identifiers in `interactivity` to its `"position"` (0-based), `"label"` or `"residue"`; a selected position is highlighted and a selected residue stands out in every stack. `logo.logo_data(state)` returns the letters (position, label, residue, count, frequency, height) for an export or a table.
+
 ### ProteinStructureView
 
 3D structure of a protein (PDB or mmCIF, drawn with 3Dmol.js), coloured by the fragment evidence of a sequence entry. It takes the same data as `ProteinSequenceView`, aligns the sequence to the structure's chains, and shares residue and fragment selection with a sequence view. Residues outside the entry's start..end positions are not shown.
