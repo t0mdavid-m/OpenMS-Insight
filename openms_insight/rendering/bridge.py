@@ -1446,6 +1446,12 @@ def _hash_data(data: dict[str, Any]) -> str:
     hash_parts = []
     for key, value in sorted(data.items()):
         # Skip internal metadata but NOT dynamic annotation columns or pagination
+        if key == "_download" and isinstance(value, dict):
+            # A table's full export comes with the page the view already holds:
+            # without its request id in the hash the payload is never sent, and
+            # the browser saves nothing
+            hash_parts.append(f"_download:{value.get('request_id')}")
+            continue
         if (
             key.startswith("_")
             and not key.startswith("_dynamic")
