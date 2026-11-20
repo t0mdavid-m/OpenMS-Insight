@@ -147,6 +147,25 @@ def test_download_changes_the_hash(mock_streamlit, temp_cache_dir, psm_data):
     assert table._prepare_vue_data(state)["_hash"] != plain
 
 
+def test_download_changes_the_hash_the_bridge_sends(
+    mock_streamlit, temp_cache_dir, psm_data
+):
+    """The bridge decides with its own hash of the payload, which leaves out the
+    component's ``_hash``. Unless the export changes that hash too, a view that
+    holds the page is never sent the file, and the download does not start."""
+    from openms_insight.rendering.bridge import _hash_data
+
+    table = Table(cache_id="hash_table", data=psm_data, cache_path=str(temp_cache_dir))
+    plain = _hash_data(table._prepare_vue_data({}))
+    first = _hash_data(
+        table._prepare_vue_data({"hash_table_page": {"page": 1, "download_request": 7}})
+    )
+    second = _hash_data(
+        table._prepare_vue_data({"hash_table_page": {"page": 1, "download_request": 8}})
+    )
+    assert len({plain, first, second}) == 3
+
+
 def test_download_neutralises_spreadsheet_formulas(mock_streamlit, temp_cache_dir):
     data = pl.LazyFrame(
         {
