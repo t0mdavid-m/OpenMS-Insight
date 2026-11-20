@@ -314,6 +314,8 @@ Hovering shows the peak nearest the mouse along x, anywhere in the plot's height
 
 The mouse wheel zooms x around the mouse while y follows the peaks in view; zooming out past the full extent shows the full view. Shift + wheel or a sideways (trackpad) wheel pans x, and so does dragging with the middle button; panning stops at the ends of the data. A double-click shows the full view. Outside the plot area the wheel scrolls the page.
 
+With `interactivity`, the arrow keys step through the peaks once one is selected (a click on a peak also gives the plot the keyboard focus). Left and Right select the previous or next peak along x. With Shift they skip to the previous or next labelled peak: one with an annotation or an x marker's label. The selection updates like a click, the x range pans to keep the peak in view, and the peak's read-out stays until the mouse moves.
+
 ### MirrorPlot
 
 Two stick-style spectra rendered against a shared x-axis with the bottom half flipped, used for comparing paired spectra (experimental vs. theoretical, sample vs. reference, MS1 vs. MS2 fragments). Each half is filtered independently, while clicks on either half feed into one shared selection.
