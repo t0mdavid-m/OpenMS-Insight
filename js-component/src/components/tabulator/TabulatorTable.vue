@@ -1,7 +1,7 @@
 <template>
   <!-- A table fitted to a few rows stays at least 200 px tall -->
   <div
-    style="padding: 8px; width: 98%; box-sizing: border-box"
+    style="padding: 8px; width: 98%; box-sizing: border-box; position: relative"
     :style="isServerSidePagination ? {} : { minHeight: '200px' }"
   >
     <div class="d-flex">
@@ -211,6 +211,7 @@
     </div>
 
     <div :id="id" :class="tableClasses" @keydown.capture="onTableKeydown"></div>
+    <div v-if="copyNotice" class="row-copied" role="status" data-testid="row-copied">{{ copyNotice }}</div>
   </div>
 </template>
 
@@ -231,6 +232,8 @@ import { isCustomFormatter, getCustomFormatter } from './formatters'
 import { type FilterPreset, renderPresetSection } from '../filterPresets'
 import { combineSelection } from '@/composables/useMultiSelect'
 import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
+import { copyText } from '@/utils/usi'
+import { pickedValue } from '@/utils/pickValue'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -297,6 +300,9 @@ export default defineComponent({
   data() {
     return {
       tabulator: undefined as Tabulator | undefined,
+      // "Row copied" shown briefly after Ctrl+C / Cmd+C
+      copyNotice: '',
+      copyNoticeTimer: undefined as ReturnType<typeof setTimeout> | undefined,
       // Request id of a full-table CSV export awaiting its payload from Python
       pendingDownloadId: null as number | null,
       // Columns the viewer showed or hid in the column menu (field -> visible)
@@ -2111,6 +2117,10 @@ export default defineComponent({
      * Home and End scrolling does not run as well.
      */
     onTableKeydown(event: KeyboardEvent): void {
+      if (this.isCopyKey(event)) {
+        this.copySelectedRow(event)
+        return
+      }
       if (this.args.keyboardNavigation === false || !this.tabulator) return
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
       const move = KEY_MOVES[event.key]
@@ -2122,6 +2132,56 @@ export default defineComponent({
       event.preventDefault()
       event.stopPropagation()
       this.stepSelection(move)
+    },
+
+    isCopyKey(event: KeyboardEvent): boolean {
+      return (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'c'
+    },
+
+    /**
+     * Ctrl+C / Cmd+C while the rows have focus copies the selected row: a line
+     * of the shown columns' titles and a line of its values, tab-separated, so
+     * it pastes into a spreadsheet as two rows. Text selected in the table is
+     * copied as usual instead.
+     */
+    copySelectedRow(event: KeyboardEvent): void {
+      if (this.args.copyRow === false || !this.tabulator) return
+      const holder = (this.tabulator as any).rowManager?.element as HTMLElement | undefined
+      const target = event.target as HTMLElement | null
+      if (!holder || !target || !holder.contains(target)) return
+      if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
+      const selection = target.ownerDocument.getSelection()
+      if (selection && !selection.isCollapsed && selection.toString().trim()) return
+      const row = this.tabulator.getSelectedRows()[0]
+      if (!row) return
+      event.preventDefault()
+      event.stopPropagation()
+      const text = this.rowAsText(row.getData() as Record<string, unknown>)
+      void copyText(text).then((ok) => this.showCopyNotice(ok ? 'Row copied' : 'Could not copy the row'))
+    },
+
+    /** The row as two tab-separated lines: titles of the shown columns, then values. */
+    rowAsText(row: Record<string, unknown>): string {
+      const columns = ((this.args.columnDefinitions || []) as Record<string, any>[]).filter(
+        (col) => col.field && this.isColumnVisible(col.field)
+      )
+      const clean = (text: string) => text.replace(/[\t\r\n]+/g, ' ')
+      const titles = columns.map((col) => clean(String(col.title || col.field)))
+      const values = columns.map((col) => {
+        const value = row[col.field]
+        if (value === null || value === undefined || (typeof value === 'number' && Number.isNaN(value))) return ''
+        // Numbers in full, as the shortest decimal of a 32-bit float where they are one
+        return clean(typeof value === 'number' ? String(pickedValue(value)) : this.rowOverviewValue(col, value))
+      })
+      return `${titles.join('\t')}\n${values.join('\t')}`
+    },
+
+    showCopyNotice(text: string): void {
+      this.copyNotice = text
+      if (this.copyNoticeTimer) clearTimeout(this.copyNoticeTimer)
+      this.copyNoticeTimer = setTimeout(() => {
+        this.copyNotice = ''
+      }, 1500)
     },
 
     /** Rows that fit in the visible part of the table (Page Up/Down step). */
@@ -3986,6 +4046,19 @@ export default defineComponent({
 }
 
 /* Dark mode pagination styling */
+.row-copied {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: rgba(33, 33, 33, 0.88);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 5;
+}
 .row-overview-button {
   cursor: pointer;
   font-size: 18px;
