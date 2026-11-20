@@ -911,6 +911,17 @@ When the groups do not fit the panel's width, the row keeps only the tools that
 are on or hold something, plus Reset, and offers every tool in a menu behind ⋯,
 sorted into the same groups. The toolbar follows the Streamlit theme.
 
+**Keys.** While the pointer is on a 2D plot, or after a click on it, the keys
+zoom and pan it: `+` (or `=`) zooms in and `-` zooms out by a factor of two
+around the centre of the view, the arrow keys pan by a quarter of the view, and
+`0` or Home resets the axes as the Reset button does. An axis the component
+keeps fixed is left alone, so a spectrum whose intensity axis follows the
+visible peaks zooms and pans along m/z only. Each key goes through the
+component's own zoom handling, so a `Heatmap` loads the finer level of its data
+and a zoom kept in the state (`zoom_identifier`) follows. Keys typed in a field,
+and keys with Ctrl, Cmd or Alt, are left alone. The pure mapping is in
+`js-component/src/utils/plotKeys.ts`.
+
 Some tools open a menu below the toolbar (inside ⋯ on a narrow toolbar):
 
 - **Layers** shows or hides parts of a plot, one entry per layer with its color;
