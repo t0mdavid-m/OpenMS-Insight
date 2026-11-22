@@ -232,6 +232,25 @@ class TestMirrorPlotComponentArgs:
         assert "highlightColor" in args["styling"]
         assert "selectedColor" in args["styling"]
 
+    def test_unhighlighted_dash_reaches_vue_and_survives_cache(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        """The per-side dash styling of unhighlighted peaks reaches Vue, also
+        when the plot is rebuilt from its cache."""
+        from openms_insight import MirrorPlot
+
+        comp = self._make(
+            temp_cache_dir,
+            sample_lineplot_data,
+            cache_id="dashed",
+            styling={"bottomUnhighlightedDash": "dot"},
+        )
+        assert comp._get_component_args()["styling"]["bottomUnhighlightedDash"] == "dot"
+        restored = MirrorPlot(cache_id="dashed", cache_path=str(temp_cache_dir))
+        args = restored._get_component_args()
+        assert args["styling"]["bottomUnhighlightedDash"] == "dot"
+        assert "topUnhighlightedDash" not in args["styling"]
+
     def test_svg_filename_reaches_vue_and_survives_cache(
         self, mock_streamlit, temp_cache_dir, sample_lineplot_data
     ):

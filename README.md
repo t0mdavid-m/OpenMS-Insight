@@ -346,7 +346,7 @@ mirror(state_manager=state_manager, height=600)
 - `x_column`, `y_column`: Shared schema. Provide y values as positive numbers; the bottom half is flipped at render time
 - `highlight_column`, `annotation_column`: Shared schema for highlights and label text
 - `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
-- `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
+- `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot). `topUnhighlightedDash` / `bottomUnhighlightedDash` take a Plotly dash style (`'dot'`, `'dash'`, `'dashdot'`, ...) for the peaks of that half that are neither highlighted nor selected, so `styling={'bottomUnhighlightedDash': 'dot'}` with a matched flag as `highlight_column` draws unmatched theoretical ions dotted (default: solid)
 - `svg_filename`: File name (without extension) of the image download (default: `title`, then `mirror_plot`); the format is set as in [Image downloads](#image-downloads-image_format)
 - `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
 - `peak_labels`: Your own labels on peaks, on by default (see [Peak labels](#peak-labels-peak_labels))

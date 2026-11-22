@@ -174,6 +174,11 @@ class MirrorPlot(BaseComponent):
                 - highlightColor: Color for highlighted points (default: '#E4572E')
                 - selectedColor: Color for clicked/selected peak (default: '#F3A712')
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
+                - topUnhighlightedDash / bottomUnhighlightedDash: Plotly dash
+                  style ('dot', 'dash', 'dashdot', ...) for the peaks of that
+                  side that are neither highlighted nor selected, e.g.
+                  ``{"bottomUnhighlightedDash": "dot"}`` draws unmatched
+                  theoretical ions dotted (default: solid)
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options.
             image_format: Format of the image download: 'svg', 'png', 'jpeg'
