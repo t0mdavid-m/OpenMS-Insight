@@ -35,6 +35,7 @@ import {
 } from '@/utils/mzWindow'
 import { copyText, fillUsi, usiTool } from '@/utils/usi'
 import PlotToolbar from './PlotToolbar.vue'
+import { unhighlightedDash } from '@/utils/mirrorStyle'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
 const DEFAULT_STYLING = {
@@ -817,6 +818,9 @@ export default defineComponent({
     /**
      * Build stick line shapes for one side. Bottom side y is negated to mirror.
      * Selected peaks get width 3 (matches PlotlyLineplot); others use Plotly default.
+     * Peaks that are neither highlighted nor selected are drawn with the side's
+     * `topUnhighlightedDash` / `bottomUnhighlightedDash` styling (a Plotly dash
+     * style such as 'dot'; solid when unset), e.g. unmatched theoretical ions.
      */
     buildStickShapes(
       side: SideData | undefined,
@@ -825,16 +829,19 @@ export default defineComponent({
     ): Partial<Plotly.Shape>[] {
       if (!side) return []
       const sign = sideKey === 'top' ? 1 : -1
+      const dash = unhighlightedDash(this.styling, sideKey)
       const shapes: Partial<Plotly.Shape>[] = []
       for (let i = 0; i < side.x.length; i++) {
         const isSelected = colors[i] === this.styling.selectedColor
+        const line: Partial<Plotly.ShapeLine> = { color: colors[i], width: isSelected ? 3 : 1.5 }
+        if (dash && !isSelected && !side.highlight?.[i]) line.dash = dash
         shapes.push({
           type: 'line',
           x0: side.x[i],
           x1: side.x[i],
           y0: 0,
           y1: sign * side.y[i],
-          line: { color: colors[i], width: isSelected ? 3 : 1.5 },
+          line,
         })
       }
       return shapes
