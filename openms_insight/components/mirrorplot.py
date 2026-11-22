@@ -24,6 +24,7 @@ from ..core.mz_window import (
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
 from ..core.usi import usi_args, validate_usi
+from ..core.x_markers import validate_x_markers, x_marker_args
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -98,6 +99,7 @@ class MirrorPlot(BaseComponent):
         zoom_identifier: str | None = None,
         window_identifier: str | None = None,
         window_tolerance: float | str = DEFAULT_WINDOW_TOLERANCE,
+        x_markers: dict[str, float] | list[dict[str, Any]] | None = None,
         usi: str | None = None,
         **kwargs,
     ):
@@ -199,6 +201,12 @@ class MirrorPlot(BaseComponent):
                 a number of Da (default 0.01) or a string such as '10 ppm',
                 '0.02 Da' or '0.5 m/z'.
                 Render-time only: not part of the cache.
+            x_markers: Positions on the x axis to mark over both spectra, as
+                ``{label: x}`` or a list of ``{'x', 'label', 'color'}`` dicts
+                (default None), e.g. ``{'precursor 2+': 512.27}``. Each gets a
+                dotted guide in its own colour and its label at the top; the
+                Markers button hides them. Render-time only: not part of the
+                cache.
             usi: Universal Spectrum Identifier of the shown spectrum, for a
                 USI button that copies it, e.g.
                 'mzspec:PXD000561:run1:scan:{spectrum}'. A ``{identifier}``
@@ -262,6 +270,9 @@ class MirrorPlot(BaseComponent):
         # Render-time options, kept out of the cache config (see core/mz_window.py)
         self._window_identifier = validate_window_identifier(window_identifier)
         self._window_tolerance = validate_window_tolerance(window_tolerance)
+
+        # Render-time option, kept out of the cache config (see core/x_markers.py)
+        self._x_markers = validate_x_markers(x_markers)
 
         # Render-time option, kept out of the cache config (see core/usi.py)
         self._usi = validate_usi(usi)
@@ -683,6 +694,7 @@ class MirrorPlot(BaseComponent):
         args.update(zoom_args(self._zoom_identifier))
         args.update(mz_window_args(self._window_identifier, self._window_tolerance))
         args.update(usi_args(self._usi))
+        args.update(x_marker_args(self._x_markers, None))
         args.update(keep_zoom_args(self._keep_zoom))
         return args
 
