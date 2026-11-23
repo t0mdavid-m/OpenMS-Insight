@@ -112,8 +112,15 @@ _DELTA_VERSIONS = 4
 
 
 # Payload entries that ask Vue to act (not part of the data hash): a payload that
-# carries one is always sent
-_NAVIGATION_KEYS = ("_navigate_to_page", "_target_row_index")
+# carries one is always sent. A table's download is one: its rows did not change,
+# so without it the answer to a download request was never sent
+_ACTION_KEYS = ("_navigate_to_page", "_target_row_index", "_download")
+
+
+def _asks_vue_to_act(data: dict) -> bool:
+    """Whether a payload carries an entry Vue acts on, so it is sent even if Vue holds its data."""
+    return any(k in data for k in _ACTION_KEYS)
+
 
 # Key under which a component's cache build is folded into its payload cache key.
 # Leading underscores keep it clear of state identifiers, which the key also holds.
@@ -1109,7 +1116,7 @@ def _render_component(
     if (
         cache_valid
         and st.session_state[_SENT_HASH_KEY].get(key) == cached_hash
-        and not any(k in cached_data for k in _NAVIGATION_KEYS)
+        and not _asks_vue_to_act(cached_data)
     ):
         # Vue already has this data (it was sent in an earlier run): send the
         # state and the component arguments only. Resending the data on every

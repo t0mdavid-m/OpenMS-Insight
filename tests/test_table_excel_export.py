@@ -170,9 +170,8 @@ def test_a_title_equal_to_another_field_but_for_case_keeps_the_rows(
     }
     rows = list(_workbook(table._prepare_vue_data(state)["_download"])["PSMs"].values)
     assert len(rows) == 121
-    header = [h.casefold() for h in rows[0]]
-    assert len(set(header)) == len(header)
-    assert "Score" in rows[0] and "sequence" in rows[0]
+    # The displayed column keeps its title, the raw field is renamed
+    assert rows[0] == ("Sequence", "Score", "id_idx", "sequence (2)", "proteins")
 
 
 def test_headers_that_differ_only_in_case_are_made_unique():

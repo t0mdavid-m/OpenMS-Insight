@@ -1647,18 +1647,18 @@ class Table(BaseComponent):
         return data
 
     def _column_titles(self, columns: list[str]) -> dict[str, str]:
-        """Column titles to use as the Excel header, where they are unique.
+        """Column titles to use as the Excel header, where no other title is the same.
 
-        Excel compares a table's headers without case, so a title such as
-        "Sequence" stays a field name while a column named "sequence" is
-        exported too.
+        Excel compares a table's headers without case, so titles are compared
+        that way too. A title that equals another column's field name is kept;
+        ``to_xlsx`` makes that column's header unique.
         """
         titles = {
             col_def["field"]: str(col_def["title"])
             for col_def in (self._column_definitions or [])
             if col_def.get("field") in columns and col_def.get("title")
         }
-        taken = [titles.get(c, c).casefold() for c in columns]
+        taken = [t.casefold() for t in titles.values()]
         return {f: t for f, t in titles.items() if taken.count(t.casefold()) == 1}
 
     def _xlsx_download(
