@@ -907,9 +907,18 @@ labels, a selection) shows how many, with an × that removes them. The row is
 always visible, not only on hover. Its 36 px are taken from the plot, so a
 component keeps the `height` it is given.
 
+After a zoom, pan or reset of a plot with axes (by mouse, a toolbar button or a
+key), **Back** (an arrow turning back, after Reset) returns to the zoom before
+it, step by step down to the full view; its tooltip says how many steps are
+kept (at most 50). It zooms the way the mouse does, so a Heatmap loads the
+level for the restored range and a `zoom_identifier` follows. A component that
+fits its y axis to a new x range does so within the same step. The history
+belongs to the plot on the page and starts empty when the component is drawn
+anew.
+
 When the groups do not fit the panel's width, the row keeps only the tools that
-are on or hold something, plus Reset, and offers every tool in a menu behind ⋯,
-sorted into the same groups. The toolbar follows the Streamlit theme.
+are on or hold something, plus Reset and Back, and offers every tool in a menu
+behind ⋯, sorted into the same groups. The toolbar follows the Streamlit theme.
 
 Some tools open a menu below the toolbar (inside ⋯ on a narrow toolbar):
 
