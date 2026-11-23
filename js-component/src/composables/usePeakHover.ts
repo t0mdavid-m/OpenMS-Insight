@@ -98,7 +98,6 @@ export function peakAt(
 
 /** Peaks looked at on each side of the mouse. */
 const MAX_SCAN = 5000
-/** Half the width, in pixels, of the window where the tallest peak wins. */
 /**
  * The peak next to `current` along x: the next larger x for `step` 1, the
  * next smaller for -1 (equal x in index order). Only peaks `accept` lets
@@ -121,6 +120,7 @@ export function stepIndex(
   return undefined
 }
 
+/** Half the width, in pixels, of the window where the tallest peak wins. */
 export const PIXEL_WINDOW = 2
 
 /** Number of leading non-NaN entries of `order` (NaN sorts last). */
