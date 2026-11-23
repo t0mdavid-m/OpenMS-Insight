@@ -145,3 +145,38 @@ def test_csv_download_joins_list_columns(mock_streamlit, temp_cache_dir, psm_dat
     ]
     exported = pl.read_csv(io.StringIO(payload["csv"]))
     assert exported.filter(pl.col("id_idx") == 0)["proteins"].item() == "P0; Q0"
+
+
+def test_a_title_equal_to_another_field_but_for_case_keeps_the_rows(
+    mock_streamlit, temp_cache_dir, psm_data
+):
+    # A display column titled "Sequence" next to the raw "sequence" field:
+    # Excel compares headers without case and refused the whole sheet
+    data = psm_data.with_columns(pl.col("sequence").str.to_lowercase().alias("shown"))
+    table = Table(
+        cache_id="excel_case_table",
+        data=data,
+        cache_path=str(temp_cache_dir),
+        column_definitions=[
+            {"field": "shown", "title": "Sequence"},
+            {"field": "score", "title": "Score", "sorter": "number"},
+        ],
+        index_field="id_idx",
+        page_size=50,
+        title="PSMs",
+    )
+    state = {
+        "excel_case_table_page": {"download_request": 1, "download_format": "xlsx"}
+    }
+    rows = list(_workbook(table._prepare_vue_data(state)["_download"])["PSMs"].values)
+    assert len(rows) == 121
+    header = [h.casefold() for h in rows[0]]
+    assert len(set(header)) == len(header)
+    assert "Score" in rows[0] and "sequence" in rows[0]
+
+
+def test_headers_that_differ_only_in_case_are_made_unique():
+    data = pl.DataFrame({"Score": [1.0], "score": [2.0]})
+    book = openpyxl.load_workbook(io.BytesIO(to_xlsx(data, "T", [])))
+    rows = list(book["T"].values)
+    assert rows == [("Score", "score (2)"), (1.0, 2.0)]
