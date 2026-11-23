@@ -354,7 +354,7 @@ mirror(state_manager=state_manager, height=600)
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
 - Tick labels show absolute intensity on both sides — the bottom half is flipped only for layout, not for the displayed values
-- Marker traces are kept in addition to stick shapes so Plotly fires `plotly_click` events; the click handler picks the side via `curveNumber` and routes the row's interactivity column value to the shared selection
+- Hovering shows the peak nearest the mouse along x, as on LinePlot: above the axis a peak of the upper spectrum, below it one of the lower, with a dot on the peak top and a box with its x, its intensity (as a positive value) and its annotation. A click selects the peak the box shows, anywhere along its stick; the row's interactivity column value goes to the shared selection
 - In measure mode the two peaks of a measurement must be in the same half; a click in the other half starts a new measurement there
 - `set_top_dynamic_annotations(...)` / `set_bottom_dynamic_annotations(...)` allow another component (e.g. a `SequenceView`) to push fragment-ion annotations into one half without invalidating the cache
 

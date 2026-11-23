@@ -26,6 +26,15 @@ export interface PeakHoverSource {
   extra?: (index: number) => string | undefined
   xName: string
   yName: string
+  /** -1 when the peaks are drawn below the axis (y negated), as in a mirror plot. */
+  sign?: 1 | -1
+  /** Which set of peaks this is (e.g. 'top' or 'bottom'), passed on by hitAt. */
+  group?: string
+}
+
+/** Where the mouse is, for a source that depends on it (y in data units). */
+export interface PeakHoverAt {
+  y?: number
 }
 
 export interface PeakHoverTip {
@@ -133,14 +142,29 @@ export function formatHoverValues(x: number, y: number): [string, string] {
 interface PlotLayout {
   _size?: { l: number; t: number; w: number; h: number }
   xaxis?: { p2l?: (px: number) => number; l2p?: (v: number) => number }
+  yaxis?: { p2l?: (px: number) => number }
 }
 
 export function usePeakHover() {
   const tip = ref<PeakHoverTip | null>(null)
   let element: HTMLElement | null = null
   let container: HTMLElement | null = null
-  let source: () => PeakHoverSource = () => ({ x: undefined, y: undefined, xName: 'x', yName: 'y' })
-  let sorted: { x: ArrayLike<number>; order: Uint32Array } | null = null
+  let source: (at: PeakHoverAt) => PeakHoverSource = () => ({
+    x: undefined,
+    y: undefined,
+    xName: 'x',
+    yName: 'y',
+  })
+  // The x order of the last two peak sets (a mirror plot alternates between two)
+  let sorted: { x: ArrayLike<number>; order: Uint32Array }[] = []
+
+  function orderOf(x: ArrayLike<number>): Uint32Array {
+    const hit = sorted.find((entry) => entry.x === x)
+    if (hit) return hit.order
+    const order = xOrder(x)
+    sorted = [{ x, order }, ...sorted].slice(0, 2)
+    return order
+  }
   let frame = 0
   let lastEvent: MouseEvent | null = null
 
@@ -153,20 +177,18 @@ export function usePeakHover() {
     const layout = (element as unknown as { _fullLayout?: PlotLayout } | null)?._fullLayout
     const size = layout?._size
     const xaxis = layout?.xaxis
-    const src = source()
-    const { x, y } = src
-    if (!event || !element || !size || !xaxis?.p2l || !xaxis.l2p || !x || !y || x.length === 0) {
-      return null
-    }
+    if (!event || !element || !size || !xaxis?.p2l || !xaxis.l2p) return null
     const rect = element.getBoundingClientRect()
     const px = event.clientX - rect.left - size.l
     const py = event.clientY - rect.top - size.t
     if (px < 0 || px > size.w || py < 0 || py > size.h) return null
+    const src = source({ y: layout?.yaxis?.p2l?.(py) })
+    const { x, y } = src
+    if (!x || !y || x.length === 0) return null
 
-    if (!sorted || sorted.x !== x) sorted = { x, order: xOrder(x) }
     const target = xaxis.p2l(px)
     const halfWidth = Math.abs(xaxis.p2l(px + PIXEL_WINDOW) - target)
-    const index = peakAt(x, y, sorted.order, target, halfWidth)
+    const index = peakAt(x, y, orderOf(x), target, halfWidth)
     if (index === undefined || Math.abs(xaxis.l2p(x[index]) - px) > SNAP_PX) return null
     return { index, x, y, src, size, rect }
   }
@@ -174,6 +196,12 @@ export function usePeakHover() {
   /** Index of the peak the hover would show for this mouse event, if any. */
   function indexAt(event: MouseEvent): number | undefined {
     return locate(event)?.index
+  }
+
+  /** The peak the hover would show, with its source's group (mirror plots). */
+  function hitAt(event: MouseEvent): { index: number; group?: string } | undefined {
+    const found = locate(event)
+    return found ? { index: found.index, group: found.src.group } : undefined
   }
 
   function update(): void {
@@ -186,18 +214,18 @@ export function usePeakHover() {
     const { index, x, y, src, size, rect } = found
     const { extra, xName, yName } = src
 
-    const position = plotPointPosition(element, container, x[index], y[index])
+    const position = plotPointPosition(element, container, x[index], (src.sign ?? 1) * y[index])
     if (!position) return hide()
     const [xs, ys] = formatHoverValues(x[index], y[index])
     const lines = [`${xName} ${xs}`, `${yName} ${ys}`]
     const note = extra?.(index)
     if (note) lines.push(note)
-    // Keep the dot inside the plot area for peaks above the visible y range
+    // Keep the dot inside the plot area for peaks beyond the visible y range
     const plotTop = rect.top - (container?.getBoundingClientRect().top ?? rect.top) + size.t
     const width = container?.clientWidth ?? rect.width
     tip.value = {
       left: position.left,
-      top: Math.max(position.top, plotTop),
+      top: Math.min(Math.max(position.top, plotTop), plotTop + size.h),
       index,
       lines,
       flip: position.left > width - FLIP_MARGIN_PX,
@@ -223,7 +251,7 @@ export function usePeakHover() {
   function bind(
     plotElement: HTMLElement | null,
     root: HTMLElement | null,
-    getSource: () => PeakHoverSource,
+    getSource: (at: PeakHoverAt) => PeakHoverSource,
   ): void {
     source = getSource
     container = root
@@ -250,5 +278,5 @@ export function usePeakHover() {
     unbind()
   })
 
-  return reactive({ tip, bind, hide, indexAt })
+  return reactive({ tip, bind, hide, indexAt, hitAt })
 }
