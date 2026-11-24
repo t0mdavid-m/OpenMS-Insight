@@ -57,6 +57,8 @@ export function resizePlots(delta: number): void {
     return
   }
   document.querySelectorAll<HTMLElement>('.js-plotly-plot').forEach((element) => {
+    // Plots of another Plotly bundle size themselves from their height argument
+    if (element.closest('[data-own-size]')) return
     const height = (element as unknown as { _fullLayout?: { height?: number } })._fullLayout?.height
     if (!height) return
     const width = element.parentElement?.clientWidth

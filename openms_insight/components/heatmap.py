@@ -110,6 +110,9 @@ class Heatmap(BaseComponent):
     # few rows per refresh: only those are sent again
     _delta_tables = ("heatmapData",)
 
+    # The marked points carry their intensity too (PeakMap draws them in 3D)
+    _highlight_intensity = False
+
     def __init__(
         self,
         cache_id: str,
@@ -1392,6 +1395,8 @@ class Heatmap(BaseComponent):
                 "x": highlighted[self._x_column].to_list(),
                 "y": highlighted[self._y_column].to_list(),
             }
+            if self._intensity_column in highlighted.columns:
+                result["highlightPoints"]["z"] = highlighted[self._intensity_column].to_list()
             # The points data may be unchanged while the marked points move
             result["_hash"] = f"{data_hash}:{compute_dataframe_hash(highlighted)}"
         if self._multi_select:
@@ -1428,6 +1433,8 @@ class Heatmap(BaseComponent):
         """x and y of the points whose `multi_select` column value is in the
         selected set, from the full-resolution data."""
         columns = [self._x_column, self._y_column]
+        if self._highlight_intensity and self._intensity_column:
+            columns.append(self._intensity_column)
         empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
         full = self._full_filtered(state, levels)
         if full is None:
@@ -1491,6 +1498,8 @@ class Heatmap(BaseComponent):
         """x and y of the points matching the selected value of each
         `highlight` identifier, from the full-resolution data."""
         columns = [self._x_column, self._y_column]
+        if self._highlight_intensity and self._intensity_column:
+            columns.append(self._intensity_column)
         empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
         conditions = [
             pl.col(column) == state[identifier]
