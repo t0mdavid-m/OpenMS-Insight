@@ -1,8 +1,8 @@
 <template>
-  <div v-if="componentArgs !== undefined">
+  <div v-if="componentArgs !== undefined" :class="{ 'view-fullscreen': fullscreen }" :style="fullscreenStyle">
     <component
       :is="currentComponent"
-      :args="componentArgs"
+      :args="shownArgs"
       :index="0"
     />
   </div>
@@ -27,6 +27,7 @@ import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
 import { applyAppTheme } from './utils/appTheme'
+import { fullscreen, resizePlots, screenHeight } from './utils/fullscreen'
 // Each view is its own chunk, so a page with several views does not load and
 // run Plotly in every table's frame
 const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
@@ -250,7 +251,7 @@ export default defineComponent({
       { immediate: true }
     )
 
-    return { streamlitDataStore, selectionStore }
+    return { streamlitDataStore, selectionStore, fullscreen, screenHeight }
   },
   data() {
     return {
@@ -270,6 +271,25 @@ export default defineComponent({
       return undefined
     },
 
+    /** The arguments the view is drawn with: in full screen, as tall as the screen. */
+    shownArgs(): ComponentArgs | undefined {
+      const args = this.componentArgs
+      if (!args || !this.fullscreen) return args
+      const height = this.screenHeight - 16
+      const sized: Record<string, unknown> = { ...args, height }
+      // The structure viewer sizes its canvas apart from its controls
+      if ('viewerHeight' in args || args.componentType === 'ProteinStructureView') sized.viewerHeight = height - 160
+      return sized as unknown as ComponentArgs
+    },
+    /** In full screen the view sits on the app's background and scrolls if taller. */
+    fullscreenStyle(): Record<string, string> | undefined {
+      if (!this.fullscreen) return undefined
+      return {
+        background: this.streamlitDataStore.theme?.backgroundColor || '#ffffff',
+        height: '100vh',
+        overflow: 'auto',
+      }
+    },
     /**
      * Get the Vue component based on componentType.
      */
@@ -306,6 +326,14 @@ export default defineComponent({
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null
+      }
+    },
+  },
+  watch: {
+    // Plots keep the height they were drawn with until they redraw: resize them now
+    'shownArgs.height'(height: number | undefined, previous: number | undefined) {
+      if (typeof height === 'number' && typeof previous === 'number' && height !== previous) {
+        this.$nextTick(() => resizePlots(height - previous))
       }
     },
   },

@@ -1,5 +1,5 @@
 <template>
-  <div class="plot3d" :style="fullscreen ? { background: theme?.backgroundColor || '#ffffff' } : undefined">
+  <div class="plot3d">
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
   </div>
@@ -58,8 +58,6 @@ const HEIGHT_COLORSCALE: [number, string][] = [
   [0.5, '#3157e9'],
   [1, '#0b1a5c'],
 ]
-const FULLSCREEN_ICON = 'M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z'
-const EXIT_FULLSCREEN_ICON = 'M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z'
 
 export default defineComponent({
   name: 'Plotly3D',
@@ -92,8 +90,6 @@ export default defineComponent({
       /** Seen from above, as a flat map without perspective. */
       topView: false,
       colourMode: 'series' as ColourMode,
-      /** The plot fills the screen. */
-      fullscreen: false,
     }
   },
   computed: {
@@ -116,15 +112,6 @@ export default defineComponent({
           run: () => {
             this.topView = !this.topView
           },
-        },
-        {
-          id: 'fullscreen',
-          group: 'view',
-          icon: this.fullscreen ? EXIT_FULLSCREEN_ICON : FULLSCREEN_ICON,
-          label: this.fullscreen ? 'Exit full screen' : 'Full screen',
-          help: this.fullscreen ? 'back to the page (Esc)' : 'the plot fills the screen',
-          active: this.fullscreen,
-          run: () => this.toggleFullscreen(),
         },
         downloadTool({
           plotId: this.id,
@@ -485,7 +472,7 @@ export default defineComponent({
         },
         paper_bgcolor: this.theme?.backgroundColor,
         plot_bgcolor: this.theme?.secondaryBackgroundColor,
-        height: (this.fullscreen ? window.innerHeight : this.args.height || 800) - TOOLBAR_HEIGHT,
+        height: (this.args.height || 800) - TOOLBAR_HEIGHT,
         font: {
           color: this.theme?.textColor,
           family: this.theme?.font,
@@ -529,16 +516,9 @@ export default defineComponent({
     colourMode() {
       this.requestRender()
     },
-    fullscreen() {
-      this.requestRender()
-    },
   },
   mounted() {
-    document.addEventListener('fullscreenchange', this.onFullscreenChange)
     this.requestRender()
-  },
-  beforeUnmount() {
-    document.removeEventListener('fullscreenchange', this.onFullscreenChange)
   },
   methods: {
     /** Colour settings of a line or marker that colour each point by its z within `range`. */
@@ -560,16 +540,6 @@ export default defineComponent({
             }
           : undefined,
       }
-    },
-    toggleFullscreen(): void {
-      if (document.fullscreenElement) {
-        void document.exitFullscreen()
-      } else {
-        void (this.$el as HTMLElement).requestFullscreen?.()
-      }
-    },
-    onFullscreenChange(): void {
-      this.fullscreen = document.fullscreenElement === this.$el
     },
     /** Draw once per update: one update often changes several watched values
      * (the data and the selection), and each drawing costs a full Plotly render.

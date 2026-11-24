@@ -7,6 +7,7 @@
     <div class="d-flex">
       <div class="table-toolbar">
         <div class="table-toolbar-buttons">
+          <FullscreenButton />
           <v-btn
             v-if="!offersExcel"
             variant="text"
@@ -216,6 +217,7 @@
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { TabulatorFull as Tabulator, type CellComponent, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
@@ -280,6 +282,7 @@ const KEY_MOVES: Record<string, KeyMove> = {
 
 export default defineComponent({
   name: 'TabulatorTable',
+  components: { FullscreenButton },
   props: {
     args: {
       type: Object as PropType<TableComponentArgs>,

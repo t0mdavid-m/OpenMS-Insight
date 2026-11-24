@@ -15,6 +15,7 @@
           :color="theme?.primaryColor ?? 'primary'"
           size="small"
         />
+        <FullscreenButton />
         <v-btn variant="text" icon size="small" :disabled="sequence.length === 0" @click="copySequence">
           <v-icon>mdi-content-copy</v-icon>
           <v-tooltip activator="parent" location="bottom">Copy sequence to clipboard</v-tooltip>
@@ -186,6 +187,7 @@
 
 <script lang="ts">
 import { defineComponent } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
@@ -210,6 +212,7 @@ function toSuperscript(n: number): string {
 export default defineComponent({
   name: 'SequenceView',
   components: {
+    FullscreenButton,
     AminoAcidCell,
     ImageScreenshot,
   },
