@@ -3,6 +3,11 @@
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container"></div>
     <MeasureHint v-if="args.measure" :measure="measure" />
+    <PeakHoverTip
+      :tip="hover.tip"
+      :color="theme?.textColor || '#262730'"
+      :background="theme?.backgroundColor || 'white'"
+    />
     <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
       ↩
     </button>
@@ -41,6 +46,8 @@ import { usePinZoom } from '@/composables/usePinZoom'
 import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import PeakHoverTip from './PeakHoverTip.vue'
+import { usePeakHover } from '@/composables/usePeakHover'
 import { readableTextOn } from '@/utils/appTheme'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
@@ -194,7 +201,7 @@ let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlyDeconvolvedSpectrum',
-  components: { MeasureHint, PlotToolbar },
+  components: { MeasureHint, PeakHoverTip, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<DeconvolvedSpectrumComponentArgs>,
@@ -211,7 +218,8 @@ export default defineComponent({
     const measure = useMeasure(() => !!props.args.measure)
     const pinZoom = usePinZoom(() => !!props.args.keepZoom)
     const zoom = useZoomState(() => props.args.zoomIdentifier)
-    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, zoomStamp: zoom.stamp, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
+    const hover = usePeakHover()
+    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, hover, zoomStamp: zoom.stamp, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -896,6 +904,8 @@ export default defineComponent({
             type: 'scatter',
             connectgaps: false,
             marker: { color: this.styling.highlightHiddenColor },
+            // The read-out comes from usePeakHover (nearest peak along x)
+            hoverinfo: 'none',
           } as Plotly.Data,
         ]
       }
@@ -906,6 +916,7 @@ export default defineComponent({
           mode: 'lines',
           type: 'scatter',
           marker: { color: this.styling.unhighlightedColor },
+          hoverinfo: 'none',
         } as Plotly.Data,
         ...this.fragmentTraces,
         {
@@ -914,6 +925,7 @@ export default defineComponent({
           mode: 'lines',
           type: 'scatter',
           marker: { color: this.styling.highlightColor },
+          hoverinfo: 'none',
         } as Plotly.Data,
         {
           x: this.plotData.selected_x,
@@ -921,6 +933,7 @@ export default defineComponent({
           mode: 'lines',
           type: 'scatter',
           marker: { color: this.styling.selectedColor },
+          hoverinfo: 'none',
         } as Plotly.Data,
       ]
       if (this.envelopeTrace) traces.push(this.envelopeTrace)
@@ -951,32 +964,6 @@ export default defineComponent({
           name: FRAGMENT_KIND_NAMES[kind],
           line: { color: this.fragmentColors[kind], width: 1.5 },
           hoverinfo: 'skip',
-        } as Plotly.Data)
-      }
-      // Hover: the names of the ions at each marked mass or peak
-      const hover = this.isMzMode ? marks.peakHover : marks.massHover
-      const xs = this.xColumnValues
-      const ys = this.yColumnValues
-      const hx: number[] = []
-      const hy: number[] = []
-      const ht: string[] = []
-      const kinds = this.fragmentKindPos
-      hover.forEach((text, i) => {
-        if (text === undefined || kinds[i] === undefined) return
-        hx.push(xs[i])
-        hy.push(ys[i])
-        ht.push(`${text}<br>${this.isMzMode ? 'm/z' : 'Mass'} ${xs[i]?.toFixed(4)}`)
-      })
-      if (hx.length > 0) {
-        traces.push({
-          x: hx,
-          y: hy,
-          mode: 'markers',
-          type: 'scatter',
-          marker: { size: 8, opacity: 0 },
-          hoverinfo: 'text',
-          hovertext: ht,
-          showlegend: false,
         } as Plotly.Data)
       }
       return traces
@@ -1394,7 +1381,42 @@ export default defineComponent({
       this.resetManualState()
       this.requestGraph()
     },
-    onPlotClick(eventData: { points?: Array<{ x: number }> }): void {
+    /** The fragment ions marked at a drawn mass or peak, for the read-out. */
+    ionNames(index: number): string | undefined {
+      const marks = this.fragmentMarks
+      if (!marks || this.fragmentKindPos[index] === undefined) return undefined
+      return (this.isMzMode ? marks.peakHover : marks.massHover)[index]
+    },
+    /**
+     * Plotly reports a click only near a vertex of a stick, so a click
+     * half-way up a tall mass was lost. A click on the mass the read-out
+     * shows that Plotly did not report is handled here (once per element).
+     */
+    bindStickClicks(element: HTMLElement & { _insightClicks?: boolean; _plotlyClickAt?: number }): void {
+      if (element._insightClicks) return
+      element._insightClicks = true
+      let downAt: { x: number; y: number } | null = null
+      element.addEventListener('mousedown', (event: MouseEvent) => {
+        downAt = { x: event.clientX, y: event.clientY }
+      })
+      element.addEventListener('click', (event: MouseEvent) => {
+        const start = downAt
+        downAt = null
+        // A zoom box or pan ends with a click too
+        if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return
+        const index = this.hover.indexAt(event)
+        if (index === undefined) return
+        const x = this.xColumnValues[index]
+        setTimeout(() => {
+          if (performance.now() - (element._plotlyClickAt ?? -Infinity) < 300) return
+          this.onPlotClick({ points: [{ x }] })
+        })
+      })
+    },
+    onPlotClick(eventData: { points?: Array<{ x: number }>; event?: MouseEvent }): void {
+      // The mass or peak the read-out shows, so a click selects what is shown
+      const shown = eventData.event ? this.hover.indexAt(eventData.event) : undefined
+      if (shown !== undefined) eventData = { points: [{ x: this.xColumnValues[shown] }] }
       // In measure mode a click picks the nearest mass or peak, not a selection
       if (this.measure.active) {
         const x = eventData.points?.[0]?.x
@@ -1425,6 +1447,7 @@ export default defineComponent({
       }
     },
     onRelayout(eventData: Record<string, unknown>): void {
+      this.hover.hide()
       if (eventData['xaxis.range[0]'] !== undefined && eventData['xaxis.range[1]'] !== undefined) {
         const newXRange = [eventData['xaxis.range[0]'] as number, eventData['xaxis.range[1]'] as number]
         if (newXRange[0] < 0) newXRange[0] = 0
@@ -1462,7 +1485,18 @@ export default defineComponent({
         scrollZoom: true,
       })) as unknown as { on: (event: string, handler: (data: never) => void) => void }
       plot.on('plotly_relayout', (eventData: Record<string, unknown>) => this.onRelayout(eventData))
-      plot.on('plotly_click', (eventData: { points?: Array<{ x: number }> }) => this.onPlotClick(eventData))
+      plot.on('plotly_click', (eventData: { points?: Array<{ x: number }>; event?: MouseEvent }) => {
+        ;(element as HTMLElement & { _plotlyClickAt?: number })._plotlyClickAt = performance.now()
+        this.onPlotClick(eventData)
+      })
+      this.hover.bind(element, element.parentElement, () => ({
+        x: this.xColumnValues,
+        y: this.yColumnValues,
+        extra: (i) => this.ionNames(i),
+        xName: this.isMzMode ? 'm/z' : 'Mass',
+        yName: 'Intensity',
+      }))
+      this.bindStickClicks(element)
       this.measure.bindLabelClicks(element)
       this.pinZoom.bind(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
