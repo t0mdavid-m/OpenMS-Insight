@@ -40,6 +40,8 @@ class ClusteredHeatmap(BaseComponent):
     """
 
     _component_type: str = "clustered_heatmap"
+    #: Its view has a plot toolbar (help, settings; it has no filters to step)
+    _supports_stepper = True
 
     def __init__(
         self,

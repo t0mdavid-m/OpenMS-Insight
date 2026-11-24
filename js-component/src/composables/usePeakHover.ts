@@ -107,6 +107,28 @@ export function peakAt(
 
 /** Peaks looked at on each side of the mouse. */
 const MAX_SCAN = 5000
+/**
+ * The peak next to `current` along x: the next larger x for `step` 1, the
+ * next smaller for -1 (equal x in index order). Only peaks `accept` lets
+ * through count; undefined at the end of the data.
+ */
+export function stepIndex(
+  x: ArrayLike<number>,
+  order: Uint32Array,
+  current: number,
+  step: 1 | -1,
+  accept: (index: number) => boolean = () => true,
+): number | undefined {
+  const at = order.indexOf(current)
+  if (at < 0) return undefined
+  for (let k = at + step; k >= 0 && k < order.length; k += step) {
+    const index = order[k]
+    if (Number.isNaN(x[index])) continue
+    if (accept(index)) return index
+  }
+  return undefined
+}
+
 /** Half the width, in pixels, of the window where the tallest peak wins. */
 export const PIXEL_WINDOW = 2
 
@@ -211,8 +233,21 @@ export function usePeakHover() {
     if (!event || event.buttons !== 0) return hide()
     const found = locate(event)
     if (!found || !element) return hide()
-    const { index, x, y, src, size, rect } = found
-    const { extra, xName, yName } = src
+    showTip(found.index, found.src)
+  }
+
+  /** Show the box for peak `index`, without the mouse (keyboard stepping). */
+  function showIndex(index: number): void {
+    lastEvent = null
+    showTip(index, source({}))
+  }
+
+  function showTip(index: number, src: PeakHoverSource): void {
+    const layout = (element as unknown as { _fullLayout?: PlotLayout } | null)?._fullLayout
+    const size = layout?._size
+    const { x, y, extra, xName, yName } = src
+    if (!element || !size || !x || !y || index < 0 || index >= x.length) return hide()
+    const rect = element.getBoundingClientRect()
 
     const position = plotPointPosition(element, container, x[index], (src.sign ?? 1) * y[index])
     if (!position) return hide()
@@ -278,5 +313,5 @@ export function usePeakHover() {
     unbind()
   })
 
-  return reactive({ tip, bind, hide, indexAt, hitAt })
+  return reactive({ tip, bind, hide, indexAt, hitAt, showIndex })
 }

@@ -430,6 +430,7 @@ class VolcanoPlot(BaseComponent):
         fc_threshold: float = 1.0,
         p_threshold: float = 0.05,
         max_labels: int = 10,
+        help: str | None = None,
     ) -> Any:
         """
         Render the volcano plot component.
@@ -449,6 +450,8 @@ class VolcanoPlot(BaseComponent):
         Returns:
             Component result for Streamlit rendering.
         """
+        if help is not None:
+            self._help = help or None
         # Store render-time threshold values
         self._current_fc_threshold = fc_threshold
         self._current_p_threshold = p_threshold

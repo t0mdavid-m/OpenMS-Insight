@@ -3,8 +3,8 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
-    <div :id="id" class="plot-container"></div>
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
+    <div :id="id" class="plot-container" :style="{ minHeight: `${plotHeight}px` }"></div>
     <PeakHoverTip
       :tip="hover.tip"
       :color="theme?.textColor || '#262730'"
@@ -31,7 +31,7 @@ import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import {
   currentWindow,
   windowOverlay,
@@ -644,7 +644,7 @@ export default defineComponent({
       ]
 
       const layout: Partial<Plotly.Layout> = {
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: this.args.title ? { text: boldTitle(this.args.title, this.id).text } : undefined,
         showlegend: false,
         height: this.plotHeight,
         xaxis: {

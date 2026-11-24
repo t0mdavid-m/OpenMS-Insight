@@ -178,6 +178,7 @@ Table(
 - `filter_presets`: Ready-made filters at the top of the filter dialog, each a check box with a label, optional help and a default state. The same card lists the filters the viewer set (column filters, search), each removed by unticking it. A preset that is on keeps only the rows matching all of its conditions (`{"column", "op", "value"}`, op one of `==`, `!=`, `<=`, `>=`, `<`, `>`, `in`, `not in`) and counts in the filter badge and chips. The sequence view's fragment table uses the same presets.
 - `collapse_columns`: Columns that do not fit the table's width fold into a row overview (default). `False` keeps every column and scrolls the table sideways instead, for a narrow table whose columns all matter. It does not affect the cache.
 - `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
+- `copy_row`: Ctrl+C (Cmd+C on a Mac) while the table has focus copies the selected row as two tab-separated lines, the shown columns' titles and the row's values, which paste into a spreadsheet as a header and a row (default: True). Text selected in the table is copied as usual. `False` leaves the keys to the browser; it does not affect the cache.
 
 **Filters.** The filter button opens a dialog with a filter per column: values to
 keep, a text pattern, or for numbers "at least", "at most" or a range. Every
@@ -313,6 +314,8 @@ LinePlot(
 Hovering shows the peak nearest the mouse along x, anywhere in the plot's height: a dot on the peak top and a box with its x and y (and its annotation, if any). Within two pixels of the mouse the most intense peak wins, so a dense profile spectrum reports the peak that is drawn.
 
 The mouse wheel zooms x around the mouse while y follows the peaks in view; zooming out past the full extent shows the full view. Shift + wheel or a sideways (trackpad) wheel pans x, and so does dragging with the middle button; panning stops at the ends of the data. A double-click shows the full view. Outside the plot area the wheel scrolls the page.
+
+With `interactivity`, the arrow keys step through the peaks once one is selected (a click on a peak also gives the plot the keyboard focus). Left and Right select the previous or next peak along x. With Shift they skip to the previous or next labelled peak: one with an annotation or an x marker's label. The selection updates like a click, the x range pans to keep the peak in view, and the peak's read-out stays until the mouse moves.
 
 ### MirrorPlot
 

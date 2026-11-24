@@ -1,27 +1,9 @@
 <template>
   <div class="volcano-plot">
-    <div v-if="multiSelectEnabled && args.selectionPresets" class="volcano-select-bar">
-      <span class="volcano-select-label">Select</span>
-      <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
-        {{ presetLabel('changed') }} ({{ presetCounts.changed }})
-      </button>
-      <button type="button" class="volcano-select-button" :disabled="!presetCounts.up" @click="selectPreset('up')">
-        <span class="volcano-swatch" :style="{ background: args.upColor || '#E74C3C' }"></span>
-        {{ presetLabel('up') }} ({{ presetCounts.up }})
-      </button>
-      <button type="button" class="volcano-select-button" :disabled="!presetCounts.down" @click="selectPreset('down')">
-        <span class="volcano-swatch" :style="{ background: args.downColor || '#3498DB' }"></span>
-        {{ presetLabel('down') }} ({{ presetCounts.down }})
-      </button>
-      <button type="button" class="volcano-select-button" :disabled="!selectedCount" @click="clearSelection">
-        {{ presetLabel('clear') }}
-      </button>
-      <span v-if="selectedCount" class="volcano-select-hint">{{ selectedCount }} selected</span>
-    </div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div class="volcano-plot-area">
-      <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
+      <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" :selection="!!multiSelectEnabled" />
       <div :id="id" class="volcano-container" :style="{ minHeight: `${plotHeight}px` }"></div>
       <MeasureHint v-if="args.measure" :measure="measure" />
     </div>
@@ -32,13 +14,14 @@
 import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
-import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { isClickedRow, usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { placeLabels, type LabelOffset } from '@/composables/labelPlacement'
 import { clearSelectionTool, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
-import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
@@ -121,23 +104,25 @@ export default defineComponent({
       isInitialized: false as boolean,
       // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
       nativeZoom: null as ZoomValue | null,
-      // Box or lasso select when several points can be selected, else zoom;
-      // kept across re-renders when the user switches in the mode bar
-      dragmode: (this.args.multiSelect && Object.keys(this.args.multiSelect).length > 0
-        ? 'select'
-        : 'zoom') as string,
+      // Zoom until the user picks box or lasso select in the toolbar; kept
+      // across re-renders when the user switches
+      dragmode: 'zoom' as string,
       shiftHeld: false as boolean,
+      // Where each label (by its place in labelledPoints) sits relative to its point
+      labelOffsets: [] as LabelOffset[],
     }
   },
   computed: {
-    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    /** Height of the plot below its toolbar and selection presets; the frame keeps args.height. */
     plotHeight(): number {
-      return (this.args.height || 400) - TOOLBAR_HEIGHT
+      return Math.max(120, (this.args.height || 400) - TOOLBAR_HEIGHT)
     },
 
     toolbarTools(): PlotTool[] {
       return [
-        ...(this.multiSelectEnabled ? [clearSelectionTool(() => this.clearSelection(), this.selectedCount)] : []),
+        ...(this.multiSelectEnabled
+          ? [this.args.selectionPresets ? this.selectTool() : clearSelectionTool(() => this.clearSelection(), this.selectedCount)]
+          : []),
         ...this.measure.tools(),
         ...this.layers.tool(this.layerList),
         this.downloadTool(),
@@ -240,6 +225,46 @@ export default defineComponent({
       return { up, down, ns }
     },
 
+    /**
+     * The view a volcano opens with: centred on a fold change of 0 so the
+     * two arms are equally wide, with the threshold lines inside and room
+     * around the outermost points, so no marker is cut at an edge. A few far
+     * outliers among the not significant points (more than three times the
+     * 95th percentile away) do not squeeze the volcano: they are left out of
+     * the first view and Reset axes keeps it, zooming out shows them. A
+     * significant point is always in view.
+     */
+    initialRange(): { x: [number, number]; y: [number, number] } {
+      const xs: number[] = []
+      const ys: number[] = []
+      let sigX = 0
+      let sigY = 0
+      for (const row of this.volcanoData) {
+        const x = Number(row[this.args.log2fcColumn])
+        const y = Number(row[this.args.neglog10pColumn])
+        if (Number.isFinite(x)) xs.push(Math.abs(x))
+        if (Number.isFinite(y)) ys.push(y)
+        const p = Number(row[this.args.pvalueColumn])
+        if (Number.isFinite(x) && Number.isFinite(y) &&
+            computeSignificance(x, p, this.fcThreshold, this.pThreshold) !== 'ns') {
+          sigX = Math.max(sigX, Math.abs(x))
+          sigY = Math.max(sigY, y)
+        }
+      }
+      const reach = (values: number[], floor: number, keep: number): number => {
+        if (!values.length) return Math.max(floor, keep)
+        const sorted = [...values].sort((a, b) => a - b)
+        const top = sorted[sorted.length - 1]
+        const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]
+        const cap = p95 > 0 ? p95 * 3 : top
+        return Math.max(floor, keep, Math.min(top, cap))
+      }
+      const xReach = reach(xs, this.fcThreshold * 1.5, sigX) * 1.12 || 1
+      const yReach = reach(ys, this.neglog10PThreshold * 1.3, sigY) * 1.12 || 1
+      // Points at -log10(p) = 0 sit on the axis: a little room below keeps them whole.
+      return { x: [-xReach, xReach], y: [-yReach * 0.03, yReach] }
+    },
+
     /** Number of points each selection button selects. */
     presetCounts(): { changed: number; up: number; down: number } {
       const { up, down } = this.categorizedData
@@ -256,6 +281,24 @@ export default defineComponent({
         if (this.isRowSelected(row as Record<string, unknown>)) selected.add(idx)
       })
       return selected
+    },
+
+    /** The values of this plot's interactivity identifiers, to redraw the ring when one changes. */
+    clickedKey(): string {
+      const state = this.selectionStore.$state as Record<string, unknown>
+      return JSON.stringify(Object.keys(this.args.interactivity || {}).map((identifier) => state[identifier] ?? null))
+    },
+
+    /** Row indices of the point a click selected (shown when no set is selected). */
+    clickedRowIndices(): Set<number> {
+      const clicked = new Set<number>()
+      const interactivity = this.args.interactivity || {}
+      if (Object.keys(interactivity).length === 0) return clicked
+      const state = this.selectionStore.$state as Record<string, unknown>
+      this.volcanoData.forEach((row, idx) => {
+        if (isClickedRow(row as Record<string, unknown>, interactivity, state)) clicked.add(idx)
+      })
+      return clicked
     },
 
     /**
@@ -328,12 +371,15 @@ export default defineComponent({
         })
       }
 
-      if (this.multiSelectEnabled && this.selectedRowIndices.size > 0) {
+      const ringed = this.multiSelectEnabled && this.selectedRowIndices.size > 0
+        ? this.selectedRowIndices
+        : this.clickedRowIndices
+      if (ringed.size > 0) {
         const x: number[] = []
         const y: number[] = []
         for (const group of [ns, down, up]) {
           group.indices.forEach((rowIndex, i) => {
-            if (this.selectedRowIndices.has(rowIndex)) {
+            if (ringed.has(rowIndex)) {
               x.push(group.x[i])
               y.push(group.y[i])
             }
@@ -405,12 +451,9 @@ export default defineComponent({
       return shapes
     },
 
-    /**
-     * Build annotations for top significant points.
-     */
-    pointAnnotations(): Partial<Plotly.Annotations>[] {
+    /** The most significant changed points, labelled (at most args.maxLabels). */
+    labelledPoints(): Array<{ label: string; log2fc: number; neglog10p: number }> {
       if (!this.args.labelColumn) return []
-
       const maxLabels = this.args.maxLabels ?? 10
       if (maxLabels <= 0) return []
 
@@ -419,49 +462,48 @@ export default defineComponent({
       const neglog10pCol = this.args.neglog10pColumn
       const pvalueCol = this.args.pvalueColumn
 
-      // Get significant points and sort by -log10(p) descending
-      const significantPoints: Array<{
-        label: string
-        log2fc: number
-        neglog10p: number
-      }> = []
-
+      const significantPoints: Array<{ label: string; log2fc: number; neglog10p: number }> = []
       this.volcanoData.forEach((row) => {
         const log2fc = Number(row[log2fcCol]) || 0
         const pvalue = Number(row[pvalueCol]) || 1
         const neglog10p = Number(row[neglog10pCol]) || 0
         const label = String(row[labelCol] || '')
-
         const category = computeSignificance(log2fc, pvalue, this.fcThreshold, this.pThreshold)
         if (category !== 'ns' && label) {
           significantPoints.push({ label, log2fc, neglog10p })
         }
       })
-
-      // Sort by significance (most significant first)
+      // Most significant first
       significantPoints.sort((a, b) => b.neglog10p - a.neglog10p)
+      return significantPoints.slice(0, maxLabels)
+    },
 
-      // Take top N
-      const topPoints = significantPoints.slice(0, maxLabels)
-
-      return topPoints.map((point) => ({
-        x: point.log2fc,
-        y: point.neglog10p,
-        text: point.label,
-        showarrow: true,
-        arrowhead: 0,
-        arrowsize: 0.5,
-        arrowwidth: 1,
-        arrowcolor: 'rgba(100, 100, 100, 0.5)',
-        ax: 0,
-        ay: -25,
-        font: {
-          size: 10,
-          color: this.theme?.textColor || 'black',
-        },
-        bgcolor: this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
-        borderpad: 2,
-      }))
+    /**
+     * Labels of the top significant points, each placed where its box
+     * covers no other point and no other label (labelOffsets).
+     */
+    pointAnnotations(): Partial<Plotly.Annotations>[] {
+      return this.labelledPoints.map((point, i) => {
+        const offset = this.labelOffsets[i] ?? { ax: 0, ay: -25 }
+        return {
+          x: point.log2fc,
+          y: point.neglog10p,
+          text: point.label,
+          showarrow: true,
+          arrowhead: 0,
+          arrowsize: 0.5,
+          arrowwidth: 1,
+          arrowcolor: 'rgba(100, 100, 100, 0.5)',
+          ax: offset.ax,
+          ay: offset.ay,
+          font: {
+            size: 10,
+            color: this.theme?.textColor || 'black',
+          },
+          bgcolor: this.theme?.base === 'dark' ? 'rgba(14, 17, 23, 0.8)' : 'rgba(255, 255, 255, 0.8)',
+          borderpad: 2,
+        }
+      })
     },
 
     /** Identity of the plotted points: other data drops the measurements. */
@@ -488,7 +530,7 @@ export default defineComponent({
     layout(): Partial<Plotly.Layout> {
       return {
         ...this.themeLayout,
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: this.args.title ? { text: boldTitle(this.args.title, this.id).text } : undefined,
         showlegend: true,
         legend: {
           orientation: 'h',
@@ -502,13 +544,16 @@ export default defineComponent({
         ...SELECTION_LAYOUT,
         xaxis: {
           title: { text: this.args.xLabel || 'log2 Fold Change' },
+          range: this.initialRange.x,
+          autorange: false,
           zeroline: true,
           zerolinecolor: 'rgba(150, 150, 150, 0.3)',
           zerolinewidth: 1,
         },
         yaxis: {
           title: { text: this.args.yLabel || '-log10(p-value)' },
-          rangemode: 'tozero',
+          range: this.initialRange.y,
+          autorange: false,
         },
         shapes: [...this.thresholdShapes, ...this.measureOverlay.shapes],
         annotations: [...this.pointAnnotations, ...this.measureOverlay.annotations],
@@ -534,8 +579,22 @@ export default defineComponent({
       this.nativeZoom = incoming
       const element = document.getElementById(this.id)
       if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
-        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+        const update = this.zoom.layoutFor(incoming)
+        // An axis the saved view leaves free opens at the first view, not the full extent
+        for (const axis of ['x', 'y'] as const) {
+          if (update[`${axis}axis.autorange`] === true) {
+            update[`${axis}axis.autorange`] = false
+            update[`${axis}axis.range`] = [...this.initialRange[axis]]
+          }
+        }
+        void Plotly.relayout(element, update)
       }
+    },
+    // The presets bar wrapped or unwrapped: the plot takes the rest of args.height
+    plotHeight(height: number) {
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, { height }).then(() => this.updateFrameHeight())
     },
     measureKey: {
       handler(key: string) {
@@ -588,6 +647,13 @@ export default defineComponent({
       }
     },
 
+    // The clicked point changed (here or in another component)
+    clickedKey() {
+      if (this.isInitialized && this.isDataReady) {
+        this.renderPlot()
+      }
+    },
+
     // The selected set changed (here or in another component)
     multiSelectionKey() {
       if (this.isInitialized && this.isDataReady) {
@@ -626,6 +692,13 @@ export default defineComponent({
         )
         this.setupClickHandler()
         this.setupSelectHandlers()
+        this.placePointLabels()
+        // Zoomed or panned: the labels find their free side again
+        ;(element as Plotly.PlotlyHTMLElement).on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+          if (Object.keys(eventData || {}).some((k) => k.startsWith('xaxis') || k.startsWith('yaxis'))) {
+            this.placePointLabels()
+          }
+        })
         this.zoom.bindNative(element as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
         this.measure.bindLabelClicks(element)
 
@@ -637,6 +710,37 @@ export default defineComponent({
         console.error('PlotlyVolcano: Error rendering plot:', error)
         this.renderFallback()
       }
+    },
+
+    /**
+     * Move labels that cover another point or label to a free side, using the
+     * axes as drawn; relayouts the annotations when an offset changed.
+     */
+    placePointLabels(): void {
+      const element = document.getElementById(this.id) as (Plotly.PlotlyHTMLElement & {
+        _fullLayout?: {
+          xaxis: { l2p: (v: number) => number }
+          yaxis: { l2p: (v: number) => number }
+          _size: { w: number; h: number }
+        }
+      }) | null
+      const full = element?._fullLayout
+      if (!element || !full || this.labelledPoints.length === 0) return
+      const toPx = (x: number, y: number) => ({ px: full.xaxis.l2p(x), py: full.yaxis.l2p(y) })
+      const hidden = new Set(this.layers.state.hidden)
+      const { up, down, ns } = this.categorizedData
+      const points: Array<{ px: number; py: number }> = []
+      for (const [name, group] of [['ns', ns], ['down', down], ['up', up]] as const) {
+        if (hidden.has(name)) continue
+        group.x.forEach((x, i) => points.push(toPx(x, group.y[i])))
+      }
+      const offsets = placeLabels(
+        this.labelledPoints.map((p) => ({ ...toPx(p.log2fc, p.neglog10p), text: p.label })),
+        points, full._size.w, full._size.h,
+      )
+      if (JSON.stringify(offsets) === JSON.stringify(this.labelOffsets)) return
+      this.labelOffsets = offsets
+      void Plotly.relayout(element, { annotations: this.layout.annotations })
     },
 
     /** Plotly's selection styling for a trace whose points are rows `indices`. */
@@ -659,6 +763,37 @@ export default defineComponent({
         changed: 'All changed', up: 'Up', down: 'Down', clear: 'Clear',
       }
       return this.args.presetLabels?.[name] || defaults[name] || name
+    },
+
+    /** Select: the changed, up- or down-regulated points at once, and clear (with the count selected). */
+    selectTool(): PlotTool {
+      const counts = this.presetCounts
+      return {
+        id: 'select-presets',
+        group: 'view',
+        icon: ICONS.select,
+        label: 'Select',
+        short: 'Select',
+        keep: true,
+        help: this.selectedCount > 0 ? `${this.selectedCount} selected` : 'select the changed points',
+        count: this.selectedCount,
+        clear: { label: this.presetLabel('clear'), run: () => this.clearSelection() },
+        menu: [{
+          kind: 'actions',
+          label: 'Select',
+          items: [
+            { value: 'changed', label: this.presetLabel('changed'), count: counts.changed, disabled: !counts.changed },
+            { value: 'up', label: this.presetLabel('up'), count: counts.up, color: this.args.upColor || '#E74C3C', disabled: !counts.up },
+            { value: 'down', label: this.presetLabel('down'), count: counts.down, color: this.args.downColor || '#3498DB', disabled: !counts.down },
+            { value: 'clear', label: this.presetLabel('clear'), disabled: !this.selectedCount },
+          ],
+          run: (value: string) => {
+            if (value === 'clear') this.clearSelection()
+            else this.selectPreset(value as 'changed' | 'up' | 'down')
+          },
+        }],
+        run: () => undefined,
+      }
     },
 
     /** Select every significant (changed), up- or down-regulated point. */
@@ -744,47 +879,6 @@ export default defineComponent({
   position: relative;
 }
 
-.volcano-select-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 4px 2px;
-  font-size: 13px;
-}
-.volcano-select-label {
-  font-weight: 600;
-  opacity: 0.8;
-}
-.volcano-select-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 10px;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  border-radius: 12px;
-  cursor: pointer;
-}
-.volcano-select-button:hover:not(:disabled) {
-  border-color: rgba(128, 128, 128, 0.9);
-  background: rgba(128, 128, 128, 0.12);
-}
-.volcano-select-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.volcano-swatch {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-}
-.volcano-select-hint {
-  opacity: 0.65;
-  font-size: 12px;
-}
 .volcano-container {
   position: relative;
   width: 100%;
