@@ -197,6 +197,7 @@ export interface LinePlotComponentArgs
   windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
   windowTolerance?: number // Half-width of the band around a stored centre
   windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
+  usi?: string // Universal Spectrum Identifier of the shown spectrum; {identifier} placeholders read the state
   xMarkers?: Array<{ x: number; label: string; color?: string }> | null // Labelled x markers sorted by x (x_markers)
   xMarkerTolerance?: number | null // Distance within which a marker takes a peak (x_marker_tolerance)
 }
@@ -461,6 +462,7 @@ export interface MirrorPlotComponentArgs
   windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
   windowTolerance?: number // Half-width of the band around a stored centre
   windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
+  usi?: string // Universal Spectrum Identifier of the shown spectrum; {identifier} placeholders read the state
 }
 
 export interface MirrorPlotStyling {
