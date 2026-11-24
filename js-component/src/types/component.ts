@@ -159,6 +159,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  /** False leaves Ctrl+C / Cmd+C to the browser instead of copying the selected row */
+  copyRow?: boolean
   collapseColumns?: boolean
   /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
   excelExport?: boolean
