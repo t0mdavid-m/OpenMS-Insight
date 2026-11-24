@@ -175,6 +175,7 @@ class Table(BaseComponent):
         numeric_filters: dict[str, dict[str, Any]] | None = None,
         filter_presets: list[dict[str, Any]] | None = None,
         keyboard_navigation: bool = True,
+        copy_row: bool = True,
         collapse_columns: bool = True,
         export_info: dict[str, Any] | None = None,
         **kwargs,
@@ -341,6 +342,11 @@ class Table(BaseComponent):
                 for 200 ms, so holding a key down does not rerun the app for
                 every row it passes. False leaves the keys to the browser.
                 Display-only, so not part of the cache configuration.
+            copy_row: Ctrl+C (Cmd+C) while the table has focus copies the
+                selected row: the shown columns' titles and the row's values
+                as two tab-separated lines, which paste into a spreadsheet as
+                a header and a row. Text selected in the table is copied as
+                usual. False leaves the keys to the browser. Display-only.
             export_info: What the Excel download's "About" sheet says besides
                 the table, its sort, filters and search: ``{"Run": "Run 3",
                 "Search": "10 ppm, Trypsin/P"}``, one row per item, in this
@@ -362,6 +368,7 @@ class Table(BaseComponent):
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
+        self._copy_row = bool(copy_row)
         self._collapse_columns = bool(collapse_columns)
         self._export_info = dict(export_info or {})
         self._reset_sort = bool(reset_sort)
@@ -1863,6 +1870,8 @@ class Table(BaseComponent):
             args["columnMenu"] = False
         if not self._keyboard_navigation:
             args["keyboardNavigation"] = False
+        if not getattr(self, "_copy_row", True):
+            args["copyRow"] = False
         if not getattr(self, "_collapse_columns", True):
             args["collapseColumns"] = False
         if self._pagination and excel_available():

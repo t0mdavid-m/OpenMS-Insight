@@ -1,5 +1,10 @@
 <template>
   <div ref="root" class="plot-toolbar" :style="cssCustomProperties">
+    <!-- The view's info icon and the component's own controls (a view switch), left of the tools -->
+    <div v-if="helpText || $slots.lead" ref="lead" class="toolbar-lead">
+      <HelpIcon v-if="helpText" :text="helpText" />
+      <slot name="lead" />
+    </div>
     <!-- Every group in a row; also kept (hidden) while collapsed, to measure whether it fits again -->
     <div ref="full" class="toolbar-row" :class="{ measuring: collapsed }" :aria-hidden="collapsed">
       <div v-for="group in groups" :key="group.name" class="toolbar-group" role="group" :aria-label="group.label">
@@ -38,7 +43,7 @@
 
     <!-- The choices of a tool with a menu, below the toolbar -->
     <div
-      v-if="openMenuTool && !collapsed"
+      v-if="openMenuTool"
       ref="toolMenu"
       class="toolbar-menu"
       role="menu"
@@ -54,14 +59,18 @@
         <button
           v-for="tool in pinned"
           :key="tool.id"
+          :ref="tool.menu ? `pinnedButton-${tool.id}` : undefined"
           type="button"
           class="toolbar-button"
-          :class="{ active: tool.active, labelled: !!tool.short && tool.active }"
+          :class="{ active: tool.active || openTool === tool.id, labelled: !!tool.short && (tool.active || tool.keep) }"
           :title="titleOf(tool)"
-          @click="tool.run()"
+          :aria-haspopup="tool.menu ? 'menu' : undefined"
+          :aria-expanded="tool.menu ? openTool === tool.id : undefined"
+          @click="press(tool)"
         >
           <ToolIconSvg :icon="tool.icon" />
-          <span v-if="tool.short && tool.active" class="toolbar-label">{{ tool.short }}</span>
+          <span v-if="tool.short && (tool.active || tool.keep)" class="toolbar-label">{{ tool.short }}</span>
+          <ToolIconSvg v-if="tool.menu" class="toolbar-caret" :icon="CARET" :size="12" />
           <span v-if="tool.count" class="toolbar-count">{{ tool.count }}</span>
           <span
             v-if="tool.clear && tool.count"
@@ -135,7 +144,10 @@ import { defineComponent, h, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { stepperTools, type StepperArgs } from '@/utils/stepper'
+import { settingsTools, type SettingArgs } from '@/utils/settings'
 import ToolMenuSections from './ToolMenuSections.vue'
+import HelpIcon from '@/components/common/HelpIcon.vue'
+import { useHelp } from '@/composables/useHelp'
 import {
   GROUP_LABELS,
   GROUP_ORDER,
@@ -176,9 +188,12 @@ interface Group {
   tools: PlotTool[]
 }
 
+/** Plotly's tools that only make sense when the plot reports what they select. */
+const SELECTION_TOOLS = ['plotly-dragmode:select', 'plotly-dragmode:lasso']
+
 export default defineComponent({
   name: 'PlotToolbar',
-  components: { ToolIconSvg, ToolMenuSections },
+  components: { ToolIconSvg, ToolMenuSections, HelpIcon },
   props: {
     /** Id of the element Plotly draws the plot in. */
     plotId: {
@@ -195,9 +210,25 @@ export default defineComponent({
       type: Object as PropType<StepperArgs | undefined>,
       default: undefined,
     },
+    /** The component's `settings` argument: a gear menu of settings kept in the state. */
+    settings: {
+      type: Array as PropType<SettingArgs[] | undefined>,
+      default: undefined,
+    },
+    /** Whether the plot reports a selection of several points; without it, box select and lasso are hidden. */
+    selection: {
+      type: Boolean,
+      default: false,
+    },
   },
   setup() {
-    return { streamlitDataStore: useStreamlitDataStore(), selectionStore: useSelectionStore(), ICONS, CARET }
+    return {
+      streamlitDataStore: useStreamlitDataStore(),
+      selectionStore: useSelectionStore(),
+      helpText: useHelp(),
+      ICONS,
+      CARET,
+    }
   },
   data() {
     return {
@@ -221,9 +252,14 @@ export default defineComponent({
         this.selectionStore.updateSelection(identifier, value),
       )
     },
-    /** The component's tools with the stepper's buttons first. */
+    settingsTools(): PlotTool[] {
+      return settingsTools(this.settings, this.selectionStore.$state as Record<string, unknown>, (identifier, value) =>
+        this.selectionStore.updateSelection(identifier, value),
+      )
+    },
+    /** The component's tools with the stepper's buttons first and its settings last. */
     allTools(): PlotTool[] {
-      return [...this.stepperTools, ...this.tools]
+      return [...this.stepperTools, ...this.tools, ...this.settingsTools]
     },
     groups(): Group[] {
       const all: PlotTool[] = [...this.plotlyButtons, ...this.allTools]
@@ -240,7 +276,7 @@ export default defineComponent({
     /** What a narrow toolbar keeps: tools that are on or hold something, and Reset. */
     pinned(): PlotTool[] {
       const keep = this.plotlyButtons.filter((tool) => tool.keep)
-      const on = this.tools.filter((tool) => tool.active || (tool.count ?? 0) > 0)
+      const on = this.tools.filter((tool) => tool.keep || tool.active || (tool.count ?? 0) > 0)
       return [...this.stepperTools, ...on, ...keep]
     },
     cssCustomProperties(): Record<string, string> {
@@ -299,7 +335,9 @@ export default defineComponent({
       })
     },
     readPlotlyButtons(): void {
-      const next = plotlyTools(document.getElementById(this.plotId))
+      const next = plotlyTools(document.getElementById(this.plotId)).filter(
+        (tool) => this.selection || !SELECTION_TOOLS.includes(tool.id),
+      )
       const same =
         next.length === this.plotlyButtons.length &&
         next.every((tool, i) => tool.id === this.plotlyButtons[i].id && tool.active === this.plotlyButtons[i].active)
@@ -310,7 +348,8 @@ export default defineComponent({
       const root = this.$refs.root as HTMLElement | undefined
       const full = this.$refs.full as HTMLElement | undefined
       if (!root || !full) return
-      const needed = full.scrollWidth
+      const lead = this.$refs.lead as HTMLElement | undefined
+      const needed = full.scrollWidth + (lead ? lead.offsetWidth + 8 : 0)
       const collapsed = needed > root.clientWidth + 1
       if (collapsed !== this.collapsed) {
         this.collapsed = collapsed
@@ -336,7 +375,8 @@ export default defineComponent({
       if (this.openTool) this.$nextTick(() => this.fit())
     },
     menuButton(id: string): HTMLElement | undefined {
-      const ref = this.$refs[`menuButton-${id}`] as HTMLElement | HTMLElement[] | undefined
+      const key = this.collapsed ? `pinnedButton-${id}` : `menuButton-${id}`
+      const ref = this.$refs[key] as HTMLElement | HTMLElement[] | undefined
       return Array.isArray(ref) ? ref[0] : ref
     },
     onPointerDown(event: Event): void {
@@ -382,6 +422,15 @@ export default defineComponent({
   --tb-border: color-mix(in srgb, var(--tb-text) 16%, transparent);
   --tb-active-bg: color-mix(in srgb, var(--tb-accent) 13%, var(--tb-background));
   --tb-hover-bg: color-mix(in srgb, var(--tb-text) 7%, var(--tb-background));
+}
+.toolbar-lead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  padding-left: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .toolbar-row {
   display: flex;
