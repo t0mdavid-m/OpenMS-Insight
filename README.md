@@ -726,6 +726,8 @@ spectrum(key="spectrum", state_manager=state_manager)
 - `annotated`: the raw peaks, with the signal peaks of the selected mass highlighted and each charge state labelled `z=N`.
 - `ladder`: the masses with a sequence tag drawn as a ladder, set per render with `set_ladder(masses, sequence)`. Clicking a ladder mass shows its raw peaks.
 
+In every view, hovering shows the mass or peak nearest the mouse along x, as on LinePlot: a dot on its top and a box with its mass (or m/z), its intensity and the fragment ions marked there. A click selects the mass the box shows, anywhere along its stick.
+
 **Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. The **Fragments** button in the toolbar's Show group hides or shows them.
 
 ### SeriesPlot
