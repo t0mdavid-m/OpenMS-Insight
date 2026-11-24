@@ -638,6 +638,16 @@ def _validate_interactivity_selections(
         return False
 
     filter_groups = _get_validation_filter_groups(component)
+    if not any(filters for filters, _defaults in filter_groups) and not callable(
+        getattr(type(component), "_apply_validation_filters", None)
+    ):
+        # Nothing filters this component's rows, so they are the same in every
+        # run: a selection missing from them was made in another component that
+        # shows other rows (a scan table of every spectrum beside a chromatogram
+        # of the MS1 spectra). Clearing it would undo that click, and with a
+        # table that selects its first row whenever nothing is selected, the two
+        # would take the selection from each other on every run.
+        return False
 
     # Get the preprocessed data
     preprocessed = getattr(component, "_preprocessed_data", None)
