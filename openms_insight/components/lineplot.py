@@ -903,6 +903,7 @@ class LinePlot(BaseComponent):
         state_manager: Optional["StateManager"] = None,
         height: int | None = None,
         sequence_view_key: str | None = None,
+        help: str | None = None,
     ) -> Any:
         """
         Render the component in Streamlit.
@@ -919,6 +920,8 @@ class LinePlot(BaseComponent):
         Returns:
             The value returned by the Vue component (usually selection state)
         """
+        if help is not None:
+            self._help = help or None
         from ..core.state import get_default_state_manager
         from ..rendering.bridge import get_component_annotations, render_component
 
