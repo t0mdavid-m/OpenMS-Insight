@@ -120,4 +120,10 @@ def test_switch_needs_names(tmp_path, terms):
     with pytest.raises(ValueError):
         _plot(tmp_path, terms, switch_identifier="go_mode")
     with pytest.raises(ValueError):
-        _plot(tmp_path, terms, switch_identifier="go_mode", switch_names={"a": "A"}, switch_default="b")
+        _plot(
+            tmp_path,
+            terms,
+            switch_identifier="go_mode",
+            switch_names={"a": "A"},
+            switch_default="b",
+        )

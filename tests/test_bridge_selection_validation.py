@@ -345,7 +345,9 @@ class TestUnfilteredComponent:
         state_manager.set_selection("scan", 9999)
         state = state_manager.get_state_for_vue()
 
-        assert _validate_interactivity_selections(component, state_manager, state) is False
+        assert (
+            _validate_interactivity_selections(component, state_manager, state) is False
+        )
         assert state_manager.get_selection("scan") == 9999
 
     def test_empty_unfiltered_data_keeps_the_selection(self, peaks, state_manager):
@@ -353,5 +355,7 @@ class TestUnfilteredComponent:
         state_manager.set_selection("scan", 3371)
         state = state_manager.get_state_for_vue()
 
-        assert _validate_interactivity_selections(component, state_manager, state) is False
+        assert (
+            _validate_interactivity_selections(component, state_manager, state) is False
+        )
         assert state_manager.get_selection("scan") == 3371
