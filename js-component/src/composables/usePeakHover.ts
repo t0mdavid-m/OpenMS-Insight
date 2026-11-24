@@ -1,5 +1,9 @@
 /**
- * Hover read-out for stick spectra: the peak nearest the mouse along x.
+ * One hover read-out for every 2D plot: a dot on the point and a small box
+ * with its values. `bind` serves stick spectra, `bindPoints` the plots where
+ * Plotly's own picking fits (scatter, bars, lines).
+ *
+ * Stick spectra: the peak nearest the mouse along x.
  *
  * Plotly's own hover picks the nearest drawn point, and a stick is drawn as
  * three points (baseline, top, baseline), so over the lower part of a tall
@@ -161,6 +165,56 @@ export function formatHoverValues(x: number, y: number): [string, string] {
   return [x.toFixed(4), ys]
 }
 
+/** A point of a Plotly hover event (the fields bindPoints reads). */
+export interface HoverPoint {
+  x: unknown
+  y: unknown
+  curveNumber: number
+  pointIndex?: number
+  pointNumber?: number
+  customdata?: unknown
+  text?: unknown
+  hovertext?: unknown
+  data?: { name?: string; type?: string; orientation?: string }
+  /** The point's box in client pixels (plotly.js 2.x). */
+  bbox?: { x0: number; x1: number; y0: number; y1: number }
+}
+
+/** Lines of a Plotly hover text: split at <br>, tags and entities removed. */
+export function textLines(text: unknown): string[] {
+  if (text === undefined || text === null) return []
+  return String(text)
+    .split(/<br\s*\/?>/i)
+    .map((line) =>
+      line
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .trim(),
+    )
+    .filter((line) => line !== '')
+}
+
+/** A value for the box: numbers as formatHoverValues writes y, the rest as text. */
+export function formatValue(value: unknown): string {
+  if (typeof value === 'number') return formatHoverValues(0, value)[1]
+  return String(value ?? '')
+}
+
+/** The box of a point: its hover text, else its x and y under the axis names. */
+export function pointLines(point: HoverPoint, xName: string, yName: string): string[] {
+  const text = textLines(point.hovertext ?? point.text)
+  if (text.length > 0) return text
+  return [`${xName} ${formatValue(point.x)}`, `${yName} ${formatValue(point.y)}`]
+}
+
+interface PlotEvents {
+  on?: (name: string, handler: (event: never) => void) => void
+  removeListener?: (name: string, handler: (event: never) => void) => void
+}
+
 interface PlotLayout {
   _size?: { l: number; t: number; w: number; h: number }
   xaxis?: { p2l?: (px: number) => number; l2p?: (v: number) => number }
@@ -267,6 +321,65 @@ export function usePeakHover() {
     }
   }
 
+  /** Show the box at a position relative to the container. */
+  function showAt(left: number, top: number, index: number, lines: string[]): void {
+    const width = container?.clientWidth ?? element?.clientWidth ?? 0
+    tip.value = { left, top, index, lines, flip: left > width - FLIP_MARGIN_PX }
+  }
+
+  let describePoint: (point: HoverPoint) => string[] | null | undefined = () => null
+
+  /** Show the box for the point Plotly's hover picked. */
+  function onPointHover(event: { points?: HoverPoint[] }): void {
+    const point = event?.points?.[0]
+    const lines = point ? describePoint(point) : null
+    if (!point || !lines || lines.length === 0 || !element) return hide()
+    const box = point.bbox
+    let position: { left: number; top: number } | null = null
+    if (box && Number.isFinite(box.x0) && Number.isFinite(box.y0)) {
+      const origin = (container ?? element).getBoundingClientRect()
+      const bar = point.data?.type === 'bar'
+      const horizontal = point.data?.orientation === 'h'
+      position = {
+        // A bar's box is the bar: the dot goes on its end
+        left: (bar && horizontal ? Math.max(box.x0, box.x1) : (box.x0 + box.x1) / 2) - origin.left,
+        top: (bar && !horizontal ? Math.min(box.y0, box.y1) : (box.y0 + box.y1) / 2) - origin.top,
+      }
+    } else if (typeof point.x === 'number' && typeof point.y === 'number') {
+      position = plotPointPosition(element, container, point.x, point.y)
+    }
+    if (!position) return hide()
+    showAt(position.left, position.top, point.pointIndex ?? point.pointNumber ?? -1, lines)
+  }
+
+  /**
+   * Show the box for the point Plotly's own hover picks (traces drawn with
+   * `hoverinfo: 'none'`, so Plotly still picks and clicks but draws no label).
+   * `describe` gives the box's lines, or nothing to show none.
+   */
+  function bindPoints(
+    plotElement: HTMLElement | null,
+    root: HTMLElement | null,
+    describe: (point: HoverPoint) => string[] | null | undefined,
+  ): void {
+    describePoint = describe
+    container = root
+    if (!plotElement) return
+    if (plotElement !== element) {
+      unbind()
+      element = plotElement
+      element.addEventListener('mouseleave', onLeave)
+      element.addEventListener('mousedown', hide)
+      element.addEventListener('wheel', hide, { passive: true })
+    }
+    // Again on every call: Plotly.newPlot drops the listeners of the element
+    const plot = plotElement as unknown as PlotEvents
+    plot.removeListener?.('plotly_hover', onPointHover)
+    plot.removeListener?.('plotly_unhover', hide)
+    plot.on?.('plotly_hover', onPointHover)
+    plot.on?.('plotly_unhover', hide)
+  }
+
   function onMove(event: MouseEvent): void {
     lastEvent = event
     if (!frame) frame = requestAnimationFrame(update)
@@ -301,6 +414,9 @@ export function usePeakHover() {
 
   function unbind(): void {
     if (!element) return
+    const plot = element as unknown as PlotEvents
+    plot.removeListener?.('plotly_hover', onPointHover)
+    plot.removeListener?.('plotly_unhover', hide)
     element.removeEventListener('mousemove', onMove)
     element.removeEventListener('mouseleave', onLeave)
     element.removeEventListener('mousedown', hide)
@@ -313,5 +429,5 @@ export function usePeakHover() {
     unbind()
   })
 
-  return reactive({ tip, bind, hide, indexAt, hitAt, showIndex })
+  return reactive({ tip, bind, bindPoints, hide, indexAt, hitAt, showIndex })
 }

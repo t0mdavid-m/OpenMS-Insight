@@ -1,10 +1,15 @@
 <template>
-  <div class="heatmap-plot">
+  <div ref="hoverRoot" class="heatmap-plot">
     <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" :selection="!!multiSelectEnabled" />
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
+    <PeakHoverTip
+      :tip="hover.tip"
+      :color="theme?.textColor || '#262730'"
+      :background="theme?.backgroundColor || 'white'"
+    />
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
   </div>
 </template>
@@ -21,6 +26,8 @@ import { axisQuantity } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
+import PeakHoverTip from './PeakHoverTip.vue'
+import { usePeakHover, textLines, formatValue as hoverValue } from '@/composables/usePeakHover'
 import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
 import { normalizeZoom } from '@/composables/useZoomState'
 import { useLayers, type Layer } from '@/composables/useLayers'
@@ -62,7 +69,7 @@ function textTicks(values: unknown[], most: number): Partial<Plotly.LayoutAxis> 
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
-  components: { MeasureHint, PlotToolbar, ColorbarLegend },
+  components: { MeasureHint, PeakHoverTip, PlotToolbar, ColorbarLegend },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -102,6 +109,7 @@ export default defineComponent({
 
     const multi = useMultiSelect(computed(() => props.args.multiSelect))
     const layers = useLayers()
+    const hover = usePeakHover()
 
     return {
       streamlitDataStore,
@@ -111,6 +119,7 @@ export default defineComponent({
       multiSelectEnabled: multi.enabled,
       selectedCount: multi.selectedCount,
       clearMultiSelect: multi.clear,
+      hover,
     }
   },
   data() {
@@ -686,7 +695,8 @@ export default defineComponent({
             opacity: this.baseOpacity,
           },
           hovertext: shown.map((i) => texts[i]),
-          hoverinfo: 'x+y+text',
+          // The read-out is PeakHoverTip (hoverinfo 'none' still fires hover and click)
+          hoverinfo: 'none',
           // Row of each point: a layer or filter leaves points out
           customdata: shown,
         } as Plotly.Data,
@@ -935,7 +945,8 @@ export default defineComponent({
             opacity: this.baseOpacity,
           },
           hovertext,
-          hoverinfo: 'x+y+text',
+          // The read-out is PeakHoverTip (hoverinfo 'none' still fires hover and click)
+          hoverinfo: 'none',
           // Flat row index per point. Plotly's pointIndex is relative to the trace, so
           // without this a click on any category but the first resolves to the wrong
           // row. See setupClickHandler in usePlotlyScatter.ts.
@@ -1026,6 +1037,11 @@ export default defineComponent({
 
       // Handle click events via composable
       this.setupClickHandler()
+      this.hover.bindPoints(plotElement, this.$refs.hoverRoot as HTMLElement | null, (point) => [
+        `${this.args.xLabel || 'x'} ${hoverValue(point.x)}`,
+        `${this.args.yLabel || 'y'} ${hoverValue(point.y)}`,
+        ...textLines(point.hovertext),
+      ])
 
       // A click on a point inside a box also selects the box
       plotElement.on('plotly_click', (eventData: Plotly.PlotMouseEvent) => {

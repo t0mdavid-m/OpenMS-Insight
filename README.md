@@ -901,6 +901,15 @@ picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
 picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
 ```
 
+### Hover read-out
+
+Every 2D plot shows its hover values the same way: a dot on the point and a small box beside it in the plot's theme colours, flipped to the left near the right edge.
+
+- **Stick spectra** (LinePlot, MirrorPlot, DeconvolvedSpectrum): the peak nearest the mouse along x, anywhere in the plot's height, and a click selects that peak anywhere along its stick. The sections of those components give the details.
+- **Point plots** (Heatmap, VolcanoPlot, PCAPlot, SeriesPlot lines, markers and bars): the point the mouse is on, with the plot's hover text (`hover_column`, `label_column`, the sample) and its x and y. Clicks select as before.
+
+SeriesPlot boxes keep their quartile read-out, and ClusteredHeatmap and Plot3D their own hover.
+
 ### Plot toolbar
 
 Every Plotly component draws its tools in a row above the plot, in labelled
