@@ -1,5 +1,15 @@
 <template>
-  <div v-if="componentArgs !== undefined" :class="{ 'view-fullscreen': fullscreen }" :style="fullscreenStyle">
+  <div
+    v-if="componentArgs !== undefined"
+    class="insight-root"
+    :class="{ 'view-fullscreen': fullscreen }"
+    :style="fullscreenStyle"
+  >
+    <HelpIcon
+      v-if="componentArgs.help && !helpInCard && helpState.claimed === 0"
+      :text="componentArgs.help"
+      floating
+    />
     <component
       :is="currentComponent"
       :args="shownArgs"
@@ -20,7 +30,8 @@
 </template>
 
 <script lang="ts">
-import { defineAsyncComponent, defineComponent, watch, toRaw, type Component } from 'vue'
+import { defineAsyncComponent, defineComponent, provide, watch, toRaw, type Component } from 'vue'
+import { HELP_KEY, createHelpState } from './composables/useHelp'
 import { useTheme } from 'vuetify'
 import { stateValues, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -28,6 +39,10 @@ import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
 import { applyAppTheme } from './utils/appTheme'
 import { fullscreen, resizePlots, screenHeight } from './utils/fullscreen'
+import HelpIcon from './components/common/HelpIcon.vue'
+
+// Height of the view with its data, measured; sent along with the next state
+let reportedFrameHeight = 0
 // Each view is its own chunk, so a page with several views does not load and
 // run Plotly in every table's frame
 const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
@@ -47,6 +62,7 @@ const ProteinStructureView = defineAsyncComponent(() => import('./components/pro
 export default defineComponent({
   name: 'App',
   components: {
+    HelpIcon,
     TabulatorTable,
     PlotlyLineplot,
     PlotlyHeatmap,
@@ -64,6 +80,21 @@ export default defineComponent({
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
+
+    // A toolbar or table title that draws the help icon in its own row claims
+    // it; the icon floats in the corner only while no view has claimed it
+    const helpState = createHelpState()
+    provide(HELP_KEY, helpState)
+    watch(
+      () => {
+        const c = streamlitDataStore.args?.components
+        const a = c && c.length > 0 && c[0].length > 0 ? c[0][0].componentArgs : undefined
+        const inCard = ['SequenceView', 'ProteinSequenceView'].includes(String(a?.componentType))
+        return a?.help && !inCard ? String(a.help) : ''
+      },
+      (text) => { helpState.text = text },
+      { immediate: true },
+    )
 
     // Checkboxes, switches and buttons take the app's primary colour
     const vuetifyTheme = useTheme()
@@ -179,6 +210,8 @@ export default defineComponent({
         plainState._event = JSON.parse(JSON.stringify(event))
         streamlitDataStore.event = null
       }
+      // The view's last height, so Python reserves it when the view is drawn again
+      if (reportedFrameHeight > 0) plainState._frameHeight = reportedFrameHeight
       Streamlit.setComponentValue(plainState)
       console.log('[App] setComponentValue CALLED')
     }
@@ -251,7 +284,7 @@ export default defineComponent({
       { immediate: true }
     )
 
-    return { streamlitDataStore, selectionStore, fullscreen, screenHeight }
+    return { streamlitDataStore, selectionStore, helpState, fullscreen, screenHeight }
   },
   data() {
     return {
@@ -289,6 +322,12 @@ export default defineComponent({
         height: '100vh',
         overflow: 'auto',
       }
+    },
+    /**
+     * Views drawn on a card show their help icon in the card's corner.
+     */
+    helpInCard(): boolean {
+      return ['SequenceView', 'ProteinSequenceView'].includes(String(this.componentArgs?.componentType))
     },
     /**
      * Get the Vue component based on componentType.
@@ -353,7 +392,8 @@ export default defineComponent({
     // the document is briefly taller than the view, and the frame grew to that.
     this.resizeObserver = new ResizeObserver(() => {
       if (this.streamlitDataStore.hash) {
-        Streamlit.setFrameHeight(this.viewHeight())
+        reportedFrameHeight = this.viewHeight()
+        Streamlit.setFrameHeight(reportedFrameHeight)
       }
     })
     this.resizeObserver.observe(this.$el as HTMLElement)
@@ -361,7 +401,10 @@ export default defineComponent({
     this.$watch(
       () => !!this.streamlitDataStore.hash,
       (hasData: boolean) => {
-        if (hasData) this.$nextTick(() => Streamlit.setFrameHeight(this.viewHeight()))
+        if (hasData) this.$nextTick(() => {
+          reportedFrameHeight = this.viewHeight()
+          Streamlit.setFrameHeight(reportedFrameHeight)
+        })
       },
       { immediate: true }
     )
@@ -398,6 +441,9 @@ body {
   margin: 0;
 }
 
+.insight-root {
+  position: relative;
+}
 /* The app's text font (set from the theme by applyThemeFonts), also for
    Vuetify's typography classes, which name Roboto */
 html,

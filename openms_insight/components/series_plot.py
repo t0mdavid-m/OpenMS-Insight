@@ -10,9 +10,10 @@ from ..core.measure import (
     measure_args,
     validate_measure,
 )
+from ..core.multi_select import match_selection
 from ..core.registry import register_component
 from ..core.zoom import validate_zoom_identifier, zoom_args
-from ..preprocessing.filtering import filter_and_collect_cached
+from ..preprocessing.filtering import compute_dataframe_hash, filter_and_collect_cached
 
 # Plotly scatter modes, then bars and boxes
 MODES = ("lines", "markers", "lines+markers", "bars", "box")
@@ -72,6 +73,7 @@ class SeriesPlot(BaseComponent):
         series_names: dict[str, str] | None = None,
         series_colors: dict[str, str] | None = None,
         mode: str = "lines+markers",
+        series_modes: dict[str, str] | None = None,
         title: str | None = None,
         x_label: str | None = None,
         y_label: str | None = None,
@@ -81,6 +83,7 @@ class SeriesPlot(BaseComponent):
         font: dict[str, str] | None = None,
         y_range_mode: str = "nonnegative",
         hover_column: str | None = None,
+        subtitle_column: str | None = None,
         orientation: str = "v",
         measure: bool = True,
         image_format: str | None = None,
@@ -92,6 +95,12 @@ class SeriesPlot(BaseComponent):
         top_choices: list[int] | None = None,
         top_default: int | None = None,
         bar_height: int | None = None,
+        highlight: dict[str, str] | None = None,
+        highlight_data: pl.LazyFrame | pl.DataFrame | None = None,
+        switch_identifier: str | None = None,
+        switch_names: dict[str, str] | None = None,
+        switch_default: str | None = None,
+        clear_identifiers: list[str] | None = None,
         **kwargs,
     ):
         """
@@ -118,6 +127,10 @@ class SeriesPlot(BaseComponent):
             mode: 'lines', 'markers' or 'lines+markers' (Plotly scatter modes),
                 'bars' (bars, the series side by side) or 'box' (a box per x
                 value and series, from the y values of its rows).
+            series_modes: A scatter mode per series value that is drawn
+                otherwise than ``mode``, such as ``{"mean": "lines"}`` for a
+                mean line among points drawn as ``mode="markers"``.
+                Render-time only: it does not change the cache.
             title: Plot title.
             x_label: X-axis label (default: x_column).
             y_label: Y-axis label (default: y_column).
@@ -132,6 +145,9 @@ class SeriesPlot(BaseComponent):
                 signed values such as mass errors).
             hover_column: Column whose text is shown when hovering a point
                 (e.g. a fragment name), above its x and y values.
+            subtitle_column: Column whose value in the first shown row is
+                added to the title (e.g. the name of the entry the filters
+                picked), so the plot says what it shows.
             orientation: 'v' (default) or 'h': with 'h', bars and boxes lie
                 horizontally, x_column on the vertical axis and y_column on
                 the horizontal one (e.g. GO terms and their -log10 p-value).
@@ -177,6 +193,28 @@ class SeriesPlot(BaseComponent):
             bar_height: Pixels per category of a horizontal bar or box plot:
                 the plot grows with the categories shown (at least its
                 height). Render-time only.
+            highlight: Mapping of identifier names to column names. The rows
+                whose column holds the identifier's selected value are drawn
+                as marked points over the series, also in a box plot, where
+                they show where the selected entry lies among the others.
+            highlight_data: The rows ``highlight`` searches (default: ``data``),
+                for a plot drawn from fewer rows than it can mark, such as
+                boxes drawn from thinned values. Needs the x and y columns
+                and the ``highlight`` columns.
+            switch_identifier: State identifier of a second switch in the
+                toolbar's row, after the views: one button per entry of
+                ``switch_names`` (value: label, in that order). A click writes
+                the button's value there, for the caller to read and decide
+                what to show (e.g. the terms of a selection or of all
+                entries). None (default) draws no switch. Render-time only.
+            switch_names: The buttons of that switch (value: label).
+            switch_default: The button that is on while the identifier holds
+                none of the values (default: the first).
+            clear_identifiers: State identifiers a "Clear selection" button in
+                the toolbar sets to None (e.g. the selection another component
+                made, and ``switch_identifier``). Its tooltip counts the
+                entries of the first one holding a list. None (default) draws
+                no button. Render-time only.
             **kwargs: Additional configuration options.
         """
         if y_range_mode not in ("nonnegative", "tozero", "normal"):
@@ -205,6 +243,14 @@ class SeriesPlot(BaseComponent):
             raise ValueError("top_default needs top_choices")
         if view_identifier is not None and view_column is None:
             raise ValueError("view_identifier needs view_column")
+        if switch_identifier is not None and not switch_names:
+            raise ValueError("switch_identifier needs switch_names")
+        if switch_default is not None and str(switch_default) not in {
+            str(k) for k in (switch_names or {})
+        }:
+            raise ValueError(
+                f"switch_default {switch_default!r} is not one of switch_names"
+            )
         if bar_height is not None and int(bar_height) < 1:
             raise ValueError("bar_height must be a positive number of pixels")
         self._x_column = x_column
@@ -213,6 +259,13 @@ class SeriesPlot(BaseComponent):
         self._series_names = series_names or {}
         self._series_colors = series_colors or {}
         self._mode = mode
+        self._series_modes = dict(series_modes or {})
+        for name, series_mode in self._series_modes.items():
+            if series_mode not in ("lines", "markers", "lines+markers"):
+                raise ValueError(
+                    f"series_modes[{name!r}] must be 'lines', 'markers' or "
+                    f"'lines+markers', got {series_mode!r}"
+                )
         self._title = title
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
@@ -222,6 +275,7 @@ class SeriesPlot(BaseComponent):
         self._font = dict(font) if font else None
         self._y_range_mode = y_range_mode
         self._hover_column = hover_column
+        self._subtitle_column = subtitle_column
         self._orientation = orientation
         self._view_column = view_column
         self._view_names = dict(view_names or {})
@@ -232,6 +286,18 @@ class SeriesPlot(BaseComponent):
         # Render-time: the identifier the picked view goes to, the bar height
         self._view_identifier = view_identifier
         self._bar_height = int(bar_height) if bar_height is not None else None
+        # Render-time: a switch whose value the caller reads, a clear button
+        self._switch_identifier = switch_identifier
+        self._switch_names = dict(switch_names or {})
+        self._switch_default = switch_default
+        self._clear_identifiers = list(clear_identifiers or [])
+
+        self._highlight = dict(highlight or {})
+        if highlight_data is not None and not self._highlight:
+            raise ValueError("highlight_data needs highlight")
+        if isinstance(highlight_data, pl.DataFrame):
+            highlight_data = highlight_data.lazy()
+        self._highlight_data = highlight_data
 
         # Render-time options, kept out of the cache config (see core/measure.py)
         self._measure = validate_measure(measure)
@@ -266,12 +332,14 @@ class SeriesPlot(BaseComponent):
             font=font,
             y_range_mode=y_range_mode,
             hover_column=hover_column,
+            subtitle_column=subtitle_column,
             orientation=orientation,
             view_column=view_column,
             view_names=view_names,
             view_default=view_default,
             top_choices=top_choices,
             top_default=top_default,
+            highlight=highlight,
             **kwargs,
         )
 
@@ -297,6 +365,11 @@ class SeriesPlot(BaseComponent):
                 else {}
             ),
             **({"hover_column": self._hover_column} if self._hover_column else {}),
+            **(
+                {"subtitle_column": self._subtitle_column}
+                if self._subtitle_column
+                else {}
+            ),
             **({"orientation": self._orientation} if self._orientation != "v" else {}),
             **(
                 {
@@ -312,6 +385,7 @@ class SeriesPlot(BaseComponent):
                 if self._top_choices
                 else {}
             ),
+            **({"highlight": self._highlight} if self._highlight else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -330,12 +404,14 @@ class SeriesPlot(BaseComponent):
         self._font = config.get("font")
         self._y_range_mode = config.get("y_range_mode", "nonnegative")
         self._hover_column = config.get("hover_column")
+        self._subtitle_column = config.get("subtitle_column")
         self._orientation = config.get("orientation", "v")
         self._view_column = config.get("view_column")
         self._view_names = config.get("view_names") or {}
         self._view_default = config.get("view_default")
         self._top_choices = config.get("top_choices")
         self._top_default = config.get("top_default")
+        self._highlight = dict(config.get("highlight") or {})
 
     def _validate_mappings(self) -> None:
         super()._validate_mappings()
@@ -345,6 +421,7 @@ class SeriesPlot(BaseComponent):
             ("y_column", self._y_column),
             ("series_column", self._series_column),
             ("hover_column", self._hover_column),
+            ("subtitle_column", self._subtitle_column),
             ("view_column", self._view_column),
         ):
             if column is not None and column not in columns:
@@ -355,6 +432,67 @@ class SeriesPlot(BaseComponent):
     def _preprocess(self) -> None:
         # Points keep their order: a curve is drawn through them as given
         self._preprocessed_data["data"] = self._raw_data
+        if self._highlight:
+            source = (
+                self._highlight_data
+                if self._highlight_data is not None
+                else self._raw_data
+            )
+            names = source.collect_schema().names()
+            wanted = [
+                self._x_column,
+                self._y_column,
+                self._series_column,
+                self._hover_column,
+                *self._highlight.values(),
+                *(self._filters or {}).values(),
+            ]
+            columns = list(
+                dict.fromkeys(c for c in wanted if c is not None and c in names)
+            )
+            missing = [
+                c
+                for c in [self._x_column, self._y_column, *self._highlight.values()]
+                if c not in names
+            ]
+            if missing:
+                raise ValueError(f"highlight data lacks the columns {missing}")
+            self._preprocessed_data["highlight"] = source.select(columns)
+
+    def get_state_dependencies(self) -> list[str]:
+        deps = super().get_state_dependencies()
+        for identifier in self._highlight:
+            if identifier not in deps:
+                deps.append(identifier)
+        return deps
+
+    def _highlighted_rows(self, state: dict[str, Any]) -> pl.DataFrame:
+        """The rows matching the selected value of a `highlight` identifier
+        (any of them), within the plot's filters."""
+        source = self._preprocessed_data.get("highlight")
+        if source is None:
+            return pl.DataFrame()
+        if isinstance(source, pl.DataFrame):
+            source = source.lazy()
+        schema = source.collect_schema()
+        conditions = [
+            match_selection(column, state[identifier], schema.get(column))
+            for identifier, column in self._highlight.items()
+            if state.get(identifier) is not None and column in schema
+        ]
+        if not conditions:
+            return source.head(0).collect()
+        condition = conditions[0]
+        for other in conditions[1:]:
+            condition = condition | other
+        # Filters still apply: a row another component filtered out stays hidden
+        for identifier, column in (self._filters or {}).items():
+            value = state.get(identifier, (self._filter_defaults or {}).get(identifier))
+            if value is not None and column in schema:
+                condition = condition & match_selection(
+                    column, value, schema.get(column)
+                )
+        return source.filter(condition).collect()
 
     def _get_vue_component_name(self) -> str:
         return "PlotlySeries"
@@ -367,6 +505,7 @@ class SeriesPlot(BaseComponent):
         for column in [
             self._series_column,
             self._hover_column,
+            getattr(self, "_subtitle_column", None),
             self._view_column,
             *(self._interactivity or {}).values(),
             *(self._filters or {}).values(),
@@ -386,7 +525,26 @@ class SeriesPlot(BaseComponent):
             columns=self._columns(),
             filter_defaults=self._filter_defaults,
         )
-        return {"plotData": df_pandas, "_hash": data_hash}
+        result = {"plotData": df_pandas, "_hash": data_hash}
+        if self._highlight:
+            rows = self._highlighted_rows(state)
+
+            def column(name):
+                return rows[name].to_list() if name and name in rows.columns else []
+
+            result["highlightPoints"] = {
+                "x": column(self._x_column),
+                "y": column(self._y_column),
+                "series": [
+                    None if v is None else str(v) for v in column(self._series_column)
+                ],
+                "text": [
+                    None if v is None else str(v) for v in column(self._hover_column)
+                ],
+            }
+            # The plotted rows may be unchanged while the marked ones move
+            result["_hash"] = f"{data_hash}:{compute_dataframe_hash(rows)}"
+        return result
 
     def _get_component_args(self) -> dict[str, Any]:
         args: dict[str, Any] = {
@@ -399,6 +557,8 @@ class SeriesPlot(BaseComponent):
             "seriesColors": self._series_colors,
             "mode": self._mode,
             "xLabel": self._x_label,
+            # Render-time: a series drawn other than ``mode`` (a mean line among points)
+            **({"seriesModes": self._series_modes} if self._series_modes else {}),
             "yLabel": self._y_label,
             "showLegend": self._show_legend,
             "fixedYRange": self._fixed_y_range,
@@ -409,6 +569,8 @@ class SeriesPlot(BaseComponent):
         }
         if self._title:
             args["title"] = self._title
+        if getattr(self, "_subtitle_column", None):
+            args["subtitleColumn"] = self._subtitle_column
         if self._svg_filename:
             args["svgFilename"] = self._svg_filename
         if self._font:
@@ -429,4 +591,12 @@ class SeriesPlot(BaseComponent):
             args["topDefault"] = self._top_default
         if self._bar_height:
             args["barHeight"] = self._bar_height
+        if getattr(self, "_switch_identifier", None):
+            args["switchIdentifier"] = self._switch_identifier
+            # Lists keep the order of switch_names through JSON
+            args["switchNames"] = [[str(k), v] for k, v in self._switch_names.items()]
+            if self._switch_default is not None:
+                args["switchDefault"] = str(self._switch_default)
+        if getattr(self, "_clear_identifiers", None):
+            args["clearIdentifiers"] = list(self._clear_identifiers)
         return args
