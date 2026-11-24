@@ -130,12 +130,16 @@
  * first in the View group, on a narrow toolbar too. Plotly's
  * navigation buttons (zoom, pan, select, reset) are read from the plot's mode
  * bar, which stays in the page but hidden, so they work exactly as before.
+ * A plot with numeric axes and a Reset button gets Go to, a form for an exact
+ * range of each axis (utils/goToRange.ts).
  */
 import { defineComponent, h, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { stepperTools, type StepperArgs } from '@/utils/stepper'
 import ToolMenuSections from './ToolMenuSections.vue'
+import { plotly } from '@/plotly/current'
+import { goToAxes, type GoToAxis } from '@/utils/goToRange'
 import {
   GROUP_LABELS,
   GROUP_ORDER,
@@ -211,6 +215,8 @@ export default defineComponent({
       resizeObserver: null as ResizeObserver | null,
       observedElement: null as HTMLElement | null,
       frame: 0,
+      /** The plot's numeric axes and their ranges in view, for Go to. */
+      axes: [] as GoToAxis[],
     }
   },
   computed: {
@@ -221,9 +227,24 @@ export default defineComponent({
         this.selectionStore.updateSelection(identifier, value),
       )
     },
-    /** The component's tools with the stepper's buttons first. */
+    /** Go to, for a plot with numeric axes that can be zoomed (it has a Reset button). */
+    goToTools(): PlotTool[] {
+      if (!this.axes.length || !this.plotlyButtons.some((tool) => tool.id === 'plotly-zoom:reset')) return []
+      return [
+        {
+          id: 'go-to',
+          group: 'view',
+          icon: ICONS.goTo,
+          label: 'Go to',
+          help: 'show an exact range of each axis',
+          menu: [{ kind: 'goto', label: 'Show the range', axes: this.axes, apply: (update) => this.goTo(update) }],
+          run: () => {},
+        },
+      ]
+    },
+    /** The component's tools with the stepper's buttons and Go to first. */
     allTools(): PlotTool[] {
-      return [...this.stepperTools, ...this.tools]
+      return [...this.stepperTools, ...this.goToTools, ...this.tools]
     },
     groups(): Group[] {
       const all: PlotTool[] = [...this.plotlyButtons, ...this.allTools]
@@ -299,11 +320,31 @@ export default defineComponent({
       })
     },
     readPlotlyButtons(): void {
+      this.readAxes()
       const next = plotlyTools(document.getElementById(this.plotId))
       const same =
         next.length === this.plotlyButtons.length &&
         next.every((tool, i) => tool.id === this.plotlyButtons[i].id && tool.active === this.plotlyButtons[i].active)
       if (!same) this.plotlyButtons = next
+    },
+    /** The axes for Go to; kept as they are while the ranges did not change, so an open form keeps what was typed. */
+    readAxes(): void {
+      const element = document.getElementById(this.plotId) as (HTMLElement & { _fullLayout?: unknown }) | null
+      const next = goToAxes(element?._fullLayout as Record<string, unknown> | undefined)
+      const same =
+        next.length === this.axes.length &&
+        next.every((axis, i) => {
+          const old = this.axes[i]
+          return axis.name === old.name && axis.label === old.label && axis.low === old.low && axis.high === old.high
+        })
+      if (!same) this.axes = next
+    },
+    /** Show the ranges typed into Go to, as a mouse zoom would, and close the form. */
+    goTo(update: Record<string, number>): void {
+      const element = document.getElementById(this.plotId)
+      this.openTool = null
+      this.menuOpen = false
+      if (element) void plotly().relayout(element, update)
     },
     /** Collapse when the groups need more width than the panel has. */
     fit(): void {

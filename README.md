@@ -907,6 +907,14 @@ labels, a selection) shows how many, with an × that removes them. The row is
 always visible, not only on hover. Its 36 px are taken from the plot, so a
 component keeps the `height` it is given.
 
+A plot with numeric axes that can be zoomed has **Go to** (a crosshair, after
+Reset): a form with two fields per axis, filled with the range in view, that
+shows exactly the ranges typed (Enter or **Go**), e.g. RT 28 to 29.5 and m/z 400
+to 480 on a peak map. An axis whose two fields are left empty keeps its range.
+It zooms the way the mouse does, so a Heatmap loads the level for the range and
+a `zoom_identifier` follows; a LinePlot still fits its y axis to the peaks in
+the new x range.
+
 When the groups do not fit the panel's width, the row keeps only the tools that
 are on or hold something, plus Reset, and offers every tool in a menu behind ⋯,
 sorted into the same groups. The toolbar follows the Streamlit theme.

@@ -41,6 +41,8 @@
         </button>
       </template>
 
+      <GoToForm v-else-if="section.kind === 'goto'" :axes="section.axes" :apply="section.apply" />
+
       <label v-else-if="section.kind === 'range'" class="menu-range">
         <input
           type="range"
@@ -61,9 +63,11 @@
 /** The choices of a toolbar button with a menu (see PlotTool.menu). */
 import { defineComponent, type PropType } from 'vue'
 import { ICONS, type ToolMenuSection } from '@/utils/plotTools'
+import GoToForm from './GoToForm.vue'
 
 export default defineComponent({
   name: 'ToolMenuSections',
+  components: { GoToForm },
   props: {
     sections: { type: Array as PropType<ToolMenuSection[]>, required: true },
   },
