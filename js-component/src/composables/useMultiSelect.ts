@@ -133,7 +133,12 @@ export function selectionOverlay(x: number[], y: number[], size = 8): Plotly.Dat
   if (x.length === 0) return []
   const common = { type: 'scattergl', x, y, mode: 'markers', hoverinfo: 'skip', showlegend: false }
   return [
-    { ...common, name: 'selection glow', marker: { symbol: 'circle', size: size + 7, color: SELECTION_GLOW } },
+    { ...common, name: 'selection glow', marker: { symbol: 'circle', size: size + 12, color: SELECTION_GLOW } },
+    {
+      ...common,
+      name: 'selection ring',
+      marker: { symbol: 'circle-open', size: size + 9, color: SELECTION_ACCENT, line: { width: 2.5, color: SELECTION_ACCENT } },
+    },
     {
       ...common,
       name: 'in selection',

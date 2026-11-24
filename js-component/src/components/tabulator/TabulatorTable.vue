@@ -4,7 +4,7 @@
     style="padding: 8px; width: 98%; box-sizing: border-box"
     :style="isServerSidePagination ? {} : { minHeight: '200px' }"
   >
-    <div class="d-flex">
+    <div class="d-flex table-toolbar-host">
       <div class="table-toolbar">
         <div class="table-toolbar-buttons">
           <v-btn
@@ -97,6 +97,7 @@
           />
         </div>
         <div class="table-toolbar-title">
+          <HelpIcon v-if="helpText" class="table-help" :text="helpText" />
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
           <v-btn
             v-if="multiSelectEnabled"
@@ -230,6 +231,8 @@ import type {
 import { isCustomFormatter, getCustomFormatter } from './formatters'
 import { type FilterPreset, renderPresetSection } from '../filterPresets'
 import { combineSelection } from '@/composables/useMultiSelect'
+import { useHelp } from '@/composables/useHelp'
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
 
 // Global counter for unique table IDs
@@ -280,6 +283,8 @@ const KEY_MOVES: Record<string, KeyMove> = {
 
 export default defineComponent({
   name: 'TabulatorTable',
+  components: { HelpIcon },
+
   props: {
     args: {
       type: Object as PropType<TableComponentArgs>,
@@ -292,7 +297,9 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     // Generate unique ID on setup
     const uniqueId = `table-${Date.now()}-${++tableIdCounter}`
-    return { streamlitDataStore, selectionStore, uniqueId }
+    // The view's info icon beside the title, not over the buttons
+    const helpText = useHelp()
+    return { streamlitDataStore, selectionStore, uniqueId, helpText }
   },
   data() {
     return {
@@ -3791,6 +3798,35 @@ export default defineComponent({
   column-gap: 8px;
 }
 
+/* A narrow table keeps its title on the line of its buttons (shortened with
+   an ellipsis when it must be) and puts the toggles on a row below */
+.table-toolbar-host {
+  container-type: inline-size;
+}
+@container (max-width: 640px) {
+  .table-toolbar {
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-areas:
+      'buttons title'
+      'toggles toggles';
+    row-gap: 2px;
+  }
+  .table-toolbar-title {
+    grid-area: title;
+    justify-content: flex-start;
+  }
+  .table-toolbar-buttons {
+    grid-area: buttons;
+  }
+  .table-toolbar-toggles {
+    grid-area: toggles;
+    justify-content: flex-start;
+  }
+  .table-search {
+    min-width: 120px;
+  }
+}
+
 .table-toolbar-buttons {
   display: flex;
   flex-wrap: nowrap;
@@ -3804,6 +3840,11 @@ export default defineComponent({
   align-items: center;
   justify-content: center;
   gap: 2px;
+}
+
+.table-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
 }
 
 .table-toolbar-title h4 {

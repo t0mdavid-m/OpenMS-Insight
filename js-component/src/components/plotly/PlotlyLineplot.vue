@@ -3,8 +3,8 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
-    <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
+    <div :id="id" class="plot-container" :style="{ ...cssCustomProperties, minHeight: `${plotHeight}px` }"></div>
     <PeakHoverTip
       :tip="hover.tip"
       :color="theme?.textColor || '#262730'"
@@ -51,7 +51,7 @@ import { pickedValue, sameValue, selectedValue } from '@/utils/pickValue'
 import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration
@@ -738,7 +738,7 @@ export default defineComponent({
      */
     layout(): Partial<Plotly.Layout> {
       return {
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: this.args.title ? { text: boldTitle(this.args.title, this.id).text } : undefined,
         showlegend: false,
         height: this.plotHeight,
         xaxis: {
