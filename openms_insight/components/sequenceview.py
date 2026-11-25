@@ -567,6 +567,9 @@ class SequenceView:
         self._svg_filename = svg_filename
         self._image_format = validate_image_format(image_format, allow_none=True)
 
+        # The view's explanation (the info icon), never part of the cache
+        self._help: str | None = kwargs.pop("help", None) or None
+
         # Determine if data is provided (creation mode vs reconstruction mode)
         has_sequence_data = sequence_data is not None or sequence_data_path is not None
 
@@ -1165,6 +1168,7 @@ class SequenceView:
         key: str | None = None,
         state_manager: Optional["StateManager"] = None,
         height: int | None = None,
+        help: str | None = None,
     ) -> SequenceViewResult:
         """
         Render the component in Streamlit.
@@ -1178,6 +1182,8 @@ class SequenceView:
         Returns:
             SequenceViewResult with annotations DataFrame (if available)
         """
+        if help is not None:
+            self._help = help or None
         from ..core.state import get_default_state_manager
         from ..rendering.bridge import get_component_annotations, render_component
 

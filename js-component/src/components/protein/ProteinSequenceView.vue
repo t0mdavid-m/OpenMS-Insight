@@ -10,11 +10,13 @@
     :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT + (args.uniprotLookup ? UNIPROT_ROW_HEIGHT : 0)}px` } : undefined"
   >
   <div class="sequence-view-column">
-  <div v-if="args.title" class="d-flex justify-center">
+  <div v-if="args.title" class="d-flex justify-center align-center">
+    <HelpIcon v-if="args.help" :text="args.help" class="title-help" />
     <h4>{{ args.title }}</h4>
   </div>
 
-  <v-sheet class="pa-4 rounded-lg" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
+  <v-sheet class="pa-4 rounded-lg help-card" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
+      <HelpIcon v-if="args.help && !args.title" :text="args.help" floating class="card-help" />
     <div class="sequence-and-scale">
     <div :id="sequencePartId" class="sequence-part">
       <!-- Label and value pairs wrap as whole pairs, never inside one -->
@@ -94,6 +96,19 @@
             <v-icon>mdi-pencil</v-icon>
             <v-tooltip activator="parent" location="bottom">
               Edit sequence and modifications
+            </v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="isEdited && (n_truncation || c_truncation)"
+            variant="text"
+            icon="mdi-arrow-expand-horizontal"
+            size="large"
+            data-testid="restore-termini"
+            @click="setProteoformRange(0, sequence.length - 1)"
+          >
+            <v-icon>mdi-arrow-expand-horizontal</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Restore the truncated residues (right-click a residue to start or end the proteoform there)
             </v-tooltip>
           </v-btn>
           <v-btn
@@ -592,6 +607,7 @@
 </template>
 
 <script lang="ts">
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { defineComponent, toRaw, type PropType } from 'vue'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
@@ -702,7 +718,7 @@ function sameModifications(a: ModificationData[], b: ModificationData[]): boolea
 
 export default defineComponent({
   name: 'ProteinSequenceView',
-  components: {
+  components: { HelpIcon,
     SequenceViewInformation,
     FragmentTable,
     AminoAcidCell,
@@ -742,6 +758,10 @@ export default defineComponent({
         entry: () => this.entry,
         selectedAA: () => this.selectedAA,
         setSelectedAA: (position?: number) => this.setSelectedAA(position),
+        // While an identification is edited: its residue range, which a
+        // residue's menu moves
+        editRange: () => (this.isEdited ? { start: this.sequence_start, end: this.sequence_end } : null),
+        setRange: (start: number, end: number) => this.setProteoformRange(start, end),
       },
     }
   },
@@ -2359,6 +2379,29 @@ export default defineComponent({
       // A new nonce each time: the app applies every edit once
       this.selectionStore.updateSelection(id, { ...edit, nonce: Date.now() })
     },
+    // An edited identification starts and ends at other residues: the
+    // residues outside are truncated, their modifications dropped (a
+    // terminal modification stays on its terminus)
+    setProteoformRange(start: number, end: number): void {
+      if (!this.isEdited) return
+      const last = this.sequence.length - 1
+      start = Math.max(0, Math.min(start, last))
+      end = Math.max(0, Math.min(end, last))
+      if (start > end) return
+      if (start === this.sequence_start && end === this.sequence_end) return
+      const keepStart = start === this.sequence_start ? this.sequence_start_reported : start
+      const keepEnd = end === this.sequence_end ? this.sequence_end_reported : end
+      const modifications = this.storeModifications.filter(
+        (m) => m.start < 0 || m.start > last || (m.start >= start && m.start <= end),
+      )
+      this.writeEdit({
+        action: 'update',
+        sequence: this.sequence.join(''),
+        start_position: keepStart,
+        end_position: keepEnd,
+        modifications,
+      })
+    },
     startEdit(): void {
       this.writeEdit({ action: 'edit' })
     },
@@ -2711,6 +2754,18 @@ export default defineComponent({
 .sequence-regex-field .v-field__input {
   padding-top: 19px;
   padding-bottom: 4px;
+}
+
+.help-card {
+  position: relative;
+}
+.help-card > .card-help {
+  top: 6px;
+  left: 6px;
+}
+.title-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
 }
 </style>
 
