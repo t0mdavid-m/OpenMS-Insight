@@ -361,20 +361,14 @@ export default defineComponent({
     // Measured on the view, not the document: while a table lays out new rows
     // the document is briefly taller than the view, and the frame grew to that.
     this.resizeObserver = new ResizeObserver(() => {
-      if (this.streamlitDataStore.hash) {
-        reportedFrameHeight = this.viewHeight()
-        Streamlit.setFrameHeight(reportedFrameHeight)
-      }
+      if (this.streamlitDataStore.hash) this.reportViewHeight()
     })
     this.resizeObserver.observe(this.$el as HTMLElement)
     // The data may leave the size as it was, so no resize follows: measure once
     this.$watch(
       () => !!this.streamlitDataStore.hash,
       (hasData: boolean) => {
-        if (hasData) this.$nextTick(() => {
-          reportedFrameHeight = this.viewHeight()
-          Streamlit.setFrameHeight(reportedFrameHeight)
-        })
+        if (hasData) this.$nextTick(() => this.reportViewHeight())
       },
       { immediate: true }
     )
@@ -389,6 +383,20 @@ export default defineComponent({
   // This was redundant - height is now set explicitly by components
   // and via the watch on allDataForDrawing.height
   methods: {
+    /**
+     * Give the frame the view's height, once the view has drawn.
+     *
+     * A view's code is loaded on demand: when its data comes before its code,
+     * the view takes no space yet and measures 0. Reported, that hid the frame
+     * until the code arrived (on a slow connection seconds later), so every
+     * plot of a page vanished and came back. The frame keeps its height then.
+     */
+    reportViewHeight(): void {
+      const height = this.viewHeight()
+      if (height <= 0) return
+      reportedFrameHeight = height
+      Streamlit.setFrameHeight(height)
+    },
     /** Bottom of the view in the document, its last element's margin included. */
     viewHeight(): number {
       const root = this.$el as HTMLElement
