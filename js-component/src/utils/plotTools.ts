@@ -118,6 +118,8 @@ export const ICONS = {
   fragments: 'M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z',
   peaks: 'M5 20h2V10H5v10zm4 0h2V4H9v16zm4 0h2v-7h-2v7zm4 0h2v-12h-2v12z',
   colorbar: 'M5 3h5v18H5V3zm2 2v14h1V5H7zm6 1h6v2h-6v-2zm0 5h6v2h-6v-2zm0 5h6v2h-6v-2z',
+  /** A small frame in a large one (Material "picture_in_picture"), for the overview. */
+  overview: 'M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 1.98 2 1.98h18c1.1 0 2-.88 2-1.98V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z',
   palette:
     'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z',
   layers:

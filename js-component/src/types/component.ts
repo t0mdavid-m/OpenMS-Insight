@@ -262,6 +262,8 @@ export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, Im
   layerColumn?: string
   /** False: the colorbar below the plot cannot be edited */
   colorbarEditor?: boolean
+  /** While zoomed, a small picture of the whole map in the top right corner */
+  overview?: boolean
   /** Identifier → column; the points of each identifier's selected value are ringed */
   highlight?: Record<string, string>
   /** Selections a click sets besides `interactivity` (null clears one) */
