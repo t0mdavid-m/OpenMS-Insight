@@ -220,3 +220,24 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
     selectionStore,
   }
 }
+
+/**
+ * Whether a row is the point a click selected: every interactivity identifier
+ * that holds a value matches the row's column, and at least one holds one.
+ * The plot draws such rows with the same ring a box or lasso selection gets.
+ */
+export function isClickedRow(
+  row: Record<string, unknown>,
+  interactivity: Record<string, string>,
+  state: Record<string, unknown>,
+): boolean {
+  let matched = false
+  for (const [identifier, column] of Object.entries(interactivity)) {
+    const value = state[identifier]
+    if (value === null || value === undefined) continue
+    if (row[column] === undefined) continue
+    if (String(row[column]) !== String(value)) return false
+    matched = true
+  }
+  return matched
+}

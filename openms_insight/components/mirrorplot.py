@@ -844,6 +844,7 @@ class MirrorPlot(BaseComponent):
         height: int | None = None,
         sequence_view_top_key: str | None = None,
         sequence_view_bottom_key: str | None = None,
+        help: str | None = None,
     ) -> Any:
         """Render the component.
 
@@ -859,6 +860,8 @@ class MirrorPlot(BaseComponent):
 
         Each SequenceView linkage is independent — wire one, both, or neither.
         """
+        if help is not None:
+            self._help = help or None
         from ..core.state import get_default_state_manager
         from ..rendering.bridge import get_component_annotations, render_component
 
