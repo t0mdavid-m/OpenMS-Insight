@@ -5,6 +5,11 @@
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
     <div :id="id" class="plot-container" :style="{ minHeight: `${plotHeight}px` }"></div>
+    <PeakHoverTip
+      :tip="hover.tip"
+      :color="theme?.textColor || '#262730'"
+      :background="theme?.backgroundColor || 'white'"
+    />
   </div>
 </template>
 
@@ -23,6 +28,8 @@ import { useXNavigation } from '@/composables/useXNavigation'
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
+import PeakHoverTip from './PeakHoverTip.vue'
+import { usePeakHover } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
@@ -73,7 +80,7 @@ interface AnnotationBox {
 
 export default defineComponent({
   name: 'PlotlyMirrorPlot',
-  components: { MeasureHint, PeakLabelEditor, PlotToolbar },
+  components: { MeasureHint, PeakLabelEditor, PeakHoverTip, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<MirrorPlotComponentArgs>,
@@ -92,7 +99,8 @@ export default defineComponent({
     const pinZoom = usePinZoom(() => !!props.args.keepZoom)
     const zoom = useZoomState(() => props.args.zoomIdentifier)
     const navigation = useXNavigation()
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp, navigation }
+    const hover = usePeakHover()
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp, hover, navigation }
   },
   data() {
     return {
@@ -577,6 +585,8 @@ export default defineComponent({
           mode: 'markers',
           type: 'scattergl',
           marker: { color: topColors, size: 4 },
+          // The read-out comes from usePeakHover (nearest peak along x)
+          hoverinfo: 'none',
           name: this.args.titleTop || 'Top',
           customdata: (top?.x.map((_, i) => ({ side: 'top', index: i })) ?? []) as any[],
         },
@@ -586,6 +596,7 @@ export default defineComponent({
           mode: 'markers',
           type: 'scattergl',
           marker: { color: bottomColors, size: 4 },
+          hoverinfo: 'none',
           name: this.args.titleBottom || 'Bottom',
           customdata: (bottom?.x.map((_, i) => ({ side: 'bottom', index: i })) ?? []) as any[],
         },
@@ -690,6 +701,20 @@ export default defineComponent({
         displaylogo: false,
       })
       this.pinZoom.bind(element)
+      // The upper spectrum while the mouse is above the axis, the lower below it
+      this.hover.bind(element, this.$refs.root as HTMLElement | null, (at) => {
+        const lower = at.y !== undefined && at.y < 0
+        const data = lower ? this.bottomData : this.topData
+        return {
+          x: data?.x,
+          y: data?.y,
+          extra: (i) => data?.annotations?.[i] || undefined,
+          xName: this.args.xLabel || 'x',
+          yName: this.args.yLabel || 'y',
+          sign: lower ? -1 : 1,
+          group: lower ? 'bottom' : 'top',
+        }
+      })
       this.isInitialized = true
       // The frame follows the plot's height. Without this a mirror plot first
       // drawn in a zero-height frame (e.g. below the fold) stayed invisible.
@@ -699,7 +724,11 @@ export default defineComponent({
       const plotEl = element as Plotly.PlotlyHTMLElement
       plotEl.removeAllListeners?.('plotly_click')
       plotEl.on('plotly_click', (event: Plotly.PlotMouseEvent) => {
-        const pt = event.points?.[0]
+        ;(plotEl as unknown as { _plotlyClickAt?: number })._plotlyClickAt = performance.now()
+        let pt = event.points?.[0] as { curveNumber: number; pointIndex?: number; pointNumber?: number } | undefined
+        // The peak the hover read-out shows, so a click selects what is shown
+        const hit = event.event ? this.hover.hitAt(event.event as MouseEvent) : undefined
+        if (hit) pt = { curveNumber: hit.group === 'bottom' ? 1 : 0, pointIndex: hit.index, pointNumber: hit.index }
         if (!pt) return
         const traceIdx = pt.curveNumber
         const sourceData = traceIdx === 0 ? this.topData : this.bottomData
@@ -731,16 +760,35 @@ export default defineComponent({
           return
         }
 
-        const interactivity = this.args.interactivity
-        if (!interactivity) return
-
-        for (const [identifier, column] of Object.entries(interactivity)) {
-          const values = sourceData.interactivityValues?.[column]
-          if (values && pt.pointIndex !== undefined) {
-            this.selectionStore.updateSelection(identifier, values[pt.pointIndex])
-          }
-        }
+        const pointIndex = pt.pointIndex ?? pt.pointNumber
+        if (pointIndex !== undefined) this.selectPeak(sourceData, pointIndex)
       })
+
+      // Plotly reports a click only near a marker at a peak top, so a click
+      // half-way up a tall peak was lost. A click on a peak the hover shows
+      // that Plotly did not report is handled here.
+      const element_ = element as HTMLElement & { _insightClicks?: boolean; _plotlyClickAt?: number }
+      if (!element_._insightClicks) {
+        element_._insightClicks = true
+        let downAt: { x: number; y: number } | null = null
+        element_.addEventListener('mousedown', (event: MouseEvent) => {
+          downAt = { x: event.clientX, y: event.clientY }
+        })
+        element_.addEventListener('click', (event: MouseEvent) => {
+          const start = downAt
+          downAt = null
+          // A zoom box or pan ends with a click too
+          if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return
+          if (this.labels.active || this.measure.active) return
+          const hit = this.hover.hitAt(event)
+          if (!hit) return
+          const data = hit.group === 'bottom' ? this.bottomData : this.topData
+          setTimeout(() => {
+            if (performance.now() - (element_._plotlyClickAt ?? -Infinity) < 300 || !data) return
+            this.selectPeak(data, hit.index)
+          })
+        })
+      }
 
       // A click on a measurement's label removes that measurement
       this.measure.bindLabelClicks(plotEl)
@@ -775,7 +823,20 @@ export default defineComponent({
      * and re-runs annotation overlap detection at the new pixel/data ratio
      * — matches PlotlyLineplot's behavior.
      */
+    /** Set the identifiers of `interactivity` to a peak of one spectrum. */
+    selectPeak(data: SideData, index: number): void {
+      const interactivity = this.args.interactivity
+      if (!interactivity) return
+      for (const [identifier, column] of Object.entries(interactivity)) {
+        const values = data.interactivityValues?.[column]
+        if (values && index < values.length) {
+          this.selectionStore.updateSelection(identifier, values[index])
+        }
+      }
+    },
+
     onRelayout(eventData: Record<string, unknown>): void {
+      this.hover.hide()
       if (
         eventData['xaxis.range[0]'] !== undefined &&
         eventData['xaxis.range[1]'] !== undefined

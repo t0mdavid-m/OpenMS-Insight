@@ -1304,7 +1304,7 @@ export default defineComponent({
         if (!this.isServerSidePagination) {
           this.selectDefaultRow()
         }
-        this.applyFilters()
+        this.applyFilters({ onlyIfChanged: true })
 
         // Update Streamlit iframe height after table is rendered
         // Use specified height if provided, otherwise auto-calculate
@@ -1371,8 +1371,7 @@ export default defineComponent({
           const sortDir = sorters[0].dir as 'asc' | 'desc'
 
           // Check if sort actually changed
-          const cachedSortCol = this.paginationState?.sort_column || ''
-          const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+          const { column: cachedSortCol, dir: cachedSortDir } = this.servedSort()
 
           if (sortColumn === cachedSortCol && sortDir === cachedSortDir) {
             console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort unchanged, skipping`)
@@ -1467,8 +1466,8 @@ export default defineComponent({
 
       // Check if we already have data for this request (initial load or same page/sort)
       // This happens when Python sends initial data before Tabulator calls ajaxRequestFunc
-      const cachedSortCol = this.paginationState?.sort_column || ''
-      const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+      const servedSortCol = this.paginationState?.sort_column || ''
+      const { column: cachedSortCol, dir: cachedSortDir } = this.servedSort()
       const requestedSortCol = sortColumn || ''
       const sortMatch = cachedSortCol === requestedSortCol && cachedSortDir === sortDir
 
@@ -1496,12 +1495,19 @@ export default defineComponent({
         // Without this, Vue's selection store would have stale page number
         // (e.g., after Python navigates to page 38, Vue's store still had page 1)
         const paginationIdentifier = this.args.paginationIdentifier
-        if (paginationIdentifier) {
+        // While Python has no pagination for this table it serves the table's
+        // default page, which is the page shown: writing it down would only
+        // cost the page a rerun on first load
+        const stored = paginationIdentifier ? (this.selectionStore.$state[paginationIdentifier] as any) : null
+        if (paginationIdentifier && stored != null) {
+          // Rows served in the initialSort order keep the sort they were asked
+          // with, so the table's own default sort is no new pagination
+          const keepSort = !servedSortCol
           this.selectionStore.updateSelection(paginationIdentifier, {
             page,
             page_size: pageSize,
-            sort_column: sortColumn,
-            sort_dir: sortDir,
+            sort_column: keepSort ? stored.sort_column : sortColumn,
+            sort_dir: keepSort ? stored.sort_dir : sortDir,
             column_filters: this.currentColumnFilters,
               ...this.viewFiltersPatch,
           })
@@ -2464,7 +2470,7 @@ export default defineComponent({
         // During page navigation, filter state is already correct - calling applyFilters()
         // would incorrectly reset the page to 1 (server-side pagination always resets page)
         if (!this.isNavigatingPages) {
-          this.applyFilters()
+          this.applyFilters({ onlyIfChanged: true })
         }
 
         // Update pagination limits when data changes (filter applied, data refreshed)
@@ -2759,7 +2765,29 @@ export default defineComponent({
       }
     },
 
-    applyFilters(): void {
+    /**
+     * The sort of the rows Python sent. Without a sort column Python sorts by
+     * initialSort, so those rows are already in the order the table asks for
+     * when it is built (Tabulator swaps each initialSort column name for its
+     * column object).
+     */
+    servedSort(): { column: string; dir: string } {
+      const served = this.paginationState?.sort_column
+      if (served) return { column: served, dir: this.paginationState?.sort_dir || 'asc' }
+      const initial = (this.args.initialSort as Array<{ column: any; dir?: string }> | undefined)?.[0]
+      const column: string =
+        typeof initial?.column === 'string'
+          ? initial.column
+          : initial?.column?.getField?.() ?? initial?.column?.field ?? ''
+      return { column, dir: (column && initial?.dir) || 'asc' }
+    },
+    /**
+     * Apply the filters of the dialog. `onlyIfChanged` is for a table that was
+     * built or got new rows: a server-side table then asks Python for rows only
+     * when its filters differ from those it already shows, since every request
+     * costs the page a rerun (on first load, one for each table on the page).
+     */
+    applyFilters({ onlyIfChanged = false }: { onlyIfChanged?: boolean } = {}): void {
       if (!this.tabulator) return
 
       // For server-side pagination, build filter array and send to Python
@@ -2801,6 +2829,7 @@ export default defineComponent({
           }
         })
 
+        if (onlyIfChanged && JSON.stringify(serverFilters) === JSON.stringify(this.currentColumnFilters)) return
         // Store filters and request page 1 of the re-filtered rows
         this.currentColumnFilters = serverFilters
         this.requestFilteredRows()
