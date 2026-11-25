@@ -86,6 +86,22 @@ def test_one_rerun_after_all_components(rerun, vue, temp_cache_dir):
     assert rerun.call_count == 1
 
 
+def test_nested_blocks_rerun_once_after_the_outer_one(rerun, vue, temp_cache_dir):
+    """A grid deferring its own reruns inside a page that defers them too."""
+    state = StateManager(session_key="nested")
+    first, second = _tables(temp_cache_dir)
+    rendered = []
+    with pytest.raises(Rerun):
+        with defer_reruns():
+            with defer_reruns():
+                render_component(first, state, key="scans")
+            rendered.append("inner done")
+            render_component(second, state, key="rows")
+            rendered.append("rows")
+    assert rendered == ["inner done", "rows"]
+    assert rerun.call_count == 1
+
+
 def test_no_rerun_when_the_block_raises(rerun):
     with pytest.raises(ValueError):
         with defer_reruns():
