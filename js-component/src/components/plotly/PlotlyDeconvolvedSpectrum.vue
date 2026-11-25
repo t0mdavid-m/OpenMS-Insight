@@ -38,6 +38,7 @@ import {
 } from '@/utils/fragmentIons'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
+import { useXNavigation } from '@/composables/useXNavigation'
 import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
@@ -211,7 +212,8 @@ export default defineComponent({
     const measure = useMeasure(() => !!props.args.measure)
     const pinZoom = usePinZoom(() => !!props.args.keepZoom)
     const zoom = useZoomState(() => props.args.zoomIdentifier)
-    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, zoomStamp: zoom.stamp, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
+    const navigation = useXNavigation()
+    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, zoomStamp: zoom.stamp, navigation, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -674,10 +676,22 @@ export default defineComponent({
     maxAnnotationRange(): number {
       return this.config.xPosScalingFactor * this.config.xPosScalingThreshold
     },
+    /** The whole spectrum (the double-click view). */
+    fullXRange(): [number, number] | undefined {
+      const xValues = this.xValues
+      if (xValues.length === 0) return undefined
+      let min = Infinity
+      let max = -Infinity
+      for (const x of xValues) {
+        if (x < min) min = x
+        if (x > max) max = x
+      }
+      return [min * 0.98, max * 1.02]
+    },
     xRange(): number[] {
       const xValues = this.xValues
       if (xValues.length === 0) return [0, 1]
-      const fullRange = () => [Math.min(...xValues) * 0.98, Math.max(...xValues) * 1.02]
+      const fullRange = () => this.fullXRange ?? [0, 1]
 
       // Showing every deconvolved peak: the whole spectrum
       if (this.deconvolvedPeaksHighlightMode) return fullRange()
@@ -1459,12 +1473,26 @@ export default defineComponent({
       const plot = (await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         displaylogo: false,
-        scrollZoom: true,
+        // The wheel is handled by useXNavigation (x only)
+        scrollZoom: false,
       })) as unknown as { on: (event: string, handler: (data: never) => void) => void }
       plot.on('plotly_relayout', (eventData: Record<string, unknown>) => this.onRelayout(eventData))
       plot.on('plotly_click', (eventData: { points?: Array<{ x: number }> }) => this.onPlotClick(eventData))
       this.measure.bindLabelClicks(element)
       this.pinZoom.bind(element)
+      // The wheel zooms x only, Shift + wheel and the middle button pan x
+      this.navigation.bind(element, {
+        current: () => {
+          const range = (element as unknown as { _fullLayout?: { xaxis?: { range?: unknown[] } } })._fullLayout?.xaxis?.range
+          return range ? [Number(range[0]), Number(range[1])] : undefined
+        },
+        full: () => this.fullXRange,
+        apply: (range) => {
+          this.onRelayout(
+            range ? { 'xaxis.range[0]': range[0], 'xaxis.range[1]': range[1] } : { 'xaxis.autorange': true },
+          )
+        },
+      })
       this.$nextTick(() => Streamlit.setFrameHeight())
     },
     async renderEmpty(): Promise<void> {
@@ -1518,5 +1546,10 @@ export default defineComponent({
 
 .back-button:hover {
   background-color: var(--button-hover-color);
+}
+
+/* Middle-button pan (useXNavigation) */
+.plot-container :deep(.x-panning .nsewdrag) {
+  cursor: grabbing !important;
 }
 </style>
