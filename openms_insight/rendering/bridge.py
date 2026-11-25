@@ -122,6 +122,11 @@ _CACHE_GENERATION_KEY = "__cache_generation__"
 # Session key: per component key, the nonce of the last view action applied
 _HANDLED_EVENTS_KEY = "_svc_handled_events"
 
+# The height each component's frame last had, per Streamlit key: a component
+# drawn again (another view, a rerun after a page switch) reserves that space
+# until its view has loaded, so the page below it does not jump
+_FRAME_HEIGHTS_KEY = "_svc_frame_heights"
+
 # Key under which data a component is given per render is folded in (see
 # BaseComponent._get_render_key).
 _RENDER_KEY = "__render_key__"
@@ -633,6 +638,16 @@ def _validate_interactivity_selections(
         return False
 
     filter_groups = _get_validation_filter_groups(component)
+    if not any(filters for filters, _defaults in filter_groups) and not callable(
+        getattr(type(component), "_apply_validation_filters", None)
+    ):
+        # Nothing filters this component's rows, so they are the same in every
+        # run: a selection missing from them was made in another component that
+        # shows other rows (a scan table of every spectrum beside a chromatogram
+        # of the MS1 spectra). Clearing it would undo that click, and with a
+        # table that selects its first row whenever nothing is selected, the two
+        # would take the selection from each other on every run.
+        return False
 
     # Get the preprocessed data
     preprocessed = getattr(component, "_preprocessed_data", None)
@@ -955,6 +970,11 @@ def defer_reruns() -> Iterator[None]:
             table(key="table", state_manager=state_manager)
             plot(key="plot", state_manager=state_manager)
     """
+    if _deferred_rerun.get() is not None:
+        # Inside another defer_reruns() (a page drawing a grid that defers its
+        # own reruns): the outer block reruns once for both
+        yield
+        return
     _apply_new_vue_values()
     pending = [False]
     token = _deferred_rerun.set(pending)
@@ -964,6 +984,31 @@ def defer_reruns() -> Iterator[None]:
         _deferred_rerun.reset(token)
     if pending[0]:
         _rerun()
+
+
+def _css_class(key: str) -> str:
+    """The class Streamlit gives the element of a widget with ``key``."""
+    import re
+
+    return "st-key-" + re.sub(r"[^a-zA-Z0-9_-]", "-", key.strip())
+
+
+def _reserve_space(key: str, height: int | None) -> None:
+    """Keep the component's place at its last (else its given) height while
+    its frame has not drawn yet.
+
+    Streamlit gives a component's frame no height until its view has loaded
+    and reports one, so every component drawn would first take no space and
+    then push the page down. A style-only ``st.html`` takes no space itself.
+    """
+    reserve = st.session_state.get(_FRAME_HEIGHTS_KEY, {}).get(key) or height
+    if not reserve:
+        return
+    css = _css_class(key)
+    st.html(
+        f"<style>.{css}:has(iframe[height='0']), .{css}:not(:has(iframe))"
+        f" {{ min-height: {int(reserve)}px; }}</style>"
+    )
 
 
 def render_component(
@@ -1024,6 +1069,12 @@ def _render_component(
     component_args = component._get_component_args()
     if height is not None:
         component_args["height"] = height
+    help_text = getattr(component, "_help", None)
+    if help_text:
+        component_args["help"] = help_text
+    toolbar_settings = getattr(component, "_toolbar_settings", None)
+    if toolbar_settings:
+        component_args["toolbarSettings"] = toolbar_settings
 
     # Batch resend: if any component requested data in previous run, clear ALL hashes
     if st.session_state.get(_BATCH_RESEND_KEY):
@@ -1198,6 +1249,7 @@ def _render_component(
     }
     if height is not None:
         kwargs["height"] = height
+    _reserve_space(key, height)
 
     if _DEBUG_STATE_SYNC:
         _logger.warning(
@@ -1205,6 +1257,10 @@ def _render_component(
         )
 
     result = vue_func(**kwargs)
+    if result is not None:
+        frame_height = result.get("_frameHeight")
+        if isinstance(frame_height, (int, float)) and frame_height > 0:
+            st.session_state.setdefault(_FRAME_HEIGHTS_KEY, {})[key] = int(frame_height)
 
     # === PHASE 3: Apply Vue's request FIRST ===
     state_changed = prefetch_changed_state

@@ -4,6 +4,8 @@ This guide is for developers adding **new visualization components** to OpenMS-I
 
 Technologies used are Python, TypeScript, Streamlit, and Vue 3.
 
+Before adding a component, check that it belongs here: a component must make sense for any Streamlit app with a dataframe and must not know about workspaces, runs, OpenMS tools or a particular app. One app's arrangement of a component (its columns, labels, defaults) is a *panel* and belongs in the OpenMS streamlit-template's visualization library or in the app. See `CLAUDE.md`.
+
 ---
 
 ## Table of Contents
