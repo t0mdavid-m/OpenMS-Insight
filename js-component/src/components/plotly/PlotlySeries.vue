@@ -1,22 +1,41 @@
 <template>
   <div class="series-plot">
-    <div v-if="views.length > 1" class="view-switch" role="tablist" :style="switchStyle">
-      <button
-        v-for="[value, label] in views"
-        :key="value"
-        type="button"
-        role="tab"
-        class="view-button"
-        :class="{ active: value === currentView }"
-        :aria-selected="value === currentView"
-        @click="pickView(value)"
-      >
-        {{ label }}
-      </button>
-    </div>
     <MeasureHint v-if="measurable" :measure="measure" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
-    <div :id="id" class="plot-container"></div>
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings">
+      <!-- The views in the toolbar's row, left of the tools: one row of controls -->
+      <template v-if="views.length > 1 || switches.length > 1" #lead>
+        <div v-if="views.length > 1" class="view-switch" role="tablist" :style="switchStyle">
+          <button
+            v-for="[value, label] in views"
+            :key="value"
+            type="button"
+            role="tab"
+            class="view-button"
+            :class="{ active: value === currentView }"
+            :aria-selected="value === currentView"
+            @click="pickView(value)"
+          >
+            {{ label }}
+          </button>
+        </div>
+        <!-- A second switch whose value the caller reads (switch_identifier) -->
+        <div v-if="switches.length > 1" class="view-switch" role="tablist" :style="switchStyle">
+          <button
+            v-for="[value, label] in switches"
+            :key="value"
+            type="button"
+            role="tab"
+            class="view-button"
+            :class="{ active: value === currentSwitch }"
+            :aria-selected="value === currentSwitch"
+            @click="pickSwitch(value)"
+          >
+            {{ label }}
+          </button>
+        </div>
+      </template>
+    </PlotToolbar>
+    <div :id="id" class="plot-container" :style="{ minHeight: `${plotHeight}px` }"></div>
   </div>
 </template>
 
@@ -33,15 +52,15 @@ import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
+import { SELECTION_ACCENT, clearSelectionTool } from '@/composables/useMultiSelect'
 
 let plotIdCounter = 0
 
 /** Height of the row of view buttons in pixels. */
-const VIEW_SWITCH_HEIGHT = 34
 /** Space of the title and the value axis around the bars of a growing plot. */
 const BAR_PLOT_MARGIN = 110
 
@@ -112,6 +131,31 @@ export default defineComponent({
       }
       return values[0]
     },
+    /** [value, label] of the buttons of switch_identifier. */
+    switches(): Array<[string, string]> {
+      if (!this.args.switchIdentifier) return []
+      return (this.args.switchNames || []).map(([k, v]) => [String(k), v] as [string, string])
+    },
+    /** The switch button that is on: the state's value, else the default. */
+    currentSwitch(): string | null {
+      const values = this.switches.map(([value]) => value)
+      if (!values.length) return null
+      const identifier = this.args.switchIdentifier as string
+      for (const candidate of [this.selectionStore.$state[identifier], this.args.switchDefault]) {
+        if (candidate !== undefined && candidate !== null && values.includes(String(candidate))) {
+          return String(candidate)
+        }
+      }
+      return values[0]
+    },
+    /** Entries of the first clear identifier holding a list. */
+    clearCount(): number {
+      for (const identifier of this.args.clearIdentifiers || []) {
+        const value = this.selectionStore.$state[identifier]
+        if (Array.isArray(value)) return value.length
+      }
+      return 0
+    },
     currentViewLabel(): string {
       const view = this.views.find(([value]) => value === this.currentView)
       return view ? view[1] : ''
@@ -154,16 +198,20 @@ export default defineComponent({
       const base = this.args.height || 400
       const barHeight = this.args.barHeight
       if (!barHeight || !this.horizontal) return base
-      const extra = this.views.length > 1 ? VIEW_SWITCH_HEIGHT : 0
-      return Math.max(base, BAR_PLOT_MARGIN + TOOLBAR_HEIGHT + extra + barHeight * this.shownCategories)
+      return Math.max(base, BAR_PLOT_MARGIN + TOOLBAR_HEIGHT + barHeight * this.shownCategories)
     },
     plotHeight(): number {
-      return this.totalHeight - TOOLBAR_HEIGHT - (this.views.length > 1 ? VIEW_SWITCH_HEIGHT : 0)
+      return this.totalHeight - TOOLBAR_HEIGHT
     },
     shownTitle(): string | undefined {
       const title = this.args.title
       if (!title) return undefined
-      return title.split('{view}').join(this.currentViewLabel)
+      const shown = title.split('{view}').join(this.currentViewLabel)
+      const column = this.args.subtitleColumn
+      if (!column) return shown
+      const values = (this.columns[column] as unknown[]) || []
+      const first = this.shownRows.length ? values[this.shownRows[0]] : undefined
+      return first === undefined || first === null || first === '' ? shown : `${shown}: ${first}`
     },
     switchStyle(): Record<string, string> {
       const theme = this.theme
@@ -172,7 +220,6 @@ export default defineComponent({
         '--vs-background': theme?.backgroundColor || '#ffffff',
         '--vs-accent': theme?.primaryColor || '#1436b8',
         '--vs-font': theme?.font || 'sans-serif',
-        height: `${VIEW_SWITCH_HEIGHT}px`,
       }
     },
     measurable(): boolean {
@@ -201,7 +248,11 @@ export default defineComponent({
             run: () => {},
           }]
         : []
+      const clear: PlotTool[] = (this.args.clearIdentifiers || []).length
+        ? [{ ...clearSelectionTool(() => this.clearIdentifiers(), this.clearCount), short: 'Clear selection', keep: true }]
+        : []
       return [
+        ...clear,
         ...top,
         ...(this.measurable ? this.measure.tools(this.measureTitle) : []),
         ...this.layers.tool(this.layerList, 'Series'),
@@ -282,10 +333,12 @@ export default defineComponent({
         } else if (mode === 'box') {
           trace.type = 'box'
           trace.orientation = this.horizontal ? 'h' : 'v'
+          // The marks of the picked rows sit in the same group as their box
+          trace.offsetgroup = s.key
           trace.boxpoints = 'outliers'
         } else {
           trace.type = 'scatter'
-          trace.mode = mode
+          trace.mode = (this.args.seriesModes || {})[s.key] || mode
         }
         if (this.args.hoverColumn) {
           trace.text = s.text
@@ -300,7 +353,79 @@ export default defineComponent({
           if (mode === 'box') trace.fillcolor = color + '55'
         }
         return trace as Plotly.Data
-      })
+      }).concat(this.highlightTraces)
+    },
+    /** The rows the highlight identifiers pick, drawn on top of the series:
+     * a box plot only shows its outliers, so the picked value is marked here. */
+    highlightTraces(): Plotly.Data[] {
+      const points = this.streamlitDataStore.allDataForDrawing?.highlightPoints as
+        | { x: unknown[]; y: unknown[]; series?: unknown[]; text?: unknown[] }
+        | undefined
+      if (!points || !points.x || points.x.length === 0) return []
+      const grouped = this.args.mode === 'box' && this.sharedPositions
+      // Grouped boxes: one set of marks per series, each beside its own box
+      const groups = grouped
+        ? this.series.filter((s) => this.layers.visible(s.key)).map((s) => s.key)
+        : [undefined]
+      const out: Plotly.Data[] = []
+      for (const group of groups) {
+        const rows = points.x.map((_, i) => i).filter((i) => group === undefined || String(points.series?.[i]) === group)
+        if (rows.length === 0) {
+          // Holds the group's place, so the other marks stay beside their boxes
+          const [x, y] = this.horizontal ? [[points.y[0]], [points.x[0]]] : [[points.x[0]], [points.y[0]]]
+          out.push({ x, y, type: 'scatter', mode: 'markers', showlegend: false, hoverinfo: 'skip',
+            offsetgroup: group, marker: { opacity: 0 } } as Plotly.Data)
+          continue
+        }
+        const px = rows.map((i) => points.x[i])
+        const py = rows.map((i) => points.y[i])
+        const [x, y] = this.horizontal ? [py, px] : [px, py]
+        const text = rows.map((i) => String(points.text?.[i] ?? ''))
+        const hasText = text.some((t) => t !== '')
+        const common: Record<string, unknown> = { x, y, type: 'scatter', mode: 'markers', showlegend: false }
+        if (group !== undefined) common.offsetgroup = group
+        out.push(
+          { ...common, hoverinfo: 'skip', marker: { size: 22, color: SELECTION_ACCENT, opacity: 0.18 } } as Plotly.Data,
+          {
+            ...common,
+            hoverinfo: 'skip',
+            marker: { symbol: 'circle-open', size: 17, color: SELECTION_ACCENT, line: { width: 2.5, color: SELECTION_ACCENT } },
+          } as Plotly.Data,
+          {
+            ...common,
+            name: 'picked',
+            text,
+            hovertemplate: hasText ? '%{text}<br>%{x}, %{y}<extra>picked</extra>' : '%{x}, %{y}<extra>picked</extra>',
+            marker: { size: 9, color: SELECTION_ACCENT, line: { width: 1.5, color: '#ffffff' } },
+          } as Plotly.Data,
+        )
+      }
+      return out
+    },
+    /** Value-axis range while picked rows are marked over grouped boxes. */
+    groupedMarkExtent(): [number, number] | null {
+      if (this.args.mode !== 'box' || !this.sharedPositions) return null
+      const points = this.streamlitDataStore.allDataForDrawing?.highlightPoints as { y?: unknown[] } | undefined
+      if (!points?.y?.length) return null
+      let lo = Infinity
+      let hi = -Infinity
+      for (const s of this.series) {
+        if (!this.layers.visible(s.key)) continue
+        for (const v of s.y as unknown[]) {
+          const n = Number(v)
+          if (Number.isFinite(n)) { lo = Math.min(lo, n); hi = Math.max(hi, n) }
+        }
+      }
+      for (const v of points.y) {
+        const n = Number(v)
+        if (Number.isFinite(n)) { lo = Math.min(lo, n); hi = Math.max(hi, n) }
+      }
+      if (!Number.isFinite(lo)) return null
+      const mode = this.args.yRangeMode || 'nonnegative'
+      if (mode === 'tozero') { lo = Math.min(lo, 0); hi = Math.max(hi, 0) }
+      if (mode === 'nonnegative') lo = Math.max(lo, 0)
+      const pad = (hi - lo || Math.abs(hi) || 1) * 0.05
+      return [mode === 'nonnegative' ? Math.max(lo - pad, 0) : lo - pad, hi + pad]
     },
     /** x positions of the points selected through this plot's interactivity
      * identifiers, also when the selection was made in another component. */
@@ -355,29 +480,44 @@ export default defineComponent({
         title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
         showgrid: false,
         automargin: true,
+        fixedrange: mode === 'bars',
       }
       const valueAxis: Record<string, unknown> = {
         title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
         showgrid: true,
         rangemode: this.args.yRangeMode || 'nonnegative',
-        fixedrange: !!this.args.fixedYRange,
+        fixedrange: !!this.args.fixedYRange || mode === 'bars',
         automargin: true,
       }
+      // Grouped marks are placed like bars, which would stretch the value axis
+      // to zero: the axis keeps the extent of the values instead
+      const extent = this.groupedMarkExtent
+      if (extent) valueAxis.range = extent
       // Horizontal categories read from the top, in the order of the data
       if (this.horizontal) positionAxis.autorange = 'reversed'
       const xaxis = this.horizontal ? valueAxis : positionAxis
       const yaxis = this.horizontal ? positionAxis : valueAxis
+      // A long title wraps to the plot's width instead of running off both edges
+      const title = this.shownTitle ? boldTitle(this.shownTitle, this.id) : undefined
       return {
         shapes: [...selectionShapes, ...this.measureOverlay.shapes],
         annotations: this.measureOverlay.annotations,
-        title: this.shownTitle ? { text: `<b>${this.shownTitle}</b>` } : undefined,
+        // The title just above the plot area: Plotly's own margin leaves a wide gap
+        title: title
+          ? { text: title.text, y: 1, yref: 'paper', yanchor: 'bottom', pad: { b: 10 } }
+          : undefined,
+        margin: { t: title ? 18 + 20 * title.lines : 12, r: 16, b: 40, l: 48 },
         showlegend: this.args.showLegend !== false,
         height: this.plotHeight,
+        // Bars are read, not explored: no zoom, pan or box select
+        ...(mode === 'bars' ? { dragmode: false } : {}),
         xaxis,
         yaxis,
         // Side by side only where series share a position, else full width
         ...(mode === 'bars' ? { barmode: this.sharedPositions ? 'group' : 'overlay' } : {}),
         ...(mode === 'box' ? { boxmode: this.sharedPositions ? 'group' : 'overlay' } : {}),
+        // Picked rows drawn over grouped boxes take the boxes' positions
+        ...(mode === 'box' && this.sharedPositions ? { scattermode: 'group', scattergap: 0.3, boxgap: 0.3 } : {}),
         paper_bgcolor: this.theme?.backgroundColor || 'white',
         plot_bgcolor: this.theme?.backgroundColor || 'white',
         font: {
@@ -420,6 +560,12 @@ export default defineComponent({
         height: this.layout.height,
       })
     },
+    'streamlitDataStore.allDataForDrawing.highlightPoints': {
+      handler() {
+        this.requestRender()
+      },
+      deep: true,
+    },
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
         this.requestRender()
@@ -459,7 +605,9 @@ export default defineComponent({
       const element = document.getElementById(this.id)
       if (!element) return
       await Plotly.newPlot(element, this.traces, withZoom(this.layout, this.nativeZoom), {
-        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+        modeBarButtonsToRemove: this.args.mode === 'bars'
+          ? ['toImage', 'sendDataToCloud', 'zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d']
+          : ['toImage', 'sendDataToCloud'],
         displaylogo: false,
         responsive: true,
       })
@@ -477,6 +625,21 @@ export default defineComponent({
       // Skip no-op writes (see ProteinSequenceView)
       if (identifier && this.selectionStore.$state[identifier] !== value) {
         this.selectionStore.updateSelection(identifier, value)
+      }
+    },
+    pickSwitch(value: string): void {
+      const identifier = this.args.switchIdentifier
+      // Skip no-op writes (see ProteinSequenceView)
+      if (identifier && this.selectionStore.$state[identifier] !== value) {
+        this.selectionStore.updateSelection(identifier, value)
+      }
+    },
+    clearIdentifiers(): void {
+      for (const identifier of this.args.clearIdentifiers || []) {
+        const value = this.selectionStore.$state[identifier]
+        if (value !== undefined && value !== null) {
+          this.selectionStore.updateSelection(identifier, null)
+        }
       }
     },
     onClick(eventData: { points: Array<{ curveNumber: number; pointIndex: number }> }): void {
@@ -522,14 +685,13 @@ export default defineComponent({
   align-items: center;
   gap: 4px;
   flex-wrap: nowrap;
-  overflow-x: auto;
   font-family: var(--vs-font);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .view-button {
-  height: 28px;
-  padding: 0 12px;
+  height: 24px;
+  padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--vs-text) 16%, transparent);
   border-radius: 999px;
   background: var(--vs-background);
