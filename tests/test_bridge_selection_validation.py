@@ -333,3 +333,29 @@ class TestComponentsWithoutValidatableData:
         )
 
         assert changed is False
+
+
+class TestUnfilteredComponent:
+    """A component nothing filters keeps a selection made in another component."""
+
+    def test_selection_missing_from_unfiltered_data_is_kept(self, peaks, state_manager):
+        # A chromatogram of the MS1 spectra beside a scan table of every
+        # spectrum: the scan picked in the table is not among its rows
+        component = FakeComponent(peaks, interactivity={"scan": "scan_id"})
+        state_manager.set_selection("scan", 9999)
+        state = state_manager.get_state_for_vue()
+
+        assert (
+            _validate_interactivity_selections(component, state_manager, state) is False
+        )
+        assert state_manager.get_selection("scan") == 9999
+
+    def test_empty_unfiltered_data_keeps_the_selection(self, peaks, state_manager):
+        component = FakeComponent(peaks.clear(), interactivity={"scan": "scan_id"})
+        state_manager.set_selection("scan", 3371)
+        state = state_manager.get_state_for_vue()
+
+        assert (
+            _validate_interactivity_selections(component, state_manager, state) is False
+        )
+        assert state_manager.get_selection("scan") == 3371
