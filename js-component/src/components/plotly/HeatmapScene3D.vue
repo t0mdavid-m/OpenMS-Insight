@@ -30,6 +30,63 @@ export function plotly3D(): PlotlyModule | null {
 // reaches the bottom of the z range, which starts at 0.
 const STEM_FLOOR = -1e12
 
+type Vec = { x: number; y: number; z: number }
+/** Where the camera looks from (around the centre, angles in radians), and the scene box's shape */
+interface SceneCamera {
+  azimuth: number
+  elevation: number
+  distance: number
+  /** Width and height of the scene box against its depth (y) */
+  width: number
+  height: number
+}
+const UP: Vec = { x: 0, y: 0, z: 1 }
+function cameraOf(eye: Vec, width: number, height: number): SceneCamera {
+  const distance = Math.hypot(eye.x, eye.y, eye.z) || 1
+  return {
+    azimuth: Math.atan2(eye.y, eye.x),
+    elevation: Math.asin(Math.max(-1, Math.min(1, eye.z / distance))),
+    distance,
+    width,
+    height,
+  }
+}
+function eyeOf(camera: SceneCamera): Vec {
+  const r = camera.distance * Math.cos(camera.elevation)
+  return {
+    x: r * Math.cos(camera.azimuth),
+    y: r * Math.sin(camera.azimuth),
+    z: camera.distance * Math.sin(camera.elevation),
+  }
+}
+/** The view the scene opens with: tilted, retention time along the long side */
+const TILTED_EYE: Vec = { x: -0.95, y: -1.6, z: 0.9 }
+const TILTED: SceneCamera = cameraOf(TILTED_EYE, 1.8, 0.7)
+/** Distance of the camera above a flat scene, so it fills the plot as the 2D map does */
+const FLAT_EYE = 0.62
+/** Length of the tilt between the map and the scene, in ms */
+const TILT_MS = 900
+const TILT_STEPS = 30
+
+const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+/** From one camera to the other: round the centre the short way, the box's shape along */
+function between(a: SceneCamera, b: SceneCamera, t: number): SceneCamera {
+  let turn = b.azimuth - a.azimuth
+  if (turn > Math.PI) turn -= 2 * Math.PI
+  if (turn < -Math.PI) turn += 2 * Math.PI
+  const lerp = (u: number, v: number) => u + (v - u) * t
+  return {
+    azimuth: a.azimuth + turn * t,
+    elevation: lerp(a.elevation, b.elevation),
+    distance: lerp(a.distance, b.distance),
+    width: lerp(a.width, b.width),
+    height: lerp(a.height, b.height),
+  }
+}
+function reducedMotion(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+}
+
 export interface ScenePoints {
   x: number[]
   y: number[]
@@ -64,12 +121,16 @@ export default defineComponent({
     theme: { type: Object as PropType<Theme | undefined>, default: undefined },
     /** Colour of the selected point; default: the text colour */
     highlightColor: { type: String, default: '' },
+    /** Tilt up from the 2D map when first drawn */
+    animate: { type: Boolean, default: false },
   },
   emits: ['pick', 'rendered'],
   data() {
     return {
       drawPending: false,
       plotted: false,
+      tilting: false,
+      renderAfterTilt: false,
     }
   },
   computed: {
@@ -204,8 +265,8 @@ export default defineComponent({
           zaxis: { title: { text: this.zLabel }, range: [0, this.maxZ] },
           // As wide as the map: retention time along the long side
           aspectmode: 'manual',
-          aspectratio: { x: 1.8, y: 1, z: 0.7 },
-          camera: { eye: { x: -0.95, y: -1.6, z: 0.9 } },
+          aspectratio: { x: TILTED.width, y: 1, z: TILTED.height },
+          camera: { eye: TILTED_EYE, up: UP },
           // A rotation of the user stays across new points and zooms
           uirevision: 'scene',
         },
@@ -245,6 +306,10 @@ export default defineComponent({
   methods: {
     /** One drawing per update, in a task of its own (see Plotly3D). */
     requestRender(): void {
+      if (this.tilting) {
+        this.renderAfterTilt = true
+        return
+      }
       if (this.drawPending) return
       this.drawPending = true
       setTimeout(() => {
@@ -256,10 +321,13 @@ export default defineComponent({
       const Plotly = await loadPlotly3D()
       const element = document.getElementById(this.plotId) as (HTMLElement & { on?: Function }) | null
       if (!element) return
+      const tiltUp = this.animate && !this.plotted && !reducedMotion()
+      const layout = { ...this.layout, width: element.clientWidth || undefined } as Record<string, unknown>
+      if (tiltUp) layout.scene = { ...(layout.scene as object), ...this.sceneLayout(this.flat()) }
       await Plotly.react(
         element,
         this.traces as Plotly.Data[],
-        { ...this.layout, width: element.clientWidth || undefined } as Partial<Plotly.Layout>,
+        layout as Partial<Plotly.Layout>,
         {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
           displaylogo: false,
@@ -275,6 +343,73 @@ export default defineComponent({
         })
       }
       this.$emit('rendered')
+      if (tiltUp) await this.tilt(this.flat(), TILTED)
+    },
+    /** Straight from above with the stems flat, as wide as the plot: the scene drawn as the 2D map */
+    flat(): SceneCamera {
+      const element = document.getElementById(this.plotId)
+      const ratio = element && this.height > 0 ? element.clientWidth / this.height : TILTED.width
+      const width = Math.min(4, Math.max(1, ratio))
+      // Seen from just short of straight above, from the low-y side: y runs up the screen as on the map
+      return {
+        azimuth: -Math.PI / 2,
+        elevation: (89.5 * Math.PI) / 180,
+        distance: FLAT_EYE * width,
+        width,
+        height: 0.01,
+      }
+    },
+    sceneLayout(camera: SceneCamera): Record<string, unknown> {
+      return {
+        camera: { eye: eyeOf(camera), up: UP, center: { x: 0, y: 0, z: 0 } },
+        aspectratio: { x: camera.width, y: 1, z: camera.height },
+      }
+    },
+    /** The camera the scene is seen with now, the user's rotation included */
+    currentCamera(): SceneCamera {
+      const element = document.getElementById(this.plotId) as unknown as {
+        layout?: { scene?: { camera?: { eye?: Vec }; aspectratio?: Vec } }
+      } | null
+      const scene = element?.layout?.scene
+      return cameraOf(
+        scene?.camera?.eye ?? TILTED_EYE,
+        scene?.aspectratio?.x ?? TILTED.width,
+        scene?.aspectratio?.z ?? TILTED.height,
+      )
+    },
+    /** Move the camera and the stems' height from one view to the other. */
+    async tilt(from: SceneCamera, to: SceneCamera): Promise<void> {
+      const element = document.getElementById(this.plotId)
+      if (!element || reducedMotion()) return
+      const Plotly = await loadPlotly3D()
+      this.tilting = true
+      try {
+        const start = performance.now()
+        let p = 0
+        for (;;) {
+          // By the clock, but in at least TILT_STEPS steps where drawing is slow
+          p = Math.min(1, (performance.now() - start) / TILT_MS, p + 1 / TILT_STEPS)
+          const camera = between(from, to, ease(p))
+          const scene = this.sceneLayout(camera)
+          await Plotly.relayout(element, {
+            'scene.camera': scene.camera,
+            'scene.aspectratio': scene.aspectratio,
+          } as unknown as Partial<Plotly.Layout>)
+          if (p >= 1) break
+          await new Promise((resolve) => requestAnimationFrame(resolve))
+        }
+      } finally {
+        this.tilting = false
+        if (this.renderAfterTilt) {
+          this.renderAfterTilt = false
+          this.requestRender()
+        }
+      }
+    },
+    /** Lay the scene flat onto the map before the map is shown again. */
+    async flatten(): Promise<void> {
+      if (!this.plotted) return
+      await this.tilt(this.currentCamera(), this.flat())
     },
   },
 })

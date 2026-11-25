@@ -10,27 +10,38 @@
       :settings="args.toolbarSettings"
       :selection="!!multiSelectEnabled && view === '2d'"
     />
-    <div v-show="view === '2d'" :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
-    <HeatmapScene3D
-      v-if="view === '3d'"
-      :plot-id="sceneId"
-      :points="scenePoints"
-      :highlight="sceneHighlight"
-      :color-stops="colorStops"
-      :cmin="colorRange[0]"
-      :cmax="colorRange[1]"
-      :x-range="sceneXRange"
-      :y-range="sceneYRange"
-      :x-label="args.xLabel || args.xColumn"
-      :y-label="args.yLabel || args.yColumn"
-      :z-label="args.zLabel || colorbarLabel"
-      :hover-texts="hoverTexts"
-      :title="args.title || ''"
-      :height="plotHeight"
-      :theme="theme"
-      @pick="selectRow"
-      @rendered="updateFrameHeight"
-    />
+    <div class="heatmap-views">
+      <!-- The map stays until the scene is drawn, which then tilts up from it -->
+      <div
+        v-show="view === '2d' || !sceneReady"
+        :id="id"
+        class="heatmap-container"
+        :style="{ minHeight: `${plotHeight}px` }"
+      ></div>
+      <HeatmapScene3D
+        v-if="view === '3d'"
+        ref="scene"
+        :class="{ 'scene-loading': !sceneReady }"
+        :plot-id="sceneId"
+        :points="scenePoints"
+        :highlight="sceneHighlight"
+        :color-stops="colorStops"
+        :cmin="colorRange[0]"
+        :cmax="colorRange[1]"
+        :x-range="sceneXRange"
+        :y-range="sceneYRange"
+        :x-label="args.xLabel || args.xColumn"
+        :y-label="args.yLabel || args.yColumn"
+        :z-label="args.zLabel || colorbarLabel"
+        :hover-texts="hoverTexts"
+        :title="args.title || ''"
+        :height="plotHeight"
+        :theme="theme"
+        :animate="tiltScene"
+        @pick="selectRow"
+        @rendered="sceneRendered"
+      />
+    </div>
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
   </div>
 </template>
@@ -48,7 +59,7 @@ import MeasureHint from './MeasureHint.vue'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
-import HeatmapScene3D, { plotly3D, type ScenePoints } from './HeatmapScene3D.vue'
+import HeatmapScene3D, { loadPlotly3D, plotly3D, type ScenePoints } from './HeatmapScene3D.vue'
 import { downloadTool as makeDownloadTool } from '@/utils/plotlyDownload'
 import { imageFormatOf } from '@/utils/imageExport'
 import { normalizeZoom } from '@/composables/useZoomState'
@@ -151,6 +162,10 @@ export default defineComponent({
   data() {
     return {
       isInitialized: false as boolean,
+      // Tilt the scene up from the map (not when the view opens in 3D)
+      tiltScene: false,
+      sceneReady: false,
+      switching: false,
       dragmode: 'zoom' as string,
       removingOutline: false,
       selectModifier: 'replace' as 'replace' | 'add' | 'remove',
@@ -219,7 +234,7 @@ export default defineComponent({
           ? 'the map seen from above, with box zoom and selection'
           : `the points shown as stems as high as their ${this.colorbarLabel.toLowerCase()}`,
         active: in3d,
-        run: () => this.setView(in3d ? '2d' : '3d'),
+        run: () => void this.setView(in3d ? '2d' : '3d'),
       }
     },
 
@@ -973,6 +988,7 @@ export default defineComponent({
 
     // Back on the map: draw it at its size, with what changed while it was hidden
     view(view: string) {
+      if (view === '2d') this.sceneReady = false
       if (view === '2d' && this.isInitialized) this.$nextTick(() => this.renderPlot())
       else this.$nextTick(() => this.updateFrameHeight())
     },
@@ -1015,6 +1031,8 @@ export default defineComponent({
       }
       this.setupHeatmapResizeObserver()
     })
+    // Load the 3D drawing early, so the switch to 3D does not wait for it
+    if (this.args.view3d) setTimeout(() => void loadPlotly3D(), 1500)
   },
 
   beforeUnmount() {
@@ -1034,8 +1052,27 @@ export default defineComponent({
   },
 
   methods: {
-    setView(view: '2d' | '3d'): void {
-      this.view = view
+    sceneRendered(): void {
+      this.sceneReady = true
+      this.updateFrameHeight()
+    },
+
+    /** Switch between the map and the scene, tilting from one to the other. */
+    async setView(view: '2d' | '3d'): Promise<void> {
+      if (view === this.view || this.switching) return
+      if (view === '3d') {
+        this.tiltScene = true
+        this.view = view
+        return
+      }
+      const scene = this.$refs.scene as { flatten?: () => Promise<void> } | undefined
+      this.switching = true
+      try {
+        await scene?.flatten?.()
+      } finally {
+        this.switching = false
+        this.view = view
+      }
     },
 
     /** Set the zoom of the map (both drawings), as a box zoom of the 2D map does. */
@@ -1471,6 +1508,18 @@ export default defineComponent({
 <style scoped>
 .heatmap-plot {
   position: relative;
+}
+.heatmap-views {
+  position: relative;
+}
+/* Drawn over the map, out of sight, until its first drawing is done */
+.scene-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .heatmap-container {
