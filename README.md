@@ -357,7 +357,7 @@ mirror(state_manager=state_manager, height=600)
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
 - Tick labels show absolute intensity on both sides — the bottom half is flipped only for layout, not for the displayed values
-- Marker traces are kept in addition to stick shapes so Plotly fires `plotly_click` events; the click handler picks the side via `curveNumber` and routes the row's interactivity column value to the shared selection
+- Hovering shows the peak nearest the mouse along x, as on LinePlot: above the axis a peak of the upper spectrum, below it one of the lower, with a dot on the peak top and a box with its x, its intensity (as a positive value) and its annotation. A click selects the peak the box shows, anywhere along its stick; the row's interactivity column value goes to the shared selection
 - In measure mode the two peaks of a measurement must be in the same half; a click in the other half starts a new measurement there
 - `set_top_dynamic_annotations(...)` / `set_bottom_dynamic_annotations(...)` allow another component (e.g. a `SequenceView`) to push fragment-ion annotations into one half without invalidating the cache
 
@@ -726,6 +726,8 @@ spectrum(key="spectrum", state_manager=state_manager)
 - `annotated`: the raw peaks, with the signal peaks of the selected mass highlighted and each charge state labelled `z=N`.
 - `ladder`: the masses with a sequence tag drawn as a ladder, set per render with `set_ladder(masses, sequence)`. Clicking a ladder mass shows its raw peaks.
 
+In every view, hovering shows the mass or peak nearest the mouse along x, as on LinePlot: a dot on its top and a box with its mass (or m/z), its intensity and the fragment ions marked there. A click selects the mass the box shows, anywhere along its stick.
+
 **Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. The **Fragments** button in the toolbar's Show group hides or shows them.
 
 ### SeriesPlot
@@ -898,6 +900,15 @@ table = Table(..., multi_select={"proteins": "accession"})
 picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
 picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
 ```
+
+### Hover read-out
+
+Every 2D plot shows its hover values the same way: a dot on the point and a small box beside it in the plot's theme colours, flipped to the left near the right edge.
+
+- **Stick spectra** (LinePlot, MirrorPlot, DeconvolvedSpectrum): the peak nearest the mouse along x, anywhere in the plot's height, and a click selects that peak anywhere along its stick. The sections of those components give the details.
+- **Point plots** (Heatmap, VolcanoPlot, PCAPlot, SeriesPlot lines, markers and bars): the point the mouse is on, with the plot's hover text (`hover_column`, `label_column`, the sample) and its x and y. Clicks select as before.
+
+SeriesPlot boxes keep their quartile read-out, and ClusteredHeatmap and Plot3D their own hover.
 
 ### Plot toolbar
 
