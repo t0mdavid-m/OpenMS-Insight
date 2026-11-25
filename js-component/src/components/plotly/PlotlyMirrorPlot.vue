@@ -24,6 +24,7 @@ import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
 import { useZoomState } from '@/composables/useZoomState'
+import { useXNavigation } from '@/composables/useXNavigation'
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
@@ -97,8 +98,9 @@ export default defineComponent({
     const labels = usePeakLabels(() => !!props.args.peakLabels)
     const pinZoom = usePinZoom(() => !!props.args.keepZoom)
     const zoom = useZoomState(() => props.args.zoomIdentifier)
+    const navigation = useXNavigation()
     const hover = usePeakHover()
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp, hover }
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp, hover, navigation }
   },
   data() {
     return {
@@ -253,15 +255,20 @@ export default defineComponent({
      * range when the user has zoomed/panned (set by onRelayout).
      */
     xRange(): number[] {
-      if (this.manualXRange) {
-        return this.manualXRange
-      }
+      return this.manualXRange ?? this.fullXRange ?? [0, 1]
+    },
+    /** Both sides at full extent, with 2% padding (the double-click view). */
+    fullXRange(): [number, number] | undefined {
       const xs: number[] = []
       if (this.topData) xs.push(...this.topData.x)
       if (this.bottomData) xs.push(...this.bottomData.x)
-      if (xs.length === 0) return [0, 1]
-      const minX = Math.min(...xs)
-      const maxX = Math.max(...xs)
+      if (xs.length === 0) return undefined
+      let minX = Infinity
+      let maxX = -Infinity
+      for (const x of xs) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+      }
       const padding = (maxX - minX) * 0.02
       return [minX - padding, maxX + padding]
     },
@@ -795,6 +802,19 @@ export default defineComponent({
       plotEl.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
         this.onRelayout(eventData as unknown as Record<string, unknown>)
       })
+      // The wheel zooms x only, Shift + wheel and the middle button pan x
+      this.navigation.bind(element, {
+        current: () => {
+          const range = (element as unknown as { _fullLayout?: { xaxis?: { range?: unknown[] } } })._fullLayout?.xaxis?.range
+          return range ? [Number(range[0]), Number(range[1])] : undefined
+        },
+        full: () => this.fullXRange,
+        apply: (range) => {
+          this.onRelayout(
+            range ? { 'xaxis.range[0]': range[0], 'xaxis.range[1]': range[1] } : { 'xaxis.autorange': true },
+          )
+        },
+      })
     },
 
     /**
@@ -1026,5 +1046,10 @@ export default defineComponent({
 
 .plot-container {
   width: 100%;
+}
+
+/* Middle-button pan (useXNavigation) */
+.plot-container :deep(.x-panning .nsewdrag) {
+  cursor: grabbing !important;
 }
 </style>

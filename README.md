@@ -356,6 +356,7 @@ mirror(state_manager=state_manager, height=600)
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
+- The mouse wheel zooms x around the mouse (y follows), Shift + wheel or a sideways wheel pans x, and so does dragging with the middle button, as on LinePlot; a double-click shows the full view
 - Tick labels show absolute intensity on both sides — the bottom half is flipped only for layout, not for the displayed values
 - Hovering shows the peak nearest the mouse along x, as on LinePlot: above the axis a peak of the upper spectrum, below it one of the lower, with a dot on the peak top and a box with its x, its intensity (as a positive value) and its annotation. A click selects the peak the box shows, anywhere along its stick; the row's interactivity column value goes to the shared selection
 - In measure mode the two peaks of a measurement must be in the same half; a click in the other half starts a new measurement there
@@ -729,6 +730,8 @@ spectrum(key="spectrum", state_manager=state_manager)
 In every view, hovering shows the mass or peak nearest the mouse along x, as on LinePlot: a dot on its top and a box with its mass (or m/z), its intensity and the fragment ions marked there. A click selects the mass the box shows, anywhere along its stick.
 
 **Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. The **Fragments** button in the toolbar's Show group hides or shows them.
+
+**Mouse.** The wheel zooms x around the mouse while y follows the peaks in view, Shift + wheel or a sideways wheel pans x, and so does dragging with the middle button, as on LinePlot. A double-click shows the full view.
 
 ### SeriesPlot
 
