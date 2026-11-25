@@ -223,3 +223,11 @@ def test_each_run_records_its_own_sent_hashes():
         bridge._record_sent("map", "h2")
         bridge._rerun()
     assert state[bridge._SENT_HASH_KEY]["map"] == "h1"
+
+
+def test_a_download_is_sent_although_vue_holds_the_rows():
+    # The table's rows are unchanged by a download request, so the payload has
+    # the hash Vue holds; the download must still reach it
+    assert bridge._asks_vue_to_act({"tableData": [], "_download": {"request_id": 1}})
+    assert bridge._asks_vue_to_act({"_navigate_to_page": 3})
+    assert not bridge._asks_vue_to_act({"tableData": [], "_pagination": {"page": 1}})

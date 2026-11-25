@@ -61,6 +61,20 @@ def flatten_nested(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns(columns) if columns else df
 
 
+def unique_headers(df: pl.DataFrame) -> pl.DataFrame:
+    """Rename columns whose names differ only in case: Excel refuses such a table."""
+    seen: set[str] = set()
+    renames = {}
+    for name in df.columns:
+        new, n = name, 2
+        while new.casefold() in seen:
+            new, n = f"{name} ({n})", n + 1
+        seen.add(new.casefold())
+        if new != name:
+            renames[name] = new
+    return df.rename(renames) if renames else df
+
+
 def _describe_filters(column_filters: Any) -> str:
     if not column_filters:
         return ""
@@ -132,7 +146,7 @@ def to_xlsx(df: pl.DataFrame, title: str | None, about: list[tuple[str, str]]) -
     does not run when the file is opened. Rows beyond what a sheet holds are
     left out (``about_rows`` says so).
     """
-    df = flatten_nested(df.head(EXCEL_MAX_ROWS - 1))
+    df = unique_headers(flatten_nested(df.head(EXCEL_MAX_ROWS - 1)))
     buffer = io.BytesIO()
     import xlsxwriter
 
