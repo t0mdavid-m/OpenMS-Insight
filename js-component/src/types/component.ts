@@ -23,6 +23,10 @@ export interface BaseComponentArgs {
   zoomIdentifier?: string
   /** Previous / next buttons for one filter, shown by PlotToolbar (core/stepper.py). */
   stepper?: StepperArgs
+  /** Tooltip of an info icon on the view, explaining it (the component's ``help``). */
+  help?: string
+  /** Settings in the plot toolbar's gear menu (core/settings.py). */
+  toolbarSettings?: import('@/utils/settings').SettingArgs[]
 }
 
 /**
@@ -155,6 +159,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  /** False leaves Ctrl+C / Cmd+C to the browser instead of copying the selected row */
+  copyRow?: boolean
   collapseColumns?: boolean
   /** Place in a chain of tables: Enter goes one level down, Backspace up */
   level?: number
@@ -485,6 +491,8 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   seriesNames?: Array<[string, string]>
   seriesColors?: Record<string, string>
   mode?: 'lines' | 'markers' | 'lines+markers' | 'bars' | 'box'
+  /** Scatter mode per series value drawn otherwise than mode */
+  seriesModes?: Record<string, 'lines' | 'markers' | 'lines+markers'>
   /** 'h': bars and boxes horizontal, the x column on the vertical axis */
   orientation?: 'v' | 'h'
   title?: string
@@ -496,6 +504,8 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   yRangeMode?: 'nonnegative' | 'tozero' | 'normal'
   /** Column whose text is shown on hover */
   hoverColumn?: string | null
+  /** Column whose value in the first shown row is added to the title */
+  subtitleColumn?: string | null
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
@@ -511,6 +521,12 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   topDefault?: number
   /** Pixels per category of a horizontal plot that grows with its bars */
   barHeight?: number
+  /** A second switch in the toolbar, writing its value to this identifier. */
+  switchIdentifier?: string
+  switchNames?: Array<[string, string]>
+  switchDefault?: string
+  /** Identifiers a "Clear selection" button sets to null. */
+  clearIdentifiers?: string[]
 }
 
 /**
