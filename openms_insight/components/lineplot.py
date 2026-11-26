@@ -22,6 +22,10 @@ from ..core.mz_window import (
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
+from ..core.relative_intensity import (
+    relative_intensity_args,
+    validate_relative_intensity,
+)
 from ..core.top_peak_labels import (
     top_peak_label_args,
     validate_show_top_peak_labels,
@@ -98,6 +102,7 @@ class LinePlot(BaseComponent):
         peak_labels: bool = True,
         image_format: str | None = None,
         keep_zoom: bool = False,
+        relative_intensity: bool = False,
         top_peak_labels: int = 10,
         show_top_peak_labels: bool = False,
         x_markers: dict[str, float] | list[dict[str, Any]] | None = None,
@@ -176,6 +181,11 @@ class LinePlot(BaseComponent):
                 gets new data, e.g. when another spectrum is selected; unpinned,
                 each new spectrum is shown in full. Double-click still resets
                 the zoom. Render-time only: not part of the cache.
+            relative_intensity: Start with the intensities shown as a
+                percentage of the highest peak of the spectrum (default
+                False). The "Relative" button in the toolbar switches between
+                relative and absolute intensities. Render-time only: not part
+                of the cache.
             top_peak_labels: How many of the most intense peaks in view the
                 "Label top peaks" button in the mode bar labels with their x
                 value (default 10, at most 200; 0 removes the button). The
@@ -240,6 +250,9 @@ class LinePlot(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/keep_zoom.py)
         self._keep_zoom = validate_keep_zoom(keep_zoom)
+
+        # Render-time option, kept out of the cache config (see core/relative_intensity.py)
+        self._relative_intensity = validate_relative_intensity(relative_intensity)
 
         # Render-time options, kept out of the cache config (see core/top_peak_labels.py)
         self._top_peak_labels = validate_top_peak_labels(top_peak_labels)
@@ -568,6 +581,7 @@ class LinePlot(BaseComponent):
         args.update(zoom_args(self._zoom_identifier))
         args.update(mz_window_args(self._window_identifier, self._window_tolerance))
         args.update(keep_zoom_args(self._keep_zoom))
+        args.update(relative_intensity_args(self._relative_intensity))
         args.update(
             top_peak_label_args(self._top_peak_labels, self._show_top_peak_labels)
         )
