@@ -638,9 +638,16 @@ def _validate_interactivity_selections(
         return False
 
     filter_groups = _get_validation_filter_groups(component)
-    if not any(filters for filters, _defaults in filter_groups) and not callable(
-        getattr(type(component), "_apply_validation_filters", None)
-    ):
+    # Restrictions beyond plain filters (a Table's range filters). Looked up on
+    # the class, so test doubles' auto-created attributes are ignored; a class
+    # that has the hook only for some of its instances says whether this one
+    # restricts its rows.
+    extra_filters = getattr(type(component), "_apply_validation_filters", None)
+    restricts = getattr(type(component), "_validation_restricts", None)
+    has_extra = callable(extra_filters) and (
+        not callable(restricts) or restricts(component)
+    )
+    if not any(filters for filters, _defaults in filter_groups) and not has_extra:
         # Nothing filters this component's rows, so they are the same in every
         # run: a selection missing from them was made in another component that
         # shows other rows (a scan table of every spectrum beside a chromatogram
@@ -706,9 +713,7 @@ def _validate_interactivity_selections(
 
     # Restrictions that are not plain equality filters (e.g. a Table's range
     # filters) hide rows just the same, so a selection outside them is invalid too.
-    # Looked up on the class, so test doubles' auto-created attributes are ignored.
-    extra_filters = getattr(type(component), "_apply_validation_filters", None)
-    if callable(extra_filters):
+    if has_extra:
         data = extra_filters(component, data, state)
 
     # Collect all checks to validate

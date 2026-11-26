@@ -1502,6 +1502,14 @@ class Table(BaseComponent):
             )
         return data
 
+    def _validation_restricts(self) -> bool:
+        """Whether ``_apply_validation_filters`` hides any rows: only with range filters.
+
+        A table without filters or range filters shows the same rows in every
+        run, so a selection it does not hold was made elsewhere and is kept.
+        """
+        return bool(self._range_filters)
+
     def _apply_validation_filters(
         self, data: pl.LazyFrame, state: dict[str, Any]
     ) -> pl.LazyFrame:
