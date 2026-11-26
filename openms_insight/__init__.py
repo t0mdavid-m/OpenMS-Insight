@@ -35,7 +35,7 @@ from .rendering.bridge import (
     get_component_annotations,
 )
 
-__version__ = "0.7.9"
+__version__ = "0.7.10"
 
 __all__ = [
     # Core
