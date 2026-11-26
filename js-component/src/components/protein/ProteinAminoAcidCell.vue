@@ -351,6 +351,7 @@ export default defineComponent({
           '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#fff',
           '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#000',
           '--amino-acid-font-size': `${this.fontSize}px`,
+          ...this.modificationColors,
           position: 'relative',
         }
       }
@@ -368,7 +369,21 @@ export default defineComponent({
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#fff',
         '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#000',
         '--amino-acid-font-size': `${this.fontSize}px`,
+        ...this.modificationColors,
         position: 'relative',
+      }
+    },
+    // The dotted area under a modified residue (or the residues a
+    // modification could sit on) and its mass label, by theme: a light area
+    // behind light text would hide the residues in the dark theme
+    modificationColors(): Record<string, string> {
+      const dark = this.theme?.base === 'dark'
+      return {
+        '--mod-area-bg': dark ? '#2e3157' : '#e5e5f7',
+        '--mod-area-dot': dark ? '#8a8fd6' : '#444cf7',
+        '--mod-area-dot-alt': dark ? '#5b5f99' : '#676a9c',
+        '--mod-mass-bg': dark ? '#2e3157' : 'white',
+        '--mod-mass-color': dark ? '#ffffff' : '#000000',
       }
     },
     aminoAcidCellClass(): Record<string, boolean> {
@@ -661,14 +676,15 @@ export default defineComponent({
   display: flex;
   align-items: center;
   justify-content: right;
-  background-image:  radial-gradient(#676a9c 0.5px, transparent 0.5px), radial-gradient(#444cf7 0.5px, #e5e5f7 0.5px);
+  background-image:  radial-gradient(var(--mod-area-dot-alt) 0.5px, transparent 0.5px), radial-gradient(var(--mod-area-dot) 0.5px, var(--mod-area-bg) 0.5px);
   background-size: 15px 15px;
   background-position: 0 0,10px 10px;
   background-repeat: repeat;
 }
 
 .mod-mass {
-  background-color: white;
+  background-color: var(--mod-mass-bg);
+  color: var(--mod-mass-color);
   display: inline-block;
   position: absolute;
   top: -15%;
