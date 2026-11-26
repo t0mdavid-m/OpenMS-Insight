@@ -1,4 +1,4 @@
-"""relative_intensity on LinePlot: a render-time option passed to Vue, not part of the cache."""
+"""relative_intensity on LinePlot and MirrorPlot: a render-time option passed to Vue, not part of the cache."""
 
 import json
 
@@ -62,3 +62,34 @@ def test_reconstructed_plot_starts_absolute(mock_streamlit, temp_cache_dir, spec
     _lineplot(spectra, temp_cache_dir, "rebuilt", relative_intensity=True)
     rebuilt = LinePlot(cache_id="rebuilt", cache_path=str(temp_cache_dir))
     assert rebuilt._get_component_args()["relativeIntensity"] is False
+
+
+def test_mirror_plot_relative_intensity_reaches_vue(mock_streamlit, temp_cache_dir):
+    from openms_insight import MirrorPlot
+
+    data = pl.LazyFrame(
+        {"scan": [1, 1], "mz": [100.0, 200.0], "intensity": [5.0, 10.0]}
+    )
+
+    def mirror(cache_id, **kwargs):
+        return MirrorPlot(
+            cache_id=cache_id,
+            data=data,
+            filters_top={"spectrum_top": "scan"},
+            filters_bottom={"spectrum_bottom": "scan"},
+            cache_path=str(temp_cache_dir),
+            x_column="mz",
+            y_column="intensity",
+            **kwargs,
+        )
+
+    assert mirror("mirror_abs")._get_component_args()["relativeIntensity"] is False
+    plot = mirror("mirror_rel", relative_intensity=True)
+    assert plot._get_component_args()["relativeIntensity"] is True
+    # Render-time only: a plot rebuilt from its cache takes the argument too
+    reloaded = MirrorPlot(
+        cache_id="mirror_abs", cache_path=str(temp_cache_dir), relative_intensity=True
+    )
+    assert reloaded._get_component_args()["relativeIntensity"] is True
+    with pytest.raises(ValueError):
+        mirror("mirror_bad", relative_intensity="yes")

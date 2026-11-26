@@ -32,7 +32,8 @@ import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
+import { relativeLabel, relativeValues } from '@/utils/relativeIntensity'
 import {
   currentWindow,
   windowOverlay,
@@ -111,6 +112,10 @@ export default defineComponent({
       usiCopied: null as boolean | null,
       usiTimer: 0,
       manualXRange: undefined as number[] | undefined,
+      // The Relative button shows each spectrum as % of its highest peak (relative_intensity)
+      relativeShown: !!this.args.relativeIntensity as boolean,
+      /** rawKey when the zoom was last reset for new data. */
+      shownKey: '' as string,
       textMeasureCanvas: null as HTMLCanvasElement | null,
       labelEditorPosition: null as { left: number; top: number } | null,
     }
@@ -161,6 +166,7 @@ export default defineComponent({
         ...this.measure.tools('click two peaks of the same spectrum (Esc cancels)'),
         ...this.labels.tools(),
         ...this.pinZoom.tools(),
+        ...this.relativeTools,
         ...this.windowTools,
         ...this.usiTools,
         downloadTool({
@@ -212,15 +218,50 @@ export default defineComponent({
         | Record<string, unknown>
         | undefined
     },
-    topData(): SideData | undefined {
+    /** The sides as sent, in absolute intensities. */
+    rawTop(): SideData | undefined {
       return this.extractSide('plotDataTop', 'topHighlightColumn', 'topAnnotationColumn')
     },
-    bottomData(): SideData | undefined {
+    rawBottom(): SideData | undefined {
       return this.extractSide(
         'plotDataBottom',
         'bottomHighlightColumn',
         'bottomAnnotationColumn',
       )
+    },
+    /** The sides as drawn: with the Relative switch on, each as % of its own highest peak. */
+    topData(): SideData | undefined {
+      return this.shownSide(this.rawTop)
+    },
+    bottomData(): SideData | undefined {
+      return this.shownSide(this.rawBottom)
+    },
+    /** Identity of the spectra sent, whichever way their intensities are shown. */
+    rawKey(): string {
+      return `${pointsKey(this.rawTop?.x, this.rawTop?.y)}|${pointsKey(this.rawBottom?.x, this.rawBottom?.y)}`
+    },
+    /** The y axis title: "Relative intensity (%)" while the Relative switch is on. */
+    yAxisLabel(): string | undefined {
+      return this.relativeShown ? relativeLabel(this.args.yLabel) : this.args.yLabel
+    },
+    /** The Relative switch: each spectrum's intensities as a percentage of its highest peak. */
+    relativeTools(): PlotTool[] {
+      return [
+        {
+          id: 'relative-intensity',
+          group: 'view',
+          icon: ICONS.percent,
+          label: 'Relative intensity',
+          short: 'Relative',
+          help: this.relativeShown
+            ? 'show the absolute intensities'
+            : 'show each spectrum as % of its highest peak',
+          active: this.relativeShown,
+          run: () => {
+            this.relativeShown = !this.relativeShown
+          },
+        },
+      ]
     },
     /**
      * Maximum positive y value within the visible x range across both sides.
@@ -302,26 +343,24 @@ export default defineComponent({
       this.manualXRange = incoming?.x
       this.render()
     },
+    // Data changed (e.g., new spectrum selected) — reset zoom so the new
+    // data is shown at full extent, unless the zoom is pinned. Matches
+    // PlotlyLineplot's plotData watcher. The Relative switch keeps the zoom.
     topData: {
       handler() {
-        // Data changed (e.g., new spectrum selected) — reset zoom so the new
-        // data is shown at full extent, unless the zoom is pinned. Matches
-        // PlotlyLineplot's plotData watcher.
-        this.measure.setDataKey(this.spectrumKey)
-        this.labels.setDataKey(this.spectrumKey)
-        this.resetZoomForData()
-        this.render()
+        this.dataShown()
       },
       deep: true,
     },
     bottomData: {
       handler() {
-        this.measure.setDataKey(this.spectrumKey)
-        this.labels.setDataKey(this.spectrumKey)
-        this.resetZoomForData()
-        this.render()
+        this.dataShown()
       },
       deep: true,
+    },
+    // relative_intensity changed from Python
+    'args.relativeIntensity'(on: boolean | undefined) {
+      this.relativeShown = !!on
     },
     // Measurements added or removed
     'measure.revision'() {
@@ -663,7 +702,7 @@ export default defineComponent({
           range: this.xRange,
         },
         yaxis: {
-          title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
+          title: this.yAxisLabel ? { text: this.yAxisLabel } : undefined,
           showgrid: true,
           gridcolor: this.theme?.secondaryBackgroundColor || '#f0f0f0',
           showline: true,
@@ -710,7 +749,7 @@ export default defineComponent({
           y: data?.y,
           extra: (i) => data?.annotations?.[i] || undefined,
           xName: this.args.xLabel || 'x',
-          yName: this.args.yLabel || 'y',
+          yName: this.yAxisLabel || 'y',
           sign: lower ? -1 : 1,
           group: lower ? 'bottom' : 'top',
         }
@@ -862,6 +901,24 @@ export default defineComponent({
      * New data is shown at full extent, unless the zoom is pinned or a zoom
      * came with it (a saved view opened).
      */
+    /** Each value as % of the side's highest peak while the Relative switch is on. */
+    shownSide(side: SideData | undefined): SideData | undefined {
+      if (!side || !this.relativeShown) return side
+      return { ...side, y: relativeValues(side.y) }
+    },
+
+    /** The drawn data changed: new spectra, or the same ones shown relative or absolute. */
+    dataShown(): void {
+      // Measurements and labels hold the y they were taken at, so a switch drops them too
+      this.measure.setDataKey(this.spectrumKey)
+      this.labels.setDataKey(this.spectrumKey)
+      if (this.rawKey !== this.shownKey) {
+        this.shownKey = this.rawKey
+        this.resetZoomForData()
+      }
+      this.render()
+    },
+
     resetZoomForData(): void {
       const incoming = this.zoom.incoming()
       if (incoming !== undefined) {

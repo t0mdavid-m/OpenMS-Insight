@@ -355,6 +355,7 @@ mirror(state_manager=state_manager, height=600)
 - `svg_filename`: File name (without extension) of the image download (default: `title`, then `mirror_plot`); the format is set as in [Image downloads](#image-downloads-image_format)
 - `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
 - `peak_labels`: Your own labels on peaks, on by default (see [Peak labels](#peak-labels-peak_labels))
+- `relative_intensity`: Start with each half shown as a percentage of its own highest peak (default `False`), so a theoretical spectrum and a measured one share one scale. The **Relative** button in the plot toolbar switches between relative and absolute intensities, the y axis title follows, and the zoom stays; measurements and your labels are dropped on a switch, as for new spectra. Render-time only, like `keep_zoom`
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)

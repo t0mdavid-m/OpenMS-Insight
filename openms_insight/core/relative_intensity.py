@@ -1,7 +1,8 @@
-"""The "Relative intensity" switch of LinePlot.
+"""The "Relative intensity" switch of LinePlot and MirrorPlot.
 
 A button in the plot's toolbar shows the intensities as a percentage of the
-spectrum's highest peak, and switches back to absolute values.
+spectrum's highest peak (in MirrorPlot, each half of its own), and switches
+back to absolute values.
 ``relative_intensity=True`` starts in relative mode. Like ``keep_zoom`` it is
 a render-time argument, never part of the cache configuration.
 """
