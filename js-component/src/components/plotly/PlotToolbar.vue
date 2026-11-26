@@ -146,6 +146,8 @@ import { useSelectionStore } from '@/stores/selection'
 import { stepperTools, type StepperArgs } from '@/utils/stepper'
 import { settingsTools, type SettingArgs } from '@/utils/settings'
 import ToolMenuSections from './ToolMenuSections.vue'
+import { isTypingTarget, plotKeyAction, relayoutFor } from '@/utils/plotKeys'
+import { plotly } from '@/plotly/current'
 import { EXIT_FULLSCREEN_ICON, FULLSCREEN_ICON, fullscreen, fullscreenAvailable, toggleFullscreen } from '@/utils/fullscreen'
 import HelpIcon from '@/components/common/HelpIcon.vue'
 import { useHelp } from '@/composables/useHelp'
@@ -243,6 +245,8 @@ export default defineComponent({
       resizeObserver: null as ResizeObserver | null,
       observedElement: null as HTMLElement | null,
       frame: 0,
+      /** Whether the last click was on the plot: keys then zoom and pan it. */
+      plotClicked: false,
     }
   },
   computed: {
@@ -398,6 +402,7 @@ export default defineComponent({
     },
     onPointerDown(event: Event): void {
       const target = event.target as Node
+      this.plotClicked = !!document.getElementById(this.plotId)?.contains(target)
       if (this.openTool) {
         const panel = this.$refs.toolMenu as HTMLElement | undefined
         const button = this.menuButton(this.openTool)
@@ -410,7 +415,10 @@ export default defineComponent({
       this.menuOpen = false
     },
     onKeyDown(event: KeyboardEvent): void {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape') {
+        this.navigate(event)
+        return
+      }
       if (this.openTool) {
         const button = this.menuButton(this.openTool)
         this.openTool = null
@@ -420,6 +428,22 @@ export default defineComponent({
         this.menuOpen = false
         ;(this.$refs.moreButton as HTMLElement | undefined)?.focus()
       }
+    },
+    /** Zoom, pan or reset the plot by key, once it was clicked or while the pointer is on it. */
+    navigate(event: KeyboardEvent): void {
+      if (event.defaultPrevented || isTypingTarget(event.target)) return
+      const action = plotKeyAction(event)
+      if (!action) return
+      const element = document.getElementById(this.plotId) as (HTMLElement & { _fullLayout?: object }) | null
+      if (!element?._fullLayout || !(this.plotClicked || element.matches(':hover'))) return
+      const update = relayoutFor(action, element._fullLayout as Record<string, unknown>)
+      if (!update) return
+      event.preventDefault()
+      // Reset as the Reset axes button does, to the component's own start view
+      const reset =
+        action.kind === 'reset' ? this.plotlyButtons.find((tool) => tool.id === 'plotly-zoom:reset') : undefined
+      if (reset) reset.run()
+      else void plotly().relayout(element, update)
     },
   },
 })
