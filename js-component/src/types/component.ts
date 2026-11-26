@@ -196,6 +196,7 @@ export interface LinePlotComponentArgs
   yColumn?: string // Column name for y-axis values
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
+  colorColumn?: string // Column name for a colour per highlighted peak
   height?: number // Component height in pixels
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
@@ -463,6 +464,7 @@ export interface MirrorPlotComponentArgs
   yColumn: string
   highlightColumn?: string
   annotationColumn?: string
+  colorColumn?: string
   xLabel?: string
   yLabel?: string
   interactivity?: InteractivityMapping
@@ -817,6 +819,7 @@ export interface PlotData {
   y_values: number[]
   highlight_mask?: boolean[]
   annotations?: string[]
+  colors?: (string | null)[]
   // Allow dynamic interactivity columns like interactivity_peak_id
   [key: string]: unknown[] | undefined
 }

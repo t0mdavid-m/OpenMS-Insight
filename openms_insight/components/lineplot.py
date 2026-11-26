@@ -90,6 +90,7 @@ class LinePlot(BaseComponent):
         y_label: str | None = None,
         highlight_column: str | None = None,
         annotation_column: str | None = None,
+        color_column: str | None = None,
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
         measure: bool = True,
@@ -140,6 +141,9 @@ class LinePlot(BaseComponent):
                               indicating which points to highlight
             annotation_column: Optional column name containing text annotations
                                to display on highlighted points
+            color_column: Optional column with a colour (CSS) per point; a
+                highlighted point with a colour is drawn, and its annotation
+                boxed, in that colour (the ion series of a fragment, say).
             styling: Style configuration dict with keys:
                 - highlightColor: Color for highlighted points (default: '#E4572E')
                 - selectedColor: Color for clicked/selected peak (default: '#F3A712')
@@ -222,6 +226,7 @@ class LinePlot(BaseComponent):
         self._y_label = y_label or y_column
         self._highlight_column = highlight_column
         self._annotation_column = annotation_column
+        self._color_column = color_column
         self._styling = styling or {}
         self._plot_config = config or {}
 
@@ -275,6 +280,7 @@ class LinePlot(BaseComponent):
             y_label=y_label,
             highlight_column=highlight_column,
             annotation_column=annotation_column,
+            color_column=color_column,
             styling=styling,
             config=config,
             stepper=stepper,
@@ -293,6 +299,7 @@ class LinePlot(BaseComponent):
             "y_column": self._y_column,
             "highlight_column": self._highlight_column,
             "annotation_column": self._annotation_column,
+            "color_column": self._color_column,
             "title": self._title,
             "x_label": self._x_label,
             "y_label": self._y_label,
@@ -306,6 +313,7 @@ class LinePlot(BaseComponent):
         self._y_column = config.get("y_column", "y")
         self._highlight_column = config.get("highlight_column")
         self._annotation_column = config.get("annotation_column")
+        self._color_column = config.get("color_column")
         self._title = config.get("title")
         self._x_label = config.get("x_label", self._x_column)
         self._y_label = config.get("y_label", self._y_column)
@@ -362,6 +370,12 @@ class LinePlot(BaseComponent):
                 f"Available columns: {column_names}"
             )
 
+        if self._color_column and self._color_column not in column_names:
+            raise ValueError(
+                f"color_column '{self._color_column}' not found in data. "
+                f"Available columns: {column_names}"
+            )
+
     def _preprocess(self) -> None:
         """
         Preprocess plot data.
@@ -385,6 +399,7 @@ class LinePlot(BaseComponent):
             "y_column": self._y_column,
             "highlight_column": self._highlight_column,
             "annotation_column": self._annotation_column,
+            "color_column": self._color_column,
         }
 
         # Store LazyFrame for streaming to disk (filter happens at render time)
@@ -420,6 +435,8 @@ class LinePlot(BaseComponent):
             columns_to_select.append(self._highlight_column)
         if self._annotation_column:
             columns_to_select.append(self._annotation_column)
+        if self._color_column and self._color_column not in columns_to_select:
+            columns_to_select.append(self._color_column)
         # Include columns needed for interactivity (e.g., peak_id)
         if self._interactivity:
             for col in self._interactivity.values():
@@ -555,6 +572,7 @@ class LinePlot(BaseComponent):
             "yColumn": self._y_column,
             "highlightColumn": self._highlight_column,
             "annotationColumn": self._annotation_column,
+            "colorColumn": self._color_column,
         }
 
         # Add any extra config options
