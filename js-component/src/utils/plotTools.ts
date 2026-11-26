@@ -108,6 +108,8 @@ export const ICONS = {
   /** Dashed vertical guides, as the x markers draw them. */
   markers: 'M5 3h2v4H5V3zm0 6h2v4H5V9zm0 6h2v4H5v-4zm0 6h2v-1H5v1zM11 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4zM17 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4z',
   previous: 'M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z',
+  /** An arrow turning back (Material "undo"), for the zoom before the last one. */
+  back: 'M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z',
   next: 'M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z',
   close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
   download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',

@@ -139,6 +139,8 @@
  * first in the View group, on a narrow toolbar too. Plotly's
  * navigation buttons (zoom, pan, select, reset) are read from the plot's mode
  * bar, which stays in the page but hidden, so they work exactly as before.
+ * After a zoom, pan or reset of a plot with axes, Back returns to the zoom
+ * before it (utils/zoomHistory.ts).
  */
 import { defineComponent, h, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
@@ -146,6 +148,8 @@ import { useSelectionStore } from '@/stores/selection'
 import { stepperTools, type StepperArgs } from '@/utils/stepper'
 import { settingsTools, type SettingArgs } from '@/utils/settings'
 import ToolMenuSections from './ToolMenuSections.vue'
+import { plotly } from '@/plotly/current'
+import { ZoomHistory, readView, relayoutFor, type View } from '@/utils/zoomHistory'
 import { EXIT_FULLSCREEN_ICON, FULLSCREEN_ICON, fullscreen, fullscreenAvailable, toggleFullscreen } from '@/utils/fullscreen'
 import HelpIcon from '@/components/common/HelpIcon.vue'
 import { useHelp } from '@/composables/useHelp'
@@ -182,6 +186,19 @@ const ToolIconSvg = defineComponent({
 
 /** Small chevron after the name of a tool that opens a menu. */
 const CARET = 'M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z'
+
+/** A div Plotly draws in: its event methods and drawn layout. */
+type PlotElement = HTMLElement & {
+  on?: (event: string, handler: (data: unknown) => void) => void
+  _ev?: { listeners?: (event: string) => unknown[] }
+  _fullLayout?: unknown
+}
+
+/** Whether `handler` still listens to the plot's relayouts (Plotly.purge removes every listener). */
+function listening(element: PlotElement, handler: unknown): boolean {
+  const listeners = element._ev?.listeners?.('plotly_relayout')
+  return Array.isArray(listeners) && listeners.includes(handler)
+}
 
 interface Group {
   name: ToolGroup
@@ -229,6 +246,9 @@ export default defineComponent({
       helpText: useHelp(),
       ICONS,
       CARET,
+      zoomHistory: new ZoomHistory(),
+      /** The plot element whose relayouts the history follows. */
+      historyElement: null as HTMLElement | null,
     }
   },
   data() {
@@ -243,6 +263,8 @@ export default defineComponent({
       resizeObserver: null as ResizeObserver | null,
       observedElement: null as HTMLElement | null,
       frame: 0,
+      /** Views Back can return to (the history itself is not reactive). */
+      historySize: 0,
     }
   },
   computed: {
@@ -278,8 +300,22 @@ export default defineComponent({
     allTools(): PlotTool[] {
       return [...this.stepperTools, ...this.tools, ...this.settingsTools, ...this.fullscreenTools]
     },
+    /** Back, while the plot has a zoom to return to. */
+    historyTools(): PlotTool[] {
+      if (!this.historySize) return []
+      return [
+        {
+          id: 'zoom-back',
+          group: 'view',
+          icon: ICONS.back,
+          label: 'Back',
+          help: `return to the zoom before the last one (${this.historySize} step${this.historySize === 1 ? '' : 's'} back)`,
+          run: () => this.zoomBack(),
+        },
+      ]
+    },
     groups(): Group[] {
-      const all: PlotTool[] = [...this.plotlyButtons, ...this.allTools]
+      const all: PlotTool[] = [...this.plotlyButtons, ...this.historyTools, ...this.allTools]
       return GROUP_ORDER.map((name) => ({
         name,
         label: GROUP_LABELS[name],
@@ -294,7 +330,7 @@ export default defineComponent({
     pinned(): PlotTool[] {
       const keep = this.plotlyButtons.filter((tool) => tool.keep)
       const on = this.tools.filter((tool) => tool.keep || tool.active || (tool.count ?? 0) > 0)
-      return [...this.stepperTools, ...on, ...keep]
+      return [...this.stepperTools, ...on, ...this.historyTools, ...keep]
     },
     cssCustomProperties(): Record<string, string> {
       const theme = this.streamlitDataStore.theme
@@ -320,6 +356,8 @@ export default defineComponent({
     this.resizeObserver = new ResizeObserver(() => this.fit())
     this.resizeObserver.observe(this.$refs.root as HTMLElement)
     document.addEventListener('pointerdown', this.onPointerDown, true)
+    document.addEventListener('pointerdown', this.onPlotInput, true)
+    document.addEventListener('wheel', this.onPlotInput, { capture: true, passive: true })
     document.addEventListener('keydown', this.onKeyDown)
   },
   beforeUnmount() {
@@ -327,6 +365,8 @@ export default defineComponent({
     this.resizeObserver?.disconnect()
     cancelAnimationFrame(this.frame)
     document.removeEventListener('pointerdown', this.onPointerDown, true)
+    document.removeEventListener('pointerdown', this.onPlotInput, true)
+    document.removeEventListener('wheel', this.onPlotInput, true)
     document.removeEventListener('keydown', this.onKeyDown)
   },
   methods: {
@@ -352,6 +392,7 @@ export default defineComponent({
       })
     },
     readPlotlyButtons(): void {
+      this.followZoom()
       const next = plotlyTools(document.getElementById(this.plotId)).filter(
         (tool) => this.selection || !SELECTION_TOOLS.includes(tool.id),
       )
@@ -359,6 +400,50 @@ export default defineComponent({
         next.length === this.plotlyButtons.length &&
         next.every((tool, i) => tool.id === this.plotlyButtons[i].id && tool.active === this.plotlyButtons[i].active)
       if (!same) this.plotlyButtons = next
+    },
+    /**
+     * Keep the plot's zooms for Back, once Plotly has drawn it. Plotly.purge
+     * (a component drawing its plot anew) drops every listener, so this runs
+     * on each change of the plot's DOM and before each pointer or wheel event
+     * on it, and listens again when the listener is gone; a new plot element
+     * starts a new history.
+     */
+    followZoom(): void {
+      const element = document.getElementById(this.plotId) as PlotElement | null
+      if (!element || typeof element.on !== 'function') return
+      if (element === this.historyElement && listening(element, this.onRelayout)) return
+      if (element !== this.historyElement) {
+        this.zoomHistory.clear()
+        this.historySize = 0
+      }
+      this.historyElement = element
+      this.zoomHistory.reset(this.plotView())
+      element.on('plotly_relayout', this.onRelayout)
+    },
+    plotView(): View {
+      const element = this.historyElement as PlotElement | null
+      return readView(element?._fullLayout as Record<string, unknown> | undefined)
+    },
+    onRelayout(event: unknown): void {
+      this.zoomHistory.observe(event as Record<string, unknown>, this.plotView(), Date.now())
+      this.historySize = this.zoomHistory.size
+    },
+    /** A pointer or wheel event about to reach the plot: make sure its zoom will be kept. */
+    onPlotInput(event: Event): void {
+      const element = document.getElementById(this.plotId)
+      if (element && event.target instanceof Node && element.contains(event.target)) this.followZoom()
+    },
+    /** Back: show the zoom before the last one, as a mouse zoom or double-click would. */
+    zoomBack(): void {
+      const element = document.getElementById(this.plotId)
+      const view = this.zoomHistory.back()
+      this.historySize = this.zoomHistory.size
+      if (!view) return
+      if (!element) {
+        this.zoomHistory.cancelRestore()
+        return
+      }
+      void plotly().relayout(element, relayoutFor(view))
     },
     /** Collapse when the groups need more width than the panel has. */
     fit(): void {
