@@ -52,6 +52,30 @@ export interface SequenceData {
   neutral_losses?: boolean
   /** Whether to enable proton loss/addition matching by default */
   proton_loss_addition?: boolean
+  /** What the sequence is: 'peptide' (default) or 'nucleic_acid' */
+  molecule?: string
+  /** Ion types of the molecule; absent for peptides sent by older versions */
+  ion_types?: IonTypeInfo[]
+  /** +1 for positive ions (peptides), -1 for negative ions (nucleic acids) */
+  charge_sign?: number
+  /** Labels of the two termini, e.g. ['N', 'C'] or ["5'", "3'"] */
+  terminals?: string[]
+  /** Fragment masses of any further ion type (fragment_masses_w, fragment_masses_a-B, ...) */
+  [key: `fragment_masses_${string}`]: number[][]
+}
+
+/**
+ * One ion type a sequence can be fragmented into.
+ */
+export interface IonTypeInfo {
+  /** Ion type name, e.g. 'b', 'y', 'a-B', 'w' */
+  name: string
+  /** Grid marker it is drawn with: one of a, b, c, x, y, z */
+  slot: string
+  /** Whether it holds the start of the sequence (N or 5' terminus) */
+  prefix: boolean
+  /** Whether it is matched by default */
+  selected: boolean
 }
 
 /**
@@ -96,6 +120,8 @@ export interface FragmentTableRow {
   Name: string
   /** Ion type with extra info (e.g., 'b', 'y-H2O') */
   IonType: string
+  /** Ion type alone (e.g., 'b', 'a-B'); absent for search engine annotations */
+  IonKind?: string
   /** Ion number (position in sequence) */
   IonNumber: number
   /** Charge state of matched fragment (only for non-deconvolved data) */

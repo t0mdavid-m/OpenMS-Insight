@@ -127,7 +127,7 @@
           </div>
 
           <!-- N-terminal marker -->
-          <div v-if="aaIndex === 0" class="d-flex justify-center align-center terminal-cell">N</div>
+          <div v-if="aaIndex === 0" class="d-flex justify-center align-center terminal-cell">{{ terminals[0] }}</div>
 
           <!-- Amino acid cell -->
           <AminoAcidCell
@@ -155,7 +155,7 @@
             v-if="aaIndex === sequence.length - 1"
             class="d-flex justify-center align-center terminal-cell"
           >
-            C
+            {{ terminals[1] }}
           </div>
         </template>
       </div>
@@ -268,6 +268,10 @@ export default defineComponent({
     }
   },
   computed: {
+    terminals(): string[] {
+      const t = this.sequenceData?.terminals
+      return t && t.length === 2 ? t : ['N', 'C']
+    },
     /** Element saved by the image download: the sequence grid */
     gridId(): string {
       return `sequence-view-grid-${this.index}`
@@ -392,6 +396,7 @@ export default defineComponent({
 
         // Initialize settings from Python defaults ONLY on first load.
         // Once initialized, user adjustments persist across filter changes.
+        this.applyIonTypes()
         if (!this.settingsInitialized) {
           if (this.sequenceData?.fragment_tolerance !== undefined) {
             this.fragmentMassTolerance = this.sequenceData.fragment_tolerance
@@ -498,6 +503,34 @@ export default defineComponent({
         obj.extraTypes = []
       }
     },
+    /**
+     * Take the ion types the data names (a nucleic acid has a-B/a/b/c/d/w/x/y/z).
+     * Kept while the names stay the same, so a user's choice survives a new
+     * sequence of the same kind.
+     */
+    applyIonTypes(): void {
+      const types = this.sequenceData?.ion_types
+      if (!types || types.length === 0) return
+      const names = types.map((t) => t.name)
+      const current = this.ionTypes.map((t) => t.text)
+      if (names.length === current.length && names.every((n, i) => n === current[i])) return
+      this.ionTypes = types.map((t) => ({ text: t.name, selected: !!t.selected }))
+    },
+    /** Whether an ion type holds the start of the sequence (a/b/c, or 5' ions). */
+    isPrefixIon(ionType: string): boolean {
+      const info = this.sequenceData?.ion_types?.find((t) => t.name === ionType)
+      if (info) return info.prefix
+      return ['a', 'b', 'c'].includes(ionType)
+    },
+    /** The grid marker (a/b/c/x/y/z) an ion type is drawn with. */
+    ionSlot(ionType: string): string {
+      const info = this.sequenceData?.ion_types?.find((t) => t.name === ionType)
+      return info?.slot ?? ionType
+    },
+    /** Ion name: 'b5'; a base loss is written after the number, 'a3-B'. */
+    ionLabel(ionType: string, ionNumber: number): string {
+      return ionType.endsWith('-B') ? `${ionType.slice(0, -2)}${ionNumber}-B` : `${ionType}${ionNumber}`
+    },
     getFragmentMasses(ionType: string): number[][] {
       if (!this.sequenceData) return []
       const key = `fragment_masses_${ionType}` as keyof SequenceData
@@ -515,12 +548,12 @@ export default defineComponent({
     /** Mark amino acid position with matched ion */
     markAminoAcidPosition(ionType: string, ionNumber: number, typeName: string): void {
       const sequenceLength = this.sequence.length
-      const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
+      const isPrefixIon = this.isPrefixIon(ionType)
       const aaIndex = isPrefixIon ? ionNumber - 1 : sequenceLength - ionNumber
 
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {
         const aaObj = this.sequenceObjects[aaIndex]
-        const ionKey = `${ionType}Ion` as keyof SequenceObject
+        const ionKey = `${this.ionSlot(ionType)}Ion` as keyof SequenceObject
         ;(aaObj[ionKey] as boolean) = true
 
         if (typeName) {
@@ -607,6 +640,9 @@ export default defineComponent({
 
       // Determine charge states to check
       const chargeStates = this.deconvolved ? [1] : Array.from({ length: this.maxCharge }, (_, i) => i + 1)
+      // Nucleic acids are measured as negative ions: m/z = (M - z * proton) / z
+      const chargeSign = this.sequenceData?.charge_sign ?? 1
+      const chargeSuffix = chargeSign < 0 ? '⁻' : '⁺'
 
       // Process each selected ion type
       for (const ionType of this.ionTypes.filter((t) => t.selected)) {
@@ -623,7 +659,7 @@ export default defineComponent({
                 // Calculate theoretical m/z (or use neutral mass for deconvolved)
                 const theoreticalValue = this.deconvolved
                   ? adjustedNeutralMass
-                  : (adjustedNeutralMass + charge * PROTON_MASS) / charge
+                  : (adjustedNeutralMass + chargeSign * charge * PROTON_MASS) / charge
 
                 // Match against observed masses/m/z values (track index for PeakId lookup)
                 for (let obsIdx = 0; obsIdx < this.observedMasses.length; obsIdx++) {
@@ -635,14 +671,15 @@ export default defineComponent({
 
                     // Found a match - report all matches (multiple charge states)
                     // Include neutral loss/addition in name (e.g., "y5-H2O²⁺")
-                    const baseIonName = `${ionType.text}${theoIndex + 1}${typeName}`
+                    const baseIonName = `${this.ionLabel(ionType.text, theoIndex + 1)}${typeName}`
                     const ionName = this.deconvolved
                       ? baseIonName
-                      : `${baseIonName}${toSuperscript(charge)}⁺`
+                      : `${baseIonName}${toSuperscript(charge)}${chargeSuffix}`
 
                     const fragmentRow: FragmentTableRow = {
                       Name: ionName,
                       IonType: `${ionType.text}${typeName}`,
+                      IonKind: ionType.text,
                       IonNumber: theoIndex + 1,
                       TheoreticalMass: theoreticalValue.toFixed(3),
                       ObservedMass: observedValue,
@@ -699,8 +736,8 @@ export default defineComponent({
         if (row.PeakId !== undefined) {
           peakIds.push(row.PeakId)
           // Color based on ion type (a/b/c = red-ish, x/y/z = blue-ish)
-          const ionType = row.IonType.charAt(0).toLowerCase()
-          const color = ['a', 'b', 'c'].includes(ionType) ? '#E4572E' : '#1f77b4'
+          const ionType = row.IonKind ?? row.IonType.charAt(0).toLowerCase()
+          const color = this.isPrefixIon(ionType) ? '#E4572E' : '#1f77b4'
           highlightColors.push(color)
           annotations.push(row.Name)
         }
@@ -735,28 +772,27 @@ export default defineComponent({
       this.selectedAAIndex = aaIndex
 
       // Find corresponding fragment in table
-      const aaObj = this.sequenceObjects[aaIndex]
-      let ionName = ''
-
-      if (aaObj.bIon) ionName = `b${aaIndex + 1}`
-      else if (aaObj.aIon) ionName = `a${aaIndex + 1}`
-      else if (aaObj.cIon) ionName = `c${aaIndex + 1}`
-      else if (aaObj.yIon) ionName = `y${this.sequence.length - aaIndex}`
-      else if (aaObj.xIon) ionName = `x${this.sequence.length - aaIndex}`
-      else if (aaObj.zIon) ionName = `z${this.sequence.length - aaIndex}`
-
-      if (ionName) {
-        const rowIndex = this.fragmentTableData.findIndex((row) => row.Name === ionName)
+      // The first fragment row that ends (prefix ions) or starts (suffix
+      // ions) at this residue, prefix ions first
+      const ordered = [...this.ionTypes.map((t) => t.text)].sort(
+        (a, b) => Number(this.isPrefixIon(b)) - Number(this.isPrefixIon(a))
+      )
+      for (const ionType of ordered) {
+        const ionNumber = this.isPrefixIon(ionType) ? aaIndex + 1 : this.sequence.length - aaIndex
+        const rowIndex = this.fragmentTableData.findIndex(
+          (row) => (row.IonKind ?? row.IonType.charAt(0)) === ionType && row.IonNumber === ionNumber
+        )
         if (rowIndex >= 0) {
           this.selectedFragmentRowIndex = rowIndex
+          break
         }
       }
     },
     onFragmentTableRowClick(_event: Event, { item }: { item: FragmentTableRow }): void {
       // Find the amino acid index from the fragment
-      const ionType = item.IonType.charAt(0)
+      const ionType = item.IonKind ?? item.IonType.charAt(0)
       const ionNumber = item.IonNumber
-      const isPrefixIon = ['a', 'b', 'c'].includes(ionType)
+      const isPrefixIon = this.isPrefixIon(ionType)
 
       const aaIndex = isPrefixIon ? ionNumber - 1 : this.sequence.length - ionNumber
       if (aaIndex >= 0 && aaIndex < this.sequenceObjects.length) {

@@ -745,6 +745,27 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
 }
 
 /**
+ * SequenceCoverage component arguments.
+ */
+export interface SequenceCoverageComponentArgs extends BaseComponentArgs, ImageExportArgs {
+  componentType: 'SequenceCoverage'
+  title?: string | null
+  /** Positions per block */
+  blockSize?: number
+  /** What a count counts, titling the colour legend */
+  countLabel?: string
+  /** (upper bound or null for no bound, label, colour) per count bin */
+  countBins?: [number | null, string, string][]
+  emptyColor?: string
+  modificationColor?: string
+  notes?: string[]
+  emptyMessage?: string
+  /** Identifier -> column a click on a match sets */
+  interactivity?: Record<string, string>
+  hasCounts?: boolean
+}
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -761,6 +782,7 @@ export type ComponentArgs =
   | DeconvolvedSpectrumComponentArgs
   | ProteinSequenceViewComponentArgs
   | ProteinStructureViewComponentArgs
+  | SequenceCoverageComponentArgs
 
 /**
  * Component layout entry.

@@ -58,6 +58,7 @@ const PlotlyDeconvolvedSpectrum = defineAsyncComponent(() => import('./component
 const SequenceView = defineAsyncComponent(() => import('./components/sequence/SequenceView.vue'))
 const ProteinSequenceView = defineAsyncComponent(() => import('./components/protein/ProteinSequenceView.vue'))
 const ProteinStructureView = defineAsyncComponent(() => import('./components/protein/ProteinStructureView.vue'))
+const SequenceCoverage = defineAsyncComponent(() => import('./components/sequence-coverage/SequenceCoverage.vue'))
 
 export default defineComponent({
   name: 'App',
@@ -76,6 +77,7 @@ export default defineComponent({
     SequenceView,
     ProteinSequenceView,
     ProteinStructureView,
+    SequenceCoverage,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -89,7 +91,7 @@ export default defineComponent({
       () => {
         const c = streamlitDataStore.args?.components
         const a = c && c.length > 0 && c[0].length > 0 ? c[0][0].componentArgs : undefined
-        const inCard = ['SequenceView', 'ProteinSequenceView'].includes(String(a?.componentType))
+        const inCard = ['SequenceView', 'ProteinSequenceView', 'SequenceCoverage'].includes(String(a?.componentType))
         return a?.help && !inCard ? String(a.help) : ''
       },
       (text) => { helpState.text = text },
@@ -327,7 +329,7 @@ export default defineComponent({
      * Views drawn on a card show their help icon in the card's corner.
      */
     helpInCard(): boolean {
-      return ['SequenceView', 'ProteinSequenceView'].includes(String(this.componentArgs?.componentType))
+      return ['SequenceView', 'ProteinSequenceView', 'SequenceCoverage'].includes(String(this.componentArgs?.componentType))
     },
     /**
      * Get the Vue component based on componentType.
@@ -362,6 +364,8 @@ export default defineComponent({
           return ProteinSequenceView
         case 'ProteinStructureView':
           return ProteinStructureView
+        case 'SequenceCoverage':
+          return SequenceCoverage
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null

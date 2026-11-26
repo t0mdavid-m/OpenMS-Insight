@@ -21,6 +21,7 @@ from openms_insight import (
     PeakMap,
     Plot3D,
     ProteinSequenceView,
+    SequenceCoverage,
     SeriesPlot,
     Table,
     VolcanoPlot,
@@ -102,6 +103,18 @@ COMPONENT_CASES = [
         ProteinSequenceView,
         "sample_protein_sequence_data",
         {"filters": {"protein": "hit_index"}},
+        {},
+    ),
+    (
+        SequenceCoverage,
+        "sample_coverage_data",
+        {
+            "reference": "AUGGCUACGU",
+            "count_column": "psms",
+            "track_column": "condition",
+            "filters": {"accession": "accession"},
+            "interactivity": {"oligo": "oligo_id"},
+        },
         {},
     ),
 ]

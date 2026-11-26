@@ -299,6 +299,200 @@ def get_theoretical_mass(sequence_str: str) -> float:
         return 0.0
 
 
+# Molecules the view draws. Peptides use pyOpenMS AASequence and
+# TheoreticalSpectrumGenerator; nucleic acids (RNA/DNA oligonucleotides, with
+# modified nucleotides such as m1A) NASequence and NucleicAcidSpectrumGenerator.
+MOLECULES = ("peptide", "nucleic_acid")
+
+PEPTIDE_ION_TYPES = ("a", "b", "c", "x", "y", "z")
+NUCLEIC_ACID_ION_TYPES = ("a-B", "a", "b", "c", "d", "w", "x", "y", "z")
+_NUCLEIC_ACID_PREFIX_IONS = ("a-B", "a", "b", "c", "d")
+
+# Marker of the sequence grid each ion type is drawn with: the grid has three
+# markers per side (a/b/c on the prefix, x/y/z on the suffix side).
+_NUCLEIC_ACID_SLOTS = {
+    "a-B": "a",
+    "a": "a",
+    "b": "b",
+    "c": "c",
+    "d": "c",
+    "w": "x",
+    "x": "x",
+    "y": "y",
+    "z": "z",
+}
+
+# Ion types matched by default: those NucleicAcidSearchEngine scores with.
+DEFAULT_NUCLEIC_ACID_ION_TYPES = ["a-B", "c", "w", "y"]
+
+
+def _check_molecule(molecule: str) -> str:
+    if molecule not in MOLECULES:
+        raise ValueError(f"molecule must be one of {MOLECULES}, not {molecule!r}")
+    return molecule
+
+
+def ion_types_for(molecule: str = "peptide") -> tuple[str, ...]:
+    """Ion types a molecule fragments into."""
+    _check_molecule(molecule)
+    return NUCLEIC_ACID_ION_TYPES if molecule == "nucleic_acid" else PEPTIDE_ION_TYPES
+
+
+def is_prefix_ion(ion_type: str, molecule: str = "peptide") -> bool:
+    """Whether an ion type holds the 5' (N-terminal) end of the sequence."""
+    if molecule == "nucleic_acid":
+        return ion_type in _NUCLEIC_ACID_PREFIX_IONS
+    return ion_type in _PREFIX_IONS
+
+
+def ion_label(ion_type: str, ion_number: int) -> str:
+    """Name of one ion: ``b5``, ``y7``, or ``a3-B`` for a base loss."""
+    base, sep, loss = ion_type.partition("-")
+    return f"{base}{ion_number}{sep}{loss}"
+
+
+def parse_nucleic_acid_sequence(
+    sequence_str: str,
+) -> tuple[list[str], list[float | None]]:
+    """Nucleotide codes of an oligonucleotide and the mass of each modification.
+
+    ``'AU[m1A]G'`` gives ``(['A', 'U', 'm1A', 'G'], [None, None, 14.02, None])``:
+    a modified nucleotide keeps its code, and its mass difference from the
+    unmodified nucleotide is the modification.
+    """
+    try:
+        from pyopenms import NASequence
+
+        seq = NASequence.fromString(sequence_str)
+        origin_masses: dict[str, float] = {}
+        residues: list[str] = []
+        modifications: list[float | None] = []
+        for i in range(seq.size()):
+            nucleotide = seq.get(i)
+            residues.append(nucleotide.getCode())
+            if not nucleotide.isModified():
+                modifications.append(None)
+                continue
+            origin = nucleotide.getOrigin()
+            if origin not in origin_masses:
+                try:
+                    origin_masses[origin] = (
+                        NASequence.fromString(origin).get(0).getMonoMass()
+                    )
+                except Exception:
+                    origin_masses[origin] = nucleotide.getMonoMass()
+            modifications.append(
+                round(nucleotide.getMonoMass() - origin_masses[origin], 2)
+            )
+        return residues, modifications
+    except ImportError:
+        residues = []
+        i = 0
+        while i < len(sequence_str):
+            if sequence_str[i] == "[":
+                end = sequence_str.find("]", i)
+                end = end if end > i else len(sequence_str) - 1
+                residues.append(sequence_str[i + 1 : end])
+                i = end + 1
+            else:
+                residues.append(sequence_str[i])
+                i += 1
+        return residues, [None] * len(residues)
+    except Exception:
+        return list(sequence_str), [None] * len(sequence_str)
+
+
+def calculate_nucleic_acid_fragment_masses(
+    sequence_str: str,
+) -> dict[str, list[list[float]]]:
+    """Neutral fragment masses of an oligonucleotide, per ion type and position.
+
+    Uses pyOpenMS NucleicAcidSpectrumGenerator for every ion type in
+    ``NUCLEIC_ACID_ION_TYPES``; position ``i`` of ``fragment_masses_<type>``
+    holds the fragment of ``i + 1`` nucleotides.
+    """
+    empty = {f"fragment_masses_{ion}": [] for ion in NUCLEIC_ACID_ION_TYPES}
+    try:
+        from pyopenms import NASequence, NucleicAcidSpectrumGenerator
+    except ImportError:
+        return empty
+    try:
+        seq = NASequence.fromString(sequence_str)
+        n = seq.size()
+        generator = NucleicAcidSpectrumGenerator()
+        params = generator.getParameters()
+        for ion in NUCLEIC_ACID_ION_TYPES:
+            params.setValue(f"add_{ion}_ions", "true")
+        params.setValue("add_first_prefix_ion", "true")
+        params.setValue("add_metainfo", "true")
+        generator.setParameters(params)
+        # Charge -1: the m/z of each peak plus a proton is its neutral mass
+        spectrum = generator.getSpectrum(seq, -1, -1)
+
+        names: list[str] = []
+        for array in spectrum.getStringDataArrays():
+            if array.getName() == "IonNames":
+                names = [
+                    name.decode("utf-8") if isinstance(name, bytes) else name
+                    for name in array
+                ]
+                break
+
+        result = {f"fragment_masses_{ion}": [[] for _ in range(n)] for ion in NUCLEIC_ACID_ION_TYPES}
+        for i in range(spectrum.size()):
+            name = names[i] if i < len(names) else ""
+            if not name:
+                continue
+            letter = name[0]
+            digits = ""
+            for c in name[1:]:
+                if not c.isdigit():
+                    break
+                digits += c
+            if not digits:
+                continue
+            rest = name[1 + len(digits) :]
+            ion_type = f"{letter}-B" if rest.startswith("-B") else letter
+            key = f"fragment_masses_{ion_type}"
+            number = int(digits)
+            if key in result and 1 <= number <= n:
+                result[key][number - 1].append(spectrum[i].getMZ() + PROTON_MASS)
+        return result
+    except Exception as e:
+        print(f"Error calculating fragments for {sequence_str}: {e}")
+        return empty
+
+
+def calculate_fragment_masses(
+    sequence_str: str, molecule: str = "peptide"
+) -> dict[str, list[list[float]]]:
+    """Fragment masses of a peptide or nucleic acid (see ``molecule``)."""
+    if _check_molecule(molecule) == "nucleic_acid":
+        return calculate_nucleic_acid_fragment_masses(sequence_str)
+    return calculate_fragment_masses_pyopenms(sequence_str)
+
+
+def parse_sequence(
+    sequence_str: str, molecule: str = "peptide"
+) -> tuple[list[str], list[float | None]]:
+    """Residues and modification masses of a peptide or nucleic acid."""
+    if _check_molecule(molecule) == "nucleic_acid":
+        return parse_nucleic_acid_sequence(sequence_str)
+    return parse_openms_sequence(sequence_str)
+
+
+def get_sequence_mass(sequence_str: str, molecule: str = "peptide") -> float:
+    """Monoisotopic mass of a peptide or nucleic acid."""
+    if _check_molecule(molecule) == "nucleic_acid":
+        try:
+            from pyopenms import NASequence
+
+            return NASequence.fromString(sequence_str).getMonoWeight()
+        except Exception:
+            return 0.0
+    return get_theoretical_mass(sequence_str)
+
+
 # Default annotation configuration
 DEFAULT_ANNOTATION_CONFIG = {
     "ion_types": ["b", "y"],
@@ -326,6 +520,49 @@ PROTON_SHIFTS = [("-H", -1.0078250319), ("+H", 1.0078250319)]
 _PREFIX_IONS = ("a", "b", "c")
 
 
+def default_annotation_config(molecule: str = "peptide") -> dict[str, Any]:
+    """The annotation config a SequenceView of ``molecule`` starts from.
+
+    Nucleic acids are matched without the peptide neutral losses (-H2O,
+    -NH3) and with the a-B, c, w and y ions by default.
+    """
+    config = {**DEFAULT_ANNOTATION_CONFIG, "colors": dict(DEFAULT_ANNOTATION_CONFIG["colors"])}
+    if _check_molecule(molecule) == "nucleic_acid":
+        config["ion_types"] = list(DEFAULT_NUCLEIC_ACID_ION_TYPES)
+        config["neutral_losses"] = False
+        config["colors"].update(
+            {"a-B": "#8E44AD", "d": "#D35400", "w": "#16A085"}
+        )
+    return config
+
+
+def charge_sign_for(molecule: str = "peptide") -> int:
+    """+1 for peptides (positive mode), -1 for nucleic acids (negative mode)."""
+    return -1 if _check_molecule(molecule) == "nucleic_acid" else 1
+
+
+def ion_type_info(molecule: str, selected: list[str] | None = None) -> list[dict[str, Any]]:
+    """Ion types of ``molecule`` for the view: name, grid slot, prefix, selected."""
+    selected = set(selected or [])
+    info = []
+    for name in ion_types_for(molecule):
+        slot = _NUCLEIC_ACID_SLOTS.get(name, name) if molecule == "nucleic_acid" else name
+        info.append(
+            {
+                "name": name,
+                "slot": slot,
+                "prefix": is_prefix_ion(name, molecule),
+                "selected": name in selected,
+            }
+        )
+    return info
+
+
+def terminals_for(molecule: str = "peptide") -> list[str]:
+    """Labels of the two termini drawn around the sequence."""
+    return ["5'", "3'"] if _check_molecule(molecule) == "nucleic_acid" else ["N", "C"]
+
+
 def match_fragment_ions(
     sequence_str: str,
     observed: "np.ndarray",
@@ -335,8 +572,9 @@ def match_fragment_ions(
     intensities: Optional["np.ndarray"] = None,
     peak_ids: Optional["np.ndarray"] = None,
     include_unmatched: bool = False,
+    molecule: str = "peptide",
 ) -> list[dict[str, Any]]:
-    """Match a peptide's theoretical fragment ions against one spectrum.
+    """Match a molecule's theoretical fragment ions against one spectrum.
 
     Follows the matching the SequenceView draws: each selected ion type, with
     neutral losses and proton loss/addition when enabled, at every charge from
@@ -355,13 +593,18 @@ def match_fragment_ions(
         peak_ids: Optional peak ids, aligned with ``observed``.
         include_unmatched: Also emit a row, with empty observed columns, for
             every theoretical ion that no peak matched.
+        molecule: ``"peptide"`` (positive ions) or ``"nucleic_acid"`` (an
+            OpenMS NASequence such as ``"A[m1A]UGC"``, matched as negative
+            ions: m/z = (M - z * proton) / z).
 
     Returns:
         One dict per matched (or, optionally, unmatched) fragment ion.
     """
     import numpy as np
 
-    config = {**DEFAULT_ANNOTATION_CONFIG, **(annotation_config or {})}
+    molecule = _check_molecule(molecule)
+    config = {**default_annotation_config(molecule), **(annotation_config or {})}
+    charge_sign = charge_sign_for(molecule)
     tolerance = float(config.get("tolerance") or 0.0)
     tolerance_ppm = bool(config.get("tolerance_ppm", True))
 
@@ -383,7 +626,7 @@ def match_fragment_ions(
 
     # Every theoretical ion as one row of parallel arrays, so the peak search
     # below is a single vectorised searchsorted per spectrum.
-    fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
+    fragment_masses = calculate_fragment_masses(sequence_str, molecule)
     ions: list[tuple[str, str, int, int, float]] = []
     for ion_type in config.get("ion_types") or []:
         per_position = fragment_masses.get(f"fragment_masses_{ion_type}") or []
@@ -396,11 +639,12 @@ def match_fragment_ions(
                         theoretical = (
                             adjusted
                             if deconvolved
-                            else (adjusted + charge * PROTON_MASS) / charge
+                            else (adjusted + charge_sign * charge * PROTON_MASS)
+                            / charge
                         )
                         ions.append(
                             (
-                                f"{ion_type}{ion_number}{shift_name}",
+                                f"{ion_label(ion_type, ion_number)}{shift_name}",
                                 f"{ion_type}{shift_name}",
                                 ion_number,
                                 charge,
@@ -519,6 +763,7 @@ class SequenceView:
         regenerate_cache: bool = False,
         svg_filename: str | None = None,
         image_format: str | None = None,
+        molecule: str = "peptide",
         **kwargs,
     ):
         """
@@ -558,11 +803,20 @@ class SequenceView:
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            molecule: What the sequences are. ``"peptide"`` (default): amino
+                acids with a/b/c/x/y/z ions in positive mode. ``"nucleic_acid"``:
+                an OpenMS NASequence (``"A[m1A]UGC"``, modified nucleotides in
+                brackets) with the a-B/a/b/c/d/w/x/y/z ions of
+                NucleicAcidSpectrumGenerator, matched in negative mode
+                (m/z = (M - z * proton) / z), 5' and 3' termini, and
+                ``DEFAULT_NUCLEIC_ACID_ION_TYPES`` without neutral losses
+                unless ``annotation_config`` says otherwise.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
         self._cache_path = Path(cache_path)
         self._cache_dir = self._cache_path / cache_id
+        self._molecule = _check_molecule(molecule)
         # Render-time options, kept out of the cache config (see core/image_format.py)
         self._svg_filename = svg_filename
         self._image_format = validate_image_format(image_format, allow_none=True)
@@ -581,6 +835,7 @@ class SequenceView:
             or interactivity is not None
             or deconvolved is not False
             or annotation_config is not None
+            or molecule != "peptide"
             or title is not None
             or height != 400
             or bool(kwargs)
@@ -612,7 +867,7 @@ class SequenceView:
             self._interactivity = interactivity or {}
 
             # Store annotation config with defaults
-            self._annotation_config = {**DEFAULT_ANNOTATION_CONFIG}
+            self._annotation_config = default_annotation_config(self._molecule)
             if annotation_config:
                 self._annotation_config.update(annotation_config)
 
@@ -693,6 +948,7 @@ class SequenceView:
             "height": self._height,
             "deconvolved": self._deconvolved,
             "annotation_config": self._annotation_config,
+            "molecule": self._molecule,
         }
 
     def _compute_input_config_hash(self) -> str:
@@ -775,8 +1031,9 @@ class SequenceView:
         self._title = config.get("title")
         self._height = config.get("height", 400)
         self._deconvolved = config.get("deconvolved", False)
+        self._molecule = config.get("molecule", "peptide")
         self._annotation_config = config.get(
-            "annotation_config", {**DEFAULT_ANNOTATION_CONFIG}
+            "annotation_config", default_annotation_config(self._molecule)
         )
         self._config = {}
 
@@ -964,14 +1221,10 @@ class SequenceView:
         # Get sequence for current state
         sequence_str, precursor_charge = self._get_sequence_for_state(state)
 
-        # Parse sequence
-        residues, modifications = parse_openms_sequence(sequence_str)
-
-        # Calculate theoretical fragment masses
-        fragment_masses = calculate_fragment_masses_pyopenms(sequence_str)
-
-        # Calculate theoretical mass
-        theoretical_mass = get_theoretical_mass(sequence_str)
+        # Parse sequence, theoretical fragment masses and the molecule's mass
+        residues, modifications = parse_sequence(sequence_str, self._molecule)
+        fragment_masses = calculate_fragment_masses(sequence_str, self._molecule)
+        theoretical_mass = get_sequence_mass(sequence_str, self._molecule)
 
         # Build sequence data structure
         sequence_data = {
@@ -984,6 +1237,14 @@ class SequenceView:
             "fragment_tolerance_ppm": self._annotation_config.get("tolerance_ppm"),
             "neutral_losses": self._annotation_config.get("neutral_losses"),
             "proton_loss_addition": self._annotation_config.get("proton_loss_addition"),
+            # What the sequence is: the view takes its ion types, their grid
+            # column, prefix/suffix side, charge sign and termini from these
+            "molecule": self._molecule,
+            "ion_types": ion_type_info(
+                self._molecule, self._annotation_config.get("ion_types")
+            ),
+            "charge_sign": charge_sign_for(self._molecule),
+            "terminals": terminals_for(self._molecule),
             **fragment_masses,
         }
 
@@ -1124,6 +1385,7 @@ class SequenceView:
                 intensities=intensities,
                 peak_ids=peak_ids,
                 include_unmatched=include_unmatched,
+                molecule=self._molecule,
             ):
                 rows.append({**prefix, **ion})
 
@@ -1201,6 +1463,11 @@ class SequenceView:
         annotations = get_component_annotations(key) if key else None
 
         return SequenceViewResult(annotations=annotations)
+
+    @property
+    def molecule(self) -> str:
+        """What the sequences are: ``"peptide"`` or ``"nucleic_acid"``."""
+        return self._molecule
 
     def __repr__(self) -> str:
         return (
