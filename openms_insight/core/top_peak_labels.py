@@ -1,4 +1,5 @@
-"""The "Label top peaks" button of LinePlot.
+"""The "Label top peaks" button of the stick spectra (LinePlot, MirrorPlot,
+DeconvolvedSpectrum).
 
 Switched on, the most intense peaks in the visible x range show their x value
 (the m/z of a spectrum) above the stick, placed again on every zoom or pan.
