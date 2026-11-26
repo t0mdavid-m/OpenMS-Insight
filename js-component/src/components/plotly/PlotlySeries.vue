@@ -1,5 +1,5 @@
 <template>
-  <div class="series-plot">
+  <div ref="hoverRoot" class="series-plot">
     <MeasureHint v-if="measurable" :measure="measure" />
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings">
       <!-- The views in the toolbar's row, left of the tools: one row of controls -->
@@ -36,6 +36,11 @@
       </template>
     </PlotToolbar>
     <div :id="id" class="plot-container" :style="{ minHeight: `${plotHeight}px` }"></div>
+    <PeakHoverTip
+      :tip="hover.tip"
+      :color="theme?.textColor || '#262730'"
+      :background="theme?.backgroundColor || 'white'"
+    />
   </div>
 </template>
 
@@ -55,6 +60,8 @@ import { downloadTool } from '@/utils/plotlyDownload'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
+import PeakHoverTip from './PeakHoverTip.vue'
+import { usePeakHover, formatValue, textLines, type HoverPoint } from '@/composables/usePeakHover'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 import { SELECTION_ACCENT, clearSelectionTool } from '@/composables/useMultiSelect'
 
@@ -66,7 +73,7 @@ const BAR_PLOT_MARGIN = 110
 
 export default defineComponent({
   name: 'PlotlySeries',
-  components: { MeasureHint, PlotToolbar },
+  components: { MeasureHint, PeakHoverTip, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<SeriesPlotComponentArgs>,
@@ -92,6 +99,7 @@ export default defineComponent({
       layers: useLayers(),
       zoom,
       zoomStamp: zoom.stamp,
+      hover: usePeakHover(),
       uniqueId: `series-plot-${++plotIdCounter}`,
     }
   },
@@ -342,9 +350,17 @@ export default defineComponent({
         }
         if (this.args.hoverColumn) {
           trace.text = s.text
-          trace.hovertemplate = '%{text}<br>%{x}, %{y}<extra>%{fullData.name}</extra>'
           // Hover text only: a bar would otherwise print it on itself
           if (mode === 'bars') trace.textposition = 'none'
+        }
+        if (mode === 'box') {
+          // A box's own read-out lists its quartiles
+          if (this.args.hoverColumn) {
+            trace.hovertemplate = '%{text}<br>%{x}, %{y}<extra>%{fullData.name}</extra>'
+          }
+        } else {
+          // The read-out is PeakHoverTip (hoverinfo 'none' still fires hover and click)
+          trace.hoverinfo = 'none'
         }
         const color = colors[s.key]
         if (color) {
@@ -395,7 +411,9 @@ export default defineComponent({
             ...common,
             name: 'picked',
             text,
-            hovertemplate: hasText ? '%{text}<br>%{x}, %{y}<extra>picked</extra>' : '%{x}, %{y}<extra>picked</extra>',
+            ...(this.args.mode === 'box'
+              ? { hovertemplate: hasText ? '%{text}<br>%{x}, %{y}<extra>picked</extra>' : '%{x}, %{y}<extra>picked</extra>' }
+              : { hoverinfo: 'none' }),
             marker: { size: 9, color: SELECTION_ACCENT, line: { width: 1.5, color: '#ffffff' } },
           } as Plotly.Data,
         )
@@ -615,6 +633,7 @@ export default defineComponent({
         on: (event: string, handler: (data: { points: Array<{ curveNumber: number; pointIndex: number }> }) => void) => void
       }
       plotElement.on('plotly_click', (eventData) => this.onClick(eventData))
+      this.hover.bindPoints(element, this.$refs.hoverRoot as HTMLElement | null, (point) => this.hoverLines(point))
       this.zoom.bindNative(element as unknown as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
       this.measure.bindLabelClicks(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
@@ -641,6 +660,17 @@ export default defineComponent({
           this.selectionStore.updateSelection(identifier, null)
         }
       }
+    },
+    /** The read-out of a point: its series, its hover text, then its position and value. */
+    hoverLines(point: HoverPoint): string[] | null {
+      if (point.data?.type === 'box') return null
+      const position = this.args.xLabel || this.args.xColumn || 'x'
+      const value = this.args.yLabel || this.args.yColumn || 'y'
+      const [at, of] = this.horizontal ? [point.y, point.x] : [point.x, point.y]
+      const lines: string[] = []
+      if (point.data?.name && (this.series.length > 1 || point.data.name === 'picked')) lines.push(point.data.name)
+      lines.push(...textLines(point.text), `${position} ${formatValue(at)}`, `${value} ${formatValue(of)}`)
+      return lines
     },
     onClick(eventData: { points: Array<{ curveNumber: number; pointIndex: number }> }): void {
       // In measure mode a click picks a point to measure, not a selection

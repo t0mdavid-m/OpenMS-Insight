@@ -1,5 +1,6 @@
 /**
- * Mouse navigation along x for stick spectra (LinePlot).
+ * Mouse navigation along x for stick spectra (LinePlot, MirrorPlot,
+ * DeconvolvedSpectrum).
  *
  * - The wheel zooms x around the mouse; y follows the peaks in view, as after
  *   any zoom. Zooming out past the full extent shows the full view.
