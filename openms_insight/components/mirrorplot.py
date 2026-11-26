@@ -23,6 +23,10 @@ from ..core.mz_window import (
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
+from ..core.relative_intensity import (
+    relative_intensity_args,
+    validate_relative_intensity,
+)
 from ..core.usi import usi_args, validate_usi
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
@@ -95,6 +99,7 @@ class MirrorPlot(BaseComponent):
         config: dict[str, Any] | None = None,
         image_format: str | None = None,
         keep_zoom: bool = False,
+        relative_intensity: bool = False,
         zoom_identifier: str | None = None,
         window_identifier: str | None = None,
         window_tolerance: float | str = DEFAULT_WINDOW_TOLERANCE,
@@ -185,6 +190,11 @@ class MirrorPlot(BaseComponent):
                 gets new data, e.g. when another spectrum is selected; unpinned,
                 each new spectrum is shown in full. Double-click still resets
                 the zoom. Render-time only: not part of the cache.
+            relative_intensity: Start with each spectrum's intensities shown
+                as a percentage of its own highest peak, so a theoretical and
+                a measured spectrum share one scale (default False). The
+                "Relative" button in the toolbar switches between relative and
+                absolute intensities. Render-time only: not part of the cache.
             zoom_identifier: State identifier the plot keeps its zoom under,
                 ``{"x": [lo, hi], "y": [lo, hi]}`` (default None: the zoom stays
                 in the browser). The plot reports its ranges there after a zoom
@@ -255,6 +265,9 @@ class MirrorPlot(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/keep_zoom.py)
         self._keep_zoom = validate_keep_zoom(keep_zoom)
+
+        # Render-time option, kept out of the cache config (see core/relative_intensity.py)
+        self._relative_intensity = validate_relative_intensity(relative_intensity)
 
         # Render-time option, kept out of the cache config (see core/zoom.py)
         self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
@@ -684,6 +697,7 @@ class MirrorPlot(BaseComponent):
         args.update(mz_window_args(self._window_identifier, self._window_tolerance))
         args.update(usi_args(self._usi))
         args.update(keep_zoom_args(self._keep_zoom))
+        args.update(relative_intensity_args(self._relative_intensity))
         return args
 
     def set_top_dynamic_annotations(
