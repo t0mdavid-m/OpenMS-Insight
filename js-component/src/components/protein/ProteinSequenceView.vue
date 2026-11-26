@@ -2511,11 +2511,7 @@ export default defineComponent({
       const target = this.spanModifications[index]
       if (!id || !span || !target) return
       const text = this.proForma({ target, start: span.lo, end: span.hi })
-      this.selectionStore.updateSelection(id, {
-        text,
-        by: 'dialog',
-        n: Math.max(this.appliedProFormaN, this.proformaLink?.n ?? 0) + 1,
-      })
+      this.writeProFormaLink(text, 'dialog', Math.max(this.appliedProFormaN, this.proformaLink?.n ?? 0) + 1)
     },
     // Where the matched fragments place each modification set on a residue:
     // a window of several possible residues (or several modifications of the
@@ -2775,7 +2771,17 @@ export default defineComponent({
       const text = this.proFormaText
       // The same text is there already: nothing to tell the app
       if (this.proformaLink?.text === text) return
-      this.selectionStore.updateSelection(id, { text, by: 'view', n: this.appliedProFormaN })
+      this.writeProFormaLink(text, 'view', this.appliedProFormaN)
+    },
+    // Write to the ProForma identifier in the form it holds: {text, by, n}
+    // when the app uses that form, else (a plain string or nothing yet) a
+    // plain string, so an app that reads and writes strings keeps working
+    writeProFormaLink(text: string, by: ProFormaLink['by'], n: number): void {
+      const id = this.args.proformaIdentifier
+      if (!id) return
+      const value = this.selectionStore.$state[id] as unknown
+      const numbered = value !== null && typeof value === 'object'
+      this.selectionStore.updateSelection(id, numbered ? { text, by, n } : text)
     },
     // A ProForma from the app becomes the view's sequence and modifications,
     // as if it was applied in the Change sequence dialog
@@ -2907,11 +2913,11 @@ export default defineComponent({
         !this.isEdited && /[[\]<>(){}?-]/.test(input)
       ) {
         this.proformaSyncError = ''
-        this.selectionStore.updateSelection(this.args.proformaIdentifier, {
-          text: input.trim(),
-          by: 'dialog',
-          n: Math.max(this.appliedProFormaN, this.proformaLink?.n ?? 0) + 1,
-        })
+        this.writeProFormaLink(
+          input.trim(),
+          'dialog',
+          Math.max(this.appliedProFormaN, this.proformaLink?.n ?? 0) + 1,
+        )
         this.sequenceDialog = false
         this.customSequenceInput = ''
         this.sequenceInputError = ''

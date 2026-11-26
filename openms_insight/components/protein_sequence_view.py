@@ -403,11 +403,15 @@ class ProteinSequenceView(BaseComponent):
                 Accepts isoforms (``P0ACF0-2``) and FASTA identifiers
                 (``sp|P0ACF0|DBHA_ECOLI``).
             proforma_identifier: Identifier holding the shown proteoform as
-                ProForma 2.0, both ways, as ``{"text", "by", "n"}``: the app
-                (``by="app"``) and the view's dialog (``"dialog"``) write
-                numbered requests, the view answers with ``by="view"`` and the
-                number of the request it shows (``proforma_text`` reads the
-                text; a plain string from the app works too). The view writes it whenever its
+                ProForma 2.0, both ways. A plain string by default: the view
+                writes the text, and a string the app writes is a request.
+                An app that writes ``{"text", "by", "n"}`` instead gets that
+                form back: the app (``by="app"``) and the view's dialog
+                (``"dialog"``) write numbered requests, the view answers with
+                ``by="view"`` and the number of the request it shows, so an
+                answer to an earlier request is told apart from the latest
+                one. The view always writes the form the identifier holds
+                (``proforma_text`` reads the text of either). The view writes it whenever its
                 sequence or modifications change (in the dialog, the residue
                 menus), and a ProForma (or plain sequence) the
                 app writes there becomes the view's sequence, fixed and
