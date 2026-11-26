@@ -5,6 +5,7 @@
 
   <v-sheet class="pa-4 rounded-lg sequence-controls" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
     <div class="d-flex flex-wrap align-center justify-end mb-2">
+      <FullscreenButton />
       <div class="d-flex align-center">
         <v-checkbox
           v-if="sites.internalCount > 0"
@@ -93,6 +94,7 @@
 
 <script lang="ts">
 import { defineComponent, markRaw, type PropType } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -137,6 +139,7 @@ type Model = any
 
 export default defineComponent({
   name: 'ProteinStructureView',
+  components: { FullscreenButton },
   props: {
     args: {
       type: Object as PropType<ProteinStructureViewComponentArgs>,
