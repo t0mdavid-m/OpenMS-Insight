@@ -8,6 +8,8 @@
  * it keeps the tools that are on and Reset, and puts the rest in a menu.
  */
 
+import type { GoToAxis } from './goToRange'
+
 /** Height of the toolbar row in pixels; a component takes it from its plot's height. */
 export const TOOLBAR_HEIGHT = 36
 
@@ -57,6 +59,15 @@ export interface ToolMenuRange {
   format?: (value: number) => string
 }
 
+/** A form for an exact range of each axis (the Go to tool, utils/goToRange.ts). */
+export interface ToolMenuGoTo {
+  kind: 'goto'
+  label: string
+  axes: GoToAxis[]
+  /** Relayout the plot; called with the update of goToRelayout(). */
+  apply: (update: Record<string, number>) => void
+}
+
 /** Commands, each a menu item that runs once (e.g. select every up-regulated point). */
 export interface ToolMenuActions {
   kind: 'actions'
@@ -65,7 +76,7 @@ export interface ToolMenuActions {
   run: (value: string) => void
 }
 
-export type ToolMenuSection = ToolMenuChoice | ToolMenuToggles | ToolMenuRange | ToolMenuActions
+export type ToolMenuSection = ToolMenuChoice | ToolMenuToggles | ToolMenuRange | ToolMenuGoTo | ToolMenuActions
 
 export interface PlotTool {
   id: string
@@ -108,6 +119,8 @@ export const ICONS = {
   /** Dashed vertical guides, as the x markers draw them. */
   markers: 'M5 3h2v4H5V3zm0 6h2v4H5V9zm0 6h2v4H5v-4zm0 6h2v-1H5v1zM11 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4zM17 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4z',
   previous: 'M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z',
+  /** A crosshair (Material "my_location"), for going to an exact range. */
+  goTo: 'M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z',
   next: 'M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z',
   close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
   download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',

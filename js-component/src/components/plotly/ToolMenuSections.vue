@@ -41,6 +41,7 @@
         </button>
       </template>
 
+      <GoToForm v-else-if="section.kind === 'goto'" :axes="section.axes" :apply="section.apply" />
       <template v-else-if="section.kind === 'actions'">
         <button
           v-for="item in section.items"
@@ -78,9 +79,11 @@
 /** The choices of a toolbar button with a menu (see PlotTool.menu). */
 import { defineComponent, type PropType } from 'vue'
 import { ICONS, type ToolMenuSection } from '@/utils/plotTools'
+import GoToForm from './GoToForm.vue'
 
 export default defineComponent({
   name: 'ToolMenuSections',
+  components: { GoToForm },
   props: {
     sections: { type: Array as PropType<ToolMenuSection[]>, required: true },
   },
