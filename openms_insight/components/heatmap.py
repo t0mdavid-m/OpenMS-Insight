@@ -110,6 +110,9 @@ class Heatmap(BaseComponent):
     # few rows per refresh: only those are sent again
     _delta_tables = ("heatmapData",)
 
+    # The marked points carry their intensity too (PeakMap draws them in 3D)
+    _highlight_intensity = False
+
     def __init__(
         self,
         cache_id: str,
@@ -1128,6 +1131,61 @@ class Heatmap(BaseComponent):
             return [-math.inf, math.inf]
         return [float(lo), float(hi)]
 
+    def _numeric_axes(self, levels: list) -> bool:
+        """Whether both the x and the y column are numbers (not categories)."""
+        if not levels:
+            return True
+        level = levels[0]
+        schema = (
+            level.collect_schema() if isinstance(level, pl.LazyFrame) else level.schema
+        )
+        return all(
+            schema.get(column) is None or schema[column].is_numeric()
+            for column in (self._x_column, self._y_column)
+        )
+
+    def _select_categorical_zoom(
+        self,
+        zoom: dict[str, Any],
+        state: dict[str, Any],
+        levels: list,
+        filtered_raw: pl.LazyFrame | None,
+        non_categorical_filters: dict[str, str],
+    ) -> pl.DataFrame:
+        """The points of a zoomed heatmap with a category axis.
+
+        Only its numeric axis, if any, is cut to the zoom; the category axis
+        keeps all its points (such heatmaps are small: one cell per pair).
+        """
+        data = (
+            filtered_raw
+            if filtered_raw is not None
+            else (levels[-1] if levels else None)
+        )
+        if data is None:
+            return pl.DataFrame()
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+        schema = data.collect_schema()
+        normalized = normalize_zoom(zoom) or {}
+        for axis, column in (("x", self._x_column), ("y", self._y_column)):
+            r = normalized.get(axis)
+            if (
+                r is not None
+                and schema.get(column) is not None
+                and schema[column].is_numeric()
+            ):
+                data = data.filter(pl.col(column).is_between(r[0], r[1]))
+        if non_categorical_filters:
+            df_pandas, _ = filter_and_collect_cached(
+                data,
+                non_categorical_filters,
+                state,
+                filter_defaults=self._filter_defaults,
+            )
+            return from_pandas_safe(df_pandas)
+        return data.collect()
+
     def _select_level_for_zoom(
         self,
         zoom: dict[str, Any],
@@ -1153,6 +1211,15 @@ class Heatmap(BaseComponent):
             Filtered Polars DataFrame at appropriate resolution
         """
         import sys
+
+        # A category axis (sample names, protein names) has no numeric range:
+        # the browser zooms it on its own, and every point is sent
+        if not self._numeric_axes(
+            levels or ([filtered_raw] if filtered_raw is not None else [])
+        ):
+            return self._select_categorical_zoom(
+                zoom, state, levels, filtered_raw, non_categorical_filters
+            )
 
         x0, x1, y0, y1 = self._zoom_bounds(zoom, levels)
 
@@ -1392,6 +1459,10 @@ class Heatmap(BaseComponent):
                 "x": highlighted[self._x_column].to_list(),
                 "y": highlighted[self._y_column].to_list(),
             }
+            if self._intensity_column in highlighted.columns:
+                result["highlightPoints"]["z"] = highlighted[
+                    self._intensity_column
+                ].to_list()
             # The points data may be unchanged while the marked points move
             result["_hash"] = f"{data_hash}:{compute_dataframe_hash(highlighted)}"
         if self._multi_select:
@@ -1428,6 +1499,8 @@ class Heatmap(BaseComponent):
         """x and y of the points whose `multi_select` column value is in the
         selected set, from the full-resolution data."""
         columns = [self._x_column, self._y_column]
+        if self._highlight_intensity and self._intensity_column:
+            columns.append(self._intensity_column)
         empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
         full = self._full_filtered(state, levels)
         if full is None:
@@ -1491,6 +1564,8 @@ class Heatmap(BaseComponent):
         """x and y of the points matching the selected value of each
         `highlight` identifier, from the full-resolution data."""
         columns = [self._x_column, self._y_column]
+        if self._highlight_intensity and self._intensity_column:
+            columns.append(self._intensity_column)
         empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
         conditions = [
             pl.col(column) == state[identifier]

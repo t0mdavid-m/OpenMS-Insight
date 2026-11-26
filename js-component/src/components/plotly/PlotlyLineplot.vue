@@ -1,10 +1,17 @@
 <template>
-  <div ref="root" class="lineplot">
+  <div
+    ref="root"
+    class="lineplot"
+    :tabindex="hasInteractivity ? 0 : undefined"
+    @keydown="onKeydown"
+    @mousemove="keyTipIndex = undefined"
+    @mousedown.capture="focusForKeys"
+  >
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
-    <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
+    <div :id="id" class="plot-container" :style="{ ...cssCustomProperties, minHeight: `${plotHeight}px` }"></div>
     <PeakHoverTip
       :tip="hover.tip"
       :color="theme?.textColor || '#262730'"
@@ -46,12 +53,12 @@ import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
-import { usePeakHover } from '@/composables/usePeakHover'
+import { stepIndex, usePeakHover, xOrder } from '@/composables/usePeakHover'
 import { pickedValue, sameValue, selectedValue } from '@/utils/pickValue'
 import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 import { relativeLabel, relativeValues } from '@/utils/relativeIntensity'
 
@@ -130,6 +137,8 @@ export default defineComponent({
       relativeShown: !!this.args.relativeIntensity as boolean,
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
+      /** Peak whose read-out the arrow keys showed (until the mouse moves). */
+      keyTipIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
       labelEditorPosition: null as { left: number; top: number } | null,
     }
@@ -329,6 +338,15 @@ export default defineComponent({
     },
 
     /** The x range of the full view (all peaks, 2 % padding). */
+    hasInteractivity(): boolean {
+      return Object.keys(this.interactivity).length > 0
+    },
+
+    /** Peak indices in x order, for the arrow keys. */
+    peakOrder(): Uint32Array {
+      return xOrder(this.plotData?.x_values ?? [])
+    },
+
     fullXRange(): [number, number] | undefined {
       if (!this.isDataReady || !this.plotData) return undefined
       const [minX, maxX] = finiteExtent(this.plotData.x_values)
@@ -742,7 +760,7 @@ export default defineComponent({
      */
     layout(): Partial<Plotly.Layout> {
       return {
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        title: this.args.title ? { text: boldTitle(this.args.title, this.id).text } : undefined,
         showlegend: false,
         height: this.plotHeight,
         xaxis: {
@@ -1227,6 +1245,10 @@ export default defineComponent({
           // In label mode a click on one of your labels opens it for changing
           this.labels.bindLabelClicks(plotElement)
         }
+        // The read-out of a peak the arrow keys picked, while it is still the selected one
+        if (this.keyTipIndex !== undefined && this.keyTipIndex === this.selectedPeakIndex) {
+          this.hover.showIndex(this.keyTipIndex)
+        }
       } catch (error) {
         console.error('PlotlyLineplot: Error rendering plot:', error)
         this.renderFallback()
@@ -1444,21 +1466,71 @@ export default defineComponent({
           }
         }
 
-        // Update selection store using the interactivity mapping
-        for (const [identifier, column] of Object.entries(this.interactivity)) {
-          // Look for the interactivity column data (e.g., interactivity_peak_id)
-          const columnKey = `interactivity_${column}`
-          const columnValues = this.plotData[columnKey] as unknown[] | undefined
+        this.selectPeak(nearestIndex)
+      }
+    },
 
-          if (columnValues && Array.isArray(columnValues) && nearestIndex < columnValues.length) {
-            // Use the value from the interactivity column
-            this.selectionStore.updateSelection(identifier, selectedValue(columnValues[nearestIndex]))
-          } else if (column === this.args.xColumn) {
-            // Fallback: use x value if no interactivity column data
-            this.selectionStore.updateSelection(identifier, pickedValue(xValues[nearestIndex]))
-          }
+    /** Set the identifiers of `interactivity` to peak `index`. */
+    selectPeak(index: number): void {
+      if (!this.plotData) return
+      const xValues = this.plotData.x_values
+      for (const [identifier, column] of Object.entries(this.interactivity)) {
+        // Look for the interactivity column data (e.g., interactivity_peak_id)
+        const columnKey = `interactivity_${column}`
+        const columnValues = this.plotData[columnKey] as unknown[] | undefined
+
+        if (columnValues && Array.isArray(columnValues) && index < columnValues.length) {
+          // Use the value from the interactivity column
+          this.selectionStore.updateSelection(identifier, selectedValue(columnValues[index]))
+        } else if (column === this.args.xColumn) {
+          // Fallback: use x value if no interactivity column data
+          this.selectionStore.updateSelection(identifier, pickedValue(xValues[index]))
         }
       }
+    },
+
+    /**
+     * Arrow keys step the selected peak to the next peak along x, left or
+     * right; with Shift, to the next labelled peak (an annotation or an x
+     * marker). The x range pans to keep the peak in view, and the peak's
+     * read-out is shown until the mouse moves.
+     */
+    onKeydown(event: KeyboardEvent): void {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (!this.hasInteractivity || !this.plotData) return
+      const current = this.selectedPeakIndex
+      if (current === undefined) return
+      event.preventDefault()
+      const step = event.key === 'ArrowRight' ? 1 : -1
+      const annotations = this.plotData.annotations
+      const markers = new Set(this.markerMatches.filter((m) => m.label).map((m) => m.index))
+      const labelled = (i: number) => Boolean(annotations?.[i]) || markers.has(i)
+      const x = this.plotData.x_values
+      const next = stepIndex(x, this.peakOrder, current, step, event.shiftKey ? labelled : undefined)
+      if (next === undefined) return
+      this.keyTipIndex = next
+      this.panToPeak(x[next])
+      this.selectPeak(next)
+    },
+
+    /** Plotly cancels the mousedown, so the plot takes the focus itself. */
+    focusForKeys(): void {
+      if (!this.hasInteractivity) return
+      ;(this.$refs.root as HTMLElement | undefined)?.focus({ preventScroll: true })
+    },
+
+    /** Move the x range, keeping its width, so that `peakX` is inside it. */
+    panToPeak(peakX: number): void {
+      const element = document.getElementById(this.id) as any
+      const range = element?._fullLayout?.xaxis?.range
+      if (!range) return
+      const lo = Math.min(Number(range[0]), Number(range[1]))
+      const hi = Math.max(Number(range[0]), Number(range[1]))
+      const margin = (hi - lo) * 0.05
+      if (peakX >= lo + margin && peakX <= hi - margin) return
+      const half = (hi - lo) / 2
+      this.onRelayout({ 'xaxis.range[0]': peakX - half, 'xaxis.range[1]': peakX + half })
     },
 
     getFallbackData(): Plotly.Data[] {
@@ -1507,6 +1579,14 @@ export default defineComponent({
 <style scoped>
 .lineplot {
   position: relative;
+}
+
+.lineplot:focus {
+  outline: none;
+}
+.lineplot:focus-visible {
+  outline: 2px solid var(--highlight-color, #e4572e);
+  outline-offset: 2px;
 }
 
 /* Middle-button pan (useXNavigation) */
