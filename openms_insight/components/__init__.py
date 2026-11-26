@@ -6,6 +6,7 @@ from .heatmap import Heatmap
 from .lineplot import LinePlot
 from .mirrorplot import MirrorPlot
 from .pca import PCAPlot
+from .peak_map import PeakMap
 from .plot3d import Plot3D
 from .protein_sequence_view import ProteinSequenceView, pyopenms_modification_library
 from .protein_structure_view import ProteinStructureView
@@ -17,6 +18,7 @@ __all__ = [
     "Table",
     "LinePlot",
     "Heatmap",
+    "PeakMap",
     "ClusteredHeatmap",
     "VolcanoPlot",
     "MirrorPlot",

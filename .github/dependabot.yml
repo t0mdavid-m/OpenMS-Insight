@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # JavaScript dependencies of the component bundle.
+  - package-ecosystem: "npm"
+    directory: "/js-component"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"
+    groups:
+      js-minor-and-patch:
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 5
+  # Python package dependencies (pyproject.toml).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"
+    open-pull-requests-limit: 5
+  # Actions used by the workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
