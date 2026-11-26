@@ -2,7 +2,7 @@
   <!-- A table fitted to a few rows stays at least 200 px tall -->
   <div
     style="padding: 8px; width: 98%; box-sizing: border-box; position: relative"
-    :style="isServerSidePagination ? {} : { minHeight: '200px' }"
+    :style="[isServerSidePagination ? {} : { minHeight: '200px' }, { '--table-accent': accentColor }]"
   >
     <div class="d-flex table-toolbar-host">
       <div class="table-toolbar">
@@ -277,6 +277,10 @@ const KEY_PAGE_TIMEOUT_MS = 5000
 const KEY_PAGE_CHECK_MS = 750
 
 type KeyMove = 'up' | 'down' | 'pageUp' | 'pageDown' | 'home' | 'end'
+// How recent a move between levels must be for a table drawn after it (on
+// another view) to take the keyboard
+const LEVEL_MOVE_FRESH_MS = 8000
+
 const KEY_MOVES: Record<string, KeyMove> = {
   ArrowUp: 'up',
   ArrowDown: 'down',
@@ -399,6 +403,8 @@ export default defineComponent({
       // The last row the keys moved to: kept in view when its page is drawn again
       keyboardShownId: null as unknown,
       keySelectTimer: null as ReturnType<typeof setTimeout> | null,
+      // Nonce of the last move between levels this table made or followed
+      lastLevelNonce: 0,
       // Position (over all pages) of the row the keys moved to while its page
       // is being fetched, the page asked for and when
       keyNavTarget: null as number | null,
@@ -408,6 +414,10 @@ export default defineComponent({
     }
   },
   computed: {
+    /** The table is part of a chain of levels (Enter down, Backspace up) */
+    hasLevel(): boolean {
+      return typeof this.args.level === 'number' && !!this.args.levelIdentifier
+    },
     // Buttons and chips in the table's dialogs take the app's primary colour
     accentColor(): string {
       return this.streamlitDataStore.theme?.primaryColor || '#1976d2'
@@ -888,6 +898,14 @@ export default defineComponent({
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()
+    if (this.hasLevel && this.args.levelIdentifier) {
+      const identifier = this.args.levelIdentifier
+      this.onLevelMove(this.selectionStore.$state[identifier], true)
+      this.$watch(
+        () => this.selectionStore.$state[identifier],
+        (value: unknown) => this.onLevelMove(value)
+      )
+    }
     // A new selection of these identifiers starts the rows in the initial order
     for (const identifier of this.args.resetSortOn || []) {
       this.$watch(
@@ -1306,7 +1324,7 @@ export default defineComponent({
         if (!this.isServerSidePagination) {
           this.selectDefaultRow()
         }
-        this.applyFilters()
+        this.applyFilters({ onlyIfChanged: true })
 
         // Update Streamlit iframe height after table is rendered
         // Use specified height if provided, otherwise auto-calculate
@@ -1346,6 +1364,10 @@ export default defineComponent({
       this.tabulator.on('rowClick', (e: Event, row: any) => {
         this.onRowClick(row)
       })
+      // A double click goes one level down, as Enter does
+      this.tabulator.on('rowDblClick', () => {
+        if (this.hasLevel) this.goLevel('down')
+      })
 
       // Ensure visual selection matches selection state after render.
       // Only sync if no row is currently selected to avoid infinite loops
@@ -1373,8 +1395,7 @@ export default defineComponent({
           const sortDir = sorters[0].dir as 'asc' | 'desc'
 
           // Check if sort actually changed
-          const cachedSortCol = this.paginationState?.sort_column || ''
-          const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+          const { column: cachedSortCol, dir: cachedSortDir } = this.servedSort()
 
           if (sortColumn === cachedSortCol && sortDir === cachedSortDir) {
             console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort unchanged, skipping`)
@@ -1469,8 +1490,8 @@ export default defineComponent({
 
       // Check if we already have data for this request (initial load or same page/sort)
       // This happens when Python sends initial data before Tabulator calls ajaxRequestFunc
-      const cachedSortCol = this.paginationState?.sort_column || ''
-      const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+      const servedSortCol = this.paginationState?.sort_column || ''
+      const { column: cachedSortCol, dir: cachedSortDir } = this.servedSort()
       const requestedSortCol = sortColumn || ''
       const sortMatch = cachedSortCol === requestedSortCol && cachedSortDir === sortDir
 
@@ -1498,12 +1519,19 @@ export default defineComponent({
         // Without this, Vue's selection store would have stale page number
         // (e.g., after Python navigates to page 38, Vue's store still had page 1)
         const paginationIdentifier = this.args.paginationIdentifier
-        if (paginationIdentifier) {
+        // While Python has no pagination for this table it serves the table's
+        // default page, which is the page shown: writing it down would only
+        // cost the page a rerun on first load
+        const stored = paginationIdentifier ? (this.selectionStore.$state[paginationIdentifier] as any) : null
+        if (paginationIdentifier && stored != null) {
+          // Rows served in the initialSort order keep the sort they were asked
+          // with, so the table's own default sort is no new pagination
+          const keepSort = !servedSortCol
           this.selectionStore.updateSelection(paginationIdentifier, {
             page,
             page_size: pageSize,
-            sort_column: sortColumn,
-            sort_dir: sortDir,
+            sort_column: keepSort ? stored.sort_column : sortColumn,
+            sort_dir: keepSort ? stored.sort_dir : sortDir,
             column_filters: this.currentColumnFilters,
               ...this.viewFiltersPatch,
           })
@@ -2133,14 +2161,75 @@ export default defineComponent({
       if (this.args.keyboardNavigation === false || !this.tabulator) return
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
       const move = KEY_MOVES[event.key]
-      if (!move) return
+      const levelMove = this.hasLevel && (event.key === 'Enter' || event.key === 'Backspace')
+      if (!move && !levelMove) return
       const holder = (this.tabulator as any).rowManager?.element as HTMLElement | undefined
       const target = event.target as HTMLElement | null
       if (!holder || !target || !holder.contains(target)) return
       if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
       event.preventDefault()
       event.stopPropagation()
-      this.stepSelection(move)
+      if (move) this.stepSelection(move)
+      else this.goLevel(event.key === 'Enter' ? 'down' : 'up')
+    },
+
+    /**
+     * Enter (or a double click) goes one level down from the selected row,
+     * Backspace one level up: the move is written to the shared state, where
+     * the table of that level takes the keyboard (and an app may show it).
+     */
+    goLevel(go: 'down' | 'up'): void {
+      const level = this.args.level
+      const identifier = this.args.levelIdentifier
+      if (typeof level !== 'number' || !identifier) return
+      const to = go === 'down' ? level + 1 : level - 1
+      if (to < 0) return
+      if (go === 'down') {
+        // A row the keys reached but did not select yet is selected first
+        if (this.keySelectTimer) {
+          clearTimeout(this.keySelectTimer)
+          this.commitKeyboardRow()
+        }
+        if (!this.tabulator?.getSelectedRows().length) return
+      }
+      const nonce = Math.max(Date.now(), (this.lastLevelNonce || 0) + 1)
+      this.lastLevelNonce = nonce
+      this.selectionStore.updateSelection(identifier, { go, to, from: level, nonce })
+    },
+
+    /** A move to this table's level arrived: give its rows the keyboard. */
+    onLevelMove(value: unknown, onMount = false): void {
+      if (!value || typeof value !== 'object') return
+      const move = value as { to?: unknown, from?: unknown, nonce?: unknown }
+      if (move.to !== this.args.level || move.from === this.args.level) return
+      const nonce = Number(move.nonce)
+      if (!Number.isFinite(nonce) || nonce === this.lastLevelNonce) return
+      // A table drawn later (another view) only follows a move just made
+      if (onMount && Math.abs(Date.now() - nonce) > LEVEL_MOVE_FRESH_MS) return
+      this.lastLevelNonce = nonce
+      this.focusRows()
+    },
+
+    /** Put the keyboard on the rows, highlighting the first one if none is. */
+    focusRows(attempt = 0): void {
+      const holder = (this.tabulator as any)?.rowManager?.element as HTMLElement | undefined
+      if (!holder || !this.tabulator) {
+        if (attempt < 20) setTimeout(() => this.focusRows(attempt + 1), 100)
+        return
+      }
+      if (!holder.hasAttribute('tabindex')) holder.setAttribute('tabindex', '0')
+      // Outlined until the keys leave, so it shows which table they reach
+      const frame = (this.tabulator as any).element as HTMLElement
+      frame.classList.add('level-focus')
+      holder.addEventListener('blur', () => frame.classList.remove('level-focus'), { once: true })
+      holder.focus({ preventScroll: true })
+      try {
+        // The table's frame on the app's page
+        ;(window.frameElement as HTMLElement | null)?.scrollIntoView({ block: 'nearest' })
+      } catch {
+        // Another origin: leave the page where it is
+      }
+      if (!this.tabulator.getSelectedRows().length) this.stepSelection('down')
     },
 
     isCopyKey(event: KeyboardEvent): boolean {
@@ -2466,7 +2555,7 @@ export default defineComponent({
         // During page navigation, filter state is already correct - calling applyFilters()
         // would incorrectly reset the page to 1 (server-side pagination always resets page)
         if (!this.isNavigatingPages) {
-          this.applyFilters()
+          this.applyFilters({ onlyIfChanged: true })
         }
 
         // Update pagination limits when data changes (filter applied, data refreshed)
@@ -2761,7 +2850,29 @@ export default defineComponent({
       }
     },
 
-    applyFilters(): void {
+    /**
+     * The sort of the rows Python sent. Without a sort column Python sorts by
+     * initialSort, so those rows are already in the order the table asks for
+     * when it is built (Tabulator swaps each initialSort column name for its
+     * column object).
+     */
+    servedSort(): { column: string; dir: string } {
+      const served = this.paginationState?.sort_column
+      if (served) return { column: served, dir: this.paginationState?.sort_dir || 'asc' }
+      const initial = (this.args.initialSort as Array<{ column: any; dir?: string }> | undefined)?.[0]
+      const column: string =
+        typeof initial?.column === 'string'
+          ? initial.column
+          : initial?.column?.getField?.() ?? initial?.column?.field ?? ''
+      return { column, dir: (column && initial?.dir) || 'asc' }
+    },
+    /**
+     * Apply the filters of the dialog. `onlyIfChanged` is for a table that was
+     * built or got new rows: a server-side table then asks Python for rows only
+     * when its filters differ from those it already shows, since every request
+     * costs the page a rerun (on first load, one for each table on the page).
+     */
+    applyFilters({ onlyIfChanged = false }: { onlyIfChanged?: boolean } = {}): void {
       if (!this.tabulator) return
 
       // For server-side pagination, build filter array and send to Python
@@ -2803,6 +2914,7 @@ export default defineComponent({
           }
         })
 
+        if (onlyIfChanged && JSON.stringify(serverFilters) === JSON.stringify(this.currentColumnFilters)) return
         // Store filters and request page 1 of the re-filtered rows
         this.currentColumnFilters = serverFilters
         this.requestFilteredRows()
@@ -3846,6 +3958,12 @@ export default defineComponent({
 .tabulator-col-title,
 .tabulator-cell {
   font-size: 14px;
+}
+
+/* Where the keys went: the table reached from another level, until it loses them */
+.tabulator.level-focus {
+  outline: 2px solid var(--table-accent, #1976d2);
+  outline-offset: 1px;
 }
 
 /* Toolbar above the table: buttons | title | toggle filters.

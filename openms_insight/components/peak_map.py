@@ -45,7 +45,14 @@ class PeakMap(Heatmap):
 
     _highlight_intensity = True
 
-    def __init__(self, cache_id: str, *args: Any, view: str = "2d", z_label: str | None = None, **kwargs: Any):
+    def __init__(
+        self,
+        cache_id: str,
+        *args: Any,
+        view: str = "2d",
+        z_label: str | None = None,
+        **kwargs: Any,
+    ):
         if view not in VIEWS:
             raise ValueError(f"view must be one of {VIEWS}, not {view!r}")
         self._view = view
@@ -69,8 +76,15 @@ def _signature() -> inspect.Signature:
     keyword = [p for p in params if p.kind is inspect.Parameter.VAR_KEYWORD]
     params = [p for p in params if p.kind is not inspect.Parameter.VAR_KEYWORD]
     own = [
-        inspect.Parameter("view", inspect.Parameter.KEYWORD_ONLY, default="2d", annotation=str),
-        inspect.Parameter("z_label", inspect.Parameter.KEYWORD_ONLY, default=None, annotation=str | None),
+        inspect.Parameter(
+            "view", inspect.Parameter.KEYWORD_ONLY, default="2d", annotation=str
+        ),
+        inspect.Parameter(
+            "z_label",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation=str | None,
+        ),
     ]
     positional = [p for p in params if p.kind is not inspect.Parameter.KEYWORD_ONLY]
     keyword_only = [p for p in params if p.kind is inspect.Parameter.KEYWORD_ONLY]

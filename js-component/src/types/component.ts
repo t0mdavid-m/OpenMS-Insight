@@ -162,6 +162,10 @@ export interface TableComponentArgs extends BaseComponentArgs {
   /** False leaves Ctrl+C / Cmd+C to the browser instead of copying the selected row */
   copyRow?: boolean
   collapseColumns?: boolean
+  /** Place in a chain of tables: Enter goes one level down, Backspace up */
+  level?: number
+  /** State key the tables of one chain share for those moves */
+  levelIdentifier?: string
   /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
   excelExport?: boolean
   /** Show the toolbar search box */

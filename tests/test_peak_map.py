@@ -60,7 +60,9 @@ def test_unknown_view_is_refused(mock_streamlit, temp_cache_dir, peaks):
 
 
 def test_heatmap_args_have_no_3d_view(mock_streamlit, temp_cache_dir, peaks):
-    assert "view3d" not in _map(Heatmap, peaks, temp_cache_dir, "hm")._get_component_args()
+    assert (
+        "view3d" not in _map(Heatmap, peaks, temp_cache_dir, "hm")._get_component_args()
+    )
 
 
 def test_same_points_as_the_heatmap(mock_streamlit, temp_cache_dir, peaks):
@@ -75,8 +77,12 @@ def test_same_points_as_the_heatmap(mock_streamlit, temp_cache_dir, peaks):
 
 
 def test_marked_point_carries_its_intensity(mock_streamlit, temp_cache_dir, peaks):
-    peak_map = _map(PeakMap, peaks, temp_cache_dir, "mark", highlight={"peak": "peak_id"})
-    heatmap = _map(Heatmap, peaks, temp_cache_dir / "h", "mark", highlight={"peak": "peak_id"})
+    peak_map = _map(
+        PeakMap, peaks, temp_cache_dir, "mark", highlight={"peak": "peak_id"}
+    )
+    heatmap = _map(
+        Heatmap, peaks, temp_cache_dir / "h", "mark", highlight={"peak": "peak_id"}
+    )
 
     peak = 1234
     marked = peak_map._prepare_vue_data({"peak": peak})["highlightPoints"]
@@ -86,8 +92,15 @@ def test_marked_point_carries_its_intensity(mock_streamlit, temp_cache_dir, peak
         "z": [float((peak * 31) % 997) + 1.0],
     }
     # A Heatmap sends x and y only, as before
-    assert set(heatmap._prepare_vue_data({"peak": peak})["highlightPoints"]) == {"x", "y"}
-    assert peak_map._prepare_vue_data({})["highlightPoints"] == {"x": [], "y": [], "z": []}
+    assert set(heatmap._prepare_vue_data({"peak": peak})["highlightPoints"]) == {
+        "x",
+        "y",
+    }
+    assert peak_map._prepare_vue_data({})["highlightPoints"] == {
+        "x": [],
+        "y": [],
+        "z": [],
+    }
 
 
 def test_reloads_from_cache(mock_streamlit, temp_cache_dir, peaks):
@@ -95,7 +108,9 @@ def test_reloads_from_cache(mock_streamlit, temp_cache_dir, peaks):
     reloaded = PeakMap(cache_id="reload", cache_path=str(temp_cache_dir), view="3d")
 
     assert reloaded._get_component_args()["initialView"] == "3d"
-    assert reloaded._prepare_vue_data({"peak": 5})["highlightPoints"]["z"] == [float((5 * 31) % 997) + 1.0]
+    assert reloaded._prepare_vue_data({"peak": 5})["highlightPoints"]["z"] == [
+        float((5 * 31) % 997) + 1.0
+    ]
 
 
 def test_signature_lists_every_option():

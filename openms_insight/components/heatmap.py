@@ -1460,7 +1460,9 @@ class Heatmap(BaseComponent):
                 "y": highlighted[self._y_column].to_list(),
             }
             if self._intensity_column in highlighted.columns:
-                result["highlightPoints"]["z"] = highlighted[self._intensity_column].to_list()
+                result["highlightPoints"]["z"] = highlighted[
+                    self._intensity_column
+                ].to_list()
             # The points data may be unchanged while the marked points move
             result["_hash"] = f"{data_hash}:{compute_dataframe_hash(highlighted)}"
         if self._multi_select:
