@@ -150,6 +150,7 @@ import { settingsTools, type SettingArgs } from '@/utils/settings'
 import ToolMenuSections from './ToolMenuSections.vue'
 import { plotly } from '@/plotly/current'
 import { ZoomHistory, readView, relayoutFor, type View } from '@/utils/zoomHistory'
+import { EXIT_FULLSCREEN_ICON, FULLSCREEN_ICON, fullscreen, fullscreenAvailable, toggleFullscreen } from '@/utils/fullscreen'
 import HelpIcon from '@/components/common/HelpIcon.vue'
 import { useHelp } from '@/composables/useHelp'
 import {
@@ -279,9 +280,25 @@ export default defineComponent({
         this.selectionStore.updateSelection(identifier, value),
       )
     },
-    /** The component's tools with the stepper's buttons first and its settings last. */
+    /** Full screen, offered on every plot. */
+    fullscreenTools(): PlotTool[] {
+      if (!fullscreenAvailable()) return []
+      const on = fullscreen.value
+      return [
+        {
+          id: 'fullscreen',
+          group: 'view',
+          icon: on ? EXIT_FULLSCREEN_ICON : FULLSCREEN_ICON,
+          label: on ? 'Exit full screen' : 'Full screen',
+          help: on ? 'back to the page (Esc)' : 'the plot fills the screen',
+          active: on,
+          run: toggleFullscreen,
+        },
+      ]
+    },
+    /** The component's tools with the stepper's buttons first, then its settings and full screen. */
     allTools(): PlotTool[] {
-      return [...this.stepperTools, ...this.tools, ...this.settingsTools]
+      return [...this.stepperTools, ...this.tools, ...this.settingsTools, ...this.fullscreenTools]
     },
     /** Back, while the plot has a zoom to return to. */
     historyTools(): PlotTool[] {

@@ -13,6 +13,7 @@ from openms_insight import (
     Heatmap,
     LinePlot,
     PCAPlot,
+    PeakMap,
     SeriesPlot,
     VolcanoPlot,
 )
@@ -22,6 +23,7 @@ MEASURE_CLASSES = (
     SeriesPlot,
     DeconvolvedSpectrum,
     Heatmap,
+    PeakMap,
     VolcanoPlot,
     PCAPlot,
 )

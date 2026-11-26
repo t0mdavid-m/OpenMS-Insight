@@ -1,8 +1,13 @@
 <template>
-  <div class="pca-plot">
+  <div ref="hoverRoot" class="pca-plot">
     <MeasureHint v-if="args.measure" :measure="measure" />
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
     <div :id="id" class="pca-container" :style="{ minHeight: `${layout.height}px` }"></div>
+    <PeakHoverTip
+      :tip="hover.tip"
+      :color="theme?.textColor || '#262730'"
+      :background="theme?.backgroundColor || 'white'"
+    />
   </div>
 </template>
 
@@ -19,6 +24,8 @@ import MeasureHint from './MeasureHint.vue'
 import { TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
+import PeakHoverTip from './PeakHoverTip.vue'
+import { usePeakHover, pointLines } from '@/composables/usePeakHover'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 /** Default qualitative palette, shared with PlotlyHeatmap's categorical mode. */
@@ -98,7 +105,7 @@ function computeEllipse(xs: number[], ys: number[], nPoints = 60): { x: number[]
 
 export default defineComponent({
   name: 'PlotlyPca',
-  components: { MeasureHint, PlotToolbar },
+  components: { MeasureHint, PeakHoverTip, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<PCAPlotComponentArgs>,
@@ -129,6 +136,7 @@ export default defineComponent({
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      hover: usePeakHover(),
       measure: useMeasure(() => !!props.args.measure),
       layers: useLayers(),
       zoom,
@@ -282,7 +290,8 @@ export default defineComponent({
             line: { color: 'rgba(0, 0, 0, 0.3)', width: 1 },
           },
           text: points.text,
-          hoverinfo: 'text',
+          // The read-out is PeakHoverTip (hoverinfo 'none' still fires hover and click)
+          hoverinfo: 'none',
           customdata: points.indices,
         })
       }
@@ -516,6 +525,9 @@ export default defineComponent({
           this.getPlotConfig(),
         )
         this.setupPcaClickHandler()
+        this.hover.bindPoints(element, this.$refs.hoverRoot as HTMLElement | null, (point) =>
+          pointLines(point, this.args.xLabel || this.args.xColumn, this.args.yLabel || this.args.yColumn),
+        )
         this.zoom.bindNative(element as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
         this.measure.bindLabelClicks(element)
 

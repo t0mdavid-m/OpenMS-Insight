@@ -178,6 +178,7 @@ Table(
 - `filter_presets`: Ready-made filters at the top of the filter dialog, each a check box with a label, optional help and a default state. The same card lists the filters the viewer set (column filters, search), each removed by unticking it. A preset that is on keeps only the rows matching all of its conditions (`{"column", "op", "value"}`, op one of `==`, `!=`, `<=`, `>=`, `<`, `>`, `in`, `not in`) and counts in the filter badge and chips. The sequence view's fragment table uses the same presets.
 - `collapse_columns`: Columns that do not fit the table's width fold into a row overview (default). `False` keeps every column and scrolls the table sideways instead, for a narrow table whose columns all matter. It does not affect the cache.
 - `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
+- `level`: Where the table sits in a chain of tables that narrow each other, such as proteins (`0`), their peptides (`1`) and those peptides' spectra (`2`) (default: None). Enter or a double click selects a row and moves the keyboard to the table one level down, outlined until the keys leave it; Backspace moves it one level up. The move is written to `level_identifier` (default `"table_level"`) as `{"go": "down", "to": 1, "from": 0, "nonce": ...}`, so a page that shows the levels on different views reads it to show the table the keys go to; a table drawn there right after the move takes the keyboard. It does not affect the cache.
 - `copy_row`: Ctrl+C (Cmd+C on a Mac) while the table has focus copies the selected row as two tab-separated lines, the shown columns' titles and the row's values, which paste into a spreadsheet as a header and a row (default: True). Text selected in the table is copied as usual. `False` leaves the keys to the browser; it does not affect the cache.
 
 **Filters.** The filter button opens a dialog with a filter per column: values to
@@ -356,8 +357,9 @@ mirror(state_manager=state_manager, height=600)
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
+- The mouse wheel zooms x around the mouse (y follows), Shift + wheel or a sideways wheel pans x, and so does dragging with the middle button, as on LinePlot; a double-click shows the full view
 - Tick labels show absolute intensity on both sides — the bottom half is flipped only for layout, not for the displayed values
-- Marker traces are kept in addition to stick shapes so Plotly fires `plotly_click` events; the click handler picks the side via `curveNumber` and routes the row's interactivity column value to the shared selection
+- Hovering shows the peak nearest the mouse along x, as on LinePlot: above the axis a peak of the upper spectrum, below it one of the lower, with a dot on the peak top and a box with its x, its intensity (as a positive value) and its annotation. A click selects the peak the box shows, anywhere along its stick; the row's interactivity column value goes to the shared selection
 - In measure mode the two peaks of a measurement must be in the same half; a click in the other half starts a new measurement there
 - `set_top_dynamic_annotations(...)` / `set_bottom_dynamic_annotations(...)` allow another component (e.g. a `SequenceView`) to push fragment-ion annotations into one half without invalidating the cache
 
@@ -726,7 +728,11 @@ spectrum(key="spectrum", state_manager=state_manager)
 - `annotated`: the raw peaks, with the signal peaks of the selected mass highlighted and each charge state labelled `z=N`.
 - `ladder`: the masses with a sequence tag drawn as a ladder, set per render with `set_ladder(masses, sequence)`. Clicking a ladder mass shows its raw peaks.
 
+In every view, hovering shows the mass or peak nearest the mouse along x, as on LinePlot: a dot on its top and a box with its mass (or m/z), its intensity and the fragment ions marked there. A click selects the mass the box shows, anywhere along its stick.
+
 **Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. The **Fragments** button in the toolbar's Show group hides or shows them.
+
+**Mouse.** The wheel zooms x around the mouse while y follows the peaks in view, Shift + wheel or a sideways wheel pans x, and so does dragging with the middle button, as on LinePlot. A double-click shows the full view.
 
 ### SeriesPlot
 
@@ -898,6 +904,15 @@ table = Table(..., multi_select={"proteins": "accession"})
 picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
 picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
 ```
+
+### Hover read-out
+
+Every 2D plot shows its hover values the same way: a dot on the point and a small box beside it in the plot's theme colours, flipped to the left near the right edge.
+
+- **Stick spectra** (LinePlot, MirrorPlot, DeconvolvedSpectrum): the peak nearest the mouse along x, anywhere in the plot's height, and a click selects that peak anywhere along its stick. The sections of those components give the details.
+- **Point plots** (Heatmap, VolcanoPlot, PCAPlot, SeriesPlot lines, markers and bars): the point the mouse is on, with the plot's hover text (`hover_column`, `label_column`, the sample) and its x and y. Clicks select as before.
+
+SeriesPlot boxes keep their quartile read-out, and ClusteredHeatmap and Plot3D their own hover.
 
 ### Plot toolbar
 
