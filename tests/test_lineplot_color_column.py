@@ -21,9 +21,15 @@ def _data():
 
 def test_colors_reach_the_browser(mock_streamlit, temp_cache_dir):
     plot = LinePlot(
-        cache_id="colors", data=_data(), x_column="mz", y_column="intensity",
-        highlight_column="matched", annotation_column="ion", color_column="color",
-        interactivity={"peak": "peak_id"}, cache_path=str(temp_cache_dir),
+        cache_id="colors",
+        data=_data(),
+        x_column="mz",
+        y_column="intensity",
+        highlight_column="matched",
+        annotation_column="ion",
+        color_column="color",
+        interactivity={"peak": "peak_id"},
+        cache_path=str(temp_cache_dir),
     )
     assert plot._get_component_args()["colorColumn"] == "color"
     frame = plot._prepare_vue_data({})["plotData"]
@@ -38,6 +44,10 @@ def test_colors_reach_the_browser(mock_streamlit, temp_cache_dir):
 def test_missing_color_column_rejected(mock_streamlit, temp_cache_dir):
     with pytest.raises(ValueError, match="color_column"):
         LinePlot(
-            cache_id="nocolors", data=_data(), x_column="mz", y_column="intensity",
-            color_column="series", cache_path=str(temp_cache_dir),
+            cache_id="nocolors",
+            data=_data(),
+            x_column="mz",
+            y_column="intensity",
+            color_column="series",
+            cache_path=str(temp_cache_dir),
         )

@@ -14,18 +14,18 @@ from openms_insight.components.sequence_coverage import (
 
 
 def _coverage(data, tmp_path, **kwargs):
-    defaults = dict(
-        cache_id="coverage",
-        data=data,
-        cache_path=str(tmp_path),
-        reference="AUGGCUACGU",
-        count_column="psms",
-        track_column="condition",
-        modifications_column="mod_positions",
-        modification_labels_column="mod_names",
-        filters={"accession": "accession"},
-        interactivity={"oligo": "oligo_id"},
-    )
+    defaults = {
+        "cache_id": "coverage",
+        "data": data,
+        "cache_path": str(tmp_path),
+        "reference": "AUGGCUACGU",
+        "count_column": "psms",
+        "track_column": "condition",
+        "modifications_column": "mod_positions",
+        "modification_labels_column": "mod_names",
+        "filters": {"accession": "accession"},
+        "interactivity": {"oligo": "oligo_id"},
+    }
     defaults.update(kwargs)
     return SequenceCoverage(**defaults)
 

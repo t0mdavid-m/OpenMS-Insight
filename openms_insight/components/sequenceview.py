@@ -438,7 +438,10 @@ def calculate_nucleic_acid_fragment_masses(
                 ]
                 break
 
-        result = {f"fragment_masses_{ion}": [[] for _ in range(n)] for ion in NUCLEIC_ACID_ION_TYPES}
+        result = {
+            f"fragment_masses_{ion}": [[] for _ in range(n)]
+            for ion in NUCLEIC_ACID_ION_TYPES
+        }
         for i in range(spectrum.size()):
             name = names[i] if i < len(names) else ""
             if not name:
@@ -526,13 +529,14 @@ def default_annotation_config(molecule: str = "peptide") -> dict[str, Any]:
     Nucleic acids are matched without the peptide neutral losses (-H2O,
     -NH3) and with the a-B, c, w and y ions by default.
     """
-    config = {**DEFAULT_ANNOTATION_CONFIG, "colors": dict(DEFAULT_ANNOTATION_CONFIG["colors"])}
+    config = {
+        **DEFAULT_ANNOTATION_CONFIG,
+        "colors": dict(DEFAULT_ANNOTATION_CONFIG["colors"]),
+    }
     if _check_molecule(molecule) == "nucleic_acid":
         config["ion_types"] = list(DEFAULT_NUCLEIC_ACID_ION_TYPES)
         config["neutral_losses"] = False
-        config["colors"].update(
-            {"a-B": "#8E44AD", "d": "#D35400", "w": "#16A085"}
-        )
+        config["colors"].update({"a-B": "#8E44AD", "d": "#D35400", "w": "#16A085"})
     return config
 
 
@@ -541,12 +545,16 @@ def charge_sign_for(molecule: str = "peptide") -> int:
     return -1 if _check_molecule(molecule) == "nucleic_acid" else 1
 
 
-def ion_type_info(molecule: str, selected: list[str] | None = None) -> list[dict[str, Any]]:
+def ion_type_info(
+    molecule: str, selected: list[str] | None = None
+) -> list[dict[str, Any]]:
     """Ion types of ``molecule`` for the view: name, grid slot, prefix, selected."""
     selected = set(selected or [])
     info = []
     for name in ion_types_for(molecule):
-        slot = _NUCLEIC_ACID_SLOTS.get(name, name) if molecule == "nucleic_acid" else name
+        slot = (
+            _NUCLEIC_ACID_SLOTS.get(name, name) if molecule == "nucleic_acid" else name
+        )
         info.append(
             {
                 "name": name,

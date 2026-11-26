@@ -76,9 +76,7 @@ def test_fragment_masses_match_pyopenms():
 
 def test_sequence_mass():
     mass = sv.get_sequence_mass("AUGC", "nucleic_acid")
-    assert mass == pytest.approx(
-        pyopenms.NASequence.fromString("AUGC").getMonoWeight()
-    )
+    assert mass == pytest.approx(pyopenms.NASequence.fromString("AUGC").getMonoWeight())
 
 
 def test_match_fragment_ions_negative_mode():
@@ -91,9 +89,10 @@ def test_match_fragment_ions_negative_mode():
     assert any(r["ion"] == "w2" and r["charge"] == 2 for r in rows)
     assert all(r["observed_mz"] != 50.0 for r in rows)
     # The same peak read as a positive ion matches nothing named w
-    assert all(r["ion_type"] != "w" for r in sv.match_fragment_ions(
-        "PEPTIDE", observed, precursor_charge=3
-    ))
+    assert all(
+        r["ion_type"] != "w"
+        for r in sv.match_fragment_ions("PEPTIDE", observed, precursor_charge=3)
+    )
 
 
 def test_match_labels_base_loss():
@@ -135,7 +134,10 @@ def test_payload_describes_the_molecule(temp_cache_dir: Path):
     assert data["charge_sign"] == -1
     assert data["terminals"] == ["5'", "3'"]
     assert [i["name"] for i in data["ion_types"] if i["selected"]] == [
-        "a-B", "c", "w", "y",
+        "a-B",
+        "c",
+        "w",
+        "y",
     ]
     assert len(data["fragment_masses_w"]) == 5
     assert data["neutral_losses"] is False
@@ -156,7 +158,5 @@ def test_peptide_payload_unchanged(temp_cache_dir: Path):
 
 def test_molecule_restored_from_cache(temp_cache_dir: Path):
     _view(temp_cache_dir, cache_id="sv_na_cache")
-    restored = sv.SequenceView(
-        cache_id="sv_na_cache", cache_path=str(temp_cache_dir)
-    )
+    restored = sv.SequenceView(cache_id="sv_na_cache", cache_path=str(temp_cache_dir))
     assert restored.molecule == "nucleic_acid"

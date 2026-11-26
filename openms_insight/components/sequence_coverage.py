@@ -429,9 +429,7 @@ class SequenceCoverage(BaseComponent):
                 if start > end:
                     continue
             track = (
-                str(_plain(row.get(self._track_column)))
-                if self._track_column
-                else ""
+                str(_plain(row.get(self._track_column))) if self._track_column else ""
             )
             entry = tracks.setdefault(
                 track,
@@ -459,7 +457,9 @@ class SequenceCoverage(BaseComponent):
             modifications = [
                 {
                     "position": int(p),
-                    "label": str(labels[i]) if i < len(labels) and labels[i] is not None else "",
+                    "label": str(labels[i])
+                    if i < len(labels) and labels[i] is not None
+                    else "",
                 }
                 for i, p in enumerate(positions)
                 if p is not None and start <= int(p) <= end
@@ -475,7 +475,9 @@ class SequenceCoverage(BaseComponent):
                         else ""
                     ),
                     "count": count,
-                    "color": count_color(count, [tuple(b) for b in self._count_bins], self._empty_color),
+                    "color": count_color(
+                        count, [tuple(b) for b in self._count_bins], self._empty_color
+                    ),
                     "modifications": modifications,
                     "values": {
                         identifier: _plain(row.get(column))
