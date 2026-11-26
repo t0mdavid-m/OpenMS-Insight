@@ -41,6 +41,7 @@
         </span>
       </div>
       <div class="d-flex justify-end px-4 mb-4">
+        <FullscreenButton />
         <div>
           <ImageScreenshot
             :element-id="sequencePartId"
@@ -609,6 +610,7 @@
 <script lang="ts">
 import HelpIcon from '@/components/common/HelpIcon.vue'
 import { defineComponent, toRaw, type PropType } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -718,7 +720,9 @@ function sameModifications(a: ModificationData[], b: ModificationData[]): boolea
 
 export default defineComponent({
   name: 'ProteinSequenceView',
-  components: { HelpIcon,
+  components: {
+    FullscreenButton,
+    HelpIcon,
     SequenceViewInformation,
     FragmentTable,
     AminoAcidCell,

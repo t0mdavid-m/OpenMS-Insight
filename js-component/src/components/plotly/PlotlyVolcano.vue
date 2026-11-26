@@ -2,10 +2,15 @@
   <div class="volcano-plot">
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <div class="volcano-plot-area">
+    <div ref="hoverRoot" class="volcano-plot-area">
       <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" :selection="!!multiSelectEnabled" />
       <div :id="id" class="volcano-container" :style="{ minHeight: `${plotHeight}px` }"></div>
       <MeasureHint v-if="args.measure" :measure="measure" />
+      <PeakHoverTip
+        :tip="hover.tip"
+        :color="theme?.textColor || '#262730'"
+        :background="theme?.backgroundColor || 'white'"
+      />
     </div>
   </div>
 </template>
@@ -24,6 +29,8 @@ import MeasureHint from './MeasureHint.vue'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
+import PeakHoverTip from './PeakHoverTip.vue'
+import { usePeakHover, pointLines } from '@/composables/usePeakHover'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 /**
@@ -46,7 +53,7 @@ function computeSignificance(
 
 export default defineComponent({
   name: 'PlotlyVolcano',
-  components: { MeasureHint, PlotToolbar },
+  components: { MeasureHint, PeakHoverTip, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<VolcanoPlotComponentArgs>,
@@ -82,6 +89,7 @@ export default defineComponent({
     })
 
     const zoom = useZoomState(() => props.args.zoomIdentifier)
+    const hover = usePeakHover()
     const multi = useMultiSelect(computed(() => props.args.multiSelect))
 
     return {
@@ -97,6 +105,7 @@ export default defineComponent({
       clearSelection: multi.clear,
       zoom,
       zoomStamp: zoom.stamp,
+      hover,
     }
   },
   data() {
@@ -327,7 +336,8 @@ export default defineComponent({
             opacity: 0.6,
           },
           text: ns.text,
-          hoverinfo: 'text',
+          // The read-out is PeakHoverTip (hoverinfo 'none' still fires hover and click)
+          hoverinfo: 'none',
           customdata: ns.indices,
           ...this.selectionStyle(ns.indices),
         })
@@ -346,7 +356,8 @@ export default defineComponent({
             size: 8,
           },
           text: down.text,
-          hoverinfo: 'text',
+          // The read-out is PeakHoverTip (hoverinfo 'none' still fires hover and click)
+          hoverinfo: 'none',
           customdata: down.indices,
           ...this.selectionStyle(down.indices),
         })
@@ -365,7 +376,8 @@ export default defineComponent({
             size: 8,
           },
           text: up.text,
-          hoverinfo: 'text',
+          // The read-out is PeakHoverTip (hoverinfo 'none' still fires hover and click)
+          hoverinfo: 'none',
           customdata: up.indices,
           ...this.selectionStyle(up.indices),
         })
@@ -692,6 +704,9 @@ export default defineComponent({
         )
         this.setupClickHandler()
         this.setupSelectHandlers()
+        this.hover.bindPoints(element, this.$refs.hoverRoot as HTMLElement | null, (point) =>
+          pointLines(point, this.args.xLabel || 'log2FC', this.args.yLabel || '-log10(p)'),
+        )
         this.placePointLabels()
         // Zoomed or panned: the labels find their free side again
         ;(element as Plotly.PlotlyHTMLElement).on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
