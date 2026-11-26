@@ -11,17 +11,19 @@
       :selection="!!multiSelectEnabled && view === '2d'"
     />
     <div class="heatmap-views">
-      <!-- The map stays until the scene is drawn, which then tilts up from it -->
+      <!-- The scene is drawn ahead, flat and out of sight, and tilts up from the map when shown
+           (should it not be drawn yet, the map stays until it is); back on the map, it lies down first -->
       <div
-        v-show="view === '2d' || !sceneReady"
+        v-show="(view === '2d' && !leaving3d) || (view === '3d' && !sceneReady)"
         :id="id"
         class="heatmap-container"
         :style="{ minHeight: `${plotHeight}px` }"
       ></div>
       <HeatmapScene3D
-        v-if="view === '3d'"
+        v-if="args.view3d && (sceneWanted || view === '3d')"
         ref="scene"
-        :class="{ 'scene-loading': !sceneReady }"
+        :class="{ 'scene-hidden': !leaving3d && (view !== '3d' || !sceneReady) }"
+        :active="view === '3d' || leaving3d"
         :plot-id="sceneId"
         :points="scenePoints"
         :highlight="sceneHighlight"
@@ -40,6 +42,7 @@
         :animate="tiltScene"
         @pick="selectRow"
         @rendered="sceneRendered"
+        @moved="updateFrameHeight"
       />
     </div>
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
@@ -165,6 +168,10 @@ export default defineComponent({
       // Tilt the scene up from the map (not when the view opens in 3D)
       tiltScene: false,
       sceneReady: false,
+      // Draw the scene ahead, once the map is drawn
+      sceneWanted: false,
+      // Back on the map, while the scene lies down
+      leaving3d: false,
       switching: false,
       dragmode: 'zoom' as string,
       removingOutline: false,
@@ -988,7 +995,7 @@ export default defineComponent({
 
     // Back on the map: draw it at its size, with what changed while it was hidden
     view(view: string) {
-      if (view === '2d') this.sceneReady = false
+      if (view === '2d' && this.leaving3d) return
       if (view === '2d' && this.isInitialized) this.$nextTick(() => this.renderPlot())
       else this.$nextTick(() => this.updateFrameHeight())
     },
@@ -1032,7 +1039,12 @@ export default defineComponent({
       this.setupHeatmapResizeObserver()
     })
     // Load the 3D drawing early, so the switch to 3D does not wait for it
-    if (this.args.view3d) setTimeout(() => void loadPlotly3D(), 1500)
+    if (this.args.view3d) {
+      setTimeout(() => {
+        void loadPlotly3D()
+        this.sceneWanted = true
+      }, 1500)
+    }
   },
 
   beforeUnmount() {
@@ -1054,7 +1066,7 @@ export default defineComponent({
   methods: {
     sceneRendered(): void {
       this.sceneReady = true
-      this.updateFrameHeight()
+      if (this.view === '3d') this.updateFrameHeight()
     },
 
     /** Switch between the map and the scene, tilting from one to the other. */
@@ -1065,13 +1077,19 @@ export default defineComponent({
         this.view = view
         return
       }
+      // The toolbar switches at once; the map is drawn when the scene has laid down
       const scene = this.$refs.scene as { flatten?: () => Promise<void> } | undefined
       this.switching = true
+      this.leaving3d = !!scene && this.sceneReady
+      this.view = view
       try {
-        await scene?.flatten?.()
+        if (this.leaving3d) await scene?.flatten?.()
       } finally {
         this.switching = false
-        this.view = view
+        if (this.leaving3d) {
+          this.leaving3d = false
+          if (this.isInitialized) this.$nextTick(() => this.renderPlot())
+        }
       }
     },
 
@@ -1512,8 +1530,8 @@ export default defineComponent({
 .heatmap-views {
   position: relative;
 }
-/* Drawn over the map, out of sight, until its first drawing is done */
-.scene-loading {
+/* Out of sight under the map: drawn ahead, or until its first drawing is done */
+.scene-hidden {
   position: absolute;
   top: 0;
   left: 0;

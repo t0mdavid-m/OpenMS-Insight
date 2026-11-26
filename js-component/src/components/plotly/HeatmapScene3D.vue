@@ -1,5 +1,8 @@
 <template>
-  <div :id="plotId" class="heatmap-scene" data-own-size :style="{ minHeight: `${height}px` }"></div>
+  <!-- Plotly marks the plot element with classes of its own: classes given from outside go on this wrapper -->
+  <div class="heatmap-scene-box">
+    <div :id="plotId" class="heatmap-scene" data-own-size :style="{ minHeight: `${height}px` }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -67,6 +70,8 @@ const FLAT_EYE = 0.62
 /** Length of the tilt between the map and the scene, in ms */
 const TILT_MS = 900
 const TILT_STEPS = 30
+/** Wait of a drawing out of sight after the last change, so zooming the map stays quick */
+const HIDDEN_DELAY_MS = 400
 
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
 /** From one camera to the other: round the centre the short way, the box's shape along */
@@ -82,6 +87,10 @@ function between(a: SceneCamera, b: SceneCamera, t: number): SceneCamera {
     width: lerp(a.width, b.width),
     height: lerp(a.height, b.height),
   }
+}
+/** After the next paint: a change shown at once, before a slow drawing */
+function afterPaint(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
 }
 function reducedMotion(): boolean {
   return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
@@ -121,16 +130,21 @@ export default defineComponent({
     theme: { type: Object as PropType<Theme | undefined>, default: undefined },
     /** Colour of the selected point; default: the text colour */
     highlightColor: { type: String, default: '' },
-    /** Tilt up from the 2D map when first drawn */
+    /** Shown: false while the 2D map is, when the scene is drawn ahead, flat, out of sight */
+    active: { type: Boolean, default: true },
+    /** Tilt up from the 2D map when shown */
     animate: { type: Boolean, default: false },
   },
-  emits: ['pick', 'rendered'],
+  emits: ['pick', 'rendered', 'moved'],
   data() {
     return {
       drawPending: false,
       plotted: false,
       tilting: false,
       renderAfterTilt: false,
+      // Shown and not tilted up yet: the next drawing is flat, then tilts
+      tiltPending: false,
+      renderTimer: null as ReturnType<typeof setTimeout> | null,
     }
   },
   computed: {
@@ -265,10 +279,6 @@ export default defineComponent({
           zaxis: { title: { text: this.zLabel }, range: [0, this.maxZ] },
           // As wide as the map: retention time along the long side
           aspectmode: 'manual',
-          aspectratio: { x: TILTED.width, y: 1, z: TILTED.height },
-          camera: { eye: TILTED_EYE, up: UP },
-          // A rotation of the user stays across new points and zooms
-          uirevision: 'scene',
         },
       }
     },
@@ -284,6 +294,16 @@ export default defineComponent({
     },
   },
   watch: {
+    active(active: boolean) {
+      if (!active) return
+      this.tiltPending = this.animate && !reducedMotion()
+      if (this.plotted && !this.renderTimer && !this.drawPending && !this.tilting) {
+        if (this.tiltPending) {
+          this.tiltPending = false
+          void this.tilt(this.flat(), TILTED)
+        } else void this.toCamera(TILTED)
+      } else this.requestRender()
+    },
     points: {
       handler() {
         this.requestRender()
@@ -298,18 +318,35 @@ export default defineComponent({
     this.requestRender()
   },
   beforeUnmount() {
+    if (this.renderTimer) clearTimeout(this.renderTimer)
     const element = document.getElementById(this.plotId)
     if (element && this.plotted) {
       void loadPlotly3D().then((Plotly) => Plotly.purge(element))
     }
   },
   methods: {
-    /** One drawing per update, in a task of its own (see Plotly3D). */
+    /** Draw the points again: at once when shown, out of sight after a pause. */
     requestRender(): void {
       if (this.tilting) {
         this.renderAfterTilt = true
         return
       }
+      if (this.renderTimer) {
+        clearTimeout(this.renderTimer)
+        this.renderTimer = null
+      }
+      // Out of sight, drawn once the map has settled; shown, at once
+      if (!this.active) {
+        this.renderTimer = setTimeout(() => {
+          this.renderTimer = null
+          this.draw()
+        }, HIDDEN_DELAY_MS)
+        return
+      }
+      this.draw()
+    },
+    /** One drawing per update, in a task of its own (see Plotly3D). */
+    draw(): void {
       if (this.drawPending) return
       this.drawPending = true
       setTimeout(() => {
@@ -321,9 +358,14 @@ export default defineComponent({
       const Plotly = await loadPlotly3D()
       const element = document.getElementById(this.plotId) as (HTMLElement & { on?: Function }) | null
       if (!element) return
-      const tiltUp = this.animate && !this.plotted && !reducedMotion()
+      const flat = !this.active || this.tiltPending
       const layout = { ...this.layout, width: element.clientWidth || undefined } as Record<string, unknown>
-      if (tiltUp) layout.scene = { ...(layout.scene as object), ...this.sceneLayout(this.flat()) }
+      layout.scene = {
+        ...(layout.scene as object),
+        ...this.sceneLayout(flat ? this.flat() : TILTED),
+        // A rotation of the user stays across new points and zooms; flat out of sight
+        uirevision: flat ? 'flat' : 'scene',
+      }
       await Plotly.react(
         element,
         this.traces as Plotly.Data[],
@@ -343,7 +385,21 @@ export default defineComponent({
         })
       }
       this.$emit('rendered')
-      if (tiltUp) await this.tilt(this.flat(), TILTED)
+      if (this.active && this.tiltPending) {
+        this.tiltPending = false
+        await this.tilt(this.flat(), TILTED)
+      }
+    },
+    /** Straight to a camera, without the tilt */
+    async toCamera(camera: SceneCamera): Promise<void> {
+      const element = document.getElementById(this.plotId)
+      if (!element) return
+      const Plotly = await loadPlotly3D()
+      const scene = this.sceneLayout(camera)
+      await Plotly.relayout(element, {
+        'scene.camera': scene.camera,
+        'scene.aspectratio': scene.aspectratio,
+      } as unknown as Partial<Plotly.Layout>)
     },
     /** Straight from above with the stems flat, as wide as the plot: the scene drawn as the 2D map */
     flat(): SceneCamera {
@@ -384,6 +440,7 @@ export default defineComponent({
       const Plotly = await loadPlotly3D()
       this.tilting = true
       try {
+        await afterPaint()
         const start = performance.now()
         let p = 0
         for (;;) {
@@ -400,6 +457,7 @@ export default defineComponent({
         }
       } finally {
         this.tilting = false
+        this.$emit('moved')
         if (this.renderAfterTilt) {
           this.renderAfterTilt = false
           this.requestRender()
@@ -409,7 +467,8 @@ export default defineComponent({
     /** Lay the scene flat onto the map before the map is shown again. */
     async flatten(): Promise<void> {
       if (!this.plotted) return
-      await this.tilt(this.currentCamera(), this.flat())
+      if (reducedMotion()) await this.toCamera(this.flat())
+      else await this.tilt(this.currentCamera(), this.flat())
     },
   },
 })
