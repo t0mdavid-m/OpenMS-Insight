@@ -11,18 +11,18 @@
       :selection="!!multiSelectEnabled && view === '2d'"
     />
     <div class="heatmap-views">
-      <!-- The scene is drawn ahead, flat and out of sight, and tilts up from the map when shown
-           (should it not be drawn yet, the map stays until it is); back on the map, it lies down first -->
+      <!-- The scene is drawn ahead, flat on the map's plot area and out of sight. Going to 3D, the map
+           fades out over it as it starts to tilt up (should it not be drawn yet, the map stays until
+           it is); back on the map, the map fades in over it as it lies down -->
       <div
-        v-show="(view === '2d' && !leaving3d) || (view === '3d' && !sceneReady)"
         :id="id"
         class="heatmap-container"
-        :style="{ minHeight: `${plotHeight}px` }"
+        :style="{ minHeight: `${plotHeight}px`, ...(mapOver ? mapOverStyle : {}) }"
       ></div>
       <HeatmapScene3D
         v-if="args.view3d && (sceneWanted || view === '3d')"
         ref="scene"
-        :class="{ 'scene-hidden': !leaving3d && (view !== '3d' || !sceneReady) }"
+        :class="{ 'scene-hidden': sceneHidden }"
         :active="view === '3d' || leaving3d"
         :plot-id="sceneId"
         :points="scenePoints"
@@ -39,10 +39,12 @@
         :title="args.title || ''"
         :height="plotHeight"
         :theme="theme"
+        :map-area="mapArea"
         :animate="tiltScene"
         @pick="selectRow"
         @rendered="sceneRendered"
         @moved="updateFrameHeight"
+        @depth="sceneDepth = $event"
       />
     </div>
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
@@ -62,12 +64,22 @@ import MeasureHint from './MeasureHint.vue'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
 import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
-import HeatmapScene3D, { loadPlotly3D, plotly3D, type ScenePoints } from './HeatmapScene3D.vue'
+import HeatmapScene3D, { loadPlotly3D, plotly3D, type MapArea, type ScenePoints } from './HeatmapScene3D.vue'
 import { downloadTool as makeDownloadTool } from '@/utils/plotlyDownload'
 import { imageFormatOf } from '@/utils/imageExport'
 import { normalizeZoom } from '@/composables/useZoomState'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import { scaleStops, specToStops, type ColorStops, type ColorbarSpec } from '@/utils/colorscale'
+
+/** How far the scene is tilted up when the map over it has faded out (0 flat, 1 up) */
+const MAP_FADE_DEPTH = 0.08
+type FullLayout = {
+  width?: number
+  height?: number
+  _size?: { l: number; t: number; w: number; h: number }
+  xaxis?: { range?: number[] }
+  yaxis?: { range?: number[] }
+}
 
 /** Height of the colorbar row below the plot. */
 const LEGEND_HEIGHT = 30
@@ -172,6 +184,10 @@ export default defineComponent({
       sceneWanted: false,
       // Back on the map, while the scene lies down
       leaving3d: false,
+      // The map's plot area in its plot, for the scene to lie on exactly
+      mapArea: null as MapArea | null,
+      // How far up the scene is (0 flat on the map, 1 tilted), for the map's fade over it
+      sceneDepth: 0,
       switching: false,
       dragmode: 'zoom' as string,
       removingOutline: false,
@@ -333,12 +349,40 @@ export default defineComponent({
       return { x: [x0, x1], y: [y0, y1] }
     },
 
+    // The ranges the map shows (its padding included), so the scene lies exactly on it
     sceneXRange(): number[] | undefined {
-      return this.xRange
+      return this.mapArea?.xRange ?? this.xRange
     },
 
     sceneYRange(): number[] | undefined {
-      return this.yRange
+      return this.mapArea?.yRange ?? this.yRange
+    },
+
+    /** The scene is shown: in 3D once drawn, and while it lies down before the map returns */
+    sceneShown(): boolean {
+      return (this.view === '3d' && this.sceneReady) || this.leaving3d
+    },
+    sceneHidden(): boolean {
+      return !this.sceneShown
+    },
+    /** The map lies over the scene while the scene is shown, fading as the scene tilts */
+    mapOver(): boolean {
+      return this.sceneShown
+    },
+    /** The map over the scene, gone once the scene has tilted up a little. In style, not a
+     * class: a class binding would replace the classes Plotly gives the map's element. */
+    mapOverStyle(): Record<string, string> {
+      const opacity = Math.max(0, Math.min(1, 1 - this.sceneDepth / MAP_FADE_DEPTH))
+      // Above the scene, whose Plotly layers are positioned too
+      return {
+        position: 'absolute',
+        top: '0',
+        left: '0',
+        right: '0',
+        zIndex: '1',
+        pointerEvents: 'none',
+        opacity: String(opacity),
+      }
     },
 
     /** The "Color" button: what the points are colored by, and the lowest value shown. */
@@ -995,8 +1039,7 @@ export default defineComponent({
 
     // Back on the map: draw it at its size, with what changed while it was hidden
     view(view: string) {
-      if (view === '2d' && this.leaving3d) return
-      if (view === '2d' && this.isInitialized) this.$nextTick(() => this.renderPlot())
+      if (view === '2d' && this.isInitialized && !this.plotInitialized) this.$nextTick(() => this.renderPlot())
       else this.$nextTick(() => this.updateFrameHeight())
     },
 
@@ -1077,19 +1120,19 @@ export default defineComponent({
         this.view = view
         return
       }
-      // The toolbar switches at once; the map is drawn when the scene has laid down
+      // The toolbar switches at once; the scene lies down onto the map, which fades in over it
       const scene = this.$refs.scene as { flatten?: () => Promise<void> } | undefined
       this.switching = true
-      this.leaving3d = !!scene && this.sceneReady
+      const leave = !!scene && this.sceneReady
+      this.leaving3d = leave
       this.view = view
       try {
-        if (this.leaving3d) await scene?.flatten?.()
-      } finally {
-        this.switching = false
-        if (this.leaving3d) {
-          this.leaving3d = false
-          if (this.isInitialized) this.$nextTick(() => this.renderPlot())
+        if (leave) {
+          await scene?.flatten?.()
         }
+      } finally {
+        this.leaving3d = false
+        this.switching = false
       }
     },
 
@@ -1245,6 +1288,7 @@ export default defineComponent({
           // Note: No need to re-setup event handlers - they persist with react()
         }
 
+        this.measureMapArea(element)
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
           this.updateFrameHeight()
@@ -1254,6 +1298,22 @@ export default defineComponent({
         this.plotInitialized = false // Reset on error so next render uses newPlot
         this.renderFallback()
       }
+    },
+
+    /** Where the map draws its points, and the ranges it shows, for the scene to lie on it */
+    measureMapArea(element: HTMLElement): void {
+      const full = (element as unknown as { _fullLayout?: FullLayout })._fullLayout
+      const size = full?._size
+      if (!full || !size || !full.width || !full.height || !size.w || !size.h) return
+      const bottom = full.height - size.t - size.h
+      const area: MapArea = {
+        x: [size.l / full.width, (size.l + size.w) / full.width],
+        y: [bottom / full.height, (bottom + size.h) / full.height],
+        ratio: size.w / size.h,
+        xRange: [...(full.xaxis?.range ?? [])] as number[],
+        yRange: [...(full.yaxis?.range ?? [])] as number[],
+      }
+      if (JSON.stringify(area) !== JSON.stringify(this.mapArea)) this.mapArea = area
     },
 
     getHeatmapPlotConfig(): Partial<Plotly.Config> {

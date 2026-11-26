@@ -42,7 +42,20 @@ interface SceneCamera {
   /** Width and height of the scene box against its depth (y) */
   width: number
   height: number
+  /** Where in the plot the scene is drawn, as fractions of its width and height */
+  domain: { x: number[]; y: number[] }
+  /** How strongly the axes show: 0 flat on the map, whose own axes are there, 1 tilted */
+  axes: number
 }
+/** Where a 2D map draws its points (fractions of its plot), its width against its height, and its ranges */
+export interface MapArea {
+  x: number[]
+  y: number[]
+  ratio: number
+  xRange: number[]
+  yRange: number[]
+}
+const FULL = { x: [0, 1], y: [0, 1] }
 const UP: Vec = { x: 0, y: 0, z: 1 }
 function cameraOf(eye: Vec, width: number, height: number): SceneCamera {
   const distance = Math.hypot(eye.x, eye.y, eye.z) || 1
@@ -52,6 +65,8 @@ function cameraOf(eye: Vec, width: number, height: number): SceneCamera {
     distance,
     width,
     height,
+    domain: FULL,
+    axes: 1,
   }
 }
 function eyeOf(camera: SceneCamera): Vec {
@@ -65,11 +80,15 @@ function eyeOf(camera: SceneCamera): Vec {
 /** The view the scene opens with: tilted, retention time along the long side */
 const TILTED_EYE: Vec = { x: -0.95, y: -1.6, z: 0.9 }
 const TILTED: SceneCamera = cameraOf(TILTED_EYE, 1.8, 0.7)
-/** Distance of the camera above a flat scene, so it fills the plot as the 2D map does */
-const FLAT_EYE = 0.62
+/** Height of the flat scene box on screen against the camera's distance, measured on Plotly's 3D camera */
+const FLAT_FIT = 0.824
 /** Length of the tilt between the map and the scene, in ms */
 const TILT_MS = 900
 const TILT_STEPS = 30
+/** How far up the scene is before its stems start to rise */
+const STEMS_FROM = 0.12
+/** How far up the scene is before its axes start to show */
+const AXES_FROM = 0.08
 /** Wait of a drawing out of sight after the last change, so zooming the map stays quick */
 const HIDDEN_DELAY_MS = 400
 
@@ -80,17 +99,55 @@ function between(a: SceneCamera, b: SceneCamera, t: number): SceneCamera {
   if (turn > Math.PI) turn -= 2 * Math.PI
   if (turn < -Math.PI) turn += 2 * Math.PI
   const lerp = (u: number, v: number) => u + (v - u) * t
+  // The stems rise only once the scene has lifted off the map (and are down before it lies on it),
+  // so none show through the map as it fades
+  const axes = lerp(a.axes, b.axes)
+  let height = lerp(a.height, b.height)
+  if (a.axes !== b.axes) {
+    const [low, high] = a.axes < b.axes ? [a, b] : [b, a]
+    const up = (axes - low.axes) / (high.axes - low.axes)
+    height = low.height + (high.height - low.height) * Math.max(0, (up - STEMS_FROM) / (1 - STEMS_FROM))
+  }
   return {
     azimuth: a.azimuth + turn * t,
     elevation: lerp(a.elevation, b.elevation),
     distance: lerp(a.distance, b.distance),
     width: lerp(a.width, b.width),
-    height: lerp(a.height, b.height),
+    height,
+    domain: {
+      x: [lerp(a.domain.x[0], b.domain.x[0]), lerp(a.domain.x[1], b.domain.x[1])],
+      y: [lerp(a.domain.y[0], b.domain.y[0]), lerp(a.domain.y[1], b.domain.y[1])],
+    },
+    axes,
   }
 }
 /** After the next paint: a change shown at once, before a slow drawing */
 function afterPaint(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
+}
+/** A CSS colour (#rgb, #rrggbb or rgb()) as red, green and blue */
+function rgbOf(colour: string, fallback: number[]): number[] {
+  let rgb: number[] | null = null
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(colour.trim())
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].replace(/./g, (c) => c + c) : hex[1]
+    rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16))
+  } else {
+    const m = /^rgba?\(([^)]+)\)$/i.exec(colour.trim())
+    if (m)
+      rgb = m[1]
+        .split(',')
+        .slice(0, 3)
+        .map((v) => parseFloat(v))
+  }
+  return rgb && !rgb.some((v) => Number.isNaN(v)) ? rgb : fallback
+}
+/** A colour part of the way from the background to the foreground. Opaque: the 3D scene draws a
+ * transparent line light, not faint. */
+function mix(background: number[], foreground: number[], part: number): string {
+  const t = Math.max(0, Math.min(1, part))
+  const [r, g, b] = background.map((v, i) => Math.round(v + (foreground[i] - v) * t))
+  return `rgb(${r}, ${g}, ${b})`
 }
 function reducedMotion(): boolean {
   return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
@@ -130,12 +187,14 @@ export default defineComponent({
     theme: { type: Object as PropType<Theme | undefined>, default: undefined },
     /** Colour of the selected point; default: the text colour */
     highlightColor: { type: String, default: '' },
+    /** The 2D map's plot area: the flat scene lies exactly on it */
+    mapArea: { type: Object as PropType<MapArea | null>, default: null },
     /** Shown: false while the 2D map is, when the scene is drawn ahead, flat, out of sight */
     active: { type: Boolean, default: true },
     /** Tilt up from the 2D map when shown */
     animate: { type: Boolean, default: false },
   },
-  emits: ['pick', 'rendered', 'moved'],
+  emits: ['pick', 'rendered', 'moved', 'depth'],
   data() {
     return {
       drawPending: false,
@@ -144,6 +203,8 @@ export default defineComponent({
       renderAfterTilt: false,
       // Shown and not tilted up yet: the next drawing is flat, then tilts
       tiltPending: false,
+      /** How far up the scene is drawn now: 0 flat on the map, 1 tilted */
+      up: 0,
       renderTimer: null as ReturnType<typeof setTimeout> | null,
     }
   },
@@ -269,9 +330,9 @@ export default defineComponent({
         title: this.title ? { text: `<b>${this.title}</b>` } : undefined,
         paper_bgcolor: this.theme?.backgroundColor,
         plot_bgcolor: this.theme?.secondaryBackgroundColor,
-        font: { color: this.theme?.textColor, family: this.theme?.font },
+        font: { color: this.theme?.textColor || 'black', family: this.theme?.font || 'Arial' },
         height: this.height,
-        margin: { l: 0, r: 0, b: 0, t: this.title ? 50 : 10 },
+        margin: { l: 0, r: 0, b: 0, t: this.topMargin },
         showlegend: false,
         scene: {
           xaxis: axis(this.xLabel, this.xRange),
@@ -281,6 +342,13 @@ export default defineComponent({
           aspectmode: 'manual',
         },
       }
+    },
+    /** The top margin, as the map's, so the title stays put; and the height left for the scene below it */
+    topMargin(): number {
+      return this.title ? 60 : 20
+    },
+    paperHeight(): number {
+      return Math.max(1, this.height - this.topMargin)
     },
     renderKey(): string {
       return JSON.stringify([
@@ -303,6 +371,10 @@ export default defineComponent({
           void this.tilt(this.flat(), TILTED)
         } else void this.toCamera(TILTED)
       } else this.requestRender()
+    },
+    // The map moved or was zoomed: lie on it again
+    mapArea() {
+      if (!this.active) this.requestRender()
     },
     points: {
       handler() {
@@ -358,6 +430,8 @@ export default defineComponent({
       const Plotly = await loadPlotly3D()
       const element = document.getElementById(this.plotId) as (HTMLElement & { on?: Function }) | null
       if (!element) return
+      // Still flat on the map when shown: tilt it up, never jump
+      if (this.active && this.up < 1 && this.animate && !reducedMotion()) this.tiltPending = true
       const flat = !this.active || this.tiltPending
       const layout = { ...this.layout, width: element.clientWidth || undefined } as Record<string, unknown>
       layout.scene = {
@@ -365,6 +439,16 @@ export default defineComponent({
         ...this.sceneLayout(flat ? this.flat() : TILTED),
         // A rotation of the user stays across new points and zooms; flat out of sight
         uirevision: flat ? 'flat' : 'scene',
+      }
+      // The axes' colours, from relayout keys into the layout
+      for (const [key, value] of Object.entries(this.axisStyle(flat ? 0 : 1))) {
+        const path = key.split('.')
+        let node = layout as Record<string, unknown>
+        for (const part of path.slice(0, -1)) {
+          node[part] = { ...((node[part] as object) ?? {}) }
+          node = node[part] as Record<string, unknown>
+        }
+        node[path[path.length - 1]] = value
       }
       await Plotly.react(
         element,
@@ -384,6 +468,9 @@ export default defineComponent({
           if (typeof row === 'number') this.$emit('pick', row)
         })
       }
+      // How far up it is drawn: 0 flat on the map, 1 tilted
+      this.up = flat ? 0 : 1
+      this.$emit('depth', this.up)
       this.$emit('rendered')
       if (this.active && this.tiltPending) {
         this.tiltPending = false
@@ -395,51 +482,83 @@ export default defineComponent({
       const element = document.getElementById(this.plotId)
       if (!element) return
       const Plotly = await loadPlotly3D()
-      const scene = this.sceneLayout(camera)
-      await Plotly.relayout(element, {
-        'scene.camera': scene.camera,
-        'scene.aspectratio': scene.aspectratio,
-      } as unknown as Partial<Plotly.Layout>)
+      await Plotly.relayout(element, this.sceneRelayout(camera) as unknown as Partial<Plotly.Layout>)
+      this.up = camera.axes
+      this.$emit('depth', camera.axes)
     },
     /** Straight from above with the stems flat, as wide as the plot: the scene drawn as the 2D map */
     flat(): SceneCamera {
+      const area = this.mapArea
       const element = document.getElementById(this.plotId)
-      const ratio = element && this.height > 0 ? element.clientWidth / this.height : TILTED.width
-      const width = Math.min(4, Math.max(1, ratio))
-      // Seen from just short of straight above, from the low-y side: y runs up the screen as on the map
+      const ratio = area?.ratio ?? (element && this.height > 0 ? element.clientWidth / this.height : TILTED.width)
+      // Straight from above, from the low-y side, so y runs up the screen as on the map. The box,
+      // as wide against its depth as the map's plot area, fills that area: in this camera the box
+      // looks FLAT_FIT times as tall as the camera is far.
       return {
         azimuth: -Math.PI / 2,
-        elevation: (89.5 * Math.PI) / 180,
-        distance: FLAT_EYE * width,
-        width,
-        height: 0.01,
+        elevation: (89.9 * Math.PI) / 180,
+        distance: 1 / FLAT_FIT,
+        width: ratio,
+        height: 0.0001,
+        axes: 0,
+        domain: area ? { x: area.x, y: area.y.map((v) => Math.min(1, (v * this.height) / this.paperHeight)) } : FULL,
+      }
+    },
+    /** The axes' colours at a strength, as relayout keys */
+    axisStyle(strength: number): Record<string, string | boolean> {
+      const text = rgbOf(this.theme?.textColor || '#444', [68, 68, 68])
+      const paper = rgbOf(this.theme?.backgroundColor || '#fff', [255, 255, 255])
+      const style: Record<string, string | boolean> = {}
+      for (const axis of ['xaxis', 'yaxis', 'zaxis']) {
+        style[`scene.${axis}.tickfont.color`] = mix(paper, text, strength)
+        style[`scene.${axis}.title.font.color`] = mix(paper, text, strength)
+        style[`scene.${axis}.gridcolor`] = mix(paper, text, 0.2 * strength)
+        style[`scene.${axis}.zerolinecolor`] = mix(paper, text, 0.5 * strength)
+        // Left out while flat: lines of the box seen edge on
+        style[`scene.${axis}.showgrid`] = strength > 0
+        style[`scene.${axis}.zeroline`] = strength > 0
+      }
+      return style
+    },
+    /** A camera as relayout keys: the view, the box, where it is drawn and its axes */
+    sceneRelayout(camera: SceneCamera): Record<string, unknown> {
+      const scene = this.sceneLayout(camera)
+      return {
+        'scene.camera': scene.camera,
+        'scene.aspectratio': scene.aspectratio,
+        'scene.domain': scene.domain,
+        // The axes come in once the map over the scene has faded, as the scene lifts off it
+        ...this.axisStyle(Math.max(0, (camera.axes - AXES_FROM) / (1 - AXES_FROM))),
       }
     },
     sceneLayout(camera: SceneCamera): Record<string, unknown> {
       return {
         camera: { eye: eyeOf(camera), up: UP, center: { x: 0, y: 0, z: 0 } },
         aspectratio: { x: camera.width, y: 1, z: camera.height },
+        domain: camera.domain,
       }
     },
     /** The camera the scene is seen with now, the user's rotation included */
     currentCamera(): SceneCamera {
       const element = document.getElementById(this.plotId) as unknown as {
-        layout?: { scene?: { camera?: { eye?: Vec }; aspectratio?: Vec } }
+        layout?: { scene?: { camera?: { eye?: Vec }; aspectratio?: Vec; domain?: { x: number[]; y: number[] } } }
       } | null
       const scene = element?.layout?.scene
-      return cameraOf(
+      const camera = cameraOf(
         scene?.camera?.eye ?? TILTED_EYE,
         scene?.aspectratio?.x ?? TILTED.width,
         scene?.aspectratio?.z ?? TILTED.height,
       )
+      return scene?.domain ? { ...camera, domain: scene.domain } : camera
     },
     /** Move the camera and the stems' height from one view to the other. */
     async tilt(from: SceneCamera, to: SceneCamera): Promise<void> {
       const element = document.getElementById(this.plotId)
       if (!element || reducedMotion()) return
-      const Plotly = await loadPlotly3D()
+      // At once, so a drawing asked for meanwhile waits for the tilt
       this.tilting = true
       try {
+        const Plotly = await loadPlotly3D()
         await afterPaint()
         const start = performance.now()
         let p = 0
@@ -447,11 +566,9 @@ export default defineComponent({
           // By the clock, but in at least TILT_STEPS steps where drawing is slow
           p = Math.min(1, (performance.now() - start) / TILT_MS, p + 1 / TILT_STEPS)
           const camera = between(from, to, ease(p))
-          const scene = this.sceneLayout(camera)
-          await Plotly.relayout(element, {
-            'scene.camera': scene.camera,
-            'scene.aspectratio': scene.aspectratio,
-          } as unknown as Partial<Plotly.Layout>)
+          await Plotly.relayout(element, this.sceneRelayout(camera) as unknown as Partial<Plotly.Layout>)
+          this.up = camera.axes
+          this.$emit('depth', camera.axes)
           if (p >= 1) break
           await new Promise((resolve) => requestAnimationFrame(resolve))
         }
