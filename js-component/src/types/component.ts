@@ -1,3 +1,4 @@
+import type { StepperArgs } from '@/utils/stepper'
 /**
  * Type definitions for component configuration and data structures.
  */
@@ -20,6 +21,12 @@ export interface BaseComponentArgs {
    * (see composables/useZoomState.ts). Without it the zoom stays in the browser.
    */
   zoomIdentifier?: string
+  /** Previous / next buttons for one filter, shown by PlotToolbar (core/stepper.py). */
+  stepper?: StepperArgs
+  /** Tooltip of an info icon on the view, explaining it (the component's ``help``). */
+  help?: string
+  /** Settings in the plot toolbar's gear menu (core/settings.py). */
+  toolbarSettings?: import('@/utils/settings').SettingArgs[]
 }
 
 /**
@@ -67,6 +74,8 @@ export interface PaginationState {
   sort_column?: string
   sort_dir?: 'asc' | 'desc'
   toggles?: Record<string, boolean>
+  /** On/off state of the filter presets, keyed by id */
+  presets?: Record<string, boolean>
   /** The filter dialog's filters in force (sent only when there are any) */
   column_filters?: ColumnFilter[]
   /** The search in force (sent only when there is one) */
@@ -123,6 +132,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMetadata?: Record<string, ColumnMetadata>
   /** Title-row checkboxes that restrict rows to a boolean column */
   toggleFilters?: Array<{ label: string; column: string; default: boolean; group_column?: string | null }>
+  /** Ready-made filters at the top of the filter dialog (filter_presets) */
+  filterPresets?: import('../components/filterPresets').FilterPreset[]
   /** Selections set (null clears) when a row click changes the selection */
   onSelect?: Record<string, unknown>
   /** Clicking the selected row again clears the interactivity selections */
@@ -142,10 +153,21 @@ export interface TableComponentArgs extends BaseComponentArgs {
   fillRow?: boolean
   rowOverview?: boolean
   rowOverviewTitle?: string
+  /** A button per row and action, sending the row to Python */
+  rowActions?: Array<{ id: string, icon: string, label?: string }>
   /** False hides the column menu */
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  /** False leaves Ctrl+C / Cmd+C to the browser instead of copying the selected row */
+  copyRow?: boolean
+  collapseColumns?: boolean
+  /** Place in a chain of tables: Enter goes one level down, Backspace up */
+  level?: number
+  /** State key the tables of one chain share for those moves */
+  levelIdentifier?: string
+  /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
+  excelExport?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */
@@ -178,6 +200,12 @@ export interface LinePlotComponentArgs
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
   showTopPeakLabels?: boolean // Start with the top peak labels shown
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
+  usi?: string // Universal Spectrum Identifier of the shown spectrum; {identifier} placeholders read the state
+  xMarkers?: Array<{ x: number; label: string; color?: string }> | null // Labelled x markers sorted by x (x_markers)
+  xMarkerTolerance?: number | null // Distance within which a marker takes a peak (x_marker_tolerance)
 }
 
 export interface LinePlotStyling {
@@ -208,6 +236,12 @@ export interface LinePlotConfig {
  */
 export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyHeatmap'
+  /** The points can also be drawn in 3D (PeakMap) */
+  view3d?: boolean
+  /** The drawing shown first: '2d' (default) or '3d' */
+  initialView?: '2d' | '3d'
+  /** Label of the height axis in 3D (default: the intensity label) */
+  zLabel?: string
   title?: string
   svgFilename?: string
   scrollZoom?: boolean
@@ -458,6 +492,10 @@ export interface MirrorPlotComponentArgs
   height?: number
   /** Start with the zoom pinned (the pin button in the plot toolbar toggles it). */
   keepZoom?: boolean
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
+  usi?: string // Universal Spectrum Identifier of the shown spectrum; {identifier} placeholders read the state
 }
 
 export interface MirrorPlotStyling {
@@ -479,7 +517,11 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   /** [series value, legend name] pairs, in drawing order */
   seriesNames?: Array<[string, string]>
   seriesColors?: Record<string, string>
-  mode?: 'lines' | 'markers' | 'lines+markers'
+  mode?: 'lines' | 'markers' | 'lines+markers' | 'bars' | 'box'
+  /** Scatter mode per series value drawn otherwise than mode */
+  seriesModes?: Record<string, 'lines' | 'markers' | 'lines+markers'>
+  /** 'h': bars and boxes horizontal, the x column on the vertical axis */
+  orientation?: 'v' | 'h'
   title?: string
   xLabel?: string
   yLabel?: string
@@ -489,9 +531,29 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   yRangeMode?: 'nonnegative' | 'tozero' | 'normal'
   /** Column whose text is shown on hover */
   hoverColumn?: string | null
+  /** Column whose value in the first shown row is added to the title */
+  subtitleColumn?: string | null
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
+  /** Column splitting the rows into views, one shown at a time */
+  viewColumn?: string
+  /** [view value, button label] pairs, in button order */
+  viewNames?: Array<[string, string]>
+  viewDefault?: string
+  /** State identifier the picked view is written to */
+  viewIdentifier?: string
+  /** Numbers of first x values the "Top n" menu offers */
+  topChoices?: number[]
+  topDefault?: number
+  /** Pixels per category of a horizontal plot that grows with its bars */
+  barHeight?: number
+  /** A second switch in the toolbar, writing its value to this identifier. */
+  switchIdentifier?: string
+  switchNames?: Array<[string, string]>
+  switchDefault?: string
+  /** Identifiers a "Clear selection" button sets to null. */
+  clearIdentifiers?: string[]
 }
 
 /**
@@ -610,6 +672,16 @@ export interface FragmentMatches {
   spectrum: unknown
   tolerance: { value: number; unit: string }
   fragments: MatchedFragmentIon[]
+  /** The proteoform matched (fragmentMatchesProteoform only) */
+  proteoform?: {
+    proforma: string
+    sequence: string
+    length: number
+    /** With the variable modifications */
+    theoreticalMass: number
+    /** Share of the bonds with a matched fragment on either side (%) */
+    cleavagePercentage: number
+  }
 }
 
 /**
@@ -656,10 +728,18 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   proformaCopy?: boolean
   /** The change-sequence dialog also reads ProForma */
   proformaInput?: boolean
+  /** The change-sequence dialog gets a UniProt accession field that fills in the sequence */
+  uniprotLookup?: boolean
+  /** Identifier holding the shown proteoform as ProForma, both ways */
+  proformaIdentifier?: string | null
   /** Isotope errors tried when matching (shows the setting); null: hidden, exact matches only */
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */
   methodIonOptions?: boolean
+  /** List the observed masses no selected fragment ion matches, below the fragment table */
+  unmatchedMasses?: boolean
+  /** Write the matched proteoform with the matched fragments */
+  fragmentMatchesProteoform?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');

@@ -11,6 +11,14 @@ from typing import TYPE_CHECKING, Any, Optional
 import polars as pl
 
 from .cache import CacheMissError, atomic_write, cache_lock, get_cache_dir
+from .settings import validate_settings
+from .stepper import (
+    first_step,
+    sorted_values,
+    stepper_args,
+    unique_values,
+    validate_stepper,
+)
 from .storage import scan_parquet
 
 if TYPE_CHECKING:
@@ -45,7 +53,14 @@ class BaseComponent(ABC):
         _component_type: Class-level component type identifier
     """
 
+    #: Whether the component's Vue side has a plot toolbar for ``stepper``.
+    _supports_stepper: bool = False
+
     _component_type: str = ""
+
+    # Payload tables that are sent as deltas once Vue holds an earlier version:
+    # only their new rows, and where each row comes from (see bridge._as_delta)
+    _delta_tables: tuple[str, ...] = ()
 
     # Rows per parquet row group in the cache, or None for the writer's default.
     # Components that keep large list columns (one row per spectrum) set a small
@@ -117,8 +132,53 @@ class BaseComponent(ABC):
             regenerate_cache: If True, rebuild the cache even when one matching this
                 configuration already exists. Needed when the data changed but
                 cache_id and configuration did not.
-            **kwargs: Component-specific configuration options
+            **kwargs: Component-specific configuration options. ``stepper``
+                (a filter identifier) is taken out here: previous / next
+                buttons in the plot toolbar (see core/stepper.py), render-time
+                only and never part of the cache configuration. ``help`` (a
+                short text) is taken out too: an info icon in the view's
+                corner shows it as a tooltip, render-time only as well
+                (``set_help`` changes it, ``None`` hides the icon).
+                ``toolbar_settings`` (see core/settings.py) puts a gear menu in
+                the plot toolbar whose values go to selection identifiers
         """
+        stepper = kwargs.pop("stepper", None)
+        self._help: str | None = kwargs.pop("help", None) or None
+        toolbar_settings = kwargs.pop("toolbar_settings", None)
+        self._setup_component(
+            cache_id,
+            data=data,
+            data_path=data_path,
+            filters=filters,
+            filter_defaults=filter_defaults,
+            interactivity=interactivity,
+            cache_path=cache_path,
+            regenerate_cache=regenerate_cache,
+            float_precision=float_precision,
+            **kwargs,
+        )
+        # Render-time option, kept out of the cache config (see core/stepper.py)
+        if stepper is not None and not self._supports_stepper:
+            raise ValueError(f"{type(self).__name__} has no plot toolbar for a stepper")
+        self._stepper = validate_stepper(stepper, self._filters)
+        if toolbar_settings is not None and not self._supports_stepper:
+            raise ValueError(f"{type(self).__name__} has no plot toolbar for settings")
+        self._toolbar_settings = validate_settings(toolbar_settings)
+
+    def _setup_component(
+        self,
+        cache_id: str,
+        data: pl.LazyFrame | None = None,
+        data_path: str | None = None,
+        filters: dict[str, str] | None = None,
+        filter_defaults: dict[str, Any] | None = None,
+        interactivity: dict[str, str] | None = None,
+        cache_path: str = ".",
+        regenerate_cache: bool = False,
+        float_precision: str = "float32",
+        **kwargs,
+    ):
+        """Create the cache or load it (see ``__init__``)."""
         # Validate inputs
         if data is not None and data_path is not None:
             raise ValueError("Provide either 'data' or 'data_path', not both")
@@ -563,6 +623,60 @@ class BaseComponent(ABC):
         """
         pass
 
+    def _state_args(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Component arguments that depend on the current state.
+
+        Called on every render after ``_get_component_args()``; keep it cheap.
+        By default: the stepper's current value and neighbours, if any.
+        """
+        if not getattr(self, "_stepper", None):
+            return {}
+        return stepper_args(
+            self._stepper,
+            self._stepper,
+            self._stepper_values(),
+            state.get(self._stepper),
+        )
+
+    def _stepper_source(self) -> pl.LazyFrame | pl.DataFrame | None:
+        """The data the stepper reads its filter's values from.
+
+        The preprocessed ``data`` (which keeps the filter columns), else the
+        raw data. Components that store their data otherwise override it.
+        """
+        data = self._preprocessed_data.get("data")
+        if isinstance(data, (pl.LazyFrame, pl.DataFrame)):
+            return data
+        return getattr(self, "_raw_data", None)
+
+    def set_help(self, text: str | None) -> "BaseComponent":
+        """Show ``text`` as the tooltip of an info icon on the view (None: no icon).
+
+        For explanations a reader needs once (what the view shows, how to
+        interact with it), which would otherwise sit as text around the view.
+        Render-time only: it is not part of the cache configuration.
+        """
+        self._help = text or None
+        return self
+
+    def set_toolbar_settings(
+        self, settings: list[dict[str, Any]] | None
+    ) -> "BaseComponent":
+        """Replace the settings of the plot's toolbar (see core/settings.py)."""
+        if settings is not None and not self._supports_stepper:
+            raise ValueError(f"{type(self).__name__} has no plot toolbar for settings")
+        self._toolbar_settings = validate_settings(settings)
+        return self
+
+    def _stepper_values(self) -> list[Any]:
+        """The sorted values of the stepped filter's column, read once per cache."""
+        column = self._filters[self._stepper]
+        return sorted_values(
+            self._cache_dir,
+            column,
+            lambda: unique_values(self._stepper_source(), column),
+        )
+
     @abstractmethod
     def _get_component_args(self) -> dict[str, Any]:
         """
@@ -641,7 +755,9 @@ class BaseComponent(ABC):
         render simultaneously - all default selections are set in Python
         before any Vue component has a chance to trigger a rerun.
 
-        Override in subclasses that support default selection (e.g., Table).
+        By default, a component with a stepper whose filter has no value (and
+        no default) starts at the filter's first value. Override in subclasses
+        that support default selection (e.g., Table).
 
         Args:
             state: Current selection state from StateManager
@@ -650,7 +766,11 @@ class BaseComponent(ABC):
             Dict mapping identifier names to their initial values,
             or None if no initial selection should be set.
         """
-        return None
+        if not getattr(self, "_stepper", None):
+            return None
+        return first_step(
+            self._stepper, self._stepper_values(), state, self._filter_defaults
+        )
 
     def _get_primary_data(self) -> pl.LazyFrame | None:
         """
@@ -666,6 +786,7 @@ class BaseComponent(ABC):
         key: str | None = None,
         state_manager: Optional["StateManager"] = None,
         height: int | None = None,
+        help: str | None = None,
     ) -> Any:
         """
         Render the component in Streamlit.
@@ -676,6 +797,8 @@ class BaseComponent(ABC):
                 If not provided, uses a default shared StateManager.
             height: Optional height in pixels for the component.
                 If not provided, uses DEFAULT_COMPONENT_HEIGHT (400px).
+            help: Tooltip text of an info icon on the view for this render
+                (overrides the one given at construction or by ``set_help``).
 
         Returns:
             The value returned by the Vue component (usually selection state)
@@ -689,6 +812,8 @@ class BaseComponent(ABC):
         # Use default height if not specified
         if height is None:
             height = DEFAULT_COMPONENT_HEIGHT
+        if help is not None:
+            self._help = help or None
 
         return render_component(
             component=self, state_manager=state_manager, key=key, height=height

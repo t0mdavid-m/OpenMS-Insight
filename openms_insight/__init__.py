@@ -11,6 +11,7 @@ from .components.heatmap import Heatmap
 from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
 from .components.pca import PCAPlot
+from .components.peak_map import PeakMap
 from .components.plot3d import Plot3D
 from .components.protein_sequence_view import (
     ProteinSequenceView,
@@ -33,7 +34,7 @@ from .rendering.bridge import (
     get_component_annotations,
 )
 
-__version__ = "0.7.4"
+__version__ = "0.7.9"
 
 __all__ = [
     # Core
@@ -47,6 +48,7 @@ __all__ = [
     "Table",
     "LinePlot",
     "Heatmap",
+    "PeakMap",
     "ClusteredHeatmap",
     "VolcanoPlot",
     "SequenceView",

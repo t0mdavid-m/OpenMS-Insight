@@ -52,10 +52,20 @@ export interface ToolMenuRange {
   step: number
   value: number
   input: (value: number) => void
+  /** Called once the slider is let go (input is called while it moves). */
+  change?: (value: number) => void
   format?: (value: number) => string
 }
 
-export type ToolMenuSection = ToolMenuChoice | ToolMenuToggles | ToolMenuRange
+/** Commands, each a menu item that runs once (e.g. select every up-regulated point). */
+export interface ToolMenuActions {
+  kind: 'actions'
+  label: string
+  items: { value: string; label: string; count?: number; color?: string; disabled?: boolean }[]
+  run: (value: string) => void
+}
+
+export type ToolMenuSection = ToolMenuChoice | ToolMenuToggles | ToolMenuRange | ToolMenuActions
 
 export interface PlotTool {
   id: string
@@ -78,17 +88,27 @@ export interface PlotTool {
    * calling `run` (on a narrow toolbar they are listed in the ⋯ menu).
    */
   menu?: ToolMenuSection[]
+  /** Stays on a narrow toolbar, beside Reset, instead of moving into the ⋯ menu. */
+  keep?: boolean
   run: () => void
 }
 
 /** Icons of the tools (Material Design, 24 x 24). */
 export const ICONS = {
+  settings:
+    'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
   ruler:
     'M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 10H3V8h2v4h2V8h2v4h2V8h2v4h2V8h2v4h2V8h2v8z',
   tag: 'M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58.55 0 1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z',
   number:
     'M20.5 10L21 8h-4l1-4h-2l-1 4h-4l1-4h-2L9 8H5l-.5 2h4l-1 4h-4L3 16h4l-1 4h2l1-4h4l-1 4h2l1-4h4l.5-2h-4l1-4h4zm-7 4h-4l1-4h4l-1 4z',
   pin: 'M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z',
+  /** A shaded band between two edges, as the x window draws it. */
+  window: 'M3 3h2v18H3V3zm16 0h2v18h-2V3zM7 5h10v14H7V5z',
+  /** Dashed vertical guides, as the x markers draw them. */
+  markers: 'M5 3h2v4H5V3zm0 6h2v4H5V9zm0 6h2v4H5v-4zm0 6h2v-1H5v1zM11 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4zM17 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4z',
+  previous: 'M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z',
+  next: 'M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z',
   close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
   download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
   more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
@@ -102,6 +122,10 @@ export const ICONS = {
     'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z',
   layers:
     'M11.99 18.54 4.62 12.81 3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z',
+  /** A dashed box, as a box selection draws it. */
+  select:
+    'M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2zM8 8h8v8H8V8z',
+  copy: 'M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z',
   deselect:
     'M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2z',
 } as const
@@ -165,4 +189,41 @@ export function plotlyTools(element: HTMLElement | null): PlotlyTool[] {
 /** Tooltip of a tool: its name, then what it does. */
 export function toolTitle(tool: PlotTool): string {
   return tool.help ? `${tool.label}: ${tool.help}` : tool.label
+}
+
+/**
+ * Break a plot title into lines that fit ``width`` pixels (Plotly draws a
+ * title on one line and cuts it off at both edges otherwise). Breaks at spaces;
+ * returns the lines joined with <br> and how many there are.
+ */
+export function wrapTitle(
+  text: string,
+  width: number | undefined,
+  charWidth = 8.5,
+): { text: string; lines: number } {
+  if (!text || !width || width <= 0) return { text, lines: 1 }
+  const budget = Math.max(12, Math.floor((width - 32) / charWidth))
+  if (text.length <= budget) return { text, lines: 1 }
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(' ')) {
+    if (line && line.length + 1 + word.length > budget) {
+      lines.push(line)
+      line = word
+    } else {
+      line = line ? `${line} ${word}` : word
+    }
+  }
+  if (line) lines.push(line)
+  return { text: lines.join('<br>'), lines: lines.length }
+}
+
+/** A bold Plotly title that wraps to the width of the element with ``id``. */
+export function boldTitle(text: string, id?: string): { text: string; lines: number } {
+  const width = id ? document.getElementById(id)?.clientWidth : undefined
+  const wrapped = wrapTitle(text, width)
+  return {
+    text: wrapped.text.split('<br>').map((part) => `<b>${part}</b>`).join('<br>'),
+    lines: wrapped.lines,
+  }
 }

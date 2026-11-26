@@ -44,6 +44,8 @@ class PCAPlot(BaseComponent):
         pca(state_manager=state, pc_x=1, pc_y=2)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "pca"
 
     def __init__(
@@ -445,6 +447,7 @@ class PCAPlot(BaseComponent):
         height: int | None = None,
         pc_x: int | None = None,
         pc_y: int | None = None,
+        help: str | None = None,
     ) -> Any:
         """
         Render the PCA plot component.
@@ -461,6 +464,8 @@ class PCAPlot(BaseComponent):
         Returns:
             Component result for Streamlit rendering.
         """
+        if help is not None:
+            self._help = help or None
         if pc_x is not None:
             self._current_pc_x = pc_x
         if pc_y is not None:

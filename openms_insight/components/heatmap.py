@@ -19,6 +19,7 @@ from ..core.multi_select import (
     values_in_region,
 )
 from ..core.registry import register_component
+from ..core.stepper import sorted_values
 from ..core.storage import scan_parquet
 from ..core.zoom import normalize_zoom
 from ..preprocessing.compression import (
@@ -101,7 +102,16 @@ class Heatmap(BaseComponent):
         heatmap(state_manager=state_manager)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "heatmap"
+
+    # Data that grows while it is shown (e.g. a live acquisition) changes in a
+    # few rows per refresh: only those are sent again
+    _delta_tables = ("heatmapData",)
+
+    # The marked points carry their intensity too (PeakMap draws them in 3D)
+    _highlight_intensity = False
 
     def __init__(
         self,
@@ -147,6 +157,7 @@ class Heatmap(BaseComponent):
         color_columns: dict[str, str] | None = None,
         layer_column: str | None = None,
         colorbar_editor: bool = True,
+        stepper: str | None = None,
         **kwargs,
     ):
         """
@@ -266,6 +277,12 @@ class Heatmap(BaseComponent):
             colorbar_editor: The colorbar, drawn below the plot, opens an
                 editor on click: one, two or three colors, presets, reverse and
                 reset (default True; False keeps ``colorscale``).
+            stepper: A filter identifier to step through with ``‹`` / ``›``
+                buttons in the toolbar, e.g. the frames of an ion-mobility run
+                shown as m/z × 1/K0 (default None: no buttons). Listed in
+                ``categorical_filters`` too, every value keeps all its points;
+                otherwise the values come from the finest resolution level.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -367,6 +384,7 @@ class Heatmap(BaseComponent):
             highlight=highlight,
             on_select=on_select,
             multi_select=multi_select,
+            stepper=stepper,
             **kwargs,
         )
         self._config.pop("multi_select", None)
@@ -1116,6 +1134,61 @@ class Heatmap(BaseComponent):
             return [-math.inf, math.inf]
         return [float(lo), float(hi)]
 
+    def _numeric_axes(self, levels: list) -> bool:
+        """Whether both the x and the y column are numbers (not categories)."""
+        if not levels:
+            return True
+        level = levels[0]
+        schema = (
+            level.collect_schema() if isinstance(level, pl.LazyFrame) else level.schema
+        )
+        return all(
+            schema.get(column) is None or schema[column].is_numeric()
+            for column in (self._x_column, self._y_column)
+        )
+
+    def _select_categorical_zoom(
+        self,
+        zoom: dict[str, Any],
+        state: dict[str, Any],
+        levels: list,
+        filtered_raw: pl.LazyFrame | None,
+        non_categorical_filters: dict[str, str],
+    ) -> pl.DataFrame:
+        """The points of a zoomed heatmap with a category axis.
+
+        Only its numeric axis, if any, is cut to the zoom; the category axis
+        keeps all its points (such heatmaps are small: one cell per pair).
+        """
+        data = (
+            filtered_raw
+            if filtered_raw is not None
+            else (levels[-1] if levels else None)
+        )
+        if data is None:
+            return pl.DataFrame()
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+        schema = data.collect_schema()
+        normalized = normalize_zoom(zoom) or {}
+        for axis, column in (("x", self._x_column), ("y", self._y_column)):
+            r = normalized.get(axis)
+            if (
+                r is not None
+                and schema.get(column) is not None
+                and schema[column].is_numeric()
+            ):
+                data = data.filter(pl.col(column).is_between(r[0], r[1]))
+        if non_categorical_filters:
+            df_pandas, _ = filter_and_collect_cached(
+                data,
+                non_categorical_filters,
+                state,
+                filter_defaults=self._filter_defaults,
+            )
+            return from_pandas_safe(df_pandas)
+        return data.collect()
+
     def _select_level_for_zoom(
         self,
         zoom: dict[str, Any],
@@ -1141,6 +1214,15 @@ class Heatmap(BaseComponent):
             Filtered Polars DataFrame at appropriate resolution
         """
         import sys
+
+        # A category axis (sample names, protein names) has no numeric range:
+        # the browser zooms it on its own, and every point is sent
+        if not self._numeric_axes(
+            levels or ([filtered_raw] if filtered_raw is not None else [])
+        ):
+            return self._select_categorical_zoom(
+                zoom, state, levels, filtered_raw, non_categorical_filters
+            )
 
         x0, x1, y0, y1 = self._zoom_bounds(zoom, levels)
 
@@ -1380,6 +1462,10 @@ class Heatmap(BaseComponent):
                 "x": highlighted[self._x_column].to_list(),
                 "y": highlighted[self._y_column].to_list(),
             }
+            if self._intensity_column in highlighted.columns:
+                result["highlightPoints"]["z"] = highlighted[
+                    self._intensity_column
+                ].to_list()
             # The points data may be unchanged while the marked points move
             result["_hash"] = f"{data_hash}:{compute_dataframe_hash(highlighted)}"
         if self._multi_select:
@@ -1416,6 +1502,8 @@ class Heatmap(BaseComponent):
         """x and y of the points whose `multi_select` column value is in the
         selected set, from the full-resolution data."""
         columns = [self._x_column, self._y_column]
+        if self._highlight_intensity and self._intensity_column:
+            columns.append(self._intensity_column)
         empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
         full = self._full_filtered(state, levels)
         if full is None:
@@ -1479,6 +1567,8 @@ class Heatmap(BaseComponent):
         """x and y of the points matching the selected value of each
         `highlight` identifier, from the full-resolution data."""
         columns = [self._x_column, self._y_column]
+        if self._highlight_intensity and self._intensity_column:
+            columns.append(self._intensity_column)
         empty = pl.DataFrame(schema=dict.fromkeys(columns, pl.Float64))
         conditions = [
             pl.col(column) == state[identifier]
@@ -1502,6 +1592,27 @@ class Heatmap(BaseComponent):
             if value is not None and column in schema:
                 condition = condition & (pl.col(column) == value)
         return full.filter(condition).select(columns).collect()
+
+    def _stepper_values(self) -> list[Any]:
+        """The stepped filter's values: those of a categorical filter, else
+        those in the finest resolution level (see core/stepper.py)."""
+        categorical = self._preprocessed_data.get("categorical_filter_values") or {}
+        if self._stepper in categorical:
+            return sorted_values(
+                self._cache_dir,
+                self._filters[self._stepper],
+                lambda: list(categorical[self._stepper]),
+            )
+        return super()._stepper_values()
+
+    def _stepper_source(self) -> pl.LazyFrame | pl.DataFrame | None:
+        """The finest resolution level (all points unless it was downsampled)."""
+        num_levels = self._preprocessed_data.get("num_levels") or 0
+        for level in range(num_levels - 1, -1, -1):
+            data = self._preprocessed_data.get(f"level_{level}")
+            if isinstance(data, (pl.LazyFrame, pl.DataFrame)):
+                return data
+        return getattr(self, "_raw_data", None)
 
     def _get_component_args(self) -> dict[str, Any]:
         """

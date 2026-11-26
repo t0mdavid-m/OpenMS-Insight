@@ -5,6 +5,7 @@
 
   <v-sheet class="pa-4 rounded-lg sequence-controls" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
     <div class="d-flex flex-wrap align-center justify-end mb-2">
+      <FullscreenButton />
       <div class="d-flex align-center">
         <v-checkbox
           v-if="sites.internalCount > 0"
@@ -36,6 +37,18 @@
           <v-icon>mdi-fit-to-screen-outline</v-icon>
           <v-tooltip activator="parent" location="bottom">Reset view</v-tooltip>
         </v-btn>
+        <v-menu location="bottom end">
+          <template #activator="{ props: menu }">
+            <v-btn v-bind="menu" variant="text" icon="mdi-script-text-outline" size="small" :disabled="!loaded">
+              <v-icon>mdi-script-text-outline</v-icon>
+              <v-tooltip activator="parent" location="bottom">Open this view in ChimeraX or PyMOL</v-tooltip>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item prepend-icon="mdi-download" title="ChimeraX script (.py)" subtitle="File > Open in ChimeraX" @click="downloadScript('chimerax')"></v-list-item>
+            <v-list-item prepend-icon="mdi-download" title="PyMOL script (.pml)" subtitle="File > Run Script in PyMOL" @click="downloadScript('pymol')"></v-list-item>
+          </v-list>
+        </v-menu>
         <v-btn variant="text" icon="mdi-camera" size="small" :disabled="!loaded" @click="downloadImage">
           <v-icon>mdi-camera</v-icon>
           <v-tooltip activator="parent" location="bottom">{{ downloadImageTitle }}</v-tooltip>
@@ -81,11 +94,13 @@
 
 <script lang="ts">
 import { defineComponent, markRaw, type PropType } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { ProteinStructureViewComponentArgs } from '@/types/component'
 import { type ImageFormat, convertRaster, downloadTitle, imageFileName, imageFormatOf, saveImage } from '@/utils/imageExport'
+import { type ScriptInput, chimeraxScript, objectName, pymolScript } from './structure-script'
 import type { FragmentSelection, MatchedSpectrum, SequenceData } from '@/types/protein-sequence-data'
 import { settingsIons, toleranceUnit } from './fragment-ions'
 import {
@@ -124,6 +139,7 @@ type Model = any
 
 export default defineComponent({
   name: 'ProteinStructureView',
+  components: { FullscreenButton },
   props: {
     args: {
       type: Object as PropType<ProteinStructureViewComponentArgs>,
@@ -619,6 +635,57 @@ export default defineComponent({
       // zoomTo fits the bounding sphere, which leaves a wide margin
       this.viewer.zoom(1.4)
       this.viewer.render()
+    },
+    /** The colouring as shown (without the transient selection), for a desktop viewer script. */
+    scriptInput(): ScriptInput | undefined {
+      const mapping = this.mapping
+      const structure = this.structure
+      if (mapping === undefined || structure?.data === undefined) return undefined
+      const [start, end] = this.sequenceRange
+      const colors = new Map<string, number[]>()
+      mapping.dbToResidue.forEach((r, pos) => {
+        if (r < 0 || pos < start || pos > end) return
+        const color = this.baseColor(pos)
+        if (!colors.has(color)) colors.set(color, [])
+        colors.get(color)!.push(mapping.residues[r].resi)
+      })
+      const modifications = this.showModifications
+        ? (this.entry?.modifications ?? []).map((mod) => ({
+            residues: this.residuesOf((pos) => pos >= mod.start && pos <= mod.end),
+            label: `${mod.labels ? `${this.shortLabel(mod.labels)} ` : ''}${mod.mass_diff >= 0 ? '+' : ''}${mod.mass_diff.toFixed(2)} Da`,
+          }))
+        : []
+      const legend = this.legend
+        .filter((item) => item.color !== undefined && item.color !== SELECTED && item.color !== this.fragmentColor)
+        .map((item) => ({ label: item.label, color: item.color! }))
+      if (modifications.length > 0) {
+        legend.push({ label: 'Modification', color: MODIFICATION_BACKGROUND })
+        legend.push({ label: 'Modified residue (atoms as spheres)', color: MODIFICATION_DOT })
+      }
+      legend.push({ label: 'Other chains', color: OTHER_CHAIN })
+      const name = structure.accession ?? structure.name ?? 'structure'
+      return {
+        name,
+        format: structure.format === 'cif' ? 'cif' : 'pdb',
+        data: structure.data,
+        chain: mapping.chain,
+        colors,
+        hidden: this.residuesOf((pos) => pos < start || pos > end),
+        otherChains: OTHER_CHAIN,
+        modifications,
+        modificationColor: MODIFICATION_DOT,
+        legend,
+        title: `${name}${this.sourceLabel ? ` (${this.sourceLabel})` : ''}: fragment evidence, ${this.mappingLabel}`,
+      }
+    },
+    /** Saves a script that shows this colouring in ChimeraX or PyMOL. */
+    downloadScript(viewer: 'chimerax' | 'pymol'): void {
+      const input = this.scriptInput()
+      if (input === undefined) return
+      const text = viewer === 'chimerax' ? chimeraxScript(input) : pymolScript(input)
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+      saveImage(url, `${objectName(input.name)}_${viewer}.${viewer === 'chimerax' ? 'py' : 'pml'}`)
+      window.setTimeout(() => URL.revokeObjectURL(url), 10000)
     },
     /** The 3D scene is a WebGL canvas, with no vector form: SVG is saved as PNG. */
     async downloadImage(): Promise<void> {

@@ -7,14 +7,16 @@
        the fixed-modification list below its field -->
   <div
     class="sequence-view-row"
-    :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT}px` } : undefined"
+    :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT + (args.uniprotLookup ? UNIPROT_ROW_HEIGHT : 0)}px` } : undefined"
   >
   <div class="sequence-view-column">
-  <div v-if="args.title" class="d-flex justify-center">
+  <div v-if="args.title" class="d-flex justify-center align-center">
+    <HelpIcon v-if="args.help" :text="args.help" class="title-help" />
     <h4>{{ args.title }}</h4>
   </div>
 
-  <v-sheet class="pa-4 rounded-lg" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
+  <v-sheet class="pa-4 rounded-lg help-card" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
+      <HelpIcon v-if="args.help && !args.title" :text="args.help" floating class="card-help" />
     <div class="sequence-and-scale">
     <div :id="sequencePartId" class="sequence-part">
       <!-- Label and value pairs wrap as whole pairs, never inside one -->
@@ -39,6 +41,7 @@
         </span>
       </div>
       <div class="d-flex justify-end px-4 mb-4">
+        <FullscreenButton />
         <div>
           <ImageScreenshot
             :element-id="sequencePartId"
@@ -94,6 +97,19 @@
             <v-icon>mdi-pencil</v-icon>
             <v-tooltip activator="parent" location="bottom">
               Edit sequence and modifications
+            </v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="isEdited && (n_truncation || c_truncation)"
+            variant="text"
+            icon="mdi-arrow-expand-horizontal"
+            size="large"
+            data-testid="restore-termini"
+            @click="setProteoformRange(0, sequence.length - 1)"
+          >
+            <v-icon>mdi-arrow-expand-horizontal</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Restore the truncated residues (right-click a residue to start or end the proteoform there)
             </v-tooltip>
           </v-btn>
           <v-btn
@@ -274,6 +290,35 @@
           </v-menu>
         </div>
       </div>
+      <!-- A ProForma the app gave that the view cannot read -->
+      <v-alert
+        v-if="proformaSyncError"
+        type="error"
+        variant="tonal"
+        density="compact"
+        class="mx-4 mb-2"
+      >
+        {{ proformaSyncError }}
+      </v-alert>
+      <!-- No sequence yet: one button opens the Change sequence dialog -->
+      <div
+        v-if="sequence.length === 0 && shouldShowSequenceChangeButton && !isEdited"
+        class="d-flex flex-column align-center text-center py-6 px-4"
+      >
+        <v-btn
+          :color="accentColor"
+          variant="tonal"
+          size="large"
+          prepend-icon="mdi-dna"
+          class="text-none"
+          @click="openSequenceDialog"
+        >
+          {{ args.uniprotLookup ? 'Enter a sequence or UniProt accession' : 'Enter a sequence' }}
+        </v-btn>
+        <div class="text-body-2 text-medium-emphasis mt-2">
+          One-letter codes{{ args.proformaInput ? ', or ProForma with modifications' : '' }}{{ args.uniprotLookup ? ', or the sequence of a UniProt entry' : '' }}
+        </div>
+      </div>
       <!-- Regex highlighting input -->
       <div v-if="showRegexHighlight" class="pb-4 px-4">
         <v-card variant="outlined" class="pa-3">
@@ -307,13 +352,35 @@
       </div>
       <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
+          <!-- With truncations hidden, a break line one cell per truncated
+               residue (at most a row) stands for the residues outside the
+               proteoform. The first row runs: an empty row-number cell, the
+               break line (positions, then zig-zag), N, the sequence; the last:
+               the sequence, C, the break line (zig-zag, then positions), on a
+               row of its own when the rest of C's row is too short for it. -->
           <div
-            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % perRow === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="aa_index === sequence_start && truncatedBefore > 0"
+            class="truncated-gap"
+          ></div>
+          <TruncationBreak
+            :range="truncatedRange(1, truncatedBefore)" :text="truncatedText(truncatedBefore, 1, truncatedBefore)"
+            :mass="truncatedMassText(0, truncatedBefore)" :residues="truncatedResidues(0, truncatedBefore)"
+            testid="truncated-n-term" data-testid="truncated-n-term"
+            v-if="aa_index === sequence_start && truncatedBefore > 0 && nBreakCells > 0"
+            :cells="nBreakCells" :style="{ gridColumn: `span ${nBreakCells}` }"
+          />
+          <ProteinTerminalCell
+            v-if="(aa_index === 0 && truncatedBefore === 0) || (aa_index === sequence_start && truncatedBefore > 0)"
+            protein-terminal="N-term" :truncated=n_truncation :index="-1"
+            :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"
+          />
+          <div
+            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && (aa_index >= sequence_start) && (aa_index <= sequence_end) && (gridCell(aa_index) === 0) && (aa_index > sequence_start || truncatedBefore > 0))"
             class="row-number row-number-start"
+            :style="showTruncations ? undefined : { gridColumn: '1' }"
           >
-          {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+          {{ aa_index + 1 }}
           </div>
-          <ProteinTerminalCell v-if="aa_index === 0" protein-terminal="N-term" :truncated=n_truncation :index="-1" :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"/>
           <AminoAcidCell
             v-if="showTruncations || ((sequence_start <= aa_index) && (sequence_end >= aa_index))"
             :index="aa_index"
@@ -331,10 +398,10 @@
             @selected="aminoAcidSelected"
           />
           <div
-            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && (gridCell(aa_index) === perRow - 1) && (aa_index < sequence_end) && (aa_index >= sequence_start))"
             class="row-number row-number-end"
           >
-            {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+            {{ aa_index + 1 }}
           </div>
           <ProteinTerminalCell
             v-if="aa_index === sequence.length - 1"
@@ -343,6 +410,20 @@
             :disable-variable-modification-selection="disableVariableModifications"
             :determined="c_determined"
             :font-size="fontSize"
+          />
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline"
+            :cells="cBreakCells" :style="{ gridColumn: `span ${cBreakCells}` }"
+          />
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline"
+            :cells="cBreakCells" :style="{ gridColumn: `2 / span ${cBreakCells}` }"
           />
           </template>
       </div>
@@ -391,13 +472,15 @@
       <template v-if="(fragmentTableTitle !== '') && showFragments">
         <FragmentTable
           :key="usesAnnotator ? 'annotator' : 'matched'"
-          :table-data="fragmentTableData"
+          :table-data="fragmentRows"
           :column-definitions="usesAnnotator ? annotatorTableColumnDefinitions : fragmentColumns"
           :index="index"
           :selected-row-index-from-listening="selectedFragTableRowIndex"
           :go-to-fields="['Name']"
+          :filter-presets="fragmentFilterPresets"
           table-layout-param="fitColumns"
           @row-selected="onFragmentTableRowSelected"
+          @preset-changed="onFragmentPresetChanged"
         >
           <template #default>{{ fragmentTableTitle }}</template>
           <template #end-title-row
@@ -434,6 +517,42 @@
         Enter Custom Sequence
       </v-card-title>
       <v-card-text style="padding-bottom: 12px">
+        <!-- A UniProt accession fills the field below with its sequence -->
+        <div v-if="args.uniprotLookup" class="mb-4">
+          <div class="d-flex align-start" style="gap: 8px">
+            <v-text-field
+              v-model="uniprotAccession"
+              label="UniProt accession (optional)"
+              placeholder="e.g. P0ACF0"
+              density="compact"
+              clearable
+              :error-messages="uniprotError"
+              :hint="uniprotEntry ? undefined : 'Gets the sequence of the entry; edit it or add modifications below'"
+              :persistent-hint="!uniprotEntry"
+              @keydown.enter.prevent="lookUpUniProt"
+            >
+              <template #prepend-inner>
+                <v-icon>mdi-database-search</v-icon>
+              </template>
+            </v-text-field>
+            <v-btn
+              :color="accentColor"
+              variant="tonal"
+              :loading="uniprotLoading"
+              :disabled="!uniprotAccession || !uniprotAccession.trim()"
+              style="margin-top: 2px"
+              @click="lookUpUniProt"
+            >
+              Get sequence
+            </v-btn>
+          </div>
+          <div v-if="uniprotEntry" class="text-caption" style="margin-top: -14px">
+            <a :href="uniprotEntry.url" target="_blank" rel="noopener">{{ uniprotEntry.accession }}</a>
+            · {{ uniprotEntry.entryName }} · {{ uniprotEntry.proteinName }}
+            <template v-if="uniprotEntry.organism"> · <i>{{ uniprotEntry.organism }}</i></template>
+            · {{ uniprotEntry.sequence.length }} residues
+          </div>
+        </div>
         <!-- The example shows only while typing, under the raised label -->
         <v-textarea
           v-model="customSequenceInput"
@@ -489,7 +608,9 @@
 </template>
 
 <script lang="ts">
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { defineComponent, toRaw, type PropType } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -509,11 +630,14 @@ import type {
 import type { SequenceObject } from '@/types/protein-sequence-object'
 import type { ColumnDefinition } from 'tabulator-tables'
 import FragmentTable from './FragmentTable.vue'
+import type { FilterPreset } from '../filterPresets'
 import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
+import TruncationBreak from './TruncationBreak.vue'
+import { STANDARD_RESIDUE_MASSES } from '@/utils/measure'
 import { builtInLibrary, extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
 import {
   describeLocalization,
@@ -529,6 +653,7 @@ import {
   toProForma,
   type ProFormaModification,
 } from './proforma'
+import { fetchUniProtEntry, type UniProtEntry } from './uniprot'
 import {
   CUSTOM_METHOD,
   FRAGMENTATION_METHODS,
@@ -554,6 +679,16 @@ import {
 // Height (px) the Change sequence dialog needs: title, the sequence field,
 // the fixed-modification picker with its open list, and the buttons
 const SEQUENCE_DIALOG_HEIGHT = 640
+// Extra height of the UniProt accession row above the sequence field
+const UNIPROT_ROW_HEIGHT = 90
+
+// ProForma name of a residue menu label: a library id such as
+// 'Acetyl (N-term)' gives 'Acetyl'; a custom mass or a sum has none
+function proFormaName(label: string | undefined): string | undefined {
+  if (!label || label === 'Custom' || label.includes(' + ')) return undefined
+  if (/^[+-]?\d/.test(label)) return undefined
+  return label.replace(/\s*\([^)]*\)$/, '')
+}
 
 // One label and value of the summary lines above the sequence
 type SummaryItem = { label: string; value: string }
@@ -586,12 +721,15 @@ function sameModifications(a: ModificationData[], b: ModificationData[]): boolea
 export default defineComponent({
   name: 'ProteinSequenceView',
   components: {
+    FullscreenButton,
+    HelpIcon,
     SequenceViewInformation,
     FragmentTable,
     AminoAcidCell,
     ProteinTerminalCell,
     ImageScreenshot,
     InternalFragmentTrack,
+    TruncationBreak,
   },
   props: {
     args: {
@@ -624,6 +762,10 @@ export default defineComponent({
         entry: () => this.entry,
         selectedAA: () => this.selectedAA,
         setSelectedAA: (position?: number) => this.setSelectedAA(position),
+        // While an identification is edited: its residue range, which a
+        // residue's menu moves
+        editRange: () => (this.isEdited ? { start: this.sequence_start, end: this.sequence_end } : null),
+        setRange: (start: number, end: number) => this.setProteoformRange(start, end),
       },
     }
   },
@@ -734,6 +876,13 @@ export default defineComponent({
         },
       ] as ColumnDefinition[],
       fragmentTableData: [] as Record<string, unknown>[],
+      // Observed masses no selected fragment ion matches (unmatchedMasses):
+      // rows appended to the fragment table while the filter is off
+      unmatchedTableData: [] as Record<string, unknown>[],
+      unmatchedTableTitle: '' as string,
+      unmatchedTableTooltip: '' as string,
+      // Mirrors the 'Hide unmatched masses' preset of the fragment table
+      showUnmatched: false as boolean,
       // Annotated fragment behind each fragmentTableData row
       fragmentTableSource: [] as AnnotatedFragment[],
       selectedFragment: undefined as AnnotatedFragment | undefined,
@@ -753,6 +902,16 @@ export default defineComponent({
       // Sequence change dialog properties
       sequenceDialog: false as boolean,
       SEQUENCE_DIALOG_HEIGHT,
+      UNIPROT_ROW_HEIGHT,
+      // UniProt lookup in the change-sequence dialog
+      uniprotAccession: '' as string | null,
+      uniprotError: '' as string,
+      uniprotLoading: false as boolean,
+      uniprotEntry: null as UniProtEntry | null,
+      // Two-way ProForma link with the app (args.proformaIdentifier): the
+      // residues a ProForma from the app asked for, until the view shows them
+      pendingProFormaSequence: null as string | null,
+      proformaSyncError: '' as string,
       // Modification ids picked in the change-sequence dialog
       customModifications: [] as string[],
       // Where the matched fragments place each modification set on a residue
@@ -763,6 +922,17 @@ export default defineComponent({
     }
   },
   computed: {
+    // The shown proteoform as ProForma, for the app's identifier
+    proFormaText(): string {
+      return this.args.proformaIdentifier ? this.proForma() : ''
+    },
+    // The ProForma the app put in its identifier (null: none)
+    externalProForma(): string | null {
+      const id = this.args.proformaIdentifier
+      if (!id) return null
+      const value = this.selectionStore.$state[id]
+      return typeof value === 'string' ? value : null
+    },
     fragmentationMethodItems(): string[] {
       return [...FRAGMENTATION_METHODS.map((m) => m.name), CUSTOM_METHOD]
     },
@@ -823,7 +993,40 @@ export default defineComponent({
     activeIsotopeErrors(): number {
       return this.isotopeErrorsEnabled && this.isotopeMatching ? this.isotopeErrors : 0
     },
+    unmatchedAvailable(): boolean {
+      return this.args.unmatchedMasses === true && !this.usesAnnotator &&
+        this.unmatchedTableTitle !== ''
+    },
+    // The fragment table's rows: the matched fragments, then the unmatched
+    // masses, which the table's 'Hide unmatched masses' preset hides by default
+    fragmentRows(): Record<string, unknown>[] {
+      if (!this.unmatchedAvailable) return this.fragmentTableData
+      return [...this.fragmentTableData, ...this.unmatchedTableData]
+    },
+    fragmentFilterPresets(): FilterPreset[] {
+      if (!this.unmatchedAvailable) return []
+      return [{
+        id: 'hide-unmatched',
+        label: `Hide ${this.unmatchedTableTitle}`,
+        help: this.unmatchedTableTooltip,
+        filters: [{ column: 'Unmatched', op: '!=', value: true }],
+        default: true,
+      }]
+    },
     fragmentColumns(): ColumnDefinition[] {
+      const columns = this.columnsWithIsotope
+      if (!this.unmatchedAvailable) return columns
+      const at = columns.findIndex((column) => column.field === 'Name') + 1
+      return [
+        ...columns.slice(0, at),
+        {
+          title: 'Nearest ion', field: 'Nearest',
+          headerTooltip: 'For an unmatched mass: the theoretical fragment ion (of the selected types) closest to it. The theoretical mass and the mass differences of that row are to this ion, outside the tolerance.',
+        } as unknown as ColumnDefinition,
+        ...columns.slice(at),
+      ]
+    },
+    columnsWithIsotope(): ColumnDefinition[] {
       const columns = this.fragmentTableColumnDefinitions
       if (this.activeIsotopeErrors === 0) return columns
       const at = columns.findIndex((column) => column.field === 'ObservedMass') + 1
@@ -898,6 +1101,38 @@ export default defineComponent({
     },
     c_truncation(): boolean {
       return this.sequence_end < (this.sequence.length - 1)
+    },
+    /** Cells of the N-terminal break line: one per truncated residue, at
+     *  most a row beside N */
+    nBreakCells(): number {
+      return Math.min(this.truncatedBefore, Math.max(this.perRow - 1, 0))
+    },
+    /** Cells before the first residue of the proteoform in the grid's first
+     *  row: the break line and N (truncations hidden) */
+    gridOffset(): number {
+      return this.truncatedBefore > 0 ? this.nBreakCells + 1 : 0
+    },
+    /** Cells of the C-terminal break line: one per truncated residue, at
+     *  most a row */
+    cBreakCells(): number {
+      return Math.min(this.truncatedAfter, this.perRow)
+    },
+    /** The C-terminal break line fits in the cells left after C in the last
+     *  row; C takes the row-number column when the last residue ends a row */
+    cBreakInline(): boolean {
+      const last = this.gridCell(this.sequence_end)
+      const free = last === this.perRow - 1 ? 0 : this.perRow - 2 - last
+      return this.cBreakCells <= free
+    },
+    /** Residues before the proteoform truncated from the grid (truncations hidden) */
+    truncatedBefore(): number {
+      return this.showIdentification && !this.showTruncations ? this.sequence_start : 0
+    },
+    /** Residues after the proteoform truncated from the grid (truncations hidden) */
+    truncatedAfter(): number {
+      return this.showIdentification && !this.showTruncations
+        ? Math.max(0, this.sequence.length - 1 - this.sequence_end)
+        : 0
     },
     c_determined(): boolean {
       return this.sequence_end_reported >= 0
@@ -1118,12 +1353,24 @@ export default defineComponent({
     },
   },
   watch: {
+    // The view's proteoform changed (sequence, fixed or variable modifications)
+    proFormaText() {
+      this.publishProForma()
+    },
+    // The app gave a new ProForma
+    externalProForma(value: string | null) {
+      if (value === null || value === this.proFormaText) return
+      this.applyExternalProForma(value)
+    },
     protonShiftAllowed(allowed: boolean) {
       if (!allowed) this.ionTypesExtra['proton loss/addition'] = false
     },
     // An error about the input goes once the input changes
     customSequenceInput() {
       this.sequenceInputError = ''
+    },
+    uniprotAccession() {
+      this.uniprotError = ''
     },
     // The residue menus read the variable-modification library from the store
     'args.variableModificationLibrary': {
@@ -1235,6 +1482,12 @@ export default defineComponent({
     this.setSelectedAA(undefined)
     this.syncStoreFromEntry()
     this.updateSettings()
+    // A ProForma the app gave before the view existed, else the view's own
+    if (this.externalProForma !== null && this.externalProForma !== this.proFormaText) {
+      this.applyExternalProForma(this.externalProForma)
+    } else {
+      this.publishProForma()
+    }
     if (typeof this.args.isotopeErrors === 'number') {
       this.applyIsotopeErrorsArg(this.args.isotopeErrors)
     }
@@ -1325,6 +1578,43 @@ export default defineComponent({
         item.selected = selected.has(item.text)
       })
     },
+    /** "1–23": protein positions (1-based) of truncated residues, the
+     *  label of the break line marking a truncated terminus */
+    truncatedRange(first: number, last: number): string {
+      return first === last ? `${first}` : `${first}–${last}`
+    },
+    /** "23 residues truncated (1–23)": hover text and accessible label
+     *  of the break line */
+    truncatedText(count: number, first: number, last: number): string {
+      return `${count} ${count === 1 ? 'residue' : 'residues'} truncated (${this.truncatedRange(first, last)})`
+    },
+    /** Cell (0-based column of the residue cells) of residue `index` in
+     *  the grid with truncations hidden */
+    gridCell(index: number): number {
+      return (this.gridOffset + index - this.sequence_start) % this.perRow
+    },
+    /** Summed monoisotopic residue masses (Da) of the truncated residues
+     *  (0-based, end exclusive); null when one of them is not a standard
+     *  residue */
+    truncatedMass(start: number, end: number): number | null {
+      let mass = 0
+      for (const aa of this.sequence.slice(start, end)) {
+        const m = STANDARD_RESIDUE_MASSES[aa === 'I' || aa === 'L' ? 'I/L' : aa]
+        if (m === undefined) return null
+        mass += m
+      }
+      return mass
+    },
+    /** "Residue mass 2,156.21 Da": hover text of the break line */
+    truncatedMassText(start: number, end: number): string | null {
+      const mass = this.truncatedMass(start, end)
+      if (mass === null) return null
+      return `Residue mass ${mass.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Da`
+    },
+    /** The truncated residues themselves (0-based, end exclusive), shown on hover */
+    truncatedResidues(start: number, end: number): string {
+      return this.sequence.slice(start, end).join('')
+    },
     updateSettings() {
       const settings = this.settings
       if (settings?.ion_types !== undefined && settings.ion_types !== null) {
@@ -1394,7 +1684,9 @@ export default defineComponent({
 
         // Ensures this is only executed once
         if (!this.visibilityOptions.some(option => option.text === 'Tags')) {
-          this.visibilityOptions.push({ text: 'Truncations', selected: true })
+          // settings.show_truncations === false starts with the truncated
+          // termini summarized instead of drawn
+          this.visibilityOptions.push({ text: 'Truncations', selected: this.settings?.show_truncations !== false })
           this.visibilityOptions.push({ text: 'Tags', selected: true })
           this.visibilityOptions.push({ text: 'Internal fragments', selected: true })
           this.updateSettings()
@@ -1444,6 +1736,9 @@ export default defineComponent({
         return
       }
       this.fragmentTableSource = []
+      this.unmatchedTableData = []
+      this.unmatchedTableTitle = ''
+      this.unmatchedTableTooltip = ''
 
       if (this.sequence.length <= 0) {
         this.fragmentTableTitle = '' // if no sequence is selected, nothing to show
@@ -1477,6 +1772,10 @@ export default defineComponent({
       let matching_fragments: Record<string, unknown>[] = []
       const matchedIons: MatchedFragmentIon[] = []
       const sequence_size = this.sequence_end
+      // The theoretical fragment closest to each observed mass (unmatchedMasses)
+      const trackNearest = this.args.unmatchedMasses === true
+      const nearestName: string[] = new Array(observed_masses.length).fill('')
+      const nearestDiff: number[] = new Array(observed_masses.length).fill(Infinity)
       
       this.selectedIonSeries
         .forEach((series) => {
@@ -1525,6 +1824,13 @@ export default defineComponent({
               extraFragments.forEach(({ typeName, typeMass }) => {
                 // Mass difference = (observed-theoretical)/theoretical*1e6
                 const thisTypeMass = theoretical_mass + series.offset + typeMass
+                if (trackNearest) {
+                  const diff = observed_masses[obsIndex] - thisTypeMass
+                  if (Math.abs(diff) < Math.abs(nearestDiff[obsIndex])) {
+                    nearestDiff[obsIndex] = diff
+                    nearestName[obsIndex] = `${series.name}${theoIndex + 1}${typeName}`
+                  }
+                }
                 // The smallest isotope offset (0 without isotope errors) that
                 // brings the masses within the tolerance
                 const isotope = matchIsotopeOffset(
@@ -1573,6 +1879,30 @@ export default defineComponent({
       this.residueCleavagePercentage = this.calculateCleavagePercentage
       this.fragmentTableData = matching_fragments
       this.fragmentTableTitle = `Matching fragments (# ${matching_fragments.length})`
+      if (trackNearest) {
+        const matchedIndices = new Set(matchedIons.map((ion) => ion.massIndex))
+        const rows: Record<string, unknown>[] = []
+        observed_masses.forEach((mass, obsIndex) => {
+          if (matchedIndices.has(obsIndex)) return
+          const diff = nearestDiff[obsIndex]
+          const known = Number.isFinite(diff)
+          rows.push({
+            Name: 'unmatched',
+            IonType: '',
+            Nearest: nearestName[obsIndex],
+            TheoreticalMass: known ? (mass - diff).toFixed(3) : '',
+            ObservedMass: mass,
+            MassDiffDa: known ? diff.toFixed(3) : '',
+            MassDiffPpm: known ? ((diff / (mass - diff)) * 1e6).toFixed(3) : '',
+            Unmatched: true,
+          })
+        })
+        this.unmatchedTableData = rows
+        this.unmatchedTableTitle =
+          `unmatched masses (${rows.length} of ${observed_masses.length})`
+        this.unmatchedTableTooltip =
+          'Observed masses no fragment ion of the selected types matches. Shown, each is listed as \'unmatched\' with the nearest fragment ion and the differences to it.'
+      }
       this.publishFragmentMatches(matchedIons)
     },
     // Externally annotated fragment ions: the envelopes accepted on the raw
@@ -1797,10 +2127,23 @@ export default defineComponent({
               spectrum: this.spectrum?.key ?? null,
               tolerance: { value: this.fragmentMassTolerance, unit: this.toleranceUnit },
               fragments,
+              ...(this.args.fragmentMatchesProteoform ? { proteoform: this.matchedProteoform() } : {}),
             }
       // Skip no-op writes: each write is a round trip to Python
       if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
       this.selectionStore.updateSelection(id, next)
+    },
+    // The proteoform the fragments are matched against (fragmentMatchesProteoform)
+    matchedProteoform(): NonNullable<FragmentMatches['proteoform']> {
+      let theoreticalMass = this.theoreticalMass
+      for (const mass of Object.values(this.variableModifications)) theoreticalMass += mass
+      return {
+        proforma: this.proForma(),
+        sequence: this.sequence.join(''),
+        length: this.sequence.length,
+        theoreticalMass,
+        cleavagePercentage: this.calculateCleavagePercentage,
+      }
     },
     publishSelectedFragment(rowIndex?: number) {
       const id = this.args.fragmentIdentifier
@@ -1810,14 +2153,18 @@ export default defineComponent({
       if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
       this.selectionStore.updateSelection(id, next)
     },
+    onFragmentPresetChanged(id: string, active: boolean) {
+      if (id === 'hide-unmatched') this.showUnmatched = !active
+    },
     onFragmentTableRowSelected(rowIndex?: number) {
-      this.publishSelectedFragment(rowIndex)
-      if (rowIndex !== undefined && this.fragmentTableSource[rowIndex]) {
+      const row = rowIndex === undefined ? undefined : this.fragmentRows[rowIndex]
+      // An unmatched mass is no fragment: only the mass table follows it
+      this.publishSelectedFragment(row?.Unmatched ? undefined : rowIndex)
+      if (rowIndex !== undefined && !row?.Unmatched && this.fragmentTableSource[rowIndex]) {
         this.selectedFragment = this.fragmentTableSource[rowIndex]
       }
-      if (rowIndex !== undefined && this.fragmentTableData[rowIndex]) {
-        const observedMass = this.fragmentTableData[rowIndex].ObservedMass as number
-        this.updateMassTableFromFragmentMass(observedMass)
+      if (row) {
+        this.updateMassTableFromFragmentMass(row.ObservedMass as number)
       }
     },
     updateMassTableFromFragmentMass(observedMass: number) {
@@ -1892,8 +2239,10 @@ export default defineComponent({
       const tolerance = this.massLinkTolerance(selectedMass)
       let bestMatch: { index: number; diff: number } | null = null
       
-      for (let i = 0; i < this.fragmentTableData.length; i++) {
-        const fragmentRow = this.fragmentTableData[i]
+      for (let i = 0; i < this.fragmentRows.length; i++) {
+        const fragmentRow = this.fragmentRows[i]
+        // Hidden unmatched rows cannot be selected
+        if (fragmentRow.Unmatched && !this.showUnmatched) continue
         const observedMass = fragmentRow.ObservedMass as number
         
         if (observedMass !== undefined) {
@@ -2034,6 +2383,29 @@ export default defineComponent({
       // A new nonce each time: the app applies every edit once
       this.selectionStore.updateSelection(id, { ...edit, nonce: Date.now() })
     },
+    // An edited identification starts and ends at other residues: the
+    // residues outside are truncated, their modifications dropped (a
+    // terminal modification stays on its terminus)
+    setProteoformRange(start: number, end: number): void {
+      if (!this.isEdited) return
+      const last = this.sequence.length - 1
+      start = Math.max(0, Math.min(start, last))
+      end = Math.max(0, Math.min(end, last))
+      if (start > end) return
+      if (start === this.sequence_start && end === this.sequence_end) return
+      const keepStart = start === this.sequence_start ? this.sequence_start_reported : start
+      const keepEnd = end === this.sequence_end ? this.sequence_end_reported : end
+      const modifications = this.storeModifications.filter(
+        (m) => m.start < 0 || m.start > last || (m.start >= start && m.start <= end),
+      )
+      this.writeEdit({
+        action: 'update',
+        sequence: this.sequence.join(''),
+        start_position: keepStart,
+        end_position: keepEnd,
+        modifications,
+      })
+    },
     startEdit(): void {
       this.writeEdit({ action: 'edit' })
     },
@@ -2078,8 +2450,11 @@ export default defineComponent({
         end: m.end,
         mass: m.mass_diff,
       }))
+      const labels = this.variableModData.variableModLabels ?? {}
       for (const [index, mass] of Object.entries(this.variableModifications)) {
-        if (mass) modifications.push({ start: Number(index), end: Number(index), mass })
+        if (!mass) continue
+        const name = proFormaName(labels[Number(index)])
+        modifications.push({ start: Number(index), end: Number(index), mass, ...(name ? { name } : {}) })
       }
       return toProForma({
         sequence: this.sequence,
@@ -2150,7 +2525,27 @@ export default defineComponent({
         : ''
       this.customModifications = [...(this.args.modifications ?? [])]
       this.sequenceInputError = ''
+      this.uniprotAccession = ''
+      this.uniprotError = ''
+      this.uniprotEntry = null
       this.sequenceDialog = true
+    },
+    // The sequence of a UniProt entry goes into the sequence field
+    async lookUpUniProt(): Promise<void> {
+      const input = this.uniprotAccession ?? ''
+      if (!input.trim() || this.uniprotLoading) return
+      this.uniprotLoading = true
+      this.uniprotError = ''
+      try {
+        const entry = await fetchUniProtEntry(input)
+        this.uniprotEntry = entry
+        this.customSequenceInput = entry.sequence
+      } catch (error) {
+        this.uniprotEntry = null
+        this.uniprotError = error instanceof Error ? error.message : String(error)
+      } finally {
+        this.uniprotLoading = false
+      }
     },
     // The edited residues become the whole sequence; a modification stays on
     // its residue while that residue is unchanged
@@ -2176,6 +2571,56 @@ export default defineComponent({
         end_position: residues.length - 1,
         modifications,
       })
+    },
+    // The shown proteoform goes to the app's ProForma identifier; held back
+    // while the view still waits for residues the app asked for
+    publishProForma(): void {
+      const id = this.args.proformaIdentifier
+      if (!id || this.isEdited) return
+      if (this.pendingProFormaSequence !== null) {
+        if (this.sequence.join('') !== this.pendingProFormaSequence) return
+        this.pendingProFormaSequence = null
+      }
+      const text = this.proFormaText
+      if ((this.selectionStore.$state[id] ?? '') === text) return
+      this.selectionStore.updateSelection(id, text)
+    },
+    // A ProForma from the app becomes the view's sequence and modifications,
+    // as if it was applied in the Change sequence dialog
+    applyExternalProForma(text: string): void {
+      this.proformaSyncError = ''
+      if (this.isEdited) return
+      let read
+      try {
+        read = /[[\]<>(){}?-]/.test(text)
+          ? this.readProForma(text)
+          : { sequence: text.toUpperCase().replace(/\s+/g, ''), fixedIds: [] as string[], masses: {}, labels: {} }
+      } catch (error) {
+        this.proformaSyncError = error instanceof Error ? error.message : String(error)
+        return
+      }
+      this.customModifications = [...read.fixedIds]
+      if (this.args.modificationsIdentifier) {
+        this.selectionStore.updateSelection(this.args.modificationsIdentifier, [...read.fixedIds])
+      }
+      this.pendingProFormaSequence = read.sequence
+      if (this.args.sequenceIdentifier) {
+        this.selectionStore.updateSelection(this.args.sequenceIdentifier, read.sequence)
+      }
+      this.variableModData.setAll(read.masses, read.labels)
+      this.$nextTick(() => this.publishProForma())
+    },
+    // The view goes back to no sequence (an empty ProForma from the app): its
+    // residues, fixed and variable modifications are cleared
+    clearSequence(): void {
+      this.variableModData.clear()
+      this.customModifications = []
+      if (this.args.modificationsIdentifier) {
+        this.selectionStore.updateSelection(this.args.modificationsIdentifier, [])
+      }
+      if (this.args.sequenceIdentifier) {
+        this.selectionStore.updateSelection(this.args.sequenceIdentifier, '')
+      }
     },
     closeSequenceDialog(): void {
       this.sequenceDialog = false
@@ -2314,6 +2759,18 @@ export default defineComponent({
   padding-top: 19px;
   padding-bottom: 4px;
 }
+
+.help-card {
+  position: relative;
+}
+.help-card > .card-help {
+  top: 6px;
+  left: 6px;
+}
+.title-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
+}
 </style>
 
 <style scoped lang="scss">
@@ -2354,6 +2811,19 @@ export default defineComponent({
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   opacity: var(--v-medium-emphasis-opacity);
+}
+
+.sequence-grid > .truncated-gap {
+  aspect-ratio: auto;
+  grid-column: 1;
+}
+
+.sequence-grid > .truncated-residues {
+  aspect-ratio: auto;
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
 }
 
 .row-number-start {

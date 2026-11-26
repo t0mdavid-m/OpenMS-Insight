@@ -1,9 +1,10 @@
 <template>
   <div class="sequence-view-container" :style="containerStyle">
-    <v-sheet class="pa-4 rounded-lg" :theme="theme?.base ?? 'light'" border>
-      <!-- Header with mass information -->
-      <div class="d-flex justify-center mb-2">
-        <h4>Sequence View</h4>
+    <v-sheet class="pa-4 rounded-lg help-card" :theme="theme?.base ?? 'light'" border>
+      <!-- Header with mass information; the info icon beside the title, as on tables -->
+      <div class="d-flex justify-center align-center mb-2">
+        <HelpIcon v-if="args.help" :text="args.help" class="title-help" />
+        <h4>{{ args.title || 'Sequence View' }}</h4>
       </div>
 
       <!-- Toolbar -->
@@ -15,6 +16,7 @@
           :color="theme?.primaryColor ?? 'primary'"
           size="small"
         />
+        <FullscreenButton />
         <v-btn variant="text" icon size="small" :disabled="sequence.length === 0" @click="copySequence">
           <v-icon>mdi-content-copy</v-icon>
           <v-tooltip activator="parent" location="bottom">Copy sequence to clipboard</v-tooltip>
@@ -185,7 +187,9 @@
 </template>
 
 <script lang="ts">
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { defineComponent } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
@@ -210,6 +214,8 @@ function toSuperscript(n: number): string {
 export default defineComponent({
   name: 'SequenceView',
   components: {
+    FullscreenButton,
+    HelpIcon,
     AminoAcidCell,
     ImageScreenshot,
   },
@@ -830,5 +836,13 @@ export default defineComponent({
   background-color: rgba(128, 128, 128, 0.2);
   border-radius: 4px;
   aspect-ratio: 1;
+}
+
+.help-card {
+  position: relative;
+}
+.title-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
 }
 </style>

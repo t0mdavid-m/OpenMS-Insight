@@ -1,20 +1,43 @@
 <template>
   <!-- A table fitted to a few rows stays at least 200 px tall -->
   <div
-    style="padding: 8px; width: 98%; box-sizing: border-box"
-    :style="isServerSidePagination ? {} : { minHeight: '200px' }"
+    style="padding: 8px; width: 98%; box-sizing: border-box; position: relative"
+    :style="[isServerSidePagination ? {} : { minHeight: '200px' }, { '--table-accent': accentColor }]"
   >
-    <div class="d-flex">
+    <div class="d-flex table-toolbar-host">
       <div class="table-toolbar">
         <div class="table-toolbar-buttons">
+          <FullscreenButton />
           <v-btn
+            v-if="!offersExcel"
             variant="text"
             size="small"
             icon="mdi-download"
             :loading="pendingDownloadId !== null"
             :title="isServerSidePagination ? 'Download all rows and columns as CSV' : undefined"
-            @click="downloadTable"
+            @click="downloadTable('csv')"
           />
+          <v-btn
+            v-else
+            variant="text"
+            size="small"
+            icon="mdi-download"
+            :loading="pendingDownloadId !== null"
+            title="Download all rows and columns"
+          >
+            <v-icon>mdi-download</v-icon>
+            <v-menu activator="parent" location="bottom start">
+              <v-list density="compact">
+                <v-list-item prepend-icon="mdi-file-delimited-outline" title="CSV" @click="downloadTable('csv')" />
+                <v-list-item
+                  prepend-icon="mdi-file-excel-outline"
+                  title="Excel (.xlsx)"
+                  subtitle="With a sheet on the sort and filters"
+                  @click="downloadTable('xlsx')"
+                />
+              </v-list>
+            </v-menu>
+          </v-btn>
           <div style="position: relative; display: inline-flex">
             <v-btn
               variant="text"
@@ -75,6 +98,7 @@
           />
         </div>
         <div class="table-toolbar-title">
+          <HelpIcon v-if="helpText" class="table-help" :text="helpText" />
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
           <v-btn
             v-if="multiSelectEnabled"
@@ -189,11 +213,13 @@
     </div>
 
     <div :id="id" :class="tableClasses" @keydown.capture="onTableKeydown"></div>
+    <div v-if="copyNotice" class="row-copied" role="status" data-testid="row-copied">{{ copyNotice }}</div>
   </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
+import FullscreenButton from '@/components/FullscreenButton.vue'
 import { TabulatorFull as Tabulator, type CellComponent, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
@@ -206,8 +232,13 @@ import type {
   NumericFilterConfig,
 } from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
+import { type FilterPreset, renderPresetSection } from '../filterPresets'
 import { combineSelection } from '@/composables/useMultiSelect'
+import { useHelp } from '@/composables/useHelp'
+import HelpIcon from '@/components/common/HelpIcon.vue'
 import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
+import { copyText } from '@/utils/usi'
+import { pickedValue } from '@/utils/pickValue'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -221,7 +252,7 @@ type FilterValue = {
 }
 interface FilterChip {
   key: string
-  kind: 'search' | 'categorical' | 'numeric' | 'text'
+  kind: 'search' | 'preset' | 'categorical' | 'numeric' | 'text'
   field?: string
   label: string
 }
@@ -246,6 +277,10 @@ const KEY_PAGE_TIMEOUT_MS = 5000
 const KEY_PAGE_CHECK_MS = 750
 
 type KeyMove = 'up' | 'down' | 'pageUp' | 'pageDown' | 'home' | 'end'
+// How recent a move between levels must be for a table drawn after it (on
+// another view) to take the keyboard
+const LEVEL_MOVE_FRESH_MS = 8000
+
 const KEY_MOVES: Record<string, KeyMove> = {
   ArrowUp: 'up',
   ArrowDown: 'down',
@@ -257,6 +292,8 @@ const KEY_MOVES: Record<string, KeyMove> = {
 
 export default defineComponent({
   name: 'TabulatorTable',
+  components: { FullscreenButton, HelpIcon },
+
   props: {
     args: {
       type: Object as PropType<TableComponentArgs>,
@@ -269,11 +306,16 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     // Generate unique ID on setup
     const uniqueId = `table-${Date.now()}-${++tableIdCounter}`
-    return { streamlitDataStore, selectionStore, uniqueId }
+    // The view's info icon beside the title, not over the buttons
+    const helpText = useHelp()
+    return { streamlitDataStore, selectionStore, uniqueId, helpText }
   },
   data() {
     return {
       tabulator: undefined as Tabulator | undefined,
+      // "Row copied" shown briefly after Ctrl+C / Cmd+C
+      copyNotice: '',
+      copyNoticeTimer: undefined as ReturnType<typeof setTimeout> | undefined,
       // Request id of a full-table CSV export awaiting its payload from Python
       pendingDownloadId: null as number | null,
       // Columns the viewer showed or hid in the column menu (field -> visible)
@@ -319,6 +361,10 @@ export default defineComponent({
       currentColumnFilters: [] as Array<{ field: string; type: string; value: unknown }>,
       // On/off state of the title-row toggle filters, keyed by column
       currentToggles: {} as Record<string, boolean>,
+      // On/off state of the filter presets, keyed by id
+      currentPresets: {} as Record<string, boolean>,
+      // Where the filter dialog draws its card of filters (while it is open)
+      filterCardHost: null as HTMLElement | null,
       // Text in the search box, and the search last sent to Python
       searchInput: '' as string,
       currentSearch: '' as string,
@@ -340,6 +386,9 @@ export default defineComponent({
       // These are local state that persists during the request-response cycle
       requestedSortColumn: '' as string,
       requestedSortDir: 'asc' as 'asc' | 'desc',
+      // True while the table loads a page it already holds (after new rows
+      // arrived): Tabulator then shows no Loading overlay
+      quietReload: false as boolean,
       // Track the counter value when AJAX request was made (for stale response detection)
       pendingRequestCounter: null as number | null,
       // multi_select: last check box toggled (for Shift ranges), and a check box
@@ -354,6 +403,8 @@ export default defineComponent({
       // The last row the keys moved to: kept in view when its page is drawn again
       keyboardShownId: null as unknown,
       keySelectTimer: null as ReturnType<typeof setTimeout> | null,
+      // Nonce of the last move between levels this table made or followed
+      lastLevelNonce: 0,
       // Position (over all pages) of the row the keys moved to while its page
       // is being fetched, the page asked for and when
       keyNavTarget: null as number | null,
@@ -363,6 +414,10 @@ export default defineComponent({
     }
   },
   computed: {
+    /** The table is part of a chain of levels (Enter down, Backspace up) */
+    hasLevel(): boolean {
+      return typeof this.args.level === 'number' && !!this.args.levelIdentifier
+    },
     // Buttons and chips in the table's dialogs take the app's primary colour
     accentColor(): string {
       return this.streamlitDataStore.theme?.primaryColor || '#1976d2'
@@ -400,9 +455,16 @@ export default defineComponent({
      * Toggle state and search to merge into pagination requests (nothing for a
      * table that has neither, so its requests stay as they were).
      */
+    filterPresets(): FilterPreset[] {
+      return this.args.filterPresets || []
+    },
+    activePresets(): FilterPreset[] {
+      return this.filterPresets.filter((preset) => this.currentPresets[preset.id])
+    },
     viewFiltersPatch(): Record<string, unknown> {
       return {
         ...(this.toggleFilters.length > 0 ? { toggles: { ...this.currentToggles } } : {}),
+        ...(this.filterPresets.length > 0 ? { presets: { ...this.currentPresets } } : {}),
         ...(this.args.search ? { search: this.currentSearch } : {}),
       }
     },
@@ -419,6 +481,9 @@ export default defineComponent({
       const chips: FilterChip[] = []
       if (this.currentSearch) {
         chips.push({ key: 'search', kind: 'search', label: `Search: ${this.currentSearch}` })
+      }
+      for (const preset of this.activePresets) {
+        chips.push({ key: `p:${preset.id}`, kind: 'preset', field: preset.id, label: preset.label })
       }
       for (const field of this.selectedColumns) {
         const value = this.filterValues[field]
@@ -474,7 +539,10 @@ export default defineComponent({
       return `openms-insight:columns:${this.args.paginationIdentifier || this.args.title || ''}`
     },
     activeFilterCount(): number {
-      return this.selectedColumns.filter((field) => this.isFilterActive(field)).length
+      return (
+        this.activePresets.length +
+        this.selectedColumns.filter((field) => this.isFilterActive(field)).length
+      )
     },
     preparedTableData(): Record<string, unknown>[] {
       const indexField = this.args.tableIndexField || 'id'
@@ -539,9 +607,15 @@ export default defineComponent({
       return typeof val === 'number' ? val : null
     },
     // Full-table CSV export prepared by Python in answer to a download request
-    downloadPayload(): { request_id: number; filename: string; csv: string } | null {
+    downloadPayload(): { request_id: number; filename: string; csv?: string; xlsx?: string } | null {
       const val = this.streamlitDataStore.allDataForDrawing?._download
-      return val && typeof val === 'object' ? (val as { request_id: number; filename: string; csv: string }) : null
+      return val && typeof val === 'object'
+        ? (val as { request_id: number; filename: string; csv?: string; xlsx?: string })
+        : null
+    },
+    // Excel next to CSV: Python writes the workbook, so only for server-side tables
+    offersExcel(): boolean {
+      return this.isServerSidePagination && this.args.excelExport === true
     },
     // Check if server-side pagination is enabled
     isServerSidePagination(): boolean {
@@ -561,6 +635,13 @@ export default defineComponent({
     },
   },
   watch: {
+    // The dialog's card of filters follows every change of the filters
+    activeFilterChips: {
+      handler(): void {
+        if (this.teleportDialog) this.renderFilterCard()
+      },
+      deep: true,
+    },
     // The checked rows changed (here or in another component)
     multiSelectionKey() {
       this.refreshCheckboxes()
@@ -570,7 +651,15 @@ export default defineComponent({
     downloadPayload(payload) {
       if (!payload || payload.request_id !== this.pendingDownloadId) return
       this.pendingDownloadId = null
-      const blob = new Blob([payload.csv], { type: 'text/csv;charset=utf-8' })
+      let blob: Blob
+      if (typeof payload.xlsx === 'string') {
+        const binary = atob(payload.xlsx)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      } else {
+        blob = new Blob([payload.csv ?? ''], { type: 'text/csv;charset=utf-8' })
+      }
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -794,6 +883,11 @@ export default defineComponent({
     for (const toggle of this.toggleFilters) {
       this.currentToggles[toggle.column] = saved[toggle.column] ?? toggle.default
     }
+    // So do the filter presets
+    const savedPresets = this.paginationState?.presets || {}
+    for (const preset of this.filterPresets) {
+      this.currentPresets[preset.id] = savedPresets[preset.id] ?? !!preset.default
+    }
     // So do the search and the dialog's filters, e.g. when the page is opened again
     this.restoreFilters()
   },
@@ -804,6 +898,14 @@ export default defineComponent({
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()
+    if (this.hasLevel && this.args.levelIdentifier) {
+      const identifier = this.args.levelIdentifier
+      this.onLevelMove(this.selectionStore.$state[identifier], true)
+      this.$watch(
+        () => this.selectionStore.$state[identifier],
+        (value: unknown) => this.onLevelMove(value)
+      )
+    }
     // A new selection of these identifiers starts the rows in the initial order
     for (const identifier of this.args.resetSortOn || []) {
       this.$watch(
@@ -818,7 +920,10 @@ export default defineComponent({
     }
     // A table fitted to its rows resizes with them: the frame follows it
     if (!this.isServerSidePagination) {
+      // Not before the table is built: until then it is a toolbar over an empty
+      // box, and the frame shrank to that and grew back with the rows
       this.rootResizeObserver = new ResizeObserver(() => {
+        if (!this.isTableBuilt) return
         Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
       })
       this.rootResizeObserver.observe(this.$el as HTMLElement)
@@ -1029,6 +1134,10 @@ export default defineComponent({
         this.commitSearch()
         return
       }
+      if (chip.kind === 'preset') {
+        if (chip.field) this.setPresetActive(chip.field, false)
+        return
+      }
       const value = chip.field ? this.filterValues[chip.field] : undefined
       if (!chip.field || !value) return
       if (chip.kind === 'numeric' && value.numeric) {
@@ -1042,12 +1151,13 @@ export default defineComponent({
       this.refreshTeleportDialog()
     },
 
-    /** Remove the search and every filter of the dialog (not the title-row toggles). */
+    /** Remove the search, the presets and every filter of the dialog (not the title-row toggles). */
     clearAllFilters(): void {
       if (this.searchTimer) clearTimeout(this.searchTimer)
       this.searchInput = ''
-      const hadSearch = this.currentSearch !== ''
+      const hadSearch = this.currentSearch !== '' || this.activePresets.length > 0
       this.currentSearch = ''
+      for (const id of Object.keys(this.currentPresets)) this.currentPresets[id] = false
       for (const field of Object.keys(this.filterValues)) {
         const value = this.filterValues[field]
         if (value.numeric) value.numeric = { ...value.numeric, min: null, max: null }
@@ -1058,6 +1168,15 @@ export default defineComponent({
       this.applyFilters()
       if (hadSearch && !this.isServerSidePagination) this.requestFilteredRows()
       this.refreshTeleportDialog()
+    },
+
+    /**
+     * Switch a filter preset on or off. The filtering happens in Python, so
+     * this requests page 1 of the re-filtered rows.
+     */
+    setPresetActive(id: string, active: boolean): void {
+      this.currentPresets[id] = active
+      this.requestFilteredRows()
     },
 
     /**
@@ -1104,14 +1223,15 @@ export default defineComponent({
         minHeight: 150,
         maxHeight: Math.max(tableMaxHeight, 150),
         height: Math.max(tableMaxHeight, 150),
-        responsiveLayout: 'collapse',
+        // Columns that do not fit fold into the row, unless the table scrolls sideways
+        responsiveLayout: this.args.collapseColumns === false ? false : 'collapse',
         layout: this.args.tableLayoutParam || 'fitDataFill',
         selectable: 1,
         columnDefaults: {
           title: '',
           hozAlign: 'right',
         },
-        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
+        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...this.rowActionColumns(), ...(this.args.columnDefinitions || []).map((col) => {
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
@@ -1156,6 +1276,8 @@ export default defineComponent({
           tabulatorOptions.ajaxURL = 'streamlit://data'
           // Custom request handler
           tabulatorOptions.ajaxRequestFunc = this.handleRemoteRequest.bind(this)
+          // No overlay for a page the table already holds
+          tabulatorOptions.dataLoader = () => !this.quietReload
         } else {
           // For client-side pagination, set data directly
           tabulatorOptions.data = this.preparedTableData
@@ -1202,7 +1324,7 @@ export default defineComponent({
         if (!this.isServerSidePagination) {
           this.selectDefaultRow()
         }
-        this.applyFilters()
+        this.applyFilters({ onlyIfChanged: true })
 
         // Update Streamlit iframe height after table is rendered
         // Use specified height if provided, otherwise auto-calculate
@@ -1242,6 +1364,10 @@ export default defineComponent({
       this.tabulator.on('rowClick', (e: Event, row: any) => {
         this.onRowClick(row)
       })
+      // A double click goes one level down, as Enter does
+      this.tabulator.on('rowDblClick', () => {
+        if (this.hasLevel) this.goLevel('down')
+      })
 
       // Ensure visual selection matches selection state after render.
       // Only sync if no row is currently selected to avoid infinite loops
@@ -1269,11 +1395,20 @@ export default defineComponent({
           const sortDir = sorters[0].dir as 'asc' | 'desc'
 
           // Check if sort actually changed
-          const cachedSortCol = this.paginationState?.sort_column || ''
-          const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+          const { column: cachedSortCol, dir: cachedSortDir } = this.servedSort()
 
           if (sortColumn === cachedSortCol && sortDir === cachedSortDir) {
             console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort unchanged, skipping`)
+            return
+          }
+          // The header click already asked for this sort (handleRemoteRequest):
+          // asking again would cost Python a second rerun
+          if (
+            this.pendingDataRequest &&
+            sortColumn === this.requestedSortColumn &&
+            sortDir === this.requestedSortDir
+          ) {
+            console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort already requested, skipping`)
             return
           }
 
@@ -1317,7 +1452,13 @@ export default defineComponent({
     handleRemoteRequest(
       url: string,
       config: any,
-      params: { page?: number; size?: number; sorters?: Array<{ field: string; dir: string }>; filter?: any[] }
+      params: {
+        page?: number
+        size?: number
+        sort?: Array<{ field: string; dir: string }>
+        sorters?: Array<{ field: string; dir: string }>
+        filter?: any[]
+      }
     ): Promise<{ last_page: number; last_row: number; data: any[] }> {
       // Extract pagination parameters
       const page = params.page || 1
@@ -1327,8 +1468,11 @@ export default defineComponent({
       this.lastRequestedPage = page
       // Use requested state (client) for fallbacks, not server state
       // This preserves sort during page navigation before server responds
-      const sortColumn = params.sorters?.[0]?.field ?? (this.requestedSortColumn || undefined)
-      const sortDir = (params.sorters?.[0]?.dir ?? this.requestedSortDir ?? 'asc') as 'asc' | 'desc'
+      // Tabulator sends its sorters as `sort` (dataSendParams default); a
+      // header click arrives here before dataSorting, with the new sort
+      const sorters = params.sort ?? params.sorters
+      const sortColumn = sorters?.[0]?.field ?? (this.requestedSortColumn || undefined)
+      const sortDir = (sorters?.[0]?.dir ?? this.requestedSortDir ?? 'asc') as 'asc' | 'desc'
 
       console.log(`[TabulatorTable ${this.args.title}] ===== handleRemoteRequest START =====`, {
         timestamp: Date.now(),
@@ -1336,7 +1480,7 @@ export default defineComponent({
         requestedSize: pageSize,
         requestedSortColumn: sortColumn,
         requestedSortDir: sortDir,
-        rawSorters: params.sorters,
+        rawSorters: sorters,
         paginationIdentifier: this.args.paginationIdentifier,
         currentPaginationState: this.paginationState,
         cachedSortColumn: this.paginationState?.sort_column,
@@ -1346,8 +1490,8 @@ export default defineComponent({
 
       // Check if we already have data for this request (initial load or same page/sort)
       // This happens when Python sends initial data before Tabulator calls ajaxRequestFunc
-      const cachedSortCol = this.paginationState?.sort_column || ''
-      const cachedSortDir = this.paginationState?.sort_dir || 'asc'
+      const servedSortCol = this.paginationState?.sort_column || ''
+      const { column: cachedSortCol, dir: cachedSortDir } = this.servedSort()
       const requestedSortCol = sortColumn || ''
       const sortMatch = cachedSortCol === requestedSortCol && cachedSortDir === sortDir
 
@@ -1375,16 +1519,24 @@ export default defineComponent({
         // Without this, Vue's selection store would have stale page number
         // (e.g., after Python navigates to page 38, Vue's store still had page 1)
         const paginationIdentifier = this.args.paginationIdentifier
-        if (paginationIdentifier) {
+        // While Python has no pagination for this table it serves the table's
+        // default page, which is the page shown: writing it down would only
+        // cost the page a rerun on first load
+        const stored = paginationIdentifier ? (this.selectionStore.$state[paginationIdentifier] as any) : null
+        if (paginationIdentifier && stored != null) {
+          // Rows served in the initialSort order keep the sort they were asked
+          // with, so the table's own default sort is no new pagination
+          const keepSort = !servedSortCol
           this.selectionStore.updateSelection(paginationIdentifier, {
             page,
             page_size: pageSize,
-            sort_column: sortColumn,
-            sort_dir: sortDir,
+            sort_column: keepSort ? stored.sort_column : sortColumn,
+            sort_dir: keepSort ? stored.sort_dir : sortDir,
             column_filters: this.currentColumnFilters,
               ...this.viewFiltersPatch,
           })
         }
+        this.quietReload = false
 
         // Use setTimeout(0) to delay resolution to next tick
         // This allows Tabulator's internal state machine to complete setup
@@ -1398,7 +1550,12 @@ export default defineComponent({
         })
       }
 
+      this.quietReload = false
       this.isLoadingServerData = true
+      if (sorters?.length) {
+        this.requestedSortColumn = sortColumn || ''
+        this.requestedSortDir = sortDir
+      }
 
       // Mark that we're navigating pages (user-initiated, not filter change)
       this.isNavigatingPages = true
@@ -1997,17 +2154,132 @@ export default defineComponent({
      * Home and End scrolling does not run as well.
      */
     onTableKeydown(event: KeyboardEvent): void {
+      if (this.isCopyKey(event)) {
+        this.copySelectedRow(event)
+        return
+      }
       if (this.args.keyboardNavigation === false || !this.tabulator) return
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
       const move = KEY_MOVES[event.key]
-      if (!move) return
+      const levelMove = this.hasLevel && (event.key === 'Enter' || event.key === 'Backspace')
+      if (!move && !levelMove) return
       const holder = (this.tabulator as any).rowManager?.element as HTMLElement | undefined
       const target = event.target as HTMLElement | null
       if (!holder || !target || !holder.contains(target)) return
       if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
       event.preventDefault()
       event.stopPropagation()
-      this.stepSelection(move)
+      if (move) this.stepSelection(move)
+      else this.goLevel(event.key === 'Enter' ? 'down' : 'up')
+    },
+
+    /**
+     * Enter (or a double click) goes one level down from the selected row,
+     * Backspace one level up: the move is written to the shared state, where
+     * the table of that level takes the keyboard (and an app may show it).
+     */
+    goLevel(go: 'down' | 'up'): void {
+      const level = this.args.level
+      const identifier = this.args.levelIdentifier
+      if (typeof level !== 'number' || !identifier) return
+      const to = go === 'down' ? level + 1 : level - 1
+      if (to < 0) return
+      if (go === 'down') {
+        // A row the keys reached but did not select yet is selected first
+        if (this.keySelectTimer) {
+          clearTimeout(this.keySelectTimer)
+          this.commitKeyboardRow()
+        }
+        if (!this.tabulator?.getSelectedRows().length) return
+      }
+      const nonce = Math.max(Date.now(), (this.lastLevelNonce || 0) + 1)
+      this.lastLevelNonce = nonce
+      this.selectionStore.updateSelection(identifier, { go, to, from: level, nonce })
+    },
+
+    /** A move to this table's level arrived: give its rows the keyboard. */
+    onLevelMove(value: unknown, onMount = false): void {
+      if (!value || typeof value !== 'object') return
+      const move = value as { to?: unknown, from?: unknown, nonce?: unknown }
+      if (move.to !== this.args.level || move.from === this.args.level) return
+      const nonce = Number(move.nonce)
+      if (!Number.isFinite(nonce) || nonce === this.lastLevelNonce) return
+      // A table drawn later (another view) only follows a move just made
+      if (onMount && Math.abs(Date.now() - nonce) > LEVEL_MOVE_FRESH_MS) return
+      this.lastLevelNonce = nonce
+      this.focusRows()
+    },
+
+    /** Put the keyboard on the rows, highlighting the first one if none is. */
+    focusRows(attempt = 0): void {
+      const holder = (this.tabulator as any)?.rowManager?.element as HTMLElement | undefined
+      if (!holder || !this.tabulator) {
+        if (attempt < 20) setTimeout(() => this.focusRows(attempt + 1), 100)
+        return
+      }
+      if (!holder.hasAttribute('tabindex')) holder.setAttribute('tabindex', '0')
+      // Outlined until the keys leave, so it shows which table they reach
+      const frame = (this.tabulator as any).element as HTMLElement
+      frame.classList.add('level-focus')
+      holder.addEventListener('blur', () => frame.classList.remove('level-focus'), { once: true })
+      holder.focus({ preventScroll: true })
+      try {
+        // The table's frame on the app's page
+        ;(window.frameElement as HTMLElement | null)?.scrollIntoView({ block: 'nearest' })
+      } catch {
+        // Another origin: leave the page where it is
+      }
+      if (!this.tabulator.getSelectedRows().length) this.stepSelection('down')
+    },
+
+    isCopyKey(event: KeyboardEvent): boolean {
+      return (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'c'
+    },
+
+    /**
+     * Ctrl+C / Cmd+C while the rows have focus copies the selected row: a line
+     * of the shown columns' titles and a line of its values, tab-separated, so
+     * it pastes into a spreadsheet as two rows. Text selected in the table is
+     * copied as usual instead.
+     */
+    copySelectedRow(event: KeyboardEvent): void {
+      if (this.args.copyRow === false || !this.tabulator) return
+      const holder = (this.tabulator as any).rowManager?.element as HTMLElement | undefined
+      const target = event.target as HTMLElement | null
+      if (!holder || !target || !holder.contains(target)) return
+      if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
+      const selection = target.ownerDocument.getSelection()
+      if (selection && !selection.isCollapsed && selection.toString().trim()) return
+      const row = this.tabulator.getSelectedRows()[0]
+      if (!row) return
+      event.preventDefault()
+      event.stopPropagation()
+      const text = this.rowAsText(row.getData() as Record<string, unknown>)
+      void copyText(text).then((ok) => this.showCopyNotice(ok ? 'Row copied' : 'Could not copy the row'))
+    },
+
+    /** The row as two tab-separated lines: titles of the shown columns, then values. */
+    rowAsText(row: Record<string, unknown>): string {
+      const columns = ((this.args.columnDefinitions || []) as Record<string, any>[]).filter(
+        (col) => col.field && this.isColumnVisible(col.field)
+      )
+      const clean = (text: string) => text.replace(/[\t\r\n]+/g, ' ')
+      const titles = columns.map((col) => clean(String(col.title || col.field)))
+      const values = columns.map((col) => {
+        const value = row[col.field]
+        if (value === null || value === undefined || (typeof value === 'number' && Number.isNaN(value))) return ''
+        // Numbers in full, as the shortest decimal of a 32-bit float where they are one
+        return clean(typeof value === 'number' ? String(pickedValue(value)) : this.rowOverviewValue(col, value))
+      })
+      return `${titles.join('\t')}\n${values.join('\t')}`
+    },
+
+    showCopyNotice(text: string): void {
+      this.copyNotice = text
+      if (this.copyNoticeTimer) clearTimeout(this.copyNoticeTimer)
+      this.copyNoticeTimer = setTimeout(() => {
+        this.copyNotice = ''
+      }, 1500)
     },
 
     /** Rows that fit in the visible part of the table (Page Up/Down step). */
@@ -2283,7 +2555,7 @@ export default defineComponent({
         // During page navigation, filter state is already correct - calling applyFilters()
         // would incorrectly reset the page to 1 (server-side pagination always resets page)
         if (!this.isNavigatingPages) {
-          this.applyFilters()
+          this.applyFilters({ onlyIfChanged: true })
         }
 
         // Update pagination limits when data changes (filter applied, data refreshed)
@@ -2313,7 +2585,9 @@ export default defineComponent({
               tab.redraw(true)
               // Trigger setPage to refresh pagination counter (Showing X of Y rows)
               // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
+              this.quietReload = true
               tab.setPage(targetPage || tab.getPage() || 1).catch(() => {})
+              this.quietReload = false
             } catch (error) {
               console.error('[TabulatorTable] Error setting pagination limits:', error)
             }
@@ -2325,7 +2599,9 @@ export default defineComponent({
         // Even for page 1, this is necessary because replaceData() + the initial AJAX resolution
         // leaves Tabulator in an inconsistent state without this explicit setPage() call.
         if (this.isServerSidePagination && targetPage && this.isNavigatingPages) {
+          this.quietReload = true
           ;(this.tabulator as any).setPage(targetPage).catch(() => {})
+          this.quietReload = false
         }
 
         // New rows start in the initial order again when the table asks so
@@ -2406,7 +2682,7 @@ export default defineComponent({
         // Storage can be unavailable (private window, blocked site data)
       }
     },
-    downloadTable(): void {
+    downloadTable(format: 'csv' | 'xlsx' = 'csv'): void {
       // A server-side paginated table only holds the current page, and only the
       // displayed columns, so ask Python for the whole filtered, sorted table.
       const paginationIdentifier = this.args.paginationIdentifier as string | undefined
@@ -2421,6 +2697,7 @@ export default defineComponent({
           column_filters: this.currentColumnFilters,
               ...this.viewFiltersPatch,
           download_request: requestId,
+          ...(format === 'xlsx' ? { download_format: 'xlsx' } : {}),
         })
         return
       }
@@ -2573,7 +2850,29 @@ export default defineComponent({
       }
     },
 
-    applyFilters(): void {
+    /**
+     * The sort of the rows Python sent. Without a sort column Python sorts by
+     * initialSort, so those rows are already in the order the table asks for
+     * when it is built (Tabulator swaps each initialSort column name for its
+     * column object).
+     */
+    servedSort(): { column: string; dir: string } {
+      const served = this.paginationState?.sort_column
+      if (served) return { column: served, dir: this.paginationState?.sort_dir || 'asc' }
+      const initial = (this.args.initialSort as Array<{ column: any; dir?: string }> | undefined)?.[0]
+      const column: string =
+        typeof initial?.column === 'string'
+          ? initial.column
+          : initial?.column?.getField?.() ?? initial?.column?.field ?? ''
+      return { column, dir: (column && initial?.dir) || 'asc' }
+    },
+    /**
+     * Apply the filters of the dialog. `onlyIfChanged` is for a table that was
+     * built or got new rows: a server-side table then asks Python for rows only
+     * when its filters differ from those it already shows, since every request
+     * costs the page a rerun (on first load, one for each table on the page).
+     */
+    applyFilters({ onlyIfChanged = false }: { onlyIfChanged?: boolean } = {}): void {
       if (!this.tabulator) return
 
       // For server-side pagination, build filter array and send to Python
@@ -2615,6 +2914,7 @@ export default defineComponent({
           }
         })
 
+        if (onlyIfChanged && JSON.stringify(serverFilters) === JSON.stringify(this.currentColumnFilters)) return
         // Store filters and request page 1 of the re-filtered rows
         this.currentColumnFilters = serverFilters
         this.requestFilteredRows()
@@ -2810,6 +3110,41 @@ export default defineComponent({
           this.openRowOverview(cell.getRow().getData() as Record<string, unknown>)
         },
       } as unknown as ColumnDefinition]
+    },
+
+    // Row actions: a button per row and action, sending the row to Python
+    rowActionColumns(): ColumnDefinition[] {
+      return (this.args.rowActions || []).map((action) => {
+        const label = action.label || action.id
+        const icon = /^mdi-[a-z0-9-]+$/.test(action.icon) ? action.icon : 'mdi-open-in-new'
+        return {
+          title: '',
+          field: `__row_action_${action.id}`,
+          headerSort: false,
+          resizable: false,
+          width: 36,
+          minWidth: 36,
+          hozAlign: 'center',
+          download: false,
+          responsive: 0,
+          headerTooltip: false,
+          tooltip: label,
+          formatter: () => {
+            const el = document.createElement('i')
+            el.className = `mdi ${icon} row-overview-button`
+            el.setAttribute('role', 'button')
+            el.setAttribute('aria-label', label)
+            el.dataset.testid = `row-action-${action.id}`
+            return el
+          },
+          // The row is selected too: rowClick follows this cellClick
+          cellClick: (_event: UIEvent, cell: CellComponent) => {
+            const row = { ...(cell.getRow().getData() as Record<string, unknown>) }
+            for (const key of Object.keys(row)) if (key.startsWith('__')) delete row[key]
+            this.streamlitDataStore.sendEvent({ type: 'row_action', id: action.id, row })
+          },
+        } as unknown as ColumnDefinition
+      })
     },
 
     rowOverviewValue(col: Record<string, any>, value: unknown): string {
@@ -3029,6 +3364,11 @@ export default defineComponent({
         min-height: 0;
       `
 
+      // The filters in force and the presets first, kept current while the dialog is open
+      this.filterCardHost = this.parentDocument.createElement('div')
+      content.appendChild(this.filterCardHost)
+      this.renderFilterCard()
+
       // A table with suggested thresholds opens on them; the column choice follows
       if (Object.keys(this.numericFilterConfig).length > 0) {
         this.renderFilterControls(content)
@@ -3072,6 +3412,23 @@ export default defineComponent({
       this.teleportContainer.appendChild(header)
       this.teleportContainer.appendChild(content)
       this.teleportContainer.appendChild(footer)
+    },
+
+    /** (Re)draw the dialog's card of filters: the presets, then the filters the viewer set. */
+    renderFilterCard(): void {
+      const host = this.filterCardHost
+      if (!host || !this.parentDocument) return
+      host.innerHTML = ''
+      renderPresetSection(
+        this.parentDocument,
+        host,
+        this.filterPresets,
+        (preset) => !!this.currentPresets[preset.id],
+        (preset, active) => this.setPresetActive(preset.id, active),
+        this.activeFilterChips
+          .filter((chip) => chip.kind !== 'preset')
+          .map((chip) => ({ key: chip.key, label: chip.label, remove: () => this.removeFilterChip(chip) })),
+      )
     },
 
     renderColumnSelection(content: HTMLElement): void {
@@ -3603,6 +3960,12 @@ export default defineComponent({
   font-size: 14px;
 }
 
+/* Where the keys went: the table reached from another level, until it loses them */
+.tabulator.level-focus {
+  outline: 2px solid var(--table-accent, #1976d2);
+  outline-offset: 1px;
+}
+
 /* Toolbar above the table: buttons | title | toggle filters.
    The side tracks share the free space so the title stays centred, but never
    shrink below their content: the buttons stay on one line however narrow the
@@ -3613,6 +3976,35 @@ export default defineComponent({
   grid-template-columns: minmax(max-content, 1fr) minmax(0, max-content) minmax(min-content, 1fr);
   align-items: center;
   column-gap: 8px;
+}
+
+/* A narrow table keeps its title on the line of its buttons (shortened with
+   an ellipsis when it must be) and puts the toggles on a row below */
+.table-toolbar-host {
+  container-type: inline-size;
+}
+@container (max-width: 640px) {
+  .table-toolbar {
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-areas:
+      'buttons title'
+      'toggles toggles';
+    row-gap: 2px;
+  }
+  .table-toolbar-title {
+    grid-area: title;
+    justify-content: flex-start;
+  }
+  .table-toolbar-buttons {
+    grid-area: buttons;
+  }
+  .table-toolbar-toggles {
+    grid-area: toggles;
+    justify-content: flex-start;
+  }
+  .table-search {
+    min-width: 120px;
+  }
 }
 
 .table-toolbar-buttons {
@@ -3628,6 +4020,11 @@ export default defineComponent({
   align-items: center;
   justify-content: center;
   gap: 2px;
+}
+
+.table-help {
+  margin-right: 4px;
+  flex: 0 0 auto;
 }
 
 .table-toolbar-title h4 {
@@ -3810,6 +4207,19 @@ export default defineComponent({
 }
 
 /* Dark mode pagination styling */
+.row-copied {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: rgba(33, 33, 33, 0.88);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 5;
+}
 .row-overview-button {
   cursor: pointer;
   font-size: 18px;
