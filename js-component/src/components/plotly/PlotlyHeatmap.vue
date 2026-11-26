@@ -3,8 +3,50 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" :selection="!!multiSelectEnabled" />
-    <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
+    <PlotToolbar
+      :plot-id="view === '3d' ? sceneId : id"
+      :tools="toolbarTools"
+      :stepper="args.stepper"
+      :settings="args.toolbarSettings"
+      :selection="!!multiSelectEnabled && view === '2d'"
+    />
+    <div class="heatmap-views">
+      <!-- The scene is drawn ahead, flat on the map's plot area and out of sight. Going to 3D, the map
+           fades out over it as it starts to tilt up (should it not be drawn yet, the map stays until
+           it is); back on the map, the map fades in over it as it lies down -->
+      <div
+        :id="id"
+        class="heatmap-container"
+        :style="{ minHeight: `${plotHeight}px`, ...(mapOver ? mapOverStyle : {}) }"
+      ></div>
+      <HeatmapScene3D
+        v-if="args.view3d && (sceneWanted || view === '3d')"
+        ref="scene"
+        :class="{ 'scene-hidden': sceneHidden }"
+        :active="view === '3d' || leaving3d"
+        :plot-id="sceneId"
+        :points="scenePoints"
+        :highlight="sceneHighlight"
+        :color-stops="colorStops"
+        :cmin="colorRange[0]"
+        :cmax="colorRange[1]"
+        :x-range="sceneXRange"
+        :y-range="sceneYRange"
+        :x-label="args.xLabel || args.xColumn"
+        :y-label="args.yLabel || args.yColumn"
+        :z-label="args.zLabel || colorbarLabel"
+        :hover-texts="hoverTexts"
+        :title="args.title || ''"
+        :height="plotHeight"
+        :theme="theme"
+        :map-area="mapArea"
+        :animate="tiltScene"
+        @pick="selectRow"
+        @rendered="sceneRendered"
+        @moved="updateFrameHeight"
+        @depth="sceneDepth = $event"
+      />
+    </div>
     <PeakHoverTip
       :tip="hover.tip"
       :color="theme?.textColor || '#262730'"
@@ -29,14 +71,33 @@ import PlotToolbar from './PlotToolbar.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover, textLines, formatValue as hoverValue } from '@/composables/usePeakHover'
 import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
+import HeatmapScene3D, { loadPlotly3D, plotly3D, type MapArea, type ScenePoints } from './HeatmapScene3D.vue'
+import { downloadTool as makeDownloadTool } from '@/utils/plotlyDownload'
+import { imageFormatOf } from '@/utils/imageExport'
 import { normalizeZoom } from '@/composables/useZoomState'
 import { useLayers, type Layer } from '@/composables/useLayers'
 import { scaleStops, specToStops, type ColorStops, type ColorbarSpec } from '@/utils/colorscale'
+
+/** How far the scene is tilted up when the map over it has faded out (0 flat, 1 up) */
+const MAP_FADE_DEPTH = 0.08
+type FullLayout = {
+  width?: number
+  height?: number
+  _size?: { l: number; t: number; w: number; h: number }
+  xaxis?: { range?: number[] }
+  yaxis?: { range?: number[] }
+}
 
 /** Height of the colorbar row below the plot. */
 const LEGEND_HEIGHT = 30
 /** The color option that stands for the intensity column. */
 const INTENSITY = '__intensity__'
+/** How much one click of "Zoom in" (3D) narrows the window */
+const ZOOM_STEP = 0.5
+const CUBE_ICON = 'M12 2 3 7v10l9 5 9-5V7l-9-5zm0 2.3L18.6 8 12 11.7 5.4 8 12 4.3zM5 9.7l6 3.4v6.6l-6-3.4V9.7zm8 10v-6.6l6-3.4v6.6l-6 3.4z'
+const ZOOM_IN_ICON = 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zm.5-7H9v2H7v1h2v2h1v-2h2V9h-2V7z'
+const ZOOM_OUT_ICON = 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zM7 9h5v1H7z'
+const FULL_VIEW_ICON = 'M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z'
 
 function formatValue(v: number): string {
   if (!Number.isFinite(v)) return '-'
@@ -69,7 +130,7 @@ function textTicks(values: unknown[], most: number): Partial<Plotly.LayoutAxis> 
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
-  components: { MeasureHint, PeakHoverTip, PlotToolbar, ColorbarLegend },
+  components: { MeasureHint, PeakHoverTip, PlotToolbar, ColorbarLegend, HeatmapScene3D },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -125,6 +186,18 @@ export default defineComponent({
   data() {
     return {
       isInitialized: false as boolean,
+      // Tilt the scene up from the map (not when the view opens in 3D)
+      tiltScene: false,
+      sceneReady: false,
+      // Draw the scene ahead, once the map is drawn
+      sceneWanted: false,
+      // Back on the map, while the scene lies down
+      leaving3d: false,
+      // The map's plot area in its plot, for the scene to lie on exactly
+      mapArea: null as MapArea | null,
+      // How far up the scene is (0 flat on the map, 1 tilted), for the map's fade over it
+      sceneDepth: 0,
+      switching: false,
       dragmode: 'zoom' as string,
       removingOutline: false,
       selectModifier: 'replace' as 'replace' | 'add' | 'remove',
@@ -146,6 +219,8 @@ export default defineComponent({
       colorSpecs: {} as Record<string, ColorbarSpec | null>,
       /** Lowest value shown, per color option; absent: everything. */
       minValues: {} as Record<string, number>,
+      /** The drawing shown: the 2D map, or (args.view3d) the points as stems in 3D. */
+      view: (this.args.view3d && this.args.initialView === '3d' ? '3d' : '2d') as '2d' | '3d',
     }
   },
   computed: {
@@ -156,8 +231,11 @@ export default defineComponent({
 
     toolbarTools(): PlotTool[] {
       const tools: PlotTool[] = []
+      const in3d = this.view === '3d'
+      if (this.args.view3d) tools.push(this.viewTool)
+      if (in3d) tools.push(...this.zoomTools)
       if (this.multiSelectEnabled) tools.push(clearSelectionTool(() => this.clearMultiSelect(), this.selectedCount))
-      tools.push(...this.measure.tools())
+      if (!in3d) tools.push(...this.measure.tools())
       tools.push(...this.layers.tool(this.layerList))
       if (!this.isCategoricalMode) {
         tools.push(this.colorTool)
@@ -171,8 +249,149 @@ export default defineComponent({
           run: () => this.toggleColorbar(),
         })
       }
-      tools.push(this.downloadTool())
+      tools.push(in3d ? this.sceneDownloadTool : this.downloadTool())
       return tools
+    },
+
+    /** The "3D" switch: the same points as stems as high as their intensity. */
+    viewTool(): PlotTool {
+      const in3d = this.view === '3d'
+      return {
+        id: 'view-3d',
+        group: 'view',
+        icon: CUBE_ICON,
+        label: in3d ? 'Back to the 2D map' : 'Show in 3D',
+        short: '3D',
+        help: in3d
+          ? 'the map seen from above, with box zoom and selection'
+          : `the points shown as stems as high as their ${this.colorbarLabel.toLowerCase()}`,
+        active: in3d,
+        run: () => void this.setView(in3d ? '2d' : '3d'),
+      }
+    },
+
+    /** Zoom in 3D, where Plotly's own zoom only moves the camera: the window of the map. */
+    zoomTools(): PlotTool[] {
+      return [
+        {
+          id: 'zoom-in',
+          group: 'view',
+          icon: ZOOM_IN_ICON,
+          label: 'Zoom in',
+          short: 'Zoom in',
+          help: this.highlightPoints.x.length > 0 ? 'around the selected point' : 'around the centre',
+          run: () => this.zoomBy(ZOOM_STEP),
+        },
+        {
+          id: 'zoom-out',
+          group: 'view',
+          icon: ZOOM_OUT_ICON,
+          label: 'Zoom out',
+          short: 'Zoom out',
+          run: () => this.zoomBy(1 / ZOOM_STEP),
+        },
+        {
+          id: 'full-view',
+          group: 'view',
+          icon: FULL_VIEW_ICON,
+          label: 'Full view',
+          short: 'Full view',
+          active: false,
+          run: () => this.setZoom({ xRange: [-1, -1], yRange: [-1, -1] }),
+        },
+      ]
+    },
+
+    sceneId(): string {
+      return `heatmap-scene-${this.index}`
+    },
+
+    sceneDownloadTool(): PlotTool {
+      return makeDownloadTool({
+        plotId: this.sceneId,
+        format: () => imageFormatOf(this.args.imageFormat),
+        filename: () => this.args.svgFilename || this.args.title || 'heatmap-3d',
+        width: 1000,
+        height: this.plotHeight,
+        plotly: plotly3D,
+      })
+    },
+
+    /** The points shown (layers, filter), as stems of the 3D drawing. */
+    scenePoints(): ScenePoints {
+      const shown = this.shownIndices
+      const x = this.xValues
+      const y = this.yValues
+      const z = this.intensityValues
+      const colours = this.shownColorValues
+      return {
+        x: shown.map((i) => x[i]),
+        y: shown.map((i) => y[i]),
+        z: shown.map((i) => z[i]),
+        colour: shown.map((i) => colours[i]),
+        rows: shown,
+      }
+    },
+
+    sceneHighlight(): { x: number[]; y: number[]; z: number[] } {
+      const points = this.streamlitDataStore.allDataForDrawing?.highlightPoints as
+        | { x?: number[]; y?: number[]; z?: number[] }
+        | undefined
+      return { x: points?.x ?? [], y: points?.y ?? [], z: points?.z ?? [] }
+    },
+
+    /** Extent of the points sent: the window when nothing is zoomed. */
+    dataExtent(): { x: [number, number]; y: [number, number] } | null {
+      const xs = this.xValues
+      const ys = this.yValues
+      if (xs.length === 0) return null
+      let x0 = Infinity
+      let x1 = -Infinity
+      let y0 = Infinity
+      let y1 = -Infinity
+      for (let i = 0; i < xs.length; i++) {
+        if (xs[i] < x0) x0 = xs[i]
+        if (xs[i] > x1) x1 = xs[i]
+        if (ys[i] < y0) y0 = ys[i]
+        if (ys[i] > y1) y1 = ys[i]
+      }
+      return { x: [x0, x1], y: [y0, y1] }
+    },
+
+    // The ranges the map shows (its padding included), so the scene lies exactly on it
+    sceneXRange(): number[] | undefined {
+      return this.mapArea?.xRange ?? this.xRange
+    },
+
+    sceneYRange(): number[] | undefined {
+      return this.mapArea?.yRange ?? this.yRange
+    },
+
+    /** The scene is shown: in 3D once drawn, and while it lies down before the map returns */
+    sceneShown(): boolean {
+      return (this.view === '3d' && this.sceneReady) || this.leaving3d
+    },
+    sceneHidden(): boolean {
+      return !this.sceneShown
+    },
+    /** The map lies over the scene while the scene is shown, fading as the scene tilts */
+    mapOver(): boolean {
+      return this.sceneShown
+    },
+    /** The map over the scene, gone once the scene has tilted up a little. In style, not a
+     * class: a class binding would replace the classes Plotly gives the map's element. */
+    mapOverStyle(): Record<string, string> {
+      const opacity = Math.max(0, Math.min(1, 1 - this.sceneDepth / MAP_FADE_DEPTH))
+      // Above the scene, whose Plotly layers are positioned too
+      return {
+        position: 'absolute',
+        top: '0',
+        left: '0',
+        right: '0',
+        zIndex: '1',
+        pointerEvents: 'none',
+        opacity: String(opacity),
+      }
     },
 
     /** The "Color" button: what the points are colored by, and the lowest value shown. */
@@ -828,6 +1047,12 @@ export default defineComponent({
       if (this.isInitialized && this.plotInitialized) this.renderPlot()
     },
 
+    // Back on the map: draw it at its size, with what changed while it was hidden
+    view(view: string) {
+      if (view === '2d' && this.isInitialized && !this.plotInitialized) this.$nextTick(() => this.renderPlot())
+      else this.$nextTick(() => this.updateFrameHeight())
+    },
+
     // A layer shown or hidden from the toolbar
     'layers.state.hidden'() {
       if (this.isInitialized && this.plotInitialized) this.renderPlot()
@@ -866,6 +1091,13 @@ export default defineComponent({
       }
       this.setupHeatmapResizeObserver()
     })
+    // Load the 3D drawing early, so the switch to 3D does not wait for it
+    if (this.args.view3d) {
+      setTimeout(() => {
+        void loadPlotly3D()
+        this.sceneWanted = true
+      }, 1500)
+    }
   },
 
   beforeUnmount() {
@@ -885,6 +1117,90 @@ export default defineComponent({
   },
 
   methods: {
+    sceneRendered(): void {
+      this.sceneReady = true
+      if (this.view === '3d') this.updateFrameHeight()
+    },
+
+    /** Switch between the map and the scene, tilting from one to the other. */
+    async setView(view: '2d' | '3d'): Promise<void> {
+      if (view === this.view || this.switching) return
+      if (view === '3d') {
+        this.tiltScene = true
+        this.view = view
+        return
+      }
+      // The toolbar switches at once; the scene lies down onto the map, which fades in over it
+      const scene = this.$refs.scene as { flatten?: () => Promise<void> } | undefined
+      this.switching = true
+      const leave = !!scene && this.sceneReady
+      this.leaving3d = leave
+      this.view = view
+      try {
+        if (leave) {
+          await scene?.flatten?.()
+        }
+      } finally {
+        this.leaving3d = false
+        this.switching = false
+      }
+    },
+
+    /** Set the zoom of the map (both drawings), as a box zoom of the 2D map does. */
+    setZoom(zoom: { xRange: number[]; yRange: number[] }): void {
+      if (this.zoomRangesEqual(zoom, this.zoomRange)) return
+      this.pendingZoomRange = zoom
+      this.debouncedUpdateZoom()
+    },
+
+    /** Narrow (factor < 1) or widen the window, around the selected point when it is in it. */
+    zoomBy(factor: number): void {
+      const extent = this.dataExtent
+      const x = this.xRange ?? extent?.x
+      const y = this.yRange ?? extent?.y
+      if (!x || !y) return
+      const [x0, x1] = [Math.min(x[0], x[1]), Math.max(x[0], x[1])]
+      const [y0, y1] = [Math.min(y[0], y[1]), Math.max(y[0], y[1])]
+      let cx = (x0 + x1) / 2
+      let cy = (y0 + y1) / 2
+      const mark = this.highlightPoints
+      if (factor < 1 && mark.x.length > 0) {
+        const mx = mark.x[0]
+        const my = mark.y[0]
+        if (mx >= x0 && mx <= x1 && my >= y0 && my <= y1) {
+          cx = mx
+          cy = my
+        }
+      }
+      const hx = ((x1 - x0) * factor) / 2
+      const hy = ((y1 - y0) * factor) / 2
+      // Zoomed out as far as the data reaches: the full view
+      if (factor > 1 && this.xRange === undefined && this.yRange === undefined) return
+      this.setZoom({ xRange: [cx - hx, cx + hx], yRange: [cy - hy, cy + hy] })
+    },
+
+    /** Select the point of a row, as a click on it in the 2D map does. */
+    selectRow(row: number): void {
+      const point = this.heatmapData[row]
+      const interactivity = this.interactivity
+      if (!point || Object.keys(interactivity).length === 0) return
+      const changes = Object.entries(interactivity).some(
+        ([identifier, column]) =>
+          point[column] !== undefined && this.selectionStore.$state[identifier] !== point[column],
+      )
+      if (changes) {
+        for (const [identifier, value] of Object.entries(this.args.onSelect || {})) {
+          if (!(identifier in interactivity) && this.selectionStore.$state[identifier] !== value) {
+            this.selectionStore.updateSelection(identifier, value)
+          }
+        }
+      }
+      for (const [identifier, column] of Object.entries(interactivity)) {
+        const value = point[column]
+        if (value !== undefined) this.selectionStore.updateSelection(identifier, value)
+      }
+    },
+
     /** Append the box outlines, last so trace 0 stays the points. */
     withBoxes(traces: Plotly.Data[]): Plotly.Data[] {
       return this.boxTrace ? [...traces, this.boxTrace] : traces
@@ -983,6 +1299,7 @@ export default defineComponent({
           // Note: No need to re-setup event handlers - they persist with react()
         }
 
+        this.measureMapArea(element)
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
           this.updateFrameHeight()
@@ -992,6 +1309,22 @@ export default defineComponent({
         this.plotInitialized = false // Reset on error so next render uses newPlot
         this.renderFallback()
       }
+    },
+
+    /** Where the map draws its points, and the ranges it shows, for the scene to lie on it */
+    measureMapArea(element: HTMLElement): void {
+      const full = (element as unknown as { _fullLayout?: FullLayout })._fullLayout
+      const size = full?._size
+      if (!full || !size || !full.width || !full.height || !size.w || !size.h) return
+      const bottom = full.height - size.t - size.h
+      const area: MapArea = {
+        x: [size.l / full.width, (size.l + size.w) / full.width],
+        y: [bottom / full.height, (bottom + size.h) / full.height],
+        ratio: size.w / size.h,
+        xRange: [...(full.xaxis?.range ?? [])] as number[],
+        yRange: [...(full.yaxis?.range ?? [])] as number[],
+      }
+      if (JSON.stringify(area) !== JSON.stringify(this.mapArea)) this.mapArea = area
     },
 
     getHeatmapPlotConfig(): Partial<Plotly.Config> {
@@ -1269,6 +1602,18 @@ export default defineComponent({
 <style scoped>
 .heatmap-plot {
   position: relative;
+}
+.heatmap-views {
+  position: relative;
+}
+/* Out of sight under the map: drawn ahead, or until its first drawing is done */
+.scene-hidden {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .heatmap-container {

@@ -236,6 +236,12 @@ export interface LinePlotConfig {
  */
 export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyHeatmap'
+  /** The points can also be drawn in 3D (PeakMap) */
+  view3d?: boolean
+  /** The drawing shown first: '2d' (default) or '3d' */
+  initialView?: '2d' | '3d'
+  /** Label of the height axis in 3D (default: the intensity label) */
+  zLabel?: string
   title?: string
   svgFilename?: string
   scrollZoom?: boolean

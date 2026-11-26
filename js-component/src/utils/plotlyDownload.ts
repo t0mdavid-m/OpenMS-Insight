@@ -18,6 +18,8 @@ export interface PlotlyDownloadOptions {
   /** Size of SVG downloads (raster downloads take the plot's size on screen) */
   width?: number
   height?: number
+  /** The Plotly bundle that drew the plot, when not the view's own (see plotly/current.ts) */
+  plotly?: () => typeof Plotly | null
 }
 
 /**
@@ -38,7 +40,7 @@ export function downloadTool(options: PlotlyDownloadOptions): PlotTool {
       if (!plotElement) return
       const current = options.format()
       const raster = current !== 'svg'
-      plotly().downloadImage(plotElement as Plotly.PlotlyHTMLElement, {
+      ;(options.plotly?.() ?? plotly()).downloadImage(plotElement as Plotly.PlotlyHTMLElement, {
         filename: options.filename(),
         format: current,
         width: raster ? null : (options.width ?? 1200),
