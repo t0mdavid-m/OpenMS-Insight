@@ -44,12 +44,16 @@ def test_needs_multi_select(mock_streamlit, temp_cache_dir: Path, files):
 def test_cache_unchanged(mock_streamlit, temp_cache_dir: Path, files):
     plain = _table(temp_cache_dir / "plain", files, multi_select={"picked": "row"})
     shown = _table(
-        temp_cache_dir / "shown", files, multi_select={"picked": "row"},
+        temp_cache_dir / "shown",
+        files,
+        multi_select={"picked": "row"},
         multi_select_shown=True,
     )
     assert shown._compute_config_hash() == plain._compute_config_hash()
     restored = _table(
-        temp_cache_dir / "shown", None, multi_select={"picked": "row"},
+        temp_cache_dir / "shown",
+        None,
+        multi_select={"picked": "row"},
         multi_select_shown=True,
     )
     assert restored._get_component_args()["multiSelectShown"] is True
