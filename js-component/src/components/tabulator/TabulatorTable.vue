@@ -349,6 +349,15 @@ export default defineComponent({
       // reclick 'unhighlight': the selection whose row the user unhighlighted.
       // The row stays unhighlighted until the selection changes.
       unhighlightedSelection: null as Record<string, unknown> | null,
+      // The selection last scrolled into view: new rows for the same
+      // selection leave the view where the user has it
+      scrolledSelection: null as string | null,
+      // A click names the rows it was made in; rows Python drew before it heard
+      // of the click wait, so the rows on screen do not jump away and back
+      pickHold: null as { column: string; value: string; until: number } | null,
+      heldHash: null as string | null,
+      heldPagination: null as { old: PaginationState | null } | null,
+      pickHoldTimer: null as ReturnType<typeof setTimeout> | null,
       rootResizeObserver: null as ResizeObserver | null,
       /** Pixels the table grows by to end with the tallest column of its row. */
       rowFillPixels: 0,
@@ -690,6 +699,8 @@ export default defineComponent({
         return
       }
 
+      if (this.holdForPick(newHash)) return
+
       // Update our local hash tracker
       this.lastDataHash = newHash
 
@@ -799,6 +810,16 @@ export default defineComponent({
           return
         }
 
+        // Rows held after a click (holdForPick) keep their page as it is too
+        if (this.pickHoldBlocks()) {
+          if (!this.heldPagination) this.heldPagination = { old: oldState }
+          return
+        }
+        if (this.heldPagination) {
+          oldState = this.heldPagination.old
+          this.heldPagination = null
+        }
+
         // Try to inject data if table is empty (handles case where tableBuilt fired before paginationState was available)
         // Pass newState directly to bypass Vue's computed property timing issue
         // (watchers receive new values before computed properties re-evaluate)
@@ -827,7 +848,12 @@ export default defineComponent({
           tab.redraw(true)
           // Trigger setPage to refresh pagination counter (Showing X of Y rows)
           // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
-          tab.setPage(newState.page || 1).catch(() => {})
+          // The page is the one just served (new rows arrived): no Loading overlay
+          const keptScroll = this.keptScroll()
+          this.quietReload = true
+          tab.setPage(newState.page || 1).then(() => this.restoreScroll(keptScroll)).catch(() => {})
+          this.quietReload = false
+          this.restoreScroll(keptScroll)
         }
 
         // Sync client's requested state with server's confirmed state
@@ -936,6 +962,7 @@ export default defineComponent({
     }
   },
   beforeUnmount() {
+    if (this.pickHoldTimer) clearTimeout(this.pickHoldTimer)
     if (this.searchTimer) clearTimeout(this.searchTimer)
     if (this.keySelectTimer) clearTimeout(this.keySelectTimer)
     if (this.keyNavCheckTimer) clearTimeout(this.keyNavCheckTimer)
@@ -1538,6 +1565,9 @@ export default defineComponent({
           })
         }
         this.quietReload = false
+        // A page the table holds already never shows the Loading overlay, even
+        // when a load started before it (and blocked by it) had shown one
+        ;(this.tabulator as any)?.clearAlert?.()
 
         // Use setTimeout(0) to delay resolution to next tick
         // This allows Tabulator's internal state machine to complete setup
@@ -1981,13 +2011,17 @@ export default defineComponent({
               const row = rows.find(r => r.getData()[indexField] === rowId)
               if (row) {
                 row.select()
-                // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
-                if (this.tabulator?.options.pagination) {
-                  this.tabulator.setPageToRow(rowId as string | number).then(() => {
+                const scrollKey = `${identifier}=${String(selectedValue)}`
+                if (scrollKey !== this.scrolledSelection) {
+                  this.scrolledSelection = scrollKey
+                  // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
+                  if (this.tabulator?.options.pagination) {
+                    this.tabulator.setPageToRow(rowId as string | number).then(() => {
+                      row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
+                    }).catch(() => {})
+                  } else {
                     row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
-                  }).catch(() => {})
-                } else {
-                  row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
+                  }
                 }
                 // KEY: Don't call updateSelection - Python already set it
                 selectedFromState = true
@@ -2109,6 +2143,47 @@ export default defineComponent({
      * Select a row (already highlighted) as a click does: set the selections
      * of ``interactivity`` and ``on_select`` to it.
      */
+    /**
+     * Whether rows that arrived must wait: after a click, rows Python drew
+     * before the click reached it do not start at the rows clicked in, and
+     * would move them away until its answer comes. They wait for that answer
+     * (or a few seconds), then the newest rows are shown.
+     */
+    // Whether the rows that came in are held after a click (see holdForPick)
+    pickHoldBlocks(): boolean {
+      const hold = this.pickHold
+      if (!hold) return false
+      const first = this.tableData[0]
+      return Date.now() <= hold.until && !(first && String(first[hold.column]) === hold.value)
+    },
+
+    holdForPick(newHash: string): boolean {
+      if (!this.pickHold) return false
+      if (!this.pickHoldBlocks()) {
+        this.pickHold = null
+        this.heldHash = null
+        return false
+      }
+      this.heldHash = newHash
+      if (!this.pickHoldTimer) {
+        this.pickHoldTimer = setTimeout(() => {
+          this.pickHoldTimer = null
+          const held = this.heldHash
+          this.pickHold = null
+          this.heldHash = null
+          if (this.heldPagination) {
+            const paging = (this.$options.watch as any).paginationState
+            ;(typeof paging === 'function' ? paging : paging.handler).call(this, this.paginationState, null)
+          }
+          if (held && held === this.currentDataHash && held !== this.lastDataHash) {
+            const watcher = (this.$options.watch as any).currentDataHash
+            ;(typeof watcher === 'function' ? watcher : watcher.handler).call(this, held, this.lastDataHash)
+          }
+        }, Math.max(0, this.pickHold.until - Date.now()) + 50)
+      }
+      return true
+    },
+
     commitRowSelection(rowData: Record<string, unknown> | undefined, rowIndex: unknown): void {
       const interactivity = this.args.interactivity || {}
       this.$emit('rowSelected', rowIndex)
@@ -2135,10 +2210,35 @@ export default defineComponent({
             }
           }
         }
+        // Name the first row of the page shown, so Python keeps these rows on
+        // screen although rows arrived since they were drawn
+        const paginationIdentifier = this.args.paginationIdentifier as string | undefined
+        const columns = Object.values(interactivity) as string[]
+        const indexField = this.args.tableIndexField as string | undefined
+        const viewColumn = indexField && columns.includes(indexField) ? indexField : columns[0]
+        const top = this.tableData[0]
+        if (selectionChanges && this.isServerSidePagination && paginationIdentifier && viewColumn && top) {
+          this.pickHold = { column: viewColumn, value: String(top[viewColumn]), until: Date.now() + 4000 }
+          this.selectionStore.updateSelection(paginationIdentifier, {
+            page: this.paginationState?.page || 1,
+            page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+            sort_column: this.requestedSortColumn || undefined,
+            sort_dir: this.requestedSortDir,
+            column_filters: this.currentColumnFilters,
+            ...this.viewFiltersPatch,
+            view_top: { column: viewColumn, value: top[viewColumn], at: Date.now() },
+          })
+        }
         for (const [identifier, column] of Object.entries(interactivity)) {
           const value = rowData[column as string]
           this.selectionStore.updateSelection(identifier, value)
         }
+        // A row picked in this table is in view already: the rows coming back
+        // for it do not scroll to it again
+        const first = Object.entries(interactivity).find(
+          ([, column]) => rowData[column as string] !== undefined && rowData[column as string] !== null
+        )
+        if (first) this.scrolledSelection = `${first[0]}=${String(rowData[first[1] as string])}`
       }
 
       // Clear flag after Vue's next tick (after watcher has fired)
@@ -2495,6 +2595,34 @@ export default defineComponent({
      * Uses Tabulator's replaceData() to preserve scroll position, sorting, and user filters.
      * This is much faster than destroying and recreating the table.
      */
+    // The scroll position of rows refreshed in place while a row is selected:
+    // new rows leave the view where it is (null when the view may move)
+    keptScroll(): number | null {
+      if (!this.isServerSidePagination || this.isNavigatingPages || this.pendingPageNavigation) return null
+      const tab = this.tabulator as any
+      if (!tab) return null
+      if (tab.modules?.page?.page !== (this.paginationState?.page || 1)) return null
+      const interactivity = this.args.interactivity || {}
+      const selected = Object.keys(interactivity).some(
+        (identifier) => this.selectionStore.$state[identifier] !== undefined && this.selectionStore.$state[identifier] !== null
+      )
+      if (!selected) return null
+      return tab.rowManager?.element?.scrollTop ?? null
+    },
+
+    restoreScroll(top: number | null): void {
+      if (top === null) return
+      const put = () => {
+        const holder = (this.tabulator as any)?.rowManager?.element
+        if (holder && holder.scrollTop !== top) holder.scrollTop = top
+      }
+      put()
+      requestAnimationFrame(() => {
+        put()
+        requestAnimationFrame(put)
+      })
+    },
+
     updateTableData(): void {
       // New rows: the row the user unhighlighted is highlighted again
       this.unhighlightedSelection = null
@@ -2530,10 +2658,12 @@ export default defineComponent({
       // replaceData silently replaces all data without updating scroll position, sort or filtering.
       // A table that resets its sort on new rows also starts them at the top (setData)
       const resetRows = this.args.resetSort && !this.isServerSidePagination
+      const keptScroll = this.keptScroll()
       const loaded = resetRows
         ? this.tabulator.setData(this.preparedTableData)
         : this.tabulator.replaceData(this.preparedTableData)
       loaded.then(() => {
+        this.restoreScroll(keptScroll)
         console.log('[TabulatorTable] After replaceData - Tabulator internal state:', {
           hasPageModule: !!tab.modules?.page,
           maxPage: tab.modules?.page?.max,

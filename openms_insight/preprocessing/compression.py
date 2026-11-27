@@ -272,6 +272,7 @@ def downsample_2d_streaming(
     x_range: tuple | None = None,
     y_range: tuple | None = None,
     descending: bool = True,
+    points_per_bin: int | None = None,
 ) -> pl.LazyFrame:
     """
     Streaming 2D downsampling using pure Polars operations.
@@ -292,6 +293,9 @@ def downsample_2d_streaming(
         y_range: Optional (min, max) tuple for y-axis. If None, computed from data.
         descending: If True (default), keep highest intensity per bin.
             If False, keep lowest intensity per bin.
+        points_per_bin: Points kept per bin (default: max_points over the
+            number of bins). Given by a caller whose grid grows with the data
+            (stable_grid), so that a bin keeps as many points as the grid grows.
 
     Returns:
         Downsampled data as Polars LazyFrame (fully lazy, no collection)
@@ -300,8 +304,12 @@ def downsample_2d_streaming(
         data = data.lazy()
 
     # Calculate points per bin
-    total_bins = x_bins * y_bins
-    points_per_bin = max(1, max_points // total_bins)
+    if points_per_bin is None:
+        points_per_bin = max(1, max_points // (x_bins * y_bins))
+    # Equal intensities are ordered by position, so the same data always keeps
+    # the same points (an unstable sort kept another one on each build)
+    order = [intensity_column, x_column, y_column]
+    order_descending = [descending, False, False]
 
     # Build binning expression using provided or computed ranges
     if x_range is not None and y_range is not None:
@@ -324,7 +332,7 @@ def downsample_2d_streaming(
 
         result = (
             data.with_columns([x_bin_expr, y_bin_expr])
-            .sort(intensity_column, descending=descending)
+            .sort(order, descending=order_descending)
             .group_by(["_x_bin", "_y_bin"])
             .head(points_per_bin)
             .drop(["_x_bin", "_y_bin"])
@@ -354,13 +362,41 @@ def downsample_2d_streaming(
                     .alias("_y_bin"),
                 ]
             )
-            .sort(intensity_column, descending=descending)
+            .sort(order, descending=order_descending)
             .group_by(["_x_bin", "_y_bin"])
             .head(points_per_bin)
             .drop(["_x_bin", "_y_bin"])
         )
 
     return result
+
+
+def stable_grid(value_range: tuple, bins: int) -> tuple[tuple[float, float], int]:
+    """A bin grid over `value_range` of at most `bins` bins that stays put as the
+    range grows.
+
+    The bin width is a power of two, at least the range over `bins`, and the grid
+    starts at a multiple of it. Data that is added (e.g. the next scans of an
+    acquisition) then only adds bins at the edge: every point keeps its bin, so
+    downsampling keeps the same points, until the range doubles and the width
+    with it. Binning over the range itself moved every bin edge with each new
+    point, and a different set of points was kept on each refresh.
+
+    Returns ((start, end), number of bins), with at most `bins` bins.
+    """
+    low, high = float(value_range[0]), float(value_range[1])
+    span = high - low
+    if not (math.isfinite(low) and math.isfinite(high)) or span <= 0 or bins < 1:
+        return (low, high), max(int(bins), 1)
+    width = 2.0 ** math.ceil(math.log2(span / bins))
+    start = math.floor(low / width) * width
+    count = int(math.floor((high - start) / width)) + 1
+    if count > bins:
+        # high on the last bin's far edge (or rounding): the next width up
+        width *= 2
+        start = math.floor(low / width) * width
+        count = int(math.floor((high - start) / width)) + 1
+    return (start, start + count * width), count
 
 
 def get_data_range(

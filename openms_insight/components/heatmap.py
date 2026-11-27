@@ -29,6 +29,7 @@ from ..preprocessing.compression import (
     downsample_2d_simple,
     downsample_2d_streaming,
     get_data_range,
+    stable_grid,
 )
 from ..preprocessing.filtering import (
     compute_dataframe_hash,
@@ -158,6 +159,7 @@ class Heatmap(BaseComponent):
         layer_column: str | None = None,
         colorbar_editor: bool = True,
         stepper: str | None = None,
+        stable_bins: bool = True,
         **kwargs,
     ):
         """
@@ -283,6 +285,11 @@ class Heatmap(BaseComponent):
                 ``categorical_filters`` too, every value keeps all its points;
                 otherwise the values come from the finest resolution level.
                 Render-time only: not part of the cache.
+            stable_bins: If True (default), downsampling bins on a grid that
+                stays put as the data grows (``stable_grid``): a heatmap rebuilt
+                with more data (a live acquisition) keeps the points it showed
+                and adds the new ones, instead of a new sample of all of them.
+                False bins over the data's range, as before.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -291,6 +298,7 @@ class Heatmap(BaseComponent):
             raise ValueError("levels= cannot be combined with categorical_filters")
         self._precomputed_levels = levels
         self._downsample_zoomed = downsample_zoomed
+        self._stable_bins = stable_bins
         self._x_column = x_column
         self._y_column = y_column
         self._intensity_column = intensity_column
@@ -421,6 +429,7 @@ class Heatmap(BaseComponent):
                 else {}
             ),
             **({"downsample_zoomed": False} if not self._downsample_zoomed else {}),
+            **({"stable_bins": False} if not self._stable_bins else {}),
             # Only when set, so caches built without them keep their hash; stored
             # so a component loaded from its cache keeps them
             **({"svg_filename": self._svg_filename} if self._svg_filename else {}),
@@ -455,6 +464,7 @@ class Heatmap(BaseComponent):
         self._low_values_on_top = config.get("low_values_on_top", False)
         self._intensity_label = config.get("intensity_label")
         self._downsample_zoomed = config.get("downsample_zoomed", True)
+        self._stable_bins = config.get("stable_bins", True)
         self._svg_filename = config.get("svg_filename")
         self._scroll_zoom = config.get("scroll_zoom", True)
         self._hover_column = config.get("hover_column")
@@ -501,6 +511,28 @@ class Heatmap(BaseComponent):
             self._preprocess_streaming()
         else:
             self._preprocess_eager()
+
+    def _level_grid(self, x_range: tuple, y_range: tuple, target_size: int) -> dict:
+        """Bins and ranges of downsample_2d_streaming for a level of `target_size`
+        points. With stable_bins the grid is one that new data only extends
+        (stable_grid); a bin keeps as many points as on the nominal grid, so that
+        the count does not change as the grid grows."""
+        if not getattr(self, "_stable_bins", True):
+            return {
+                "x_bins": self._x_bins,
+                "y_bins": self._y_bins,
+                "x_range": x_range,
+                "y_range": y_range,
+            }
+        grid_x, x_bins = stable_grid(x_range, self._x_bins)
+        grid_y, y_bins = stable_grid(y_range, self._y_bins)
+        return {
+            "x_bins": x_bins,
+            "y_bins": y_bins,
+            "x_range": grid_x,
+            "y_range": grid_y,
+            "points_per_bin": max(1, target_size // (self._x_bins * self._y_bins)),
+        }
 
     def _build_cascading_levels(
         self,
@@ -578,10 +610,7 @@ class Heatmap(BaseComponent):
                     x_column=self._x_column,
                     y_column=self._y_column,
                     intensity_column=self._intensity_column,
-                    x_bins=self._x_bins,
-                    y_bins=self._y_bins,
-                    x_range=x_range,
-                    y_range=y_range,
+                    **self._level_grid(x_range, y_range, target_size),
                     descending=not self._low_values_on_top,
                 )
 
