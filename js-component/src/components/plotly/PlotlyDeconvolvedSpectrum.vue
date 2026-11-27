@@ -44,6 +44,7 @@ import {
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
 import { useXNavigation } from '@/composables/useXNavigation'
+import { canvasTextWidth, useTopPeakLabels } from '@/composables/useTopPeakLabels'
 import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
@@ -221,7 +222,12 @@ export default defineComponent({
     const zoom = useZoomState(() => props.args.zoomIdentifier)
     const navigation = useXNavigation()
     const hover = usePeakHover()
-    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, hover, zoomStamp: zoom.stamp, navigation, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
+    const topPeaks = useTopPeakLabels(
+      () => props.args.topPeakLabels ?? 0,
+      () => !!props.args.showTopPeakLabels,
+      () => `show the ${props.args.view === 'annotated' ? 'm/z' : 'mass'} of the most intense peaks in view`,
+    )
+    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, hover, zoomStamp: zoom.stamp, navigation, topPeaks, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -241,6 +247,7 @@ export default defineComponent({
       const tools: PlotTool[] = [
         ...this.pinZoom.tools(),
         ...this.measure.tools(this.measureTitle),
+        ...this.topPeaks.tools(),
         {
           id: 'annotations',
           group: 'show',
@@ -1052,9 +1059,33 @@ export default defineComponent({
           ...this.isolationWindowAnnotations,
           ...this.fragmentLabelAnnotations,
           ...this.annotationData.annotations,
+          ...this.topPeakAnnotations,
           ...this.measureOverlay.annotations,
         ],
       }
+    },
+    /**
+     * x values of the most intense peaks in view (toolbar button). Peaks
+     * with an annotation or a fragment-ion label keep only that.
+     */
+    topPeakAnnotations(): Partial<Plotly.Annotations>[] {
+      if (!this.topPeaks.on) return []
+      const element = document.getElementById(this.id) as unknown as { clientWidth?: number; _fullLayout?: { _size?: { w: number; h: number } } } | null
+      const size = element?._fullLayout?._size
+      const height = (this.args.height || 400) - TOOLBAR_HEIGHT
+      const mask = this.annotationsVisible ? (this.isMzMode ? this.highlightedMzPos : this.highlightedMassPos) : []
+      const kinds = this.fragmentKindPos
+      return this.topPeaks.annotations({
+        x: this.xColumnValues,
+        y: this.yColumnValues,
+        xRange: this.xRange,
+        yRange: this.yRange,
+        widthPx: size?.w ?? (element?.clientWidth ?? 800) - 160,
+        heightPx: size?.h ?? height - 180,
+        textWidth: (text, fontSize) => canvasTextWidth(text, fontSize),
+        skip: (i) => !!mask[i] || !!kinds[i],
+        color: this.theme?.textColor || '#262730',
+      })
     },
     /**
      * Differences between masses are neutral: matched to residue masses as
@@ -1094,6 +1125,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // Top peak labels switched on or off
+    'topPeaks.on'() {
+      this.requestGraph()
+    },
     // A zoom set from Python (a saved view opened)
     zoomStamp() {
       if (this.applyIncomingZoom()) this.requestGraph()

@@ -1,5 +1,6 @@
 /**
- * The "Top peaks" switch in the plot toolbar of LinePlot.
+ * The "Top peaks" switch in the plot toolbar of the stick spectra (LinePlot,
+ * MirrorPlot, DeconvolvedSpectrum).
  *
  * Switched on, the most intense peaks in the visible x range carry their x
  * value (the m/z of a spectrum) above the stick. The labels are placed again
@@ -118,10 +119,39 @@ export function placeTopPeakLabels(
   return labels
 }
 
-export function useTopPeakLabels(count: () => number, initial: () => boolean) {
+let measureCanvas: HTMLCanvasElement | null = null
+
+/** Width of a label's text in pixels, measured on a canvas. */
+export function canvasTextWidth(text: string, fontSize: number, font = 'Arial'): number {
+  if (!measureCanvas) measureCanvas = document.createElement('canvas')
+  const ctx = measureCanvas.getContext('2d')
+  if (!ctx) return text.length * fontSize * 0.6
+  ctx.font = `${fontSize}px ${font}`
+  return ctx.measureText(text).width
+}
+
+/**
+ * The labels of a spectrum drawn below the axis (y negated, as the lower half
+ * of a mirror plot): placed as if above it, then flipped.
+ */
+export function mirrorBelow(labels: Partial<Plotly.Annotations>[]): Partial<Plotly.Annotations>[] {
+  return labels.map((label) => ({
+    ...label,
+    y: -(label.y as number),
+    yanchor: 'top',
+    yshift: -LIFT_PX,
+  }))
+}
+
+export function useTopPeakLabels(
+  count: () => number,
+  initial: () => boolean,
+  help: () => string = () => 'show the m/z of the most intense peaks in view',
+) {
   const on = ref(initial())
   let plotElement: HTMLElement | null = null
-  let orderFor: { x: ArrayLike<number>; y: ArrayLike<number>; order: Uint32Array } | null = null
+  // The intensity order of the last two peak sets (a mirror plot has two)
+  let orders: { x: ArrayLike<number>; y: ArrayLike<number>; order: Uint32Array }[] = []
 
   function markActive(): void {
     plotElement?.classList.toggle(ACTIVE_CLASS, on.value && count() > 0)
@@ -148,10 +178,12 @@ export function useTopPeakLabels(count: () => number, initial: () => boolean) {
     const n = count()
     if (!on.value || n <= 0 || !input.x || input.x.length === 0) return []
     // Sorted once per spectrum; zooming only walks the order again
-    if (!orderFor || orderFor.x !== input.x || orderFor.y !== input.y) {
-      orderFor = { x: input.x, y: input.y, order: intensityOrder(input.x, input.y) }
+    let hit = orders.find((entry) => entry.x === input.x && entry.y === input.y)
+    if (!hit) {
+      hit = { x: input.x, y: input.y, order: intensityOrder(input.x, input.y) }
+      orders = [hit, ...orders].slice(0, 2)
     }
-    return placeTopPeakLabels(input, orderFor.order, n)
+    return placeTopPeakLabels(input, hit.order, n)
   }
 
   /** The "Top peaks" switch of the plot toolbar (none when `count` is 0). */
@@ -164,7 +196,7 @@ export function useTopPeakLabels(count: () => number, initial: () => boolean) {
         icon: ICONS.number,
         label: 'Label top peaks',
         short: 'Top peaks',
-        help: 'show the m/z of the most intense peaks in view',
+        help: help(),
         active: on.value,
         run: toggle,
       },

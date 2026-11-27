@@ -25,6 +25,7 @@ import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables
 import { usePinZoom } from '@/composables/usePinZoom'
 import { useZoomState } from '@/composables/useZoomState'
 import { useXNavigation } from '@/composables/useXNavigation'
+import { canvasTextWidth, mirrorBelow, useTopPeakLabels } from '@/composables/useTopPeakLabels'
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
@@ -100,7 +101,11 @@ export default defineComponent({
     const zoom = useZoomState(() => props.args.zoomIdentifier)
     const navigation = useXNavigation()
     const hover = usePeakHover()
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp, hover, navigation }
+    const topPeaks = useTopPeakLabels(
+      () => props.args.topPeakLabels ?? 0,
+      () => !!props.args.showTopPeakLabels,
+    )
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom, zoomStamp: zoom.stamp, hover, navigation, topPeaks }
   },
   data() {
     return {
@@ -160,6 +165,7 @@ export default defineComponent({
       return [
         ...this.measure.tools('click two peaks of the same spectrum (Esc cancels)'),
         ...this.labels.tools(),
+        ...this.topPeaks.tools(),
         ...this.pinZoom.tools(),
         ...this.windowTools,
         ...this.usiTools,
@@ -295,6 +301,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // Top peak labels switched on or off
+    'topPeaks.on'() {
+      this.render()
+    },
     // A zoom set from Python (a saved view opened)
     zoomStamp() {
       const incoming = this.zoom.incoming()
@@ -537,6 +547,37 @@ export default defineComponent({
       return annotations
     },
 
+    /**
+     * x values of the most intense peaks in view on each side (toolbar
+     * button), the lower side's below its sticks. Peaks with an annotation or
+     * one of your labels keep only that.
+     */
+    topPeakAnnotations(): Partial<Plotly.Annotations>[] {
+      if (!this.topPeaks.on) return []
+      const element = document.getElementById(this.id) as unknown as { _fullLayout?: { _size?: { w: number; h: number } } } | null
+      const size = element?._fullLayout?._size
+      const widthPx = size?.w ?? this.actualPlotWidth - 80
+      const heightPx = (size?.h ?? this.plotHeight - (this.args.title ? 50 : 20) - 50) / 2
+      const own = new Set(this.args.peakLabels ? this.labels.labels.map((label) => label.x) : [])
+      const color = this.theme?.textColor || '#262730'
+      const side = (data: SideData | undefined, below: boolean): Partial<Plotly.Annotations>[] => {
+        if (!data) return []
+        const placed = this.topPeaks.annotations({
+          x: data.x,
+          y: data.y,
+          xRange: this.xRange,
+          yRange: [0, this.yRangeMax],
+          widthPx,
+          heightPx,
+          textWidth: (text, fontSize) => canvasTextWidth(text, fontSize),
+          skip: (i) => !!data.annotations?.[i] || own.has(data.x[i]),
+          color,
+        })
+        return below ? mirrorBelow(placed) : placed
+      }
+      return [...side(this.topData, false), ...side(this.bottomData, true)]
+    },
+
     measureTextWidth(text: string): number {
       if (!this.textMeasureCanvas) {
         this.textMeasureCanvas = document.createElement('canvas')
@@ -647,6 +688,7 @@ export default defineComponent({
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
+        ...this.topPeakAnnotations(),
         ...this.windowLayer.annotations,
       ]
 
@@ -998,6 +1040,7 @@ export default defineComponent({
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
+        ...this.topPeakAnnotations(),
         ...this.windowLayer.annotations,
       ]
 

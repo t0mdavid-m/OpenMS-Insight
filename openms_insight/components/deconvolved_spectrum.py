@@ -16,6 +16,11 @@ from ..core.measure import (
 )
 from ..core.registry import register_component
 from ..core.tag_ladder import ladder_steps
+from ..core.top_peak_labels import (
+    top_peak_label_args,
+    validate_show_top_peak_labels,
+    validate_top_peak_labels,
+)
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -116,6 +121,8 @@ class DeconvolvedSpectrum(BaseComponent):
         measure_residues: dict[str, float] | None = None,
         image_format: str | None = None,
         keep_zoom: bool = False,
+        top_peak_labels: int = 10,
+        show_top_peak_labels: bool = False,
         fragment_matches_identifier: str | None = None,
         zoom_identifier: str | None = None,
         **kwargs,
@@ -181,6 +188,14 @@ class DeconvolvedSpectrum(BaseComponent):
                 gets new data, e.g. when another spectrum is selected; unpinned,
                 each new spectrum is shown in full. Double-click still resets
                 the zoom. Render-time only: not part of the cache.
+            top_peak_labels: How many of the most intense peaks in view the
+                "Label top peaks" button in the mode bar labels with their
+                mass or m/z (default 10, at most 200; 0 removes the button). Peaks
+                that carry an annotation or a fragment-ion label keep only that. The
+                labels are placed again on every zoom, leaving out any that
+                would overlap. Render-time only: not part of the cache.
+            show_top_peak_labels: Start with those labels shown (default
+                False). Render-time only: not part of the cache.
             fragment_matches_identifier: Identifier a ``ProteinSequenceView``
                 writes its matched fragment ions to (its
                 ``fragment_matches_identifier``). The ions are marked when the
@@ -226,6 +241,10 @@ class DeconvolvedSpectrum(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/keep_zoom.py)
         self._keep_zoom = validate_keep_zoom(keep_zoom)
+
+        # Render-time options, kept out of the cache config (see core/top_peak_labels.py)
+        self._top_peak_labels = validate_top_peak_labels(top_peak_labels)
+        self._show_top_peak_labels = validate_show_top_peak_labels(show_top_peak_labels)
         # Render-time option, kept out of the cache config
         self._fragment_matches_identifier = fragment_matches_identifier
 
@@ -540,4 +559,7 @@ class DeconvolvedSpectrum(BaseComponent):
         args.update(image_format_args(self._image_format))
         args.update(zoom_args(self._zoom_identifier))
         args.update(keep_zoom_args(self._keep_zoom))
+        args.update(
+            top_peak_label_args(self._top_peak_labels, self._show_top_peak_labels)
+        )
         return args

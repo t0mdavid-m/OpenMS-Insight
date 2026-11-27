@@ -354,6 +354,7 @@ mirror(state_manager=state_manager, height=600)
 - `svg_filename`: File name (without extension) of the image download (default: `title`, then `mirror_plot`); the format is set as in [Image downloads](#image-downloads-image_format)
 - `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
 - `peak_labels`: Your own labels on peaks, on by default (see [Peak labels](#peak-labels-peak_labels))
+- `top_peak_labels`, `show_top_peak_labels`: The **Label top peaks** button, as on LinePlot, on each side: the m/z of the most intense peaks in view, 10 per side by default (0 removes the button), the lower side's below its sticks. Peaks with an annotation or one of your labels keep only that. Render-time only
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
@@ -731,6 +732,8 @@ spectrum(key="spectrum", state_manager=state_manager)
 In every view, hovering shows the mass or peak nearest the mouse along x, as on LinePlot: a dot on its top and a box with its mass (or m/z), its intensity and the fragment ions marked there. A click selects the mass the box shows, anywhere along its stick.
 
 **Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. The **Fragments** button in the toolbar's Show group hides or shows them.
+
+**Top peaks.** `top_peak_labels` (default 10, 0 removes the button) and `show_top_peak_labels` give the **Label top peaks** button of LinePlot: the mass (or m/z) of the most intense peaks in view, placed again on every zoom. Masses that carry an annotation or a fragment-ion label keep only that. Render-time only.
 
 **Mouse.** The wheel zooms x around the mouse while y follows the peaks in view, Shift + wheel or a sideways wheel pans x, and so does dragging with the middle button, as on LinePlot. A double-click shows the full view.
 

@@ -452,6 +452,8 @@ export interface MirrorPlotComponentArgs
     PeakLabelArgs,
     ImageExportArgs {
   componentType: 'PlotlyMirrorPlot'
+  topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels per side (0: no button)
+  showTopPeakLabels?: boolean // Start with the top peak labels shown
   title?: string
   /** File name (without extension) of the image download. */
   svgFilename?: string
@@ -580,6 +582,8 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
 export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   componentType: 'PlotlyDeconvolvedSpectrum'
+  topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
+  showTopPeakLabels?: boolean // Start with the top peak labels shown
   view: 'deconvolved' | 'annotated' | 'ladder'
   title: string
   /** Title while a ladder view shows the raw peaks of a mass */
