@@ -178,6 +178,8 @@ class Table(BaseComponent):
         narrowed_labels: dict[str, str | dict[str, str] | bool] | None = None,
         copy_row: bool = True,
         collapse_columns: bool = True,
+        level: int | None = None,
+        level_identifier: str = "table_level",
         export_info: dict[str, Any] | None = None,
         **kwargs,
     ):
@@ -354,6 +356,19 @@ class Table(BaseComponent):
                 entry is named after its column. ``False`` for an identifier
                 leaves its chip out. Display-only, so not part of the cache
                 configuration.
+            level: Where the table sits in a chain of tables that narrow each
+                other, such as proteins (0), their peptides (1) and those
+                peptides' spectra (2). With a level, Enter or a double click on
+                a row selects it and moves the keyboard to the table one level
+                down, and Backspace moves it to the table one level up. The move
+                is written to ``level_identifier`` as ``{"go": "down" or "up",
+                "to": <level>, "from": <level>, "nonce": <ms>}``; a table with
+                that level in the same state takes the keyboard, so an app with
+                the levels on different views reads it to show the table it
+                goes to. None (the default) leaves Enter and Backspace alone.
+                Display-only, so not part of the cache configuration.
+            level_identifier: The state key the tables of one chain share for
+                these moves.
             copy_row: Ctrl+C (Cmd+C) while the table has focus copies the
                 selected row: the shown columns' titles and the row's values
                 as two tab-separated lines, which paste into a spreadsheet as
@@ -383,6 +398,14 @@ class Table(BaseComponent):
         self._narrowed_labels = dict(narrowed_labels or {})
         self._copy_row = bool(copy_row)
         self._collapse_columns = bool(collapse_columns)
+        if level is not None and (
+            isinstance(level, bool) or not isinstance(level, int) or level < 0
+        ):
+            raise ValueError(
+                f"level must be a whole number of 0 or more, not {level!r}"
+            )
+        self._level = level
+        self._level_identifier = str(level_identifier)
         self._export_info = dict(export_info or {})
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
@@ -1921,6 +1944,9 @@ class Table(BaseComponent):
             args["copyRow"] = False
         if not getattr(self, "_collapse_columns", True):
             args["collapseColumns"] = False
+        if getattr(self, "_level", None) is not None:
+            args["level"] = self._level
+            args["levelIdentifier"] = self._level_identifier
         if self._pagination and excel_available():
             args["excelExport"] = True
         if self._reset_sort:
