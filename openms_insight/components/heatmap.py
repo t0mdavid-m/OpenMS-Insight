@@ -28,8 +28,8 @@ from ..preprocessing.compression import (
     downsample_2d,
     downsample_2d_simple,
     downsample_2d_streaming,
-    stable_grid,
     get_data_range,
+    stable_grid,
 )
 from ..preprocessing.filtering import (
     compute_dataframe_hash,
@@ -518,16 +518,21 @@ class Heatmap(BaseComponent):
         (stable_grid); a bin keeps as many points as on the nominal grid, so that
         the count does not change as the grid grows."""
         if not getattr(self, "_stable_bins", True):
-            return dict(
-                x_bins=self._x_bins, y_bins=self._y_bins,
-                x_range=x_range, y_range=y_range,
-            )
+            return {
+                "x_bins": self._x_bins,
+                "y_bins": self._y_bins,
+                "x_range": x_range,
+                "y_range": y_range,
+            }
         grid_x, x_bins = stable_grid(x_range, self._x_bins)
         grid_y, y_bins = stable_grid(y_range, self._y_bins)
-        return dict(
-            x_bins=x_bins, y_bins=y_bins, x_range=grid_x, y_range=grid_y,
-            points_per_bin=max(1, target_size // (self._x_bins * self._y_bins)),
-        )
+        return {
+            "x_bins": x_bins,
+            "y_bins": y_bins,
+            "x_range": grid_x,
+            "y_range": grid_y,
+            "points_per_bin": max(1, target_size // (self._x_bins * self._y_bins)),
+        }
 
     def _build_cascading_levels(
         self,
