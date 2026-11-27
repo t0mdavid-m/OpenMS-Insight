@@ -492,7 +492,6 @@ class TestStreamingTableNavigation:
         moved = version(330)._prepare_vue_data(state)
         assert 120 in ids(moved)
 
-
     def test_data_keeps_updating_while_a_picked_row_holds_the_view(
         self, mock_streamlit, temp_cache_dir
     ):
@@ -505,9 +504,7 @@ class TestStreamingTableNavigation:
             ids = list(range(n, 0, -1))
             return Table(
                 cache_id=f"live_update_{n}_{bump}",
-                data=pl.LazyFrame(
-                    {"id": ids, "score": [i * 10 + bump for i in ids]}
-                ),
+                data=pl.LazyFrame({"id": ids, "score": [i * 10 + bump for i in ids]}),
                 cache_path=str(temp_cache_dir),
                 interactivity={"selected_id": "id"},
                 index_field="id",
@@ -518,7 +515,7 @@ class TestStreamingTableNavigation:
 
         def rows(result):
             data = result["tableData"]
-            return dict(zip(data["id"], data["score"]))
+            return dict(zip(data["id"], data["score"], strict=True))
 
         state = {pagination_id: {"page": 1, "page_size": 100}, "selected_id": None}
         version(200, 0)._prepare_vue_data(state)
