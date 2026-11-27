@@ -395,8 +395,9 @@ export default defineComponent({
       // click, which must not also select the row
       lastCheckedPosition: null as number | null,
       checkboxClicked: false as boolean,
-      // The check box column is shown once the user asks for it
-      checkboxesShown: false as boolean,
+      // The check box column is shown once the user asks for it, or from the
+      // start with multi_select_shown
+      checkboxesShown: !!(this as any).args?.multiSelectShown as boolean,
       // Keyboard navigation: the row highlighted with the keys and not yet
       // selected (its index field value), and the timer that selects it
       keyboardRowId: null as unknown,

@@ -170,6 +170,7 @@ class Table(BaseComponent):
         fill_row: bool = True,
         row_overview: bool | str = False,
         multi_select: dict[str, str] | None = None,
+        multi_select_shown: bool = False,
         search: bool | list[str] = False,
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
@@ -293,6 +294,10 @@ class Table(BaseComponent):
                 passing the table's filters, on all pages). The identifier holds
                 the sorted distinct values of the column over the checked rows,
                 or None. Independent of the clicked row (``interactivity``).
+            multi_select_shown: Show the check box column of ``multi_select``
+                from the start, for a table whose purpose is ticking rows (a
+                list of files to pick). False (the default) keeps it behind
+                the toolbar's toggle. Display-only.
             search: Show a search box in the toolbar. True searches the text
                 columns of ``column_definitions``; a list of column names
                 searches those columns instead (they need not be shown, e.g. a
@@ -384,6 +389,7 @@ class Table(BaseComponent):
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
         self._copy_row = bool(copy_row)
+        self._multi_select_shown = bool(multi_select_shown)
         self._collapse_columns = bool(collapse_columns)
         if level is not None and (
             isinstance(level, bool) or not isinstance(level, int) or level < 0
@@ -1895,6 +1901,8 @@ class Table(BaseComponent):
             args["keyboardNavigation"] = False
         if not getattr(self, "_copy_row", True):
             args["copyRow"] = False
+        if getattr(self, "_multi_select_shown", False) and self._multi_select:
+            args["multiSelectShown"] = True
         if not getattr(self, "_collapse_columns", True):
             args["collapseColumns"] = False
         if getattr(self, "_level", None) is not None:
