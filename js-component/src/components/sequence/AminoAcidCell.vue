@@ -166,7 +166,8 @@ export default defineComponent({
         '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#f0f0f0',
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#000',
         '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#fff',
-        '--amino-acid-font-size': `${this.fontSize}px`,
+        // A modified nucleotide's code (m1A, Ψ, m5C) is longer than one letter
+        '--amino-acid-font-size': `${this.aminoAcid.length > 1 ? Math.max(6, Math.round((this.fontSize * 1.6) / this.aminoAcid.length)) : this.fontSize}px`,
         '--mod-mass-bg-color': isDark ? '#e0e0e0' : '#fff',
         '--mod-mass-text-color': '#000',
         '--mod-mass-border-color': isDark ? '#666' : '#a79c91',

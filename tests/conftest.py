@@ -356,3 +356,21 @@ def sample_protein_sequence_data() -> pl.LazyFrame:
             "precursor_mass": [799.4, 435.2],
         }
     )
+
+
+@pytest.fixture
+def sample_coverage_data() -> pl.LazyFrame:
+    """Matches of oligonucleotides on two references, in two conditions."""
+    return pl.LazyFrame(
+        {
+            "oligo_id": [0, 1, 2, 3, 4],
+            "accession": ["tRNA1", "tRNA1", "tRNA1", "tRNA1", "tRNA2"],
+            "sequence": ["AUGG", "GGCU", "CUAC", "AUG", "GCGC"],
+            "start": [1, 3, 5, 1, 2],
+            "end": [4, 6, 8, 3, 5],
+            "psms": [1, 3, 40, 0, 7],
+            "condition": ["ctrl", "ctrl", "ctrl", "drug", "ctrl"],
+            "mod_positions": [[2], [], [6], [], []],
+            "mod_names": [["m1A"], [], ["Um"], [], []],
+        }
+    )

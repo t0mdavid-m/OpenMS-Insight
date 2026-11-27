@@ -196,6 +196,7 @@ export interface LinePlotComponentArgs
   yColumn?: string // Column name for y-axis values
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
+  colorColumn?: string // Column name for a colour per highlighted peak
   height?: number // Component height in pixels
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
@@ -463,6 +464,7 @@ export interface MirrorPlotComponentArgs
   yColumn: string
   highlightColumn?: string
   annotationColumn?: string
+  colorColumn?: string
   xLabel?: string
   yLabel?: string
   interactivity?: InteractivityMapping
@@ -745,6 +747,27 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
 }
 
 /**
+ * SequenceCoverage component arguments.
+ */
+export interface SequenceCoverageComponentArgs extends BaseComponentArgs, ImageExportArgs {
+  componentType: 'SequenceCoverage'
+  title?: string | null
+  /** Positions per block */
+  blockSize?: number
+  /** What a count counts, titling the colour legend */
+  countLabel?: string
+  /** (upper bound or null for no bound, label, colour) per count bin */
+  countBins?: [number | null, string, string][]
+  emptyColor?: string
+  modificationColor?: string
+  notes?: string[]
+  emptyMessage?: string
+  /** Identifier -> column a click on a match sets */
+  interactivity?: Record<string, string>
+  hasCounts?: boolean
+}
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -761,6 +784,7 @@ export type ComponentArgs =
   | DeconvolvedSpectrumComponentArgs
   | ProteinSequenceViewComponentArgs
   | ProteinStructureViewComponentArgs
+  | SequenceCoverageComponentArgs
 
 /**
  * Component layout entry.
@@ -795,6 +819,7 @@ export interface PlotData {
   y_values: number[]
   highlight_mask?: boolean[]
   annotations?: string[]
+  colors?: (string | null)[]
   // Allow dynamic interactivity columns like interactivity_peak_id
   [key: string]: unknown[] | undefined
 }

@@ -18,6 +18,7 @@ from .components.protein_sequence_view import (
     pyopenms_modification_library,
 )
 from .components.protein_structure_view import ProteinStructureView
+from .components.sequence_coverage import SequenceCoverage
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.series_plot import SeriesPlot
 from .components.table import Table
@@ -34,7 +35,7 @@ from .rendering.bridge import (
     get_component_annotations,
 )
 
-__version__ = "0.7.9"
+__version__ = "0.7.10"
 
 __all__ = [
     # Core
@@ -61,6 +62,7 @@ __all__ = [
     "ProteinSequenceView",
     "pyopenms_modification_library",
     "ProteinStructureView",
+    "SequenceCoverage",
     # Utilities
     "get_component_annotations",
     "clear_component_annotations",

@@ -220,6 +220,12 @@ export default defineComponent({
         result.annotations = rawData[annotationCol] as string[]
       }
 
+      // A colour per highlighted peak (an ion series, say), if present
+      const colorCol = (config?.colorColumn as string) || this.args.colorColumn
+      if (colorCol && rawData[colorCol]) {
+        result.colors = rawData[colorCol] as (string | null)[]
+      }
+
       // Add interactivity column data for click handling
       // Columns are stored with their original names in rawData
       if (this.args.interactivity) {
@@ -546,7 +552,10 @@ export default defineComponent({
 
         // Use selected color if this annotation's peak is selected
         const isSelected = box.index === selectedIndex
-        const boxColor = isSelected ? this.styling.selectedColor : this.styling.highlightColor
+        const peakColor = this.plotData?.colors?.[box.index]
+        const boxColor = isSelected
+          ? this.styling.selectedColor
+          : peakColor || this.styling.highlightColor
 
         shapes.push({
           type: 'rect',
@@ -632,6 +641,9 @@ export default defineComponent({
       const unhighlighted_y: number[] = []
       const highlighted_x: number[] = []
       const highlighted_y: number[] = []
+      // Highlighted peaks with a colour of their own, one trace per colour
+      const colored: Record<string, { x: number[]; y: number[] }> = {}
+      const colors = this.plotData.colors
       const selected_x: number[] = []
       const selected_y: number[] = []
 
@@ -647,6 +659,10 @@ export default defineComponent({
           // Selected peak goes in gold trace (drawn last, on top)
           selected_x.push(x, x, x)
           selected_y.push(baseline, y, baseline)
+        } else if (isHighlighted && colors?.[i]) {
+          const group = (colored[colors[i] as string] ??= { x: [], y: [] })
+          group.x.push(x, x, x)
+          group.y.push(baseline, y, baseline)
         } else if (isHighlighted) {
           // Highlighted peaks (annotated)
           highlighted_x.push(x, x, x)
@@ -684,6 +700,19 @@ export default defineComponent({
           marker: { color: this.styling.highlightColor },
           // The read-out comes from usePeakHover (nearest peak along x); 'none'
           // still sends the click events
+          hoverinfo: 'none',
+        })
+      }
+
+      for (const [color, group] of Object.entries(colored)) {
+        traces.push({
+          x: group.x,
+          y: group.y,
+          mode: 'lines',
+          type: 'scatter',
+          connectgaps: false,
+          marker: { color },
+          line: { color },
           hoverinfo: 'none',
         })
       }

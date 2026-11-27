@@ -359,3 +359,47 @@ class TestUnfilteredComponent:
             _validate_interactivity_selections(component, state_manager, state) is False
         )
         assert state_manager.get_selection("scan") == 3371
+
+
+class TestUnfilteredTable:
+    """A Table always has the range filter hook; without range filters it
+    shows the same rows in every run, like any unfiltered component."""
+
+    @staticmethod
+    def _table(temp_cache_dir, **kwargs):
+        from openms_insight import Table
+
+        data = pl.DataFrame(
+            {"psm": [0, 1], "scan_id": [10, 11], "start": [1, 5], "end": [3, 9]}
+        )
+        return Table(
+            cache_id="matches",
+            data=data.lazy(),
+            cache_path=str(temp_cache_dir),
+            index_field="psm",
+            interactivity={"scan": "scan_id", "psm": "psm"},
+            **kwargs,
+        )
+
+    def test_scan_picked_elsewhere_is_kept(
+        self, mock_streamlit, temp_cache_dir, state_manager
+    ):
+        # A scan table of every spectrum beside a table of the matched ones:
+        # a scan without a match is not among the match table's rows
+        table = self._table(temp_cache_dir)
+        state_manager.set_selection("scan", 99)
+        state = state_manager.get_state_for_vue()
+
+        assert _validate_interactivity_selections(table, state_manager, state) is False
+        assert state_manager.get_selection("scan") == 99
+
+    def test_range_filter_still_drops_a_hidden_selection(
+        self, mock_streamlit, temp_cache_dir, state_manager
+    ):
+        table = self._table(temp_cache_dir, range_filters={"pos": ["start", "end"]})
+        state_manager.set_selection("pos", 2)
+        state_manager.set_selection("scan", 11)
+        state = state_manager.get_state_for_vue()
+
+        assert _validate_interactivity_selections(table, state_manager, state) is True
+        assert state_manager.get_selection("scan") is None
