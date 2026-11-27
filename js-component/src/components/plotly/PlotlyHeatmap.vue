@@ -47,6 +47,20 @@
         @depth="sceneDepth = $event"
       />
     </div>
+    <HeatmapOverview
+      v-if="view === '2d' && overviewShown && overviewData && overviewView && overviewPlace"
+      :overview="overviewData"
+      :view="overviewView"
+      :stops="colorStops"
+      :left="overviewPlace.left"
+      :top="overviewPlace.top"
+      :width="overviewPlace.width"
+      :height="overviewPlace.height"
+      :background="theme?.backgroundColor || '#ffffff'"
+      :text="theme?.textColor || '#262730'"
+      :accent="theme?.primaryColor || '#1436b8'"
+      @move="moveView"
+    />
     <PeakHoverTip
       :tip="hover.tip"
       :color="theme?.textColor || '#262730'"
@@ -71,6 +85,8 @@ import PlotToolbar from './PlotToolbar.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover, textLines, formatValue as hoverValue } from '@/composables/usePeakHover'
 import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
+import HeatmapOverview from './HeatmapOverview.vue'
+import type { OverviewData, OverviewView } from '@/utils/overview'
 import HeatmapScene3D, { loadPlotly3D, plotly3D, type MapArea, type ScenePoints } from './HeatmapScene3D.vue'
 import { downloadTool as makeDownloadTool } from '@/utils/plotlyDownload'
 import { imageFormatOf } from '@/utils/imageExport'
@@ -130,7 +146,7 @@ function textTicks(values: unknown[], most: number): Partial<Plotly.LayoutAxis> 
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
-  components: { MeasureHint, PeakHoverTip, PlotToolbar, ColorbarLegend, HeatmapScene3D },
+  components: { MeasureHint, PeakHoverTip, PlotToolbar, ColorbarLegend, HeatmapScene3D, HeatmapOverview },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -219,6 +235,10 @@ export default defineComponent({
       colorSpecs: {} as Record<string, ColorbarSpec | null>,
       /** Lowest value shown, per color option; absent: everything. */
       minValues: {} as Record<string, number>,
+      /** The overview of the whole map is shown while zoomed (args.overview). */
+      overviewVisible: true,
+      /** The plot area inside the wrapper, in pixels (Plotly's margins move with automargin). */
+      plotArea: null as { left: number; top: number; width: number; height: number } | null,
       /** The drawing shown: the 2D map, or (args.view3d) the points as stems in 3D. */
       view: (this.args.view3d && this.args.initialView === '3d' ? '3d' : '2d') as '2d' | '3d',
     }
@@ -249,8 +269,60 @@ export default defineComponent({
           run: () => this.toggleColorbar(),
         })
       }
+      if (this.args.overview && !this.isCategoricalMode && !in3d) {
+        tools.push({
+          id: 'overview',
+          group: 'show',
+          icon: ICONS.overview,
+          label: 'Overview',
+          short: 'Overview',
+          help: 'a small picture of the whole map while zoomed; click or drag in it to move the zoom',
+          active: this.overviewVisible,
+          run: () => {
+            this.overviewVisible = !this.overviewVisible
+          },
+        })
+      }
       tools.push(in3d ? this.sceneDownloadTool : this.downloadTool())
       return tools
+    },
+
+    /** The raster of the whole map, sent while the plot is zoomed. */
+    overviewData(): OverviewData | undefined {
+      if (!this.args.overview) return undefined
+      return this.streamlitDataStore.allDataForDrawing?.overview as OverviewData | undefined
+    },
+
+    /** The zoomed region (an axis that is not zoomed spans the whole map); null when not zoomed. */
+    overviewView(): OverviewView | null {
+      const overview = this.overviewData
+      const zoom = this.pendingZoomRange ?? this.zoomRange
+      if (!overview || !zoom) return null
+      const full = (range: number[]) => range[0] < 0 && range[1] < 0
+      if (full(zoom.xRange) && full(zoom.yRange)) return null
+      return {
+        x: full(zoom.xRange) ? overview.x : [zoom.xRange[0], zoom.xRange[1]],
+        y: full(zoom.yRange) ? overview.y : [zoom.yRange[0], zoom.yRange[1]],
+      }
+    },
+
+    overviewShown(): boolean {
+      return !!this.args.overview && this.overviewVisible && !this.isCategoricalMode
+    },
+
+    /**
+     * Top right corner of the plot area, at most a fifth of its width and a
+     * third of its height; none when the plot is too small to spare it.
+     */
+    overviewPlace(): { left: number; top: number; width: number; height: number } | null {
+      const area = this.plotArea
+      const overview = this.overviewData
+      if (!area || !overview) return null
+      const scale = Math.min(1, (area.width * 0.2) / overview.width, (area.height / 3) / overview.height)
+      if (scale < 0.5) return null
+      const width = Math.round(overview.width * scale)
+      const height = Math.round(overview.height * scale)
+      return { left: area.left + area.width - width - 8, top: area.top + 6, width, height }
     },
 
     /** The "3D" switch: the same points as stems as high as their intensity. */
@@ -1304,6 +1376,7 @@ export default defineComponent({
         this.$nextTick(() => {
           this.updateFrameHeight()
         })
+        this.readPlotArea()
       } catch (error) {
         console.error('PlotlyHeatmap: Error rendering plot:', error)
         this.plotInitialized = false // Reset on error so next render uses newPlot
@@ -1552,10 +1625,46 @@ export default defineComponent({
             if (Math.abs(newWidth - this.plotWidth) > 10) {
               this.plotWidth = newWidth
             }
+            requestAnimationFrame(() => this.readPlotArea())
           }
         })
         this.heatmapResizeObserver.observe(plotElement)
       }
+    },
+
+    /** Where Plotly drew the plot area, relative to the wrapper (for the overview). */
+    readPlotArea(): void {
+      const element = document.getElementById(this.id) as (HTMLElement & { _fullLayout?: any }) | null
+      const size = element?._fullLayout?._size
+      if (!element || !size) return
+      // Relative to the wrapper, whatever element in between is positioned
+      const outer = (this.$el as HTMLElement).getBoundingClientRect()
+      const inner = element.getBoundingClientRect()
+      const area = {
+        left: inner.left - outer.left + size.l,
+        top: inner.top - outer.top + size.t,
+        width: size.w,
+        height: size.h,
+      }
+      const old = this.plotArea
+      if (old && Object.keys(area).every((k) => old[k as keyof typeof old] === area[k as keyof typeof area])) return
+      this.plotArea = area
+    },
+
+    /** A click or drag in the overview: zoom to that region, as a box zoom would. */
+    moveView(view: OverviewView): void {
+      const zoom = this.pendingZoomRange ?? this.zoomRange
+      // A reversed axis keeps its direction
+      const ordered = (range: [number, number], current?: number[]) =>
+        current && current[0] > current[1] ? [range[1], range[0]] : range
+      const x = ordered(view.x, zoom?.xRange)
+      const y = ordered(view.y, zoom?.yRange)
+      void Plotly.relayout(this.id, {
+        'xaxis.range[0]': x[0],
+        'xaxis.range[1]': x[1],
+        'yaxis.range[0]': y[0],
+        'yaxis.range[1]': y[1],
+      })
     },
 
     cleanupHeatmapResizeObserver() {

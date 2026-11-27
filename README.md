@@ -400,6 +400,7 @@ Heatmap(
 - `color_columns`: Your own further numeric columns the points can be colored by, as label to column. The toolbar's **Color** button lists the intensity and these, with a slider that shows only the points from a value up (see [Plot toolbar](#plot-toolbar))
 - `layer_column`: Your own column whose values are layers the toolbar's **Layers** button shows or hides. In categorical mode the categories are the layers unless this names another column
 - `colorbar_editor`: The colorbar below the plot opens an editor on click (default True; False keeps `colorscale`)
+- `overview`: While the plot is zoomed, a small picture of the whole map sits in its top right corner with the zoomed region framed; a click or drag there moves the zoom, keeping its size, and the toolbar's **Overview** button hides it (default False; numeric axes only). Python sends it as a 160 × 100 raster of the smallest level, so it costs a few kilobytes per zoom
 
 **Coloring by your own columns, and layers:**
 Nothing in these options is specific to mass spectrometry: they take any columns of

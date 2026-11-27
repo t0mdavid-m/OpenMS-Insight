@@ -1,5 +1,6 @@
 """Heatmap component using Plotly scattergl."""
 
+import hashlib
 import math
 from typing import Any
 
@@ -36,6 +37,7 @@ from ..preprocessing.filtering import (
     filter_and_collect_cached,
     from_pandas_safe,
 )
+from ..preprocessing.overview import overview_raster
 
 
 # Cache key only includes zoom state (not other selections)
@@ -160,6 +162,7 @@ class Heatmap(BaseComponent):
         colorbar_editor: bool = True,
         stepper: str | None = None,
         stable_bins: bool = True,
+        overview: bool = False,
         **kwargs,
     ):
         """
@@ -290,6 +293,11 @@ class Heatmap(BaseComponent):
                 with more data (a live acquisition) keeps the points it showed
                 and adds the new ones, instead of a new sample of all of them.
                 False bins over the data's range, as before.
+            overview: While the plot is zoomed, show a small picture of the
+                whole map in its top right corner with the zoomed region
+                framed; a click or drag there moves the zoom, and an
+                "Overview" button in the toolbar hides it (default False).
+                Numeric axes only. Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -346,6 +354,7 @@ class Heatmap(BaseComponent):
         self._color_columns: dict[str, str] = dict(color_columns or {})
         self._layer_column = layer_column
         self._colorbar_editor = bool(colorbar_editor)
+        self._overview = bool(overview)
         _check_columns_exist(
             data,
             data_path,
@@ -1501,7 +1510,51 @@ class Heatmap(BaseComponent):
                 "y": members[self._y_column].to_list(),
             }
             result["_hash"] = f"{result['_hash']}:{compute_dataframe_hash(members)}"
+        if self._overview and not self._is_no_zoom(zoom):
+            overview = self._overview_data(state, levels, non_categorical_filters)
+            if overview is not None:
+                result["overview"] = overview
+                cells = hashlib.md5(overview["cells"].encode("ascii")).hexdigest()
+                result["_hash"] = f"{result['_hash']}:{cells}"
         return self._add_boxes(result, zoom)
+
+    def _overview_data(
+        self,
+        state: dict[str, Any],
+        levels: list,
+        non_categorical_filters: dict[str, str],
+    ) -> dict[str, Any] | None:
+        """The whole map as a small raster (see ``overview=``), from the smallest level."""
+        if not levels or not self._numeric_axes(levels):
+            return None
+        data = levels[0]
+        if isinstance(data, pl.DataFrame):
+            data = data.lazy()
+        columns = [self._x_column, self._y_column]
+        if self._intensity_column:
+            columns.append(self._intensity_column)
+        if non_categorical_filters:
+            # The filter columns are read by the filter, then left out
+            with_filters = columns + [
+                c for c in non_categorical_filters.values() if c not in columns
+            ]
+            df_pandas, _ = filter_and_collect_cached(
+                data,
+                non_categorical_filters,
+                state,
+                columns=with_filters,
+                filter_defaults=self._filter_defaults,
+            )
+            df = pl.from_pandas(df_pandas[columns])
+        else:
+            df = data.select(columns).collect()
+        return overview_raster(
+            df,
+            self._x_column,
+            self._y_column,
+            self._intensity_column,
+            log_scale=self._log_scale,
+        )
 
     # Most points marked as selected; a larger set is marked in part
     MAX_MULTI_SELECT_MARKS = 20000
@@ -1680,6 +1733,8 @@ class Heatmap(BaseComponent):
             args["layerColumn"] = self._layer_column
         if not self._colorbar_editor:
             args["colorbarEditor"] = False
+        if self._overview:
+            args["overview"] = True
 
         # Add category column configuration for categorical coloring mode
         if self._category_column:
