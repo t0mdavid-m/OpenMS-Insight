@@ -493,6 +493,62 @@ class TestStreamingTableNavigation:
         assert 120 in ids(moved)
 
 
+    def test_data_keeps_updating_while_a_picked_row_holds_the_view(
+        self, mock_streamlit, temp_cache_dir
+    ):
+        """Holding the view keeps which rows are shown, not their contents:
+        new values of the shown rows, the row count and new rows on other
+        pages still come through."""
+        pagination_id = "live_update_page"
+
+        def version(n, bump):
+            ids = list(range(n, 0, -1))
+            return Table(
+                cache_id=f"live_update_{n}_{bump}",
+                data=pl.LazyFrame(
+                    {"id": ids, "score": [i * 10 + bump for i in ids]}
+                ),
+                cache_path=str(temp_cache_dir),
+                interactivity={"selected_id": "id"},
+                index_field="id",
+                pagination_identifier=pagination_id,
+                page_size=100,
+                default_row=-1,
+            )
+
+        def rows(result):
+            data = result["tableData"]
+            return dict(zip(data["id"], data["score"]))
+
+        state = {pagination_id: {"page": 1, "page_size": 100}, "selected_id": None}
+        version(200, 0)._prepare_vue_data(state)
+
+        state["selected_id"] = 150
+        state[pagination_id] = {
+            "page": 1,
+            "page_size": 100,
+            "view_top": {"column": "id", "value": 200, "at": 1},
+        }
+        picked = version(200, 0)._prepare_vue_data(state)
+        assert rows(picked)[150] == 1500
+
+        # 100 rows arrive and every score changes while row 150 stays picked
+        updated = version(300, 7)._prepare_vue_data(state)
+        shown = rows(updated)
+        assert list(shown) == list(range(200, 100, -1))
+        assert shown[150] == 1507
+        assert all(score == i * 10 + 7 for i, score in shown.items())
+        assert updated["_pagination"]["total_rows"] == 300
+        assert updated["_pagination"]["total_pages"] == 3
+        assert "_navigate_to_page" not in updated
+
+        # The rows that arrived are there, above the rows shown
+        state[pagination_id] = {"page": 1, "page_size": 100}
+        state["selected_id"] = None
+        top = version(300, 7)._prepare_vue_data(state)
+        assert list(top["tableData"]["id"])[0] == 300
+
+
 class TestStreamingTableGoTo:
     """Tests for server-side go-to functionality."""
 
