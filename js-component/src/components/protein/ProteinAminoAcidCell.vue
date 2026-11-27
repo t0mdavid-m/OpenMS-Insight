@@ -7,32 +7,32 @@
    @click="selectCell"
    @contextmenu.prevent="toggleMenuOpen"
    >
-    <div v-if="showFragments && sequenceObject.aIon" class="frag-marker-container-a">
+    <div v-if="showFragments && (sequenceObject.aIon || ambiguousIon('a'))" class="frag-marker-container-a" :class="{ 'frag-ambiguous': !sequenceObject.aIon }">
       <svg viewBox="0 0 10 10">
         <path stroke="green" d="M7, 1 L9, 3 L9, 7 L9, 3 L7, 1 z" stroke-width="1.5" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.bIon" class="frag-marker-container-b">
+    <div v-if="showFragments && (sequenceObject.bIon || ambiguousIon('b'))" class="frag-marker-container-b" :class="{ 'frag-ambiguous': !sequenceObject.bIon }">
       <svg viewBox="0 0 10 10">
         <path stroke="blue" d="M10, 0 V5 M10, 0 H5 z" stroke-width="3" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.cIon" class="frag-marker-container-c">
+    <div v-if="showFragments && (sequenceObject.cIon || ambiguousIon('c'))" class="frag-marker-container-c" :class="{ 'frag-ambiguous': !sequenceObject.cIon }">
       <svg viewBox="0 0 10 10">
         <path stroke="red" d="M4, 1 L9, 3 L9, 7 L9, 3 L4, 1 z" stroke-width="1.5" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.xIon" class="frag-marker-container-x">
+    <div v-if="showFragments && (sequenceObject.xIon || ambiguousIon('x'))" class="frag-marker-container-x" :class="{ 'frag-ambiguous': !sequenceObject.xIon }">
       <svg viewBox="0 0 10 10">
         <path stroke="green" d="M1, 3 L1, 7 L3, 9 L1, 7 L1, 3 z" stroke-width="1.5" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.yIon" class="frag-marker-container-y">
+    <div v-if="showFragments && (sequenceObject.yIon || ambiguousIon('y'))" class="frag-marker-container-y" :class="{ 'frag-ambiguous': !sequenceObject.yIon }">
       <svg viewBox="0 0 10 10">
         <path stroke="blue" d="M0, 10 V5 M0, 10 H5 z" stroke-width="3" />
       </svg>
     </div>
-    <div v-if="showFragments && sequenceObject.zIon" class="frag-marker-container-z">
+    <div v-if="showFragments && (sequenceObject.zIon || ambiguousIon('z'))" class="frag-marker-container-z" :class="{ 'frag-ambiguous': !sequenceObject.zIon }">
       <svg viewBox="0 0 10 10">
         <path stroke="red" d="M1, 3 L1, 7 L6, 9 L1, 7 L1, 3 z" stroke-width="1.5" />
       </svg>
@@ -374,6 +374,7 @@ export default defineComponent({
           '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#fff',
           '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#000',
           '--amino-acid-font-size': `${this.fontSize}px`,
+          ...this.modificationColors,
           position: 'relative',
         }
       }
@@ -391,7 +392,21 @@ export default defineComponent({
         '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#fff',
         '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#000',
         '--amino-acid-font-size': `${this.fontSize}px`,
+        ...this.modificationColors,
         position: 'relative',
+      }
+    },
+    // The dotted area under a modified residue (or the residues a
+    // modification could sit on) and its mass label, by theme: a light area
+    // behind light text would hide the residues in the dark theme
+    modificationColors(): Record<string, string> {
+      const dark = this.theme?.base === 'dark'
+      return {
+        '--mod-area-bg': dark ? '#2e3157' : '#e5e5f7',
+        '--mod-area-dot': dark ? '#8a8fd6' : '#444cf7',
+        '--mod-area-dot-alt': dark ? '#5b5f99' : '#676a9c',
+        '--mod-mass-bg': dark ? '#2e3157' : 'white',
+        '--mod-mass-color': dark ? '#ffffff' : '#000000',
       }
     },
     aminoAcidCellClass(): Record<string, boolean> {
@@ -482,6 +497,10 @@ export default defineComponent({
     },
   },
   methods: {
+    // An ion type matched here only as an ambiguous fragment (drawn faint)
+    ambiguousIon(ion: string): boolean {
+      return (this.sequenceObject.ambiguousIons ?? []).includes(ion)
+    },
     toggleMenuOpen(): void {
       if (this.disableVariableModificationSelection) {
         return
@@ -613,6 +632,10 @@ export default defineComponent({
   left: 15%;
 }
 
+.frag-ambiguous {
+  opacity: 0.3;
+}
+
 .frag-marker-container-b {
   @extend .frag-marker-container;
   top: -8%;
@@ -684,14 +707,15 @@ export default defineComponent({
   display: flex;
   align-items: center;
   justify-content: right;
-  background-image:  radial-gradient(#676a9c 0.5px, transparent 0.5px), radial-gradient(#444cf7 0.5px, #e5e5f7 0.5px);
+  background-image:  radial-gradient(var(--mod-area-dot-alt) 0.5px, transparent 0.5px), radial-gradient(var(--mod-area-dot) 0.5px, var(--mod-area-bg) 0.5px);
   background-size: 15px 15px;
   background-position: 0 0,10px 10px;
   background-repeat: repeat;
 }
 
 .mod-mass {
-  background-color: white;
+  background-color: var(--mod-mass-bg);
+  color: var(--mod-mass-color);
   display: inline-block;
   position: absolute;
   top: -15%;
