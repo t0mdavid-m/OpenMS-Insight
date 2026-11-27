@@ -826,7 +826,10 @@ export default defineComponent({
           tab.redraw(true)
           // Trigger setPage to refresh pagination counter (Showing X of Y rows)
           // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
+          // The page is the one just served (new rows arrived): no Loading overlay
+          this.quietReload = true
           tab.setPage(newState.page || 1).catch(() => {})
+          this.quietReload = false
         }
 
         // Sync client's requested state with server's confirmed state
@@ -1537,6 +1540,9 @@ export default defineComponent({
           })
         }
         this.quietReload = false
+        // A page the table holds already never shows the Loading overlay, even
+        // when a load started before it (and blocked by it) had shown one
+        ;(this.tabulator as any)?.clearAlert?.()
 
         // Use setTimeout(0) to delay resolution to next tick
         // This allows Tabulator's internal state machine to complete setup
