@@ -150,6 +150,39 @@ def test_view_answer_is_not_read_again(mock_streamlit, temp_cache_dir):
     assert "proformaRead" in view._prepare_vue_data({"scan": 0, "proforma": "PEPK"})
 
 
+def test_plain_string_answer_leaves_payload_alone(mock_streamlit, temp_cache_dir):
+    """An app that reads and writes a plain string: the view answers with the
+    same plain string (writeProFormaLink in Vue), which gives the payload the
+    app's own string gave, so the answer changes nothing and the app keeps
+    getting a string."""
+    import polars as pl
+
+    from openms_insight import ProteinSequenceView
+
+    view = ProteinSequenceView(
+        cache_id="proforma_plain_string",
+        data=pl.LazyFrame(
+            {"scan_idx": [0], "masses": [[1.0]], "precursor_mass": [500.0]}
+        ),
+        filters={"scan": "scan_idx"},
+        sequence={"sequence": list("PEPSK")},
+        sequence_identifier="sequence",
+        proforma_identifier="proforma",
+        cache_path=str(temp_cache_dir),
+    )
+    asked = {"scan": 0, "proforma": "PEPS[Phospho]K"}
+    first = view._prepare_vue_data(asked)
+    read = first["proformaRead"]
+    assert read["text"] == "PEPS[Phospho]K" and read["sequence"] == "PEPSK"
+    # the state is left as the app wrote it: still a plain string
+    assert asked["proforma"] == "PEPS[Phospho]K"
+
+    answered = {"scan": 0, "proforma": "PEPS[Phospho]K"}
+    again = view._prepare_vue_data(answered)
+    assert again["_hash"] == first["_hash"]
+    assert again["proformaRead"] == read
+
+
 def test_link_text():
     assert proforma_text("PEPK") == "PEPK"
     assert proforma_text({"text": "PEPK", "by": "view", "n": 3}) == "PEPK"
