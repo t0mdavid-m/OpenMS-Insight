@@ -353,6 +353,198 @@ class TestStreamingTableNavigation:
         picked = version(300)._prepare_vue_data(state)
         assert picked["_navigate_to_page"] == 3
 
+    def test_selected_row_keeps_its_place_as_rows_are_added(
+        self, mock_streamlit, temp_cache_dir
+    ):
+        """While a row is selected, rows added above it do not move it: the
+        page shows the same rows, the newest ones come in out of view."""
+        pagination_id = "live_anchor_page"
+
+        def version(n, name="live_anchor"):
+            return Table(
+                cache_id=f"{name}_{n}",
+                data=pl.LazyFrame({"id": list(range(n, 0, -1))}),
+                cache_path=str(temp_cache_dir),
+                interactivity={"selected_id": "id"},
+                index_field="id",
+                pagination_identifier=pagination_id,
+                page_size=100,
+            )
+
+        def ids(result):
+            return list(result["tableData"]["id"])
+
+        state = {pagination_id: {"page": 1, "page_size": 100}, "selected_id": 150}
+        first = version(200)._prepare_vue_data(state)
+        assert ids(first) == list(range(200, 100, -1))
+
+        for n in (230, 300, 301):
+            grown = version(n)._prepare_vue_data(state)
+            assert ids(grown) == list(range(200, 100, -1))
+            assert "_navigate_to_page" not in grown
+
+        # Moving to another page starts pages at multiples of the page size
+        state[pagination_id] = {"page": 2, "page_size": 100}
+        paged = version(301)._prepare_vue_data(state)
+        assert ids(paged) == list(range(201, 101, -1))
+
+        # Without a selection the first page shows the newest rows
+        state = {pagination_id: {"page": 1, "page_size": 100}, "selected_id": None}
+        version(300)._prepare_vue_data(state)
+        newest = version(400)._prepare_vue_data(state)
+        assert ids(newest)[0] == 400
+
+    def test_row_selected_on_first_load_does_not_hold_the_view(
+        self, mock_streamlit, temp_cache_dir
+    ):
+        """The row a table selects by itself on first load lets new rows in at
+        the top; once the user picks a row, that one holds the view."""
+        pagination_id = "live_auto_page"
+
+        def version(n):
+            return Table(
+                cache_id=f"live_auto_{n}",
+                data=pl.LazyFrame({"id": list(range(n, 0, -1))}),
+                cache_path=str(temp_cache_dir),
+                interactivity={"selected_id": "id"},
+                index_field="id",
+                pagination_identifier=pagination_id,
+                page_size=100,
+            )
+
+        def ids(result):
+            return list(result["tableData"]["id"])
+
+        initial = version(200).get_initial_selection({})
+        assert initial == {"selected_id": 200}
+        state = {pagination_id: {"page": 1, "page_size": 100}, **initial}
+        version(200)._prepare_vue_data(state)
+        grown = version(250)._prepare_vue_data(state)
+        assert ids(grown)[0] == 250
+
+        state["selected_id"] = 220
+        version(250)._prepare_vue_data(state)
+        held = version(300)._prepare_vue_data(state)
+        assert ids(held)[0] == 250
+
+    def test_row_picked_after_rows_were_added_keeps_the_rows_shown(
+        self, mock_streamlit, temp_cache_dir
+    ):
+        """Rows that arrive between a render and a click do not push the rows
+        the user clicked in: the page keeps the rows it showed."""
+        pagination_id = "live_click_page"
+
+        def version(n):
+            return Table(
+                cache_id=f"live_click_{n}",
+                data=pl.LazyFrame({"id": list(range(n, 0, -1))}),
+                cache_path=str(temp_cache_dir),
+                interactivity={"selected_id": "id"},
+                index_field="id",
+                pagination_identifier=pagination_id,
+                page_size=100,
+                default_row=-1,
+            )
+
+        def ids(result):
+            return list(result["tableData"]["id"])
+
+        state = {pagination_id: {"page": 1, "page_size": 100}, "selected_id": None}
+        shown = version(200)._prepare_vue_data(state)
+        assert ids(shown)[0] == 200
+
+        # Python already drew 30 more rows the browser has not shown yet
+        version(230)._prepare_vue_data(state)
+
+        # 60 rows arrive; the user clicks row 150, which was on screen, and the
+        # table names the first row it showed
+        state["selected_id"] = 150
+        state[pagination_id] = {
+            "page": 1,
+            "page_size": 100,
+            "view_top": {"column": "id", "value": 200, "at": 1},
+        }
+        clicked = version(260)._prepare_vue_data(state)
+        assert ids(clicked) == list(range(200, 100, -1))
+        assert "_navigate_to_page" not in clicked
+        held = version(300)._prepare_vue_data(state)
+        assert ids(held) == list(range(200, 100, -1))
+
+        # Clicking another row of the rows shown keeps them as well
+        state["selected_id"] = 110
+        state[pagination_id] = {
+            "page": 1,
+            "page_size": 100,
+            "view_top": {"column": "id", "value": 200, "at": 2},
+        }
+        again = version(320)._prepare_vue_data(state)
+        assert ids(again) == list(range(200, 100, -1))
+
+        # A selection made elsewhere later does not go back to those rows
+        state["selected_id"] = 105
+        elsewhere = version(400)._prepare_vue_data(state)
+        assert 105 in ids(elsewhere)
+        assert "_navigate_to_page" in elsewhere
+
+        # Without the row shown the click goes to the picked row's page as before
+        state["selected_id"] = 120
+        state[pagination_id] = {"page": 1, "page_size": 100}
+        moved = version(330)._prepare_vue_data(state)
+        assert 120 in ids(moved)
+
+    def test_data_keeps_updating_while_a_picked_row_holds_the_view(
+        self, mock_streamlit, temp_cache_dir
+    ):
+        """Holding the view keeps which rows are shown, not their contents:
+        new values of the shown rows, the row count and new rows on other
+        pages still come through."""
+        pagination_id = "live_update_page"
+
+        def version(n, bump):
+            ids = list(range(n, 0, -1))
+            return Table(
+                cache_id=f"live_update_{n}_{bump}",
+                data=pl.LazyFrame({"id": ids, "score": [i * 10 + bump for i in ids]}),
+                cache_path=str(temp_cache_dir),
+                interactivity={"selected_id": "id"},
+                index_field="id",
+                pagination_identifier=pagination_id,
+                page_size=100,
+                default_row=-1,
+            )
+
+        def rows(result):
+            data = result["tableData"]
+            return dict(zip(data["id"], data["score"], strict=True))
+
+        state = {pagination_id: {"page": 1, "page_size": 100}, "selected_id": None}
+        version(200, 0)._prepare_vue_data(state)
+
+        state["selected_id"] = 150
+        state[pagination_id] = {
+            "page": 1,
+            "page_size": 100,
+            "view_top": {"column": "id", "value": 200, "at": 1},
+        }
+        picked = version(200, 0)._prepare_vue_data(state)
+        assert rows(picked)[150] == 1500
+
+        # 100 rows arrive and every score changes while row 150 stays picked
+        updated = version(300, 7)._prepare_vue_data(state)
+        shown = rows(updated)
+        assert list(shown) == list(range(200, 100, -1))
+        assert shown[150] == 1507
+        assert all(score == i * 10 + 7 for i, score in shown.items())
+        assert updated["_pagination"]["total_rows"] == 300
+        assert updated["_pagination"]["total_pages"] == 3
+        assert "_navigate_to_page" not in updated
+
+        # The rows that arrived are there, above the rows shown
+        state[pagination_id] = {"page": 1, "page_size": 100}
+        state["selected_id"] = None
+        top = version(300, 7)._prepare_vue_data(state)
+        assert list(top["tableData"]["id"])[0] == 300
+
 
 class TestStreamingTableGoTo:
     """Tests for server-side go-to functionality."""

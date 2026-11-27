@@ -6,6 +6,7 @@
  */
 
 import { defineStore } from 'pinia'
+import { markRaw } from 'vue'
 import type { RenderData, Theme } from 'streamlit-component-lib'
 import { ArrowTable } from 'streamlit-component-lib'
 import { Vector } from 'apache-arrow'
@@ -236,14 +237,16 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
                 columns: Object.keys(parsed),
                 rowCount: Object.values(parsed)[0]?.length ?? 0,
               })
-              this.dataForDrawing[key] = parsed
+              // Raw: Vue would otherwise make every row reactive and walk all
+              // of them in each deep watcher, on every refresh of a live view
+              this.dataForDrawing[key] = markRaw(parsed)
             } else {
               const parsed = this.parseArrowTable(value)
               console.log(`[StreamlitDataStore] Parsed ${key}:`, { rowCount: parsed.length })
-              this.dataForDrawing[key] = parsed
+              this.dataForDrawing[key] = markRaw(parsed)
             }
           } else {
-            this.dataForDrawing[key] = value
+            this.dataForDrawing[key] = Array.isArray(value) ? markRaw(value) : value
           }
         })
 

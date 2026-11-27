@@ -98,6 +98,14 @@ _VUE_OPTION_KEYS = (
 _LAST_SELECTION_KEY = "_svc_table_last_selection"
 # Session state key for tracking last sort/filter state per table component
 _LAST_SORT_FILTER_KEY = "_svc_table_last_sort_filter"
+# Session state key for where the selected row was shown, per table component
+_LAST_ANCHOR_KEY = "_svc_table_last_anchor"
+# The row each table selected by itself on first load (default_row): it does
+# not hold the view, a row the user picks does
+_AUTO_SELECTION_KEY = "_svc_table_auto_selection"
+_USED_VIEW_KEY = "_svc_table_used_view"
+# Per table, the first row shown at the last render: a row clicked there is
+# selected without the rows around it moving
 
 
 @register_component("table")
@@ -170,6 +178,7 @@ class Table(BaseComponent):
         fill_row: bool = True,
         row_overview: bool | str = False,
         multi_select: dict[str, str] | None = None,
+        multi_select_shown: bool = False,
         search: bool | list[str] = False,
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
@@ -293,6 +302,10 @@ class Table(BaseComponent):
                 passing the table's filters, on all pages). The identifier holds
                 the sorted distinct values of the column over the checked rows,
                 or None. Independent of the clicked row (``interactivity``).
+            multi_select_shown: Show the check box column of ``multi_select``
+                from the start, for a table whose purpose is ticking rows (a
+                list of files to pick). False (the default) keeps it behind
+                the toolbar's toggle. Display-only.
             search: Show a search box in the toolbar. True searches the text
                 columns of ``column_definitions``; a list of column names
                 searches those columns instead (they need not be shown, e.g. a
@@ -384,6 +397,7 @@ class Table(BaseComponent):
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
         self._copy_row = bool(copy_row)
+        self._multi_select_shown = bool(multi_select_shown)
         self._collapse_columns = bool(collapse_columns)
         if level is not None and (
             isinstance(level, bool) or not isinstance(level, int) or level < 0
@@ -723,6 +737,8 @@ class Table(BaseComponent):
                         value = value.item()
                     result[identifier] = value
 
+            if result:
+                self._remember_auto_selection(result)
             return result if result else None
 
         except Exception:
@@ -1118,6 +1134,10 @@ class Table(BaseComponent):
         navigate_to_page = None
         target_row_index = None
         go_to_not_found = False
+        # Whether the user (or a new selection) moved the view this render;
+        # if not, a selected row keeps its place while rows are added
+        view_moved = True
+        kept_offset = None
 
         if go_to_request:
             go_to_field = go_to_request.get("field")
@@ -1215,8 +1235,22 @@ class Table(BaseComponent):
             # - Don't override go_to navigation (user explicitly requested a row)
             # - Navigate if selection changed (find new selection's page)
             # - Navigate if sort/filter changed AND we have a selection (find existing selection's new page)
+            view_moved = (
+                selection_changed or sort_filter_changed or navigate_to_page is not None
+            )
             should_navigate = False
-            if navigate_to_page is None:
+            kept_offset = None
+            if (
+                selection_changed
+                and not sort_filter_changed
+                and navigate_to_page is None
+                and self._interactivity
+            ):
+                # A row picked in the rows on screen: they stay as they were
+                kept_offset = self._offset_keeping_view(
+                    data, state, pagination_state, page_size
+                )
+            if navigate_to_page is None and kept_offset is None:
                 if selection_changed:
                     should_navigate = True
                 elif sort_filter_changed and any(
@@ -1370,7 +1404,11 @@ class Table(BaseComponent):
                         auto_selection[identifier] = value
 
         # Slice to current page
-        offset = (page - 1) * page_size
+        offset = (page - 1) * page_size if kept_offset is None else kept_offset
+        if self._pagination and self._interactivity:
+            offset = self._anchored_offset(
+                data, state, pagination_state, page, offset, view_moved
+            )
         if self._pagination:
             df_polars = data.slice(offset, page_size).collect()
         else:
@@ -1428,6 +1466,160 @@ class Table(BaseComponent):
             f"[Table._prepare_vue_data] hash={data_hash[:8] if data_hash else 'None'}"
         )
         return result
+
+    def _anchored_offset(
+        self,
+        data: pl.LazyFrame,
+        state: dict[str, Any],
+        pagination_state: dict[str, Any],
+        page: int,
+        offset: int,
+        view_moved: bool,
+    ) -> int:
+        """First row to show, so that a selected row keeps its place.
+
+        When rows are added (a live view) and nothing else changed (the
+        selection, the sort, the filters, the page), the rows shown are moved
+        by as many rows as the selected one moved, so it stays where it was
+        and the rows around it stay as they were. Without a selection, or once
+        the user moves the view, pages start at multiples of the page size.
+        """
+        import streamlit as st
+
+        anchors = st.session_state.setdefault(_LAST_ANCHOR_KEY, {})
+        key = self._pagination_identifier
+        column, value = self._anchor_selection(state)
+        if column is not None and self._is_auto_selection(state):
+            column = None
+        if column is None:
+            anchors.pop(key, None)
+            return offset
+        value = self._coerce_to_column(data, column, value)
+        found = (
+            data.with_row_index("_row_num")
+            .filter(pl.col(column) == value)
+            .select("_row_num")
+            .head(1)
+            .collect()
+        )
+        row = int(found["_row_num"][0]) if found.height else None
+        last = anchors.get(key)
+        if (
+            not view_moved
+            and row is not None
+            and last is not None
+            and last["value"] == value
+            and last["row"] is not None
+            and last["page"] == pagination_state.get("page", 1)
+        ):
+            offset = max(0, min(last["offset"] + row - last["row"], row))
+        anchors[key] = {"value": value, "row": row, "offset": offset, "page": page}
+        return offset
+
+    def _offset_keeping_view(
+        self,
+        data: pl.LazyFrame,
+        state: dict[str, Any],
+        pagination_state: dict[str, Any],
+        page_size: int,
+    ) -> int | None:
+        """First row to show so that the rows on screen when a row was picked stay.
+
+        The table names the first row of the page it showed (``view_top``) with
+        the click. Rows added since it drew them would otherwise push the rows
+        down (or the picked row onto another page). Returns None when there is
+        nothing to keep: no such row, it is gone, or the picked row is not
+        among the rows it starts.
+        """
+        import streamlit as st
+
+        view_top = pagination_state.get("view_top")
+        selected_column, selected = self._anchor_selection(state)
+        if not isinstance(view_top, dict) or selected_column is None:
+            return None
+        # A click names its rows once: a later selection made elsewhere does
+        # not go back to them
+        used = st.session_state.setdefault(_USED_VIEW_KEY, {})
+        if "at" in view_top:
+            if used.get(self._pagination_identifier) == view_top["at"]:
+                return None
+            used[self._pagination_identifier] = view_top["at"]
+        column = view_top.get("column")
+        if column not in data.collect_schema().names():
+            return None
+        rows = data.with_row_index("_row_num")
+        top_value = self._coerce_to_column(data, column, view_top.get("value"))
+        top = rows.filter(pl.col(column) == top_value).select("_row_num").head(1)
+        top = top.collect()
+        value = self._coerce_to_column(data, selected_column, selected)
+        picked = (
+            rows.filter(pl.col(selected_column) == value)
+            .select("_row_num")
+            .head(1)
+            .collect()
+        )
+        if not top.height or not picked.height:
+            return None
+        start, row = int(top["_row_num"][0]), int(picked["_row_num"][0])
+        if not start <= row < start + page_size:
+            return None
+        return start
+
+    def _remember_auto_selection(self, selection: dict[str, Any]) -> None:
+        """Note the row selected on first load, which does not hold the view."""
+        try:
+            import streamlit as st
+
+            autos = st.session_state.setdefault(_AUTO_SELECTION_KEY, {})
+            autos[self._pagination_identifier] = dict(selection)
+        except Exception:
+            pass
+
+    def _is_auto_selection(self, state: dict[str, Any]) -> bool:
+        """Whether the selection is still the one made on first load.
+
+        The first other selection forgets it, so picking that row again later
+        holds the view like any row the user picks.
+        """
+        import streamlit as st
+
+        autos = st.session_state.get(_AUTO_SELECTION_KEY, {})
+        auto = autos.get(self._pagination_identifier)
+        if auto is None:
+            return False
+        current = {identifier: state.get(identifier) for identifier in auto}
+        if all(str(current[i]) == str(auto[i]) for i in auto):
+            return True
+        autos.pop(self._pagination_identifier, None)
+        return False
+
+    def _anchor_selection(self, state: dict[str, Any]) -> tuple[str | None, Any]:
+        """The column and value of the selected row, preferring the index field."""
+        if self._index_field:
+            for identifier, column in self._interactivity.items():
+                if column == self._index_field and state.get(identifier) is not None:
+                    return column, state.get(identifier)
+        for identifier, column in self._interactivity.items():
+            if state.get(identifier) is not None:
+                return column, state.get(identifier)
+        return None, None
+
+    @staticmethod
+    def _coerce_to_column(data: pl.LazyFrame, column: str, value: Any) -> Any:
+        """``value`` as the type of ``column`` (a selection may arrive as text)."""
+        schema = data.collect_schema()
+        if column not in schema:
+            return value
+        if schema[column] in NUMERIC_DTYPES:
+            if isinstance(value, str):
+                try:
+                    value = float(value)
+                except ValueError:
+                    return value
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            return value
+        return value if isinstance(value, str) else str(value)
 
     def _group_replacement_row(
         self,
@@ -1895,6 +2087,8 @@ class Table(BaseComponent):
             args["keyboardNavigation"] = False
         if not getattr(self, "_copy_row", True):
             args["copyRow"] = False
+        if getattr(self, "_multi_select_shown", False) and self._multi_select:
+            args["multiSelectShown"] = True
         if not getattr(self, "_collapse_columns", True):
             args["collapseColumns"] = False
         if getattr(self, "_level", None) is not None:
