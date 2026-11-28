@@ -126,8 +126,20 @@
       </div>
     </div>
 
-    <!-- The filters in force, each removable -->
-    <div v-if="activeFilterChips.length > 0" class="table-filter-chips">
+    <!-- What the linked filters narrow the table to, then the filters in force, each removable -->
+    <div v-if="chipRowShown" class="table-filter-chips">
+      <v-chip
+        v-for="chip in narrowedChips"
+        :key="`narrowed-${chip.identifier}`"
+        size="small"
+        variant="tonal"
+        color="primary"
+        prepend-icon="mdi-link-variant"
+        class="narrowed-chip"
+        :title="`Only rows of ${chip.label} ${chip.value}, selected in a linked view`"
+      >
+        Narrowed to {{ chip.label }}: {{ chip.value }}
+      </v-chip>
       <v-chip
         v-for="chip in activeFilterChips"
         :key="chip.key"
@@ -487,6 +499,14 @@ export default defineComponent({
       return `Rows with every word${where}. Not case sensitive.`
     },
     /** One chip per filter in force: the search, then the dialog's filters. */
+    /** Whether the row of chips (narrowed to, filters in force) takes room above the rows. */
+    chipRowShown(): boolean {
+      return this.narrowedChips.length > 0 || this.activeFilterChips.length > 0
+    },
+    /** What the linked filters in force narrow the table to. */
+    narrowedChips(): { identifier: string; label: string; value: string }[] {
+      return this.paginationState?.narrowed || []
+    },
     activeFilterChips(): FilterChip[] {
       const chips: FilterChip[] = []
       if (this.currentSearch) {
@@ -728,8 +748,8 @@ export default defineComponent({
       }
     },
     // The chip row takes room from the rows of a table of fixed height
-    'activeFilterChips.length'(count: number, previous: number) {
-      if ((count > 0) !== (previous > 0) && this.tabulator && this.isServerSidePagination) {
+    chipRowShown(shown: boolean, previous: boolean) {
+      if (shown !== previous && this.tabulator && this.isServerSidePagination) {
         this.tabulator.setHeight(Math.max(this.tableMaxHeight(), 150))
       }
     },
@@ -1042,7 +1062,7 @@ export default defineComponent({
       const defaultHeight = this.args.title ? 320 : 310
       const baseHeight = passedHeight ? passedHeight - 56 : defaultHeight
       const goToHeight = this.showGoTo ? 58 : 0
-      const chipsHeight = this.activeFilterChips.length > 0 ? 34 : 0
+      const chipsHeight = this.chipRowShown ? 34 : 0
       return baseHeight - goToHeight - chipsHeight
     },
 

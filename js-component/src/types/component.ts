@@ -80,6 +80,8 @@ export interface PaginationState {
   column_filters?: ColumnFilter[]
   /** The search in force (sent only when there is one) */
   search?: string
+  /** What the linked filters in force narrow the table to (sent only when any are) */
+  narrowed?: { identifier: string; label: string; value: string }[]
 }
 
 /** One condition of the filter dialog, as Python applies it. */
