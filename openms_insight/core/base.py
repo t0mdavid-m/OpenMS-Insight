@@ -55,6 +55,9 @@ class BaseComponent(ABC):
 
     #: Whether the component's Vue side has a plot toolbar for ``stepper``.
     _supports_stepper: bool = False
+    #: Whether the Vue side has a settings menu for ``toolbar_settings``
+    #: (every component with a plot toolbar has one).
+    _supports_settings: bool = False
 
     _component_type: str = ""
 
@@ -161,7 +164,7 @@ class BaseComponent(ABC):
         if stepper is not None and not self._supports_stepper:
             raise ValueError(f"{type(self).__name__} has no plot toolbar for a stepper")
         self._stepper = validate_stepper(stepper, self._filters)
-        if toolbar_settings is not None and not self._supports_stepper:
+        if toolbar_settings is not None and not self._has_settings_menu():
             raise ValueError(f"{type(self).__name__} has no plot toolbar for settings")
         self._toolbar_settings = validate_settings(toolbar_settings)
 
@@ -659,11 +662,14 @@ class BaseComponent(ABC):
         self._help = text or None
         return self
 
+    def _has_settings_menu(self) -> bool:
+        return self._supports_stepper or self._supports_settings
+
     def set_toolbar_settings(
         self, settings: list[dict[str, Any]] | None
     ) -> "BaseComponent":
         """Replace the settings of the plot's toolbar (see core/settings.py)."""
-        if settings is not None and not self._supports_stepper:
+        if settings is not None and not self._has_settings_menu():
             raise ValueError(f"{type(self).__name__} has no plot toolbar for settings")
         self._toolbar_settings = validate_settings(settings)
         return self

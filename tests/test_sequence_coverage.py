@@ -161,7 +161,7 @@ def test_component_args(sample_coverage_data, tmp_path):
     )
     args = coverage._get_component_args()
     assert args["componentType"] == "SequenceCoverage"
-    assert args["blockSize"] == 50
+    assert args["blockSize"] is None
     assert args["countLabel"] == "PSMs"
     assert args["countBins"][-1][0] is None
     assert args["notes"] == ["Counts are PSMs."]
@@ -193,3 +193,37 @@ def test_call_validates_block_size(sample_coverage_data, tmp_path):
     coverage = _coverage(sample_coverage_data, tmp_path)
     with pytest.raises(ValueError, match="block_size"):
         coverage(key="c", block_size=500)
+
+
+def test_block_size_defaults_to_fit_width(sample_coverage_data, tmp_path):
+    coverage = _coverage(sample_coverage_data, tmp_path)
+    assert coverage._block_size is None
+    assert coverage._get_component_args()["blockSize"] is None
+    restored = SequenceCoverage(cache_id="coverage", cache_path=str(tmp_path))
+    assert restored._block_size is None
+
+
+def test_toolbar_settings_accepted(sample_coverage_data, tmp_path):
+    settings = [
+        {
+            "identifier": "coverage_tracks",
+            "label": "Coverage tracks",
+            "options": ["Condition", "Acquisition"],
+        }
+    ]
+    coverage = _coverage(sample_coverage_data, tmp_path, toolbar_settings=settings)
+    assert coverage._toolbar_settings[0]["default"] == "Condition"
+    assert "toolbar_settings" not in coverage._get_cache_config()
+
+
+def test_toolbar_settings_need_a_settings_menu(tmp_path):
+    from openms_insight import Table
+
+    df = pl.DataFrame({"a": [1, 2]})
+    with pytest.raises(ValueError):
+        Table(
+            cache_id="t",
+            data=df.lazy(),
+            cache_path=str(tmp_path),
+            toolbar_settings=[{"identifier": "x", "options": ["a", "b"]}],
+        )
