@@ -5,7 +5,7 @@ import json
 import polars as pl
 import pytest
 
-from openms_insight import LinePlot
+from openms_insight import LinePlot, MirrorPlot
 from openms_insight.core.x_markers import (
     MAX_X_MARKERS,
     validate_x_marker_tolerance,
@@ -112,6 +112,43 @@ def test_not_part_of_the_cache(mock_streamlit, temp_cache_dir, spectra):
         cache_id="same",
         x_markers={"a": 126.1277},
         x_marker_tolerance=0.003,
+    )
+    with open(on._get_manifest_path()) as f:
+        after = json.load(f)
+    assert before == after
+
+
+def _mirror(spectra, cache_dir, cache_id="mirror_markers", **kwargs) -> MirrorPlot:
+    return MirrorPlot(
+        cache_id=cache_id,
+        data=spectra,
+        filters_top={"spectrum": "scan"},
+        filters_bottom={"spectrum": "scan"},
+        x_column="mz",
+        y_column="intensity",
+        cache_path=str(cache_dir),
+        **kwargs,
+    )
+
+
+def test_mirror_plot_takes_markers(mock_streamlit, temp_cache_dir, spectra):
+    """The mirror plot draws the markers over both spectra, without peak matching."""
+    assert "xMarkers" not in _mirror(spectra, temp_cache_dir)._get_component_args()
+    args = _mirror(
+        spectra, temp_cache_dir, x_markers={"precursor 2+": 300.0}
+    )._get_component_args()
+    assert args["xMarkers"] == [{"x": 300.0, "label": "precursor 2+"}]
+    assert args.get("xMarkerTolerance") is None
+    with pytest.raises(ValueError):
+        _mirror(spectra, temp_cache_dir, x_markers={"bad": float("nan")})
+
+
+def test_mirror_markers_not_part_of_the_cache(mock_streamlit, temp_cache_dir, spectra):
+    off = _mirror(spectra, temp_cache_dir, cache_id="same_mirror")
+    with open(off._get_manifest_path()) as f:
+        before = json.load(f)
+    on = _mirror(
+        spectra, temp_cache_dir, cache_id="same_mirror", x_markers={"a": 126.1277}
     )
     with open(on._get_manifest_path()) as f:
         after = json.load(f)

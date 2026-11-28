@@ -474,6 +474,7 @@ export interface MirrorPlotComponentArgs
   windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
   windowTolerance?: number // Half-width of the band around a stored centre
   windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
+  xMarkers?: Array<{ x: number; label: string; color?: string }> | null // Labelled x markers over both spectra (x_markers)
   usi?: string // Universal Spectrum Identifier of the shown spectrum; {identifier} placeholders read the state
 }
 

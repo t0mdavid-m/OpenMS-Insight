@@ -32,7 +32,8 @@ import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
-import { TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
+import { markerOverlay, matchMarkers, type MarkerOverlay } from '@/utils/xMarkers'
 import {
   currentWindow,
   windowOverlay,
@@ -107,6 +108,8 @@ export default defineComponent({
       isInitialized: false as boolean,
       // The Window button hides the shaded window (window_identifier) and shows it again
       windowShown: true as boolean,
+      // The Markers button hides the x markers (x_markers) and shows them again
+      markersShown: true as boolean,
       /** Outcome of the last USI copy, shown on its button for a moment (null: none). */
       usiCopied: null as boolean | null,
       usiTimer: 0,
@@ -156,12 +159,53 @@ export default defineComponent({
       )
     },
 
+    /** The Markers switch, only for a plot with x markers. */
+    markerTools(): PlotTool[] {
+      if (!this.args.xMarkers || this.args.xMarkers.length === 0) return []
+      return [
+        {
+          id: 'x-markers',
+          group: 'annotate',
+          icon: ICONS.markers,
+          label: 'Show markers',
+          short: 'Markers',
+          help: this.markersShown ? 'hide the marked x positions' : 'show the marked x positions',
+          active: this.markersShown,
+          run: () => {
+            this.markersShown = !this.markersShown
+          },
+        },
+      ]
+    },
+
+    /**
+     * Guides and labels of the x markers in view, over both spectra. A marker
+     * is not matched to a peak here: its guide runs the plot's full height,
+     * with its label at the top.
+     */
+    markerLayer(): MarkerOverlay {
+      const markers = this.args.xMarkers
+      if (!this.markersShown || !markers || markers.length === 0) return { shapes: [], annotations: [] }
+      return markerOverlay({
+        matches: matchMarkers(markers, [], [], [], null),
+        matching: false,
+        x: [],
+        y: [],
+        xRange: this.xRange,
+        yRange: [-this.yRangeMax, this.yRangeMax],
+        widthPx: this.actualPlotWidth - 80,
+        heightPx: this.plotHeight - (this.args.title ? 50 : 20) - 50,
+        textWidth: (text, size) => (this.measureTextWidth(text) * size) / 14,
+      })
+    },
+
     toolbarTools(): PlotTool[] {
       return [
         ...this.measure.tools('click two peaks of the same spectrum (Esc cancels)'),
         ...this.labels.tools(),
         ...this.pinZoom.tools(),
         ...this.windowTools,
+        ...this.markerTools,
         ...this.usiTools,
         downloadTool({
           plotId: this.id,
@@ -341,6 +385,10 @@ export default defineComponent({
     },
     // Window button: the shaded window hidden or shown again
     windowShown() {
+      this.recolor()
+    },
+    // Markers button: x markers hidden or shown again
+    markersShown() {
       this.recolor()
     },
     'selectionStore.$state': {
@@ -575,7 +623,7 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
       const measureOverlay = this.buildMeasureOverlay()
-      const shapes = [...this.windowLayer.shapes, ...stickShapes, ...labelShapes, ...measureOverlay.shapes]
+      const shapes = [...this.windowLayer.shapes, ...this.markerLayer.shapes, ...stickShapes, ...labelShapes, ...measureOverlay.shapes]
 
       // Marker traces give us click events (the shapes alone don't)
       const traces: Partial<Plotly.PlotData>[] = [
@@ -648,6 +696,7 @@ export default defineComponent({
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
         ...this.windowLayer.annotations,
+        ...this.markerLayer.annotations,
       ]
 
       const layout: Partial<Plotly.Layout> = {
@@ -960,7 +1009,7 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
       const measureOverlay = this.buildMeasureOverlay()
-      const shapes = [...this.windowLayer.shapes, ...stickShapes, ...labelShapes, ...measureOverlay.shapes]
+      const shapes = [...this.windowLayer.shapes, ...this.markerLayer.shapes, ...stickShapes, ...labelShapes, ...measureOverlay.shapes]
 
       const titleAnnotations: Partial<Plotly.Annotations>[] = [
         ...(this.args.titleTop
@@ -999,6 +1048,7 @@ export default defineComponent({
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
         ...this.windowLayer.annotations,
+        ...this.markerLayer.annotations,
       ]
 
       void Plotly.relayout(this.id, { shapes, annotations })
