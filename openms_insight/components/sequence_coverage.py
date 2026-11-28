@@ -101,6 +101,17 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _check_block_size(block_size: Any) -> None:
+    if block_size is None:
+        return
+    if (
+        isinstance(block_size, bool)
+        or not isinstance(block_size, int)
+        or not 10 <= block_size <= 200
+    ):
+        raise ValueError("block_size must be None or an integer from 10 to 200")
+
+
 @register_component("sequence_coverage")
 class SequenceCoverage(BaseComponent):
     """
@@ -119,6 +130,14 @@ class SequenceCoverage(BaseComponent):
     Clicking a match sets the ``interactivity`` identifiers to its values, and
     the match whose values the state holds is outlined.
 
+    The map fills the width it is given. Its cog menu sets the positions per
+    line (fitted to the width by default) and holds the app's own
+    ``toolbar_settings`` (see core/settings.py), e.g. how matches are grouped
+    into tracks: their values go to selection identifiers the app reads back
+    with ``setting_value`` and builds the rows from. The download menu saves
+    the map as an image, as a web page of its own, or the drawn matches as a
+    tab-separated table.
+
     Example:
         coverage = SequenceCoverage(
             cache_id="coverage",
@@ -136,6 +155,8 @@ class SequenceCoverage(BaseComponent):
     """
 
     _component_type: str = "sequence_coverage"
+    #: The cog menu holds the app's ``toolbar_settings`` too.
+    _supports_settings: bool = True
 
     def __init__(
         self,
@@ -159,7 +180,7 @@ class SequenceCoverage(BaseComponent):
         regenerate_cache: bool = False,
         title: str | None = "Sequence coverage",
         reference_name: str | None = None,
-        block_size: int = 50,
+        block_size: int | None = None,
         count_label: str = "Matches",
         count_bins: list[tuple[float, str, str]] | None = None,
         empty_color: str = EMPTY_COUNT_COLOR,
@@ -200,7 +221,10 @@ class SequenceCoverage(BaseComponent):
             title: Title above the map (None: no title).
             reference_name: Name of the reference (e.g. its accession), shown
                 in the title line and the image file name.
-            block_size: Positions per block, 10 to 200.
+            block_size: Positions per line, 10 to 200, the value the
+                settings menu starts from; None (default) fits as many
+                positions per line as the width allows. The user changes it
+                in the settings menu (the cog), render-time only.
             count_label: What a count counts, titling the colour legend.
             count_bins: (upper bound, label, colour) per count bin, ascending;
                 default a magma scale from 1 to 129+.
@@ -213,12 +237,7 @@ class SequenceCoverage(BaseComponent):
                 ``openms_insight.set_image_format()``. Render-time only.
             **kwargs: Additional configuration options.
         """
-        if (
-            isinstance(block_size, bool)
-            or not isinstance(block_size, int)
-            or not 10 <= block_size <= 200
-        ):
-            raise ValueError("block_size must be an integer from 10 to 200")
+        _check_block_size(block_size)
         self._reference = _reference_tokens(reference)
         self._start_column = start_column
         self._end_column = end_column
@@ -320,7 +339,7 @@ class SequenceCoverage(BaseComponent):
         self._track_order = list(config.get("track_order") or [])
         self._title = config.get("title", "Sequence coverage")
         self._reference_name = config.get("reference_name")
-        self._block_size = config.get("block_size", 50)
+        self._block_size = config.get("block_size")
         self._count_label = config.get("count_label", "Matches")
         self._count_bins = config.get("count_bins") or [
             [None if math.isinf(u) else u, label, color]
@@ -553,16 +572,11 @@ class SequenceCoverage(BaseComponent):
             key: Optional unique key for this component instance.
             state_manager: StateManager for cross-component linking.
             height: Optional height in pixels (None: as tall as the map).
-            block_size: Positions per block for this render (10 to 200).
+            block_size: Positions per line for this render (10 to 200).
             help: Help text shown in the component's card.
         """
         if block_size is not None:
-            if (
-                isinstance(block_size, bool)
-                or not isinstance(block_size, int)
-                or not 10 <= block_size <= 200
-            ):
-                raise ValueError("block_size must be an integer from 10 to 200")
+            _check_block_size(block_size)
             self._block_size = block_size
         return super().__call__(
             key=key, state_manager=state_manager, height=height, help=help
