@@ -1,5 +1,13 @@
 <template>
-  <div class="plot-wrapper" :style="cssCustomProperties">
+  <div
+    ref="root"
+    class="plot-wrapper"
+    :style="cssCustomProperties"
+    :tabindex="steppable ? 0 : undefined"
+    @keydown="onKeydown"
+    @mousemove="keyTipIndex = undefined"
+    @mousedown.capture="focusForKeys"
+  >
     <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" :settings="args.toolbarSettings" />
     <div :id="id" class="plot-container" :style="{ minHeight: `${layout.height}px` }"></div>
     <MeasureHint v-if="args.measure" :measure="measure" />
@@ -48,7 +56,7 @@ import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
-import { usePeakHover } from '@/composables/usePeakHover'
+import { stepIndex, usePeakHover, xOrder } from '@/composables/usePeakHover'
 import { readableTextOn } from '@/utils/appTheme'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
@@ -234,9 +242,19 @@ export default defineComponent({
       fragmentIonsVisible: true,
       // Drilled down from the ladder view into the raw peaks of a mass
       drilledDown: false,
+      /** The mass the arrow keys picked, whose read-out shows until the mouse moves. */
+      keyTipIndex: undefined as number | undefined,
     }
   },
   computed: {
+    /** The arrow keys step the selected mass in the deconvolved view. */
+    steppable(): boolean {
+      return this.mode === 'deconvolved' && !!this.args.massIdentifier
+    },
+    /** Mass indices in mass order, for the arrow keys. */
+    massOrder(): Uint32Array {
+      return xOrder(this.MassValues)
+    },
     toolbarTools(): PlotTool[] {
       const tools: PlotTool[] = [
         ...this.pinZoom.tools(),
@@ -1460,6 +1478,47 @@ export default defineComponent({
         }
       }
     },
+    /**
+     * Arrow keys step the selected mass to the next mass along x; with
+     * Shift, to the next labelled one (a fragment ion of the sequence view).
+     * A view zoomed by hand pans to keep the mass in view, and its read-out is shown
+     * until the mouse moves.
+     */
+    onKeydown(event: KeyboardEvent): void {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (!this.steppable || this.measure.active) return
+      const current = this.selectedMassIndex
+      if (current === undefined || current < 0 || current >= this.MassValues.length) return
+      event.preventDefault()
+      const kinds = this.fragmentKindPos
+      const labelled = (i: number) => kinds[i] !== undefined
+      const step = event.key === 'ArrowRight' ? 1 : -1
+      const next = stepIndex(this.MassValues, this.massOrder, current, step, event.shiftKey ? labelled : undefined)
+      if (next === undefined) return
+      this.keyTipIndex = next
+      // A view zoomed by hand pans; otherwise the view follows the selected mass anyway
+      if (this.manual) this.panToPeak(this.MassValues[next])
+      this.setSelectedMass(next)
+      this.requestGraph()
+    },
+    /** Plotly cancels the mousedown, so the plot takes the focus itself. */
+    focusForKeys(): void {
+      if (!this.steppable) return
+      ;(this.$refs.root as HTMLElement | undefined)?.focus({ preventScroll: true })
+    },
+    /** Move the x range, keeping its width, so that `peakX` is inside it. */
+    panToPeak(peakX: number): void {
+      const element = document.getElementById(this.id) as { _fullLayout?: { xaxis?: { range?: unknown[] } } } | null
+      const range = element?._fullLayout?.xaxis?.range
+      if (!range) return
+      const lo = Math.min(Number(range[0]), Number(range[1]))
+      const hi = Math.max(Number(range[0]), Number(range[1]))
+      const margin = (hi - lo) * 0.05
+      if (peakX >= lo + margin && peakX <= hi - margin) return
+      const half = (hi - lo) / 2
+      this.onRelayout({ 'xaxis.range[0]': peakX - half, 'xaxis.range[1]': peakX + half })
+    },
     onRelayout(eventData: Record<string, unknown>): void {
       this.hover.hide()
       if (eventData['xaxis.range[0]'] !== undefined && eventData['xaxis.range[1]'] !== undefined) {
@@ -1527,6 +1586,10 @@ export default defineComponent({
           )
         },
       })
+      // The read-out of the mass the arrow keys picked, while it is still the selected one
+      if (this.keyTipIndex !== undefined && this.keyTipIndex === this.selectedMassIndex && this.steppable) {
+        this.hover.showIndex(this.keyTipIndex)
+      }
       this.$nextTick(() => Streamlit.setFrameHeight())
     },
     async renderEmpty(): Promise<void> {
@@ -1557,6 +1620,14 @@ export default defineComponent({
 .plot-wrapper {
   position: relative;
   width: 100%;
+}
+
+.plot-wrapper:focus {
+  outline: none;
+}
+.plot-wrapper:focus-visible {
+  outline: 2px solid var(--highlight-color, #e4572e);
+  outline-offset: 2px;
 }
 
 .plot-container {

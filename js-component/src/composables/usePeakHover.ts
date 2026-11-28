@@ -290,10 +290,14 @@ export function usePeakHover() {
     showTip(found.index, found.src)
   }
 
-  /** Show the box for peak `index`, without the mouse (keyboard stepping). */
-  function showIndex(index: number): void {
+  /**
+   * Show the box for peak `index`, without the mouse (keyboard stepping).
+   * `at` picks the source of a plot with several (y below 0: the lower
+   * spectrum of a mirror plot).
+   */
+  function showIndex(index: number, at: PeakHoverAt = {}): void {
     lastEvent = null
-    showTip(index, source({}))
+    showTip(index, source(at))
   }
 
   function showTip(index: number, src: PeakHoverSource): void {

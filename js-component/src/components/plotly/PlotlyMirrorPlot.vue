@@ -1,5 +1,13 @@
 <template>
-  <div ref="root" class="mirror-plot" :style="cssCustomProperties">
+  <div
+    ref="root"
+    class="mirror-plot"
+    :style="cssCustomProperties"
+    :tabindex="hasInteractivity ? 0 : undefined"
+    @keydown="onKeydown"
+    @mousemove="keyTip = undefined"
+    @mousedown.capture="focusForKeys"
+  >
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
@@ -29,7 +37,7 @@ import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
-import { usePeakHover } from '@/composables/usePeakHover'
+import { stepIndex, usePeakHover, xOrder } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool, boldTitle } from '@/utils/plotTools'
@@ -50,6 +58,8 @@ const DEFAULT_STYLING = {
   selectedColor: '#F3A712',
   unhighlightedColor: 'lightblue',
 }
+
+type Side = 'top' | 'bottom'
 
 interface SideData {
   x: number[]
@@ -113,9 +123,25 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
       labelEditorPosition: null as { left: number; top: number } | null,
+      /** The spectrum of the last peak picked here; the other holds the same value too. */
+      selectedSide: 'top' as Side,
+      /** The peak the arrow keys picked, whose read-out shows until the mouse moves. */
+      keyTip: undefined as { side: Side; index: number } | undefined,
     }
   },
   computed: {
+    hasInteractivity(): boolean {
+      return Object.keys(this.args.interactivity ?? {}).length > 0
+    },
+
+    /** Peak indices of each spectrum in x order, for the arrow keys. */
+    topOrder(): Uint32Array {
+      return xOrder(this.topData?.x ?? [])
+    },
+    bottomOrder(): Uint32Array {
+      return xOrder(this.bottomData?.x ?? [])
+    },
+
     /** Height of the plot below its toolbar; the frame keeps args.height. */
     plotHeight(): number {
       return (this.args.height || 400) - TOOLBAR_HEIGHT
@@ -716,6 +742,7 @@ export default defineComponent({
         }
       })
       this.isInitialized = true
+      this.showKeyTip()
       // The frame follows the plot's height. Without this a mirror plot first
       // drawn in a zero-height frame (e.g. below the fold) stayed invisible.
       this.$nextTick(() => Streamlit.setFrameHeight())
@@ -827,6 +854,8 @@ export default defineComponent({
     selectPeak(data: SideData, index: number): void {
       const interactivity = this.args.interactivity
       if (!interactivity) return
+      this.selectedSide = data === this.bottomData ? 'bottom' : 'top'
+
       for (const [identifier, column] of Object.entries(interactivity)) {
         const values = data.interactivityValues?.[column]
         if (values && index < values.length) {
@@ -1001,7 +1030,75 @@ export default defineComponent({
         ...this.windowLayer.annotations,
       ]
 
-      void Plotly.relayout(this.id, { shapes, annotations })
+      void Plotly.relayout(this.id, { shapes, annotations }).then(() => this.showKeyTip())
+    },
+
+    /** The selected peak: side and index, looked up on the side picked last first. */
+    selectedPeak(): { side: Side; index: number } | undefined {
+      const column = this.firstInteractivityColumn()
+      const value = column ? this.currentSelectionValue() : undefined
+      if (!column || value === undefined || value === null) return undefined
+      const sides: Side[] = this.selectedSide === 'bottom' ? ['bottom', 'top'] : ['top', 'bottom']
+      for (const side of sides) {
+        const values = (side === 'top' ? this.topData : this.bottomData)?.interactivityValues?.[column]
+        const index = values ? values.indexOf(value) : -1
+        if (index >= 0) return { side, index }
+      }
+      return undefined
+    },
+
+    /**
+     * Arrow keys step the selected peak to the next peak of its spectrum
+     * along x; with Shift, to the next labelled peak (an annotation or one
+     * of your labels). The x range pans to keep the peak in view, and the
+     * peak's read-out is shown until the mouse moves.
+     */
+    onKeydown(event: KeyboardEvent): void {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (!this.hasInteractivity || this.labels.draft) return
+      const current = this.selectedPeak()
+      if (!current) return
+      const data = current.side === 'top' ? this.topData : this.bottomData
+      if (!data) return
+      event.preventDefault()
+      const own = new Set(this.labels.labels.filter((l) => l.group === current.side).map((l) => l.x))
+      const labelled = (i: number) => Boolean(data.annotations?.[i]) || own.has(data.x[i])
+      const order = current.side === 'top' ? this.topOrder : this.bottomOrder
+      const step = event.key === 'ArrowRight' ? 1 : -1
+      const next = stepIndex(data.x, order, current.index, step, event.shiftKey ? labelled : undefined)
+      if (next === undefined) return
+      this.keyTip = { side: current.side, index: next }
+      this.panToPeak(data.x[next])
+      this.selectPeak(data, next)
+    },
+
+    /** The read-out of the peak the arrow keys picked, while it is still the selected one. */
+    showKeyTip(): void {
+      const tip = this.keyTip
+      if (!tip) return
+      const current = this.selectedPeak()
+      if (current?.side !== tip.side || current.index !== tip.index) return
+      this.hover.showIndex(tip.index, { y: tip.side === 'bottom' ? -1 : 1 })
+    },
+
+    /** Plotly cancels the mousedown, so the plot takes the focus itself. */
+    focusForKeys(): void {
+      if (!this.hasInteractivity) return
+      ;(this.$refs.root as HTMLElement | undefined)?.focus({ preventScroll: true })
+    },
+
+    /** Move the x range, keeping its width, so that `peakX` is inside it. */
+    panToPeak(peakX: number): void {
+      const element = document.getElementById(this.id) as { _fullLayout?: { xaxis?: { range?: unknown[] } } } | null
+      const range = element?._fullLayout?.xaxis?.range
+      if (!range) return
+      const lo = Math.min(Number(range[0]), Number(range[1]))
+      const hi = Math.max(Number(range[0]), Number(range[1]))
+      const margin = (hi - lo) * 0.05
+      if (peakX >= lo + margin && peakX <= hi - margin) return
+      const half = (hi - lo) / 2
+      this.onRelayout({ 'xaxis.range[0]': peakX - half, 'xaxis.range[1]': peakX + half })
     },
 
     /** Your peak labels, as annotations (see usePeakLabels). */
@@ -1042,6 +1139,14 @@ export default defineComponent({
 <style scoped>
 .mirror-plot {
   position: relative;
+}
+
+.mirror-plot:focus {
+  outline: none;
+}
+.mirror-plot:focus-visible {
+  outline: 2px solid var(--highlight-color, #e4572e);
+  outline-offset: 2px;
 }
 
 .plot-container {
